@@ -64,6 +64,16 @@ describe("firewall timeline query failures", () => {
   });
 });
 describe("real invoke build and UI paths", () => {
+  it("revokes a drop when the visible bundle changes before module loading completes", async () => {
+    vi.mocked(invoke).mockImplementation(async command => command === "build_timeline_cmd" ? syntheticTimeline("old-drop") : []);
+    render(<TimelineWorkspace />);
+    const file = new File(["synthetic"], "firewall.log"); Object.defineProperty(file, "path", { value: "/synthetic/firewall.log" });
+    fireEvent.drop(screen.getByText("Drop log files here").parentElement!, { dataTransfer: { files: [file] } });
+    act(() => useTimelineStore.getState().setBundle(syntheticTimeline("replacement")));
+    await act(async () => { await vi.dynamicImportSettled(); });
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "build_timeline_cmd")).toHaveLength(0);
+    expect(useTimelineStore.getState().bundle?.id).toBe("replacement");
+  });
   it.each(["open", "append", "replace", "rebuild"] as const)("retains source-specific %s failures and previous stale evidence", async action => {
     useTimelineStore.getState().setBundle(syntheticTimeline());
     useTimelineStore.getState().reportQueryError(firewallTimelineError(), useTimelineStore.getState().requestOrigin());
@@ -122,13 +132,108 @@ describe("folder discovery ownership", () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(useTimelineStore.getState().bundle?.id).toBe("new");
   });
-  it("ignores a discovery rejection after same-bundle invalidation", async () => {
+  it("ignores a discovery rejection after bundle replacement", async () => {
     useTimelineStore.getState().setBundle(syntheticTimeline());
     const listing = deferred<unknown>(); vi.mocked(invoke).mockReturnValueOnce(listing.promise);
     const operation = openTimelineSource({ kind: "folder", path: "/synthetic/old-folder" });
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
-    useTimelineStore.getState().invalidateCaches();
+    useTimelineStore.getState().setBundle(syntheticTimeline("replacement"));
     listing.reject(new Error("old listing failure")); await expect(operation).rejects.toThrow();
     expect(useTimelineStore.getState().loadError).toBeNull();
+  });
+});
+
+describe("view changes preserve source-operation ownership", () => {
+  it.each(["success", "failure"] as const)("preserves build %s when query ownership already differs", async outcome => {
+    useTimelineStore.getState().setBundle(syntheticTimeline());
+    useTimelineStore.getState().toggleMute(0);
+    if (outcome === "success") {
+      vi.mocked(invoke).mockResolvedValueOnce(syntheticTimeline("new"));
+      await buildTimelineFromSources([{ path: "/synthetic/firewall.log" }]);
+      expect(useTimelineStore.getState().bundle?.id).toBe("new");
+    } else {
+      vi.mocked(invoke).mockRejectedValueOnce(firewallTimelineError());
+      await expect(buildTimelineFromSources([{ path: "/synthetic/firewall.log" }])).rejects.toMatchObject({ reason: "sourceChanged" });
+      expect(useTimelineStore.getState().staleSource?.reason).toBe("sourceChanged");
+    }
+    expect(useTimelineStore.getState().building).toBe(false);
+  });
+  it.each(["success", "failure"] as const)("a superseded build's %s cannot finish the current build", async outcome => {
+    useTimelineStore.getState().setBundle(syntheticTimeline());
+    const older = deferred<TimelineBundle>(), newer = deferred<TimelineBundle>();
+    vi.mocked(invoke).mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const first = buildTimelineFromSources([{ path: "/synthetic/a.log" }]);
+    const second = buildTimelineFromSources([{ path: "/synthetic/b.log" }]);
+    if (outcome === "success") { older.resolve(syntheticTimeline("old")); await first; }
+    else { older.reject(firewallTimelineError()); await expect(first).rejects.toMatchObject({ reason: "sourceChanged" }); }
+    expect(useTimelineStore.getState().bundle?.id).toBe("synthetic-timeline");
+    expect(useTimelineStore.getState().building).toBe(true);
+    expect(useTimelineStore.getState().loadError).toBeNull();
+    newer.resolve(syntheticTimeline("new")); await second;
+    expect(useTimelineStore.getState().bundle?.id).toBe("new");
+  });
+  it("ignores a late query error while a newer build owns the source", async () => {
+    useTimelineStore.getState().setBundle(syntheticTimeline());
+    const query = useTimelineStore.getState().requestOrigin();
+    const pending = deferred<TimelineBundle>(); vi.mocked(invoke).mockReturnValueOnce(pending.promise);
+    const operation = buildTimelineFromSources([{ path: "/synthetic/firewall.log" }]);
+    useTimelineStore.getState().reportQueryError(firewallTimelineError(), query);
+    expect(useTimelineStore.getState().building).toBe(true);
+    expect(useTimelineStore.getState().staleSource).toBeNull();
+    pending.resolve(syntheticTimeline("new")); await operation;
+    expect(useTimelineStore.getState().bundle?.id).toBe("new");
+  });
+  const changes = ["brush", "clearBrush", "mute", "solo", "incident"] as const;
+  function changeView(change: typeof changes[number]) {
+    const store = useTimelineStore.getState();
+    if (change === "brush") store.setBrushRange([1, 2]);
+    else if (change === "clearBrush") store.clearBrushRange();
+    else if (change === "mute") store.toggleMute(0);
+    else if (change === "solo") store.setSolo(0);
+    else store.selectIncident(store.bundle?.incidents[0]?.id ?? null);
+  }
+  it.each(changes)("keeps a pending rebuild after %s", async change => {
+    useTimelineStore.getState().setBundle(syntheticTimeline());
+    useTimelineStore.getState().reportQueryError(firewallTimelineError(), useTimelineStore.getState().requestOrigin());
+    const pending = deferred<TimelineBundle>();
+    vi.mocked(invoke).mockReturnValueOnce(pending.promise);
+    const operation = buildTimelineFromSources([{ path: "/synthetic/firewall.log" }]);
+    changeView(change);
+    expect(useTimelineStore.getState().building).toBe(true);
+    pending.resolve(syntheticTimeline("rebuilt")); await operation;
+    expect(useTimelineStore.getState().bundle?.id).toBe("rebuilt");
+    expect(useTimelineStore.getState().staleSource).toBeNull();
+  });
+  it.each(changes)("keeps a pending build failure visible after %s", async change => {
+    useTimelineStore.getState().setBundle(syntheticTimeline());
+    const pending = deferred<TimelineBundle>();
+    vi.mocked(invoke).mockReturnValueOnce(pending.promise);
+    const operation = buildTimelineFromSources([{ path: "/synthetic/firewall.log" }]);
+    changeView(change);
+    pending.reject(firewallTimelineError());
+    await expect(operation).rejects.toMatchObject({ reason: "sourceChanged" });
+    expect(useTimelineStore.getState().loadError).toContain("/synthetic/firewall.log");
+    expect(useTimelineStore.getState().staleSource?.reason).toBe("sourceChanged");
+    expect(useTimelineStore.getState().building).toBe(false);
+  });
+  it.each(["append", "replace"] as const)("keeps %s folder discovery after a view change", async mode => {
+    useTimelineStore.getState().setBundle(syntheticTimeline());
+    const pending = deferred<unknown>();
+    vi.mocked(invoke).mockReturnValueOnce(pending.promise).mockResolvedValueOnce(syntheticTimeline("discovered"));
+    const operation = (mode === "append" ? openTimelineSource : replaceTimelineSource)({ kind: "folder", path: "/synthetic/folder" });
+    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+    changeView("mute");
+    pending.resolve({ sourceKind: "folder", source: { kind: "folder", path: "/synthetic/folder" }, entries: [{ name: "test.log", path: "/synthetic/folder/test.log", isDir: false, sizeBytes: 1, modifiedUnixMs: null }] });
+    await operation;
+    expect(useTimelineStore.getState().bundle?.id).toBe("discovered");
+  });
+  it("keeps a discovery failure visible after a view change", async () => {
+    useTimelineStore.getState().setBundle(syntheticTimeline());
+    const pending = deferred<unknown>(); vi.mocked(invoke).mockReturnValueOnce(pending.promise);
+    const operation = openTimelineSource({ kind: "folder", path: "/synthetic/folder" });
+    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+    changeView("brush");
+    pending.reject(new Error("synthetic listing failure")); await expect(operation).rejects.toThrow();
+    expect(useTimelineStore.getState().loadError).not.toBeNull();
   });
 });

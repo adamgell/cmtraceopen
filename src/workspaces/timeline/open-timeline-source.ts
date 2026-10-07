@@ -28,14 +28,14 @@ let timelineOpenQueue: Promise<void> = Promise.resolve();
 
 function enqueueTimelineOpen(operation: (refreshOrigin: () => void, isCurrent: () => boolean) => Promise<void>): Promise<void> {
   const queued = timelineOpenQueue.then(async () => {
-    let origin = useTimelineStore.getState().requestOrigin();
-    const refreshOrigin = () => { origin = useTimelineStore.getState().requestOrigin(); };
+    let origin = useTimelineStore.getState().buildOrigin();
+    const refreshOrigin = () => { origin = useTimelineStore.getState().buildOrigin(); };
     useTimelineStore.getState().setLoadError(null);
-    try { await operation(refreshOrigin, () => useTimelineStore.getState().isCurrent(origin)); }
+    try { await operation(refreshOrigin, () => useTimelineStore.getState().isBuildCurrent(origin)); }
     catch (error) {
       // Builds have their own guarded error handler. This handles listing errors
       // only while the queue operation still owns the same visible timeline.
-      if (useTimelineStore.getState().isCurrent(origin)) useTimelineStore.getState().setLoadError(formatTimelineError(error));
+      if (useTimelineStore.getState().isBuildCurrent(origin)) useTimelineStore.getState().setLoadError(formatTimelineError(error));
       throw error;
     }
   });

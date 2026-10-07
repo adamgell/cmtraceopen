@@ -8,9 +8,15 @@ import type {
   IncidentDetail, FirewallTimelineError, TimelineRequestOrigin,
 } from "../types/timeline";
 
+interface TimelineBuildOrigin {
+  bundleId: string | null;
+  buildGeneration: number;
+}
+
 interface TimelineState {
   bundle: TimelineBundle | null;
   timelineGeneration: number;
+  buildGeneration: number;
   loadError: string | null;
   queryError: string | null;
   staleSource: FirewallTimelineError | null;
@@ -18,9 +24,11 @@ interface TimelineState {
   detailCache: Map<string, IncidentDetail>;
   requestOrigin(): TimelineRequestOrigin;
   isCurrent(origin: TimelineRequestOrigin): boolean;
-  beginBuild(): TimelineRequestOrigin;
+  buildOrigin(): TimelineBuildOrigin;
+  isBuildCurrent(origin: TimelineBuildOrigin): boolean;
+  beginBuild(): TimelineBuildOrigin;
   reportQueryError(error: unknown, origin: TimelineRequestOrigin): void;
-  reportBuildError(error: unknown, origin: TimelineRequestOrigin): void;
+  reportBuildError(error: unknown, origin: TimelineBuildOrigin): void;
   putDetail(key: string, value: IncidentDetail): void;
   selectedIncidentId: number | null;
   brushRange: [number, number] | null;
@@ -51,6 +59,7 @@ const MAX_ENTRY_CACHE = 128;
 export const useTimelineStore = create<TimelineState>((set, get) => ({
   bundle: null,
   timelineGeneration: 0,
+  buildGeneration: 0,
   loadError: null,
   queryError: null, staleSource: null, building: false, detailCache: new Map(),
   selectedIncidentId: null,
@@ -70,6 +79,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       loadError: null,
       queryError: null, staleSource: null, building: false, detailCache: new Map(),
       timelineGeneration: state.timelineGeneration + 1,
+      buildGeneration: state.buildGeneration + 1,
       selectedIncidentId: null,
       brushRange: null,
       laneVisibility,
@@ -80,20 +90,24 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   },
   requestOrigin() { const state = get(); return { bundleId: state.bundle?.id ?? null, generation: state.timelineGeneration }; },
   isCurrent(origin) { const state = get(); return (state.bundle?.id ?? null) === origin.bundleId && state.timelineGeneration === origin.generation; },
+  buildOrigin() { const state = get(); return { bundleId: state.bundle?.id ?? null, buildGeneration: state.buildGeneration }; },
+  isBuildCurrent(origin) { const state = get(); return (state.bundle?.id ?? null) === origin.bundleId && state.buildGeneration === origin.buildGeneration; },
   beginBuild() {
-    set(state => ({ timelineGeneration: state.timelineGeneration + 1, building: true, entryCache: new Map(), detailCache: new Map() }));
-    return get().requestOrigin();
+    set(state => ({ timelineGeneration: state.timelineGeneration + 1, buildGeneration: state.buildGeneration + 1, building: true, entryCache: new Map(), detailCache: new Map() }));
+    return get().buildOrigin();
   },
   reportQueryError(error, origin) {
     if (!get().isCurrent(origin)) return;
     if (isFirewallTimelineError(error) && error.reason === "sourceChanged") {
-      set(state => ({ queryError: formatTimelineError(error), staleSource: error, timelineGeneration: state.timelineGeneration + 1, entryCache: new Map(), detailCache: new Map(), building: false }));
+      set(state => ({ queryError: formatTimelineError(error), staleSource: error, timelineGeneration: state.timelineGeneration + 1, entryCache: new Map(), detailCache: new Map() }));
     } else set({ queryError: formatTimelineError(error) });
   },
   reportBuildError(error, origin) {
-    if (!get().isCurrent(origin)) return;
+    if (!get().isBuildCurrent(origin)) return;
     set({ loadError: formatTimelineError(error), building: false });
-    if (isFirewallTimelineError(error) && error.reason === "sourceChanged" && get().bundle?.sources.some(source => source.path === error.path)) get().reportQueryError(error, origin);
+    if (isFirewallTimelineError(error) && error.reason === "sourceChanged" && get().bundle?.sources.some(source => source.path === error.path)) {
+      set(state => ({ queryError: formatTimelineError(error), staleSource: error, timelineGeneration: state.timelineGeneration + 1, entryCache: new Map(), detailCache: new Map() }));
+    }
   },
   putDetail(key, value) {
     const cache = new Map(get().detailCache);
@@ -174,6 +188,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   },
 
   invalidateCaches() {
-    set(state => ({ timelineGeneration: state.timelineGeneration + 1, building: false, bucketCache: new Map(), entryCache: new Map(), detailCache: new Map() }));
+    // View changes revoke query results without cancelling source opens or builds.
+    set(state => ({ timelineGeneration: state.timelineGeneration + 1, bucketCache: new Map(), entryCache: new Map(), detailCache: new Map() }));
   },
 }));

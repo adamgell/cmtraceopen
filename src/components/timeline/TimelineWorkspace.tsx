@@ -57,15 +57,15 @@ export function TimelineWorkspace() {
       .map((f) => (f as File & { path?: string }).path)
       .filter((p): p is string => typeof p === "string" && p.length > 0);
     if (paths.length === 0) return;
-    const origin = useTimelineStore.getState().requestOrigin();
+    const origin = useTimelineStore.getState().buildOrigin();
     try {
       const { openTimelineFiles } = await import(
         "../../workspaces/timeline/open-timeline-source"
       );
-      await openTimelineFiles(paths);
+      if (useTimelineStore.getState().isBuildCurrent(origin)) await openTimelineFiles(paths);
     } catch (error) {
       console.error("[timeline] failed to add sources to timeline", error);
-      if (useTimelineStore.getState().isCurrent(origin)) useTimelineStore.getState().setLoadError(formatTimelineError(error));
+      if (useTimelineStore.getState().isBuildCurrent(origin)) useTimelineStore.getState().setLoadError(formatTimelineError(error));
     }
   };
 

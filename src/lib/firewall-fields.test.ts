@@ -49,13 +49,18 @@ describe("firewall field and time contracts", () => {
     const dated = { ...ordinary, id: 11, timestamp: 1 };
     const utc = firewallEntry({ id: 12, timestamp: 2 });
     const local = firewallEntry({ id: 13, timestamp: null });
-    const rows = [ordinary, dated, utc, local];
+    const zero = firewallEntry({ id: 14, timestamp: 0 });
+    const negative = firewallEntry({ id: 15, timestamp: -1 });
+    const rows = [ordinary, dated, utc, local, zero, negative];
     function permutations<T>(items: T[]): T[][] {
       return items.length === 0 ? [[]] : items.flatMap((item, index) =>
         permutations(items.filter((_, i) => i !== index)).map(rest => [item, ...rest]));
     }
     for (const permutation of permutations(rows)) {
-      expect([...permutation].sort(compareEntryTimes).map(row => row.id)).toEqual([10, 11, 12, 13]);
+      const sorted = [...permutation].sort(compareEntryTimes);
+      expect(sorted.map(row => row.timestamp ?? (row.firewall ? null : 0))).toEqual([-1, 0, 0, 1, 2, null]);
+      // Epoch-zero ties retain input order; no arbitrary tie-breaker is needed.
+      expect(sorted.slice(1, 3).map(row => row.id)).toEqual(permutation.filter(row => row.id === 10 || row.id === 14).map(row => row.id));
     }
     for (const a of rows) for (const b of rows) for (const c of rows) {
       if (compareEntryTimes(a, b) <= 0 && compareEntryTimes(b, c) <= 0) {

@@ -101,10 +101,12 @@ describe("timeline-store", () => {
   });
 });
 
-it("invalidation revokes an in-flight build without leaving queries blocked", () => {
+it("view invalidation revokes queries and preserves an in-flight build", () => {
   useTimelineStore.getState().setBundle(bundle);
   const origin = useTimelineStore.getState().beginBuild();
+  const query = useTimelineStore.getState().requestOrigin();
   useTimelineStore.getState().invalidateCaches();
-  expect(useTimelineStore.getState().isCurrent(origin)).toBe(false);
-  expect(useTimelineStore.getState().building).toBe(false);
+  expect(useTimelineStore.getState().isCurrent(query)).toBe(false);
+  expect(useTimelineStore.getState().isBuildCurrent(origin)).toBe(true);
+  expect(useTimelineStore.getState().building).toBe(true);
 });

@@ -1,6 +1,6 @@
 # Windows Firewall log support: design for issue #814
 
-Status: proposed design for review, not an implemented or tested change
+Status: approved; implemented and tested with synthetic data in [PR #818](https://github.com/adamgell/cmtraceopen/pull/818). Review corrections and exact-head CI remain tracked on the PR. The inspected baseline below is historical; this status is not Windows UI acceptance or merge authorization.
 
 Issue: https://github.com/adamgell/cmtraceopen/issues/814
 

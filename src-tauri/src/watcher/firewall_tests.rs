@@ -14,6 +14,17 @@ fn token(owner: &FirewallOwner, epoch: u64) -> FirewallControlToken {
         watch_epoch: epoch,
     }
 }
+fn commit_batch(
+    source: &mut FirewallOwner,
+    token: &FirewallControlToken,
+    revision: u64,
+    outcome: FirewallReadOutcome,
+) -> FirewallBatch {
+    let mut published = Vec::new();
+    assert!(source.commit(token, revision, outcome, |batch| published.push(batch)));
+    assert_eq!(published.len(), 1, "expected exactly one published batch");
+    published.pop().unwrap()
+}
 fn append(path: &Path, bytes: &[u8]) {
     OpenOptions::new()
         .append(true)
@@ -115,13 +126,16 @@ fn firewall_candidate_commit_checks_current_owner() {
         .unwrap();
     append(&path, format!("{ROW}\n").as_bytes());
     let outcome = read_candidate(&request, &path);
+    let mut publication_count = 0;
     assert!(
         commit_current(&state, &path, &current, request.revision, outcome, |_| {
+            publication_count += 1;
             // Publication runs while the current-owner lock is held.
             assert!(state.open_files.try_lock().is_err());
         })
         .unwrap()
     );
+    assert_eq!(publication_count, 1);
 }
 #[test]
 fn firewall_pause_stop_and_resume_retain_latest_checkpoint() {
@@ -143,11 +157,10 @@ fn firewall_pause_stop_and_resume_retain_latest_checkpoint() {
     append(&path, b"\n");
     let r = source.request(&t2).unwrap();
     let outcome = read_candidate(&r, &path);
-    source.commit(&t2, r.revision, outcome, |batch| {
-        assert_eq!(batch.entries.len(), 1);
-        assert_eq!(batch.entries[0].firewall.as_ref().unwrap().raw_line, ROW);
-        assert!(!batch.reset);
-    });
+    let batch = commit_batch(&mut source, &t2, r.revision, outcome);
+    assert_eq!(batch.entries.len(), 1);
+    assert_eq!(batch.entries[0].firewall.as_ref().unwrap().raw_line, ROW);
+    assert!(!batch.reset);
 }
 #[test]
 fn firewall_replacement_failure_keeps_reset_owed_and_empty_reset_clears_view() {
@@ -161,25 +174,22 @@ fn firewall_replacement_failure_keeps_reset_owed_and_empty_reset_clears_view() {
     let failed = read_candidate_with(&request, &path, |_, _, _| {
         Err(std::io::ErrorKind::Other.into())
     });
-    source.commit(&t, request.revision, failed, |batch| {
-        assert_eq!(batch.decoding.kind, FirewallDecodingKind::Gap)
-    });
+    let batch = commit_batch(&mut source, &t, request.revision, failed);
+    assert_eq!(batch.decoding.kind, FirewallDecodingKind::Gap);
     assert_eq!(source.checkpoint.decoder.raw_offset(), old_offset);
     assert_eq!(source.pending, Some(FirewallTransition::Generation));
     let request = source.request(&t).unwrap();
     let outcome = read_candidate(&request, &path);
-    source.commit(&t, request.revision, outcome, |batch| {
-        assert!(batch.reset);
-        assert_eq!(batch.entries.len(), 2);
-    });
+    let batch = commit_batch(&mut source, &t, request.revision, outcome);
+    assert!(batch.reset);
+    assert_eq!(batch.entries.len(), 2);
     let next_id = source.checkpoint.stream.next_id();
     std::fs::write(&path, b"").unwrap();
     let request = source.request(&t).unwrap();
     let outcome = read_candidate(&request, &path);
-    source.commit(&t, request.revision, outcome, |batch| {
-        assert!(batch.reset);
-        assert!(batch.entries.is_empty());
-    });
+    let batch = commit_batch(&mut source, &t, request.revision, outcome);
+    assert!(batch.reset);
+    assert!(batch.entries.is_empty());
     assert_eq!(source.checkpoint.stream.next_id(), next_id);
     assert_eq!(source.checkpoint.stream.next_line(), 1);
     assert_eq!(
@@ -189,10 +199,9 @@ fn firewall_replacement_failure_keeps_reset_owed_and_empty_reset_clears_view() {
     append(&path, format!("{HEADER}{ROW}\n").as_bytes());
     let request = source.request(&t).unwrap();
     let outcome = read_candidate(&request, &path);
-    source.commit(&t, request.revision, outcome, |batch| {
-        assert_eq!(batch.entries[0].id, next_id);
-        assert_eq!(batch.entries[0].line_number, 4);
-    });
+    let batch = commit_batch(&mut source, &t, request.revision, outcome);
+    assert_eq!(batch.entries[0].id, next_id);
+    assert_eq!(batch.entries[0].line_number, 4);
 }
 #[test]
 fn firewall_late_invalid_utf8_resets_once_to_cp1252() {
@@ -211,17 +220,15 @@ fn firewall_late_invalid_utf8_resets_once_to_cp1252() {
         }
         read_bytes(file, out, limit)
     });
-    source.commit(&t, request.revision, failed, |batch| {
-        assert_eq!(batch.decoding.kind, FirewallDecodingKind::Gap)
-    });
+    let batch = commit_batch(&mut source, &t, request.revision, failed);
+    assert_eq!(batch.decoding.kind, FirewallDecodingKind::Gap);
     assert_eq!(source.checkpoint.decoder.raw_offset(), HEADER.len() as u64);
     assert_eq!(source.pending, Some(FirewallTransition::Windows1252));
     let request = source.request(&t).unwrap();
     let outcome = read_candidate(&request, &path);
-    source.commit(&t, request.revision, outcome, |batch| {
-        assert!(batch.reset);
-        assert_eq!(batch.entries[0].firewall.as_ref().unwrap().raw_line, ROW);
-    });
+    let batch = commit_batch(&mut source, &t, request.revision, outcome);
+    assert!(batch.reset);
+    assert_eq!(batch.entries[0].firewall.as_ref().unwrap().raw_line, ROW);
     assert_eq!(
         source.checkpoint.decoder.encoding(),
         FirewallEncoding::Windows1252
@@ -229,7 +236,8 @@ fn firewall_late_invalid_utf8_resets_once_to_cp1252() {
     append(&path, b"\n");
     let request = source.request(&t).unwrap();
     let outcome = read_candidate(&request, &path);
-    source.commit(&t, request.revision, outcome, |batch| assert!(!batch.reset));
+    let batch = commit_batch(&mut source, &t, request.revision, outcome);
+    assert!(!batch.reset);
 }
 #[test]
 fn firewall_windows1252_every_initial_eof_split_converges() {
@@ -285,13 +293,16 @@ fn firewall_explicit_decode_gap_keeps_cursor() {
     let t = token(&source, 1);
     source.start(Some(&t));
     append(&path, &[0xff]);
-    for _ in 0..2 {
+    for attempt in 0..2 {
         let r = source.request(&t).unwrap();
         let outcome = read_candidate(&r, &path);
-        source.commit(&t, r.revision, outcome, |batch| {
+        let mut published = Vec::new();
+        assert!(source.commit(&t, r.revision, outcome, |batch| published.push(batch)));
+        assert_eq!(published.len(), usize::from(attempt == 0));
+        if let Some(batch) = published.first() {
             assert_eq!(batch.decoding.kind, FirewallDecodingKind::Gap);
             assert!(!batch.reset);
-        });
+        }
         assert_eq!(source.checkpoint.decoder.raw_offset(), bytes.len() as u64);
         assert_eq!(source.checkpoint.decoder.encoding(), FirewallEncoding::Utf8);
     }
@@ -317,7 +328,7 @@ fn firewall_stop_start_preserves_utf16_surrogate_and_provisional_identity() {
     append(&path, &raw[split..split + 1]);
     let r = source.request(&t).unwrap();
     let outcome = read_candidate(&r, &path);
-    source.commit(&t, r.revision, outcome, |_| {});
+    assert!(source.commit(&t, r.revision, outcome, |_| {}));
     assert_eq!(source.checkpoint.decoder.pending_bytes(), 3);
     source.set_paused(Some(&t), true);
     source.set_paused(Some(&t), false);
@@ -328,21 +339,20 @@ fn firewall_stop_start_preserves_utf16_surrogate_and_provisional_identity() {
     append(&path, &[b'\n', 0]);
     let r = source.request(&next).unwrap();
     let outcome = read_candidate(&r, &path);
-    source.commit(&next, r.revision, outcome, |batch| {
-        assert!(batch.entries.is_empty());
-        assert_eq!(batch.replacements.len(), 1);
-        assert_eq!(batch.replacements[0].expected_id, initial_id);
-        assert_eq!(
-            batch.replacements[0]
-                .entry
-                .firewall
-                .as_ref()
-                .unwrap()
-                .raw_line,
-            format!("{ROW}😀")
-        );
-        assert_eq!(batch.decoding.kind, FirewallDecodingKind::Ready);
-    });
+    let batch = commit_batch(&mut source, &next, r.revision, outcome);
+    assert!(batch.entries.is_empty());
+    assert_eq!(batch.replacements.len(), 1);
+    assert_eq!(batch.replacements[0].expected_id, initial_id);
+    assert_eq!(
+        batch.replacements[0]
+            .entry
+            .firewall
+            .as_ref()
+            .unwrap()
+            .raw_line,
+        format!("{ROW}😀")
+    );
+    assert_eq!(batch.decoding.kind, FirewallDecodingKind::Ready);
 }
 #[test]
 fn firewall_incremental_reads_and_padding_state_remain_bounded() {
@@ -383,17 +393,17 @@ fn firewall_unknown_identity_does_not_assert_replacement_or_allow_unverified_fal
     append(&path, b"ASCII\n");
     let r = source.request(&t).unwrap();
     let outcome = read_candidate(&r, &path);
-    source.commit(&t, r.revision, outcome, |batch| assert!(!batch.reset));
+    let batch = commit_batch(&mut source, &t, r.revision, outcome);
+    assert!(!batch.reset);
     let before = source.checkpoint.decoder.raw_offset();
     append(&path, &[0xe9, b'\n']);
     let r = source.request(&t).unwrap();
     let outcome = read_candidate(&r, &path);
-    source.commit(&t, r.revision, outcome, |batch| {
-        assert_eq!(
-            batch.decoding.reason,
-            Some(FirewallGapReason::GenerationUnverifiable)
-        );
-    });
+    let batch = commit_batch(&mut source, &t, r.revision, outcome);
+    assert_eq!(
+        batch.decoding.reason,
+        Some(FirewallGapReason::GenerationUnverifiable)
+    );
     assert_eq!(source.checkpoint.decoder.raw_offset(), before);
     assert_eq!(source.pending, Some(FirewallTransition::Windows1252));
 }

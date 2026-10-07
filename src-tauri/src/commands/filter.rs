@@ -117,6 +117,7 @@ fn matches_clause(entry: &LogEntry, compiled: &CompiledClause) -> bool {
             match_string(&thread_str, &clause.op, needle_lower)
         }
         FilterField::Timestamp => {
+            // Unplaced firewall rows match no absolute-time comparison, including NotEquals.
             if entry.firewall.is_some()
                 && entry.timestamp.is_none()
                 && !matches!(clause.op, FilterOp::Contains | FilterOp::NotContains)

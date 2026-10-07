@@ -1,4 +1,5 @@
 import { isFirewallTimelineError } from "./timeline-errors";
+import { isFirewallCoverage, isFirewallDecoding, isFirewallRecord } from "./firewall";
 import type { FirewallControlToken } from "../types/log";
 import { invoke } from "@tauri-apps/api/core";
 import { boundUtf8WithDigest } from "./bounded-utf8";
@@ -595,6 +596,13 @@ function isParserSelectionResponse(value: unknown): boolean {
   );
 }
 
+function isFirewallSourceMetadata(value: Record<string, unknown>): boolean {
+  return (value.firewallSessionId == null ||
+    (typeof value.firewallSessionId === "string" && value.firewallSessionId.length > 0 && value.firewallSessionId.length <= 128)) &&
+    (value.firewallCoverage == null || isFirewallCoverage(value.firewallCoverage)) &&
+    (value.firewallDecoding == null || isFirewallDecoding(value.firewallDecoding));
+}
+
 function isLogEntryResponse(value: unknown): boolean {
   return (
     isCommandRecord(value) &&
@@ -610,7 +618,8 @@ function isLogEntryResponse(value: unknown): boolean {
     isNullableCommandString(value.sourceFile) &&
     typeof value.format === "string" &&
     typeof value.filePath === "string" &&
-    isNullableCommandNumber(value.timezoneOffset)
+    isNullableCommandNumber(value.timezoneOffset) &&
+    (value.firewall == null || isFirewallRecord(value.firewall))
   );
 }
 
@@ -626,7 +635,8 @@ function isParseResultResponse(value: unknown): value is ParseResult {
     typeof value.filePath === "string" &&
     isFiniteCommandNumber(value.fileSize) &&
     isNullableCommandNumber(value.modifiedUnixMs) &&
-    isFiniteCommandNumber(value.byteOffset)
+    isFiniteCommandNumber(value.byteOffset) &&
+    isFirewallSourceMetadata(value)
   );
 }
 
@@ -1068,7 +1078,8 @@ function decodeAggregateParseResult(
           isFiniteCommandNumber(file.totalLines) &&
           isFiniteCommandNumber(file.parseErrors) &&
           isFiniteCommandNumber(file.fileSize) &&
-          isFiniteCommandNumber(file.byteOffset),
+          isFiniteCommandNumber(file.byteOffset) &&
+          isFirewallSourceMetadata(file),
       ),
   });
 }

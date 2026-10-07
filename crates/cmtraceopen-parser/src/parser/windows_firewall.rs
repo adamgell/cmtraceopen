@@ -6,21 +6,59 @@ use crate::models::{
 use chrono::NaiveDateTime;
 use std::{collections::HashSet, net::IpAddr};
 
+/// Maximum retained decoded UTF-8 bytes per physical line, excluding NUL padding.
 pub const MAX_FIREWALL_LINE_BYTES: usize = 65_536;
+/// Maximum nonempty physical lines inspected during format detection.
 pub const MAX_PROBE_LINES: usize = 128;
+/// Fallback standard field order used only after strict record validation.
 pub const CANONICAL_FIELDS: [&str; 18] = [
     "date", "time", "action", "protocol", "src-ip", "dst-ip", "src-port", "dst-port", "size",
     "tcpflags", "tcpsyn", "tcpack", "tcpwin", "icmptype", "icmpcode", "info", "path", "pid",
 ];
 
+/// Active schema and clock directives, updated only through validated directives.
+///
+/// ```
+/// use cmtraceopen_parser::{parser::windows_firewall::FirewallContext, models::firewall::FirewallTimeBasis};
+/// let mut context = FirewallContext::default();
+/// assert!(context.directive("#Fields: date time action"));
+/// assert_eq!(context.declared_fields().unwrap()[2], "action");
+/// context.directive("#Time Format: Local");
+/// assert_eq!(context.time_basis(), FirewallTimeBasis::Local);
+/// ```
+///
+/// Callers cannot install an ambiguous schema directly:
+/// ```compile_fail
+/// use cmtraceopen_parser::parser::windows_firewall::FirewallContext;
+/// let mut context = FirewallContext::default();
+/// context.declared_fields = Some(vec!["action".into(), "ACTION".into()]);
+/// ```
+/// Nor can they bypass the time directive:
+/// ```compile_fail
+/// use cmtraceopen_parser::{parser::windows_firewall::FirewallContext, models::firewall::FirewallTimeBasis};
+/// let mut context = FirewallContext::default();
+/// context.time_basis = FirewallTimeBasis::Utc;
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FirewallContext {
-    pub declared_fields: Option<Vec<String>>,
-    pub time_basis: FirewallTimeBasis,
+    declared_fields: Option<Vec<String>>,
+    time_basis: FirewallTimeBasis,
     rejected_fields: Vec<String>,
 }
 impl FirewallContext {
+    /// Current validated schema, absent before a declaration or after a rejected one.
+    pub fn declared_fields(&self) -> Option<&[String]> {
+        self.declared_fields.as_deref()
+    }
+
+    /// Clock interpretation from the most recent time directive in this section.
+    pub fn time_basis(&self) -> FirewallTimeBasis {
+        self.time_basis
+    }
+
     /// Install only complete physical directives; the stream owns their termination.
+    /// Returns true for every comment starting with `#`, including unknown directives;
+    /// this does not certify that the schema is valid or that the context changed.
     pub fn directive(&mut self, line: &str) -> bool {
         let line = line.trim();
         if !line.starts_with('#') {
@@ -182,8 +220,11 @@ fn probe_measured(content: &str) -> (bool, usize) {
     (false, scanned)
 }
 
+/// One parsed physical record with its reversible coverage contribution.
 pub struct FirewallRecordResult {
+    /// Parsed row, including raw firewall evidence even when malformed.
     pub entry: LogEntry,
+    /// Coverage contributed by this record alone, not a cumulative total.
     pub coverage: FirewallCoverage,
 }
 
@@ -196,6 +237,8 @@ fn endpoint(ip: Option<&str>, port: Option<&str>) -> String {
     }
 }
 
+/// Parse one decoded physical record using the supplied validated context.
+/// The stream enforces framing and the retained line limit before calling this.
 pub fn parse_record(
     line: &str,
     context: &FirewallContext,

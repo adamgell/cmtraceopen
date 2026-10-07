@@ -851,6 +851,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   }),
   applyFirewallTail: (payload) => {
     let applied = false;
+    let acceptedSource: FirewallSourceState | undefined;
     set(state => {
       const aggregate = state.sourceOpenMode === "aggregate-folder";
       if (aggregate ? !state.aggregateFiles.some(file => file.filePath === payload.filePath) : state.openFilePath !== payload.filePath) return state;
@@ -869,6 +870,7 @@ export const useLogStore = create<LogState>((set, get) => ({
         entries.sort((left, right) => compareMergedLogEntries(left, right, fileOrder));
       }
       applied = true;
+      acceptedSource = reconciled.source;
       return { entries, aggregateFiles,
         firewallSources: { ...state.firewallSources, [payload.filePath]: reconciled.source },
         totalLines: aggregate ? aggregateFiles.reduce((sum, file) => sum + file.totalLines, 0) : payload.reset ? observed : Math.max(state.totalLines, observed),
@@ -878,10 +880,16 @@ export const useLogStore = create<LogState>((set, get) => ({
     if (applied) {
       const state = get();
       const cached = getCachedTabSnapshot(payload.filePath);
-      if (cached) {
-        const source = state.firewallSources[payload.filePath];
+      const source = state.firewallSources[payload.filePath];
+      const ownsView = state.sourceOpenMode === "aggregate-folder"
+        ? state.aggregateFiles.some(file => file.filePath === payload.filePath)
+        : state.openFilePath === payload.filePath;
+      // Subscribers can replace the source or active view during publication.
+      if (cached && source && source === acceptedSource && ownsView) {
         const entries = state.entries.filter(row => row.filePath === payload.filePath).map(row => ({ ...row, id: source.sourceIds[row.lineNumber] }));
-        const totalLines = state.sourceOpenMode === "aggregate-folder" ? state.aggregateFiles.find(file => file.filePath === payload.filePath)!.totalLines : state.totalLines;
+        const totalLines = state.sourceOpenMode === "aggregate-folder"
+          ? state.aggregateFiles.find(file => file.filePath === payload.filePath)?.totalLines ?? cached.totalLines
+          : state.totalLines;
         setCachedTabSnapshot(payload.filePath, { ...cached, entries, totalLines });
       }
       recomputeAndSetMatches();

@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-07-firewall-log-design.md`, approved by Adam on 2026-10-07 at 18:07:45 UTC. Exact signed documentation commit: `2564bbd1152e299e1191901f931b48a5a923bf7a`. Spec SHA-256: `16e0be5b1e9de258122339675888a55a3b7d24f0b53b92d5f7cb3fec7a804ba7`.
 
-**Plan status:** Prepared for owner review. Product implementation, tests, builds, commits of this plan, pushes and PR creation have not been performed by this planning pass. The approved spec is unchanged.
+**Plan status:** Approved and implemented in [PR #818](https://github.com/adamgell/cmtraceopen/pull/818); synthetic parser, native adapter, frontend and browser tests have run. Review corrections and exact-head CI are tracked on the PR. The constraints and baseline below record the approved planning state; later explicit owner authorizations govern publication and the isolated local app launch. No merge or release is implied.
 
 ## Owner review
 
@@ -22,7 +22,7 @@ Review these four delivery stages: pure parser/stream (Tasks 1–3), native open
 
 ## Global Constraints
 
-- Continue branch `codex/issue-814-firewall-design` in `/Users/Adam.Gell/Documents/Codex/2026-10-07/task/cmtraceopen-issue814`. It contains only the signed approved spec above the investigated baseline; existing synthetic fixtures/tests remain untracked and preserved.
+- Continue branch `codex/issue-814-firewall-design` in an isolated task checkout. It contains only the signed approved spec above the investigated baseline; existing synthetic fixtures/tests remain untracked and preserved.
 - Canonical GitHub `main` was refreshed during this planning pass through the connected GitHub app. It resolves to `497a7a06a882eaad886ea25ba11ac8a301e16630`, tree `74d4ba7b3272f56ea7af2b3dca17e99aff53a8d6`. GitHub comparison from that SHA to `main` is `identical`, ahead 0, behind 0, files 0. No base delta needs reconciliation now. Local `origin` is another local checkout and is not canonical remote evidence. Refresh canonical GitHub before implementation and again before PR; inspect any new delta before adapting the base. Never overwrite another checkout or force-push.
 - Use only independently authored synthetic fixtures. Retain their README provenance, documentation IPv4/IPv6 and invented dates. Do not acquire, copy, sanitize, transform, publish or test with the private capture. Generate padding, encoding and chunk variations from synthetic strings only.
 - Do not alter macOS signing configuration, manifests for signing, keychain settings, firewall settings, or deployment setup. Do not install or launch the native application. No merge or release. Browser-mocked acceptance is not native UI acceptance. Windows acceptance requires the exact candidate commit to run on Windows under separately authorized execution.
@@ -67,7 +67,7 @@ Paths marked **new** are proposed; other paths were verified in the checkout. Co
 | Viewer | `src/lib/{column-config.ts,date-time-format.ts,merge-entries.ts}` and tests; `src/components/log-view/{LogListView.tsx,InfoPane.tsx,DiffView.tsx}` and tests; **new** `FirewallCoverageNotice.tsx` and test | Fields, details, raw copy, exact display and coverage notice |
 | Search/sort/filter | `src/stores/log-store.ts::getSearchableText`; `src/components/log-view/LogListView.tsx` Date/Time comparator; `src/lib/diff-entries.ts`; `src-tauri/src/commands/filter.rs`; **new** `src/lib/firewall-fields.ts` and test | Pure field access/search projection and within-source wall-clock sort; no epoch fabrication |
 | Timeline | `src-tauri/src/timeline/{builder.rs,query.rs,models.rs,store.rs}`; **new** `timeline/firewall.rs`; `timeline/mod.rs`; `commands/timeline.rs`; `src/types/timeline.ts`; `src/stores/timeline-store.ts`; `src/components/timeline/{TimelineWorkspace.tsx,hooks/buildTimelineFromSources.ts,hooks/useTimelineEntries.ts,hooks/useIncidentDetail.ts}`; `src/workspaces/timeline/open-timeline-source.ts`; **new** `src/lib/timeline-errors.ts` and adjacent focused tests | Eligible index, sparse context, same-handle materialization, typed errors for initial build/rebuild and queries, stale-state presentation |
-| Compatibility inventory | Existing parser-kind maps/validators found with `rg 'iisW3c|IisW3c'`, `LogEntry` literals, `src-tauri/src/commands/bundle_ops.rs`, `src-tauri/tests/parser_supported_formats.rs` | Exhaustive labels, bundle descriptions, wire validators and mechanical initializers only |
+| Compatibility inventory | Existing parser-kind maps/validators found with `rg 'iisW3c\|IisW3c'`, `LogEntry` literals, `src-tauri/src/commands/bundle_ops.rs`, `src-tauri/tests/parser_supported_formats.rs` | Exhaustive labels, bundle descriptions, wire validators and mechanical initializers only |
 | End-to-end coverage/docs | **new** `e2e/firewall-log.spec.ts`; fixture README; approved spec and this plan; existing CI workflow read-only | Browser-mocked user flow and evidence/gate record; do not change CI to weaken gates |
 
 Before touching each slice, repeat the focused call-site inventory for that interface and add exact paths to its commit record. A newly found consumer is not a reason to refactor unrelated formats.

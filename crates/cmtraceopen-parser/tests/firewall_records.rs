@@ -49,7 +49,7 @@ fn firewall_schema_replaces_invalidates_and_resets() {
     assert_eq!(f.field("future"), Some("Invented"));
     assert_eq!(f.declared_fields, vec!["action", "time", "date", "future"]);
     c.directive("#Fields: action action");
-    assert!(c.declared_fields.is_none());
+    assert!(c.declared_fields().is_none());
     assert_eq!(
         parse_record("OBSERVE x", &c, 2, 10, "")
             .entry
@@ -59,10 +59,10 @@ fn firewall_schema_replaces_invalidates_and_resets() {
         FirewallRecordKind::Malformed
     );
     c.directive("#Time Format: UTC");
-    assert_eq!(c.time_basis, FirewallTimeBasis::Utc);
+    assert_eq!(c.time_basis(), FirewallTimeBasis::Utc);
     c.directive("#Software: Microsoft Windows Firewall");
-    assert_eq!(c.time_basis, FirewallTimeBasis::Unknown);
-    assert!(c.declared_fields.is_none());
+    assert_eq!(c.time_basis(), FirewallTimeBasis::Unknown);
+    assert!(c.declared_fields().is_none());
 }
 #[test]
 fn firewall_arity_loss_and_missing_pid_are_unambiguous() {

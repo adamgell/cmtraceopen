@@ -907,6 +907,44 @@ describe("Windows Firewall source state", () => {
     useLogStore.setState({ sourceOpenMode: "single-file", openFilePath: path, entries: snapshot.entries });
     return snapshot;
   }
+  it("keeps cached line coverage when a subscriber removes the aggregate file during publication", () => {
+    const snapshot = install(); const state = useLogStore.getState();
+    useLogStore.setState({ sourceOpenMode: "aggregate-folder", aggregateFiles: [snapshot] });
+    setCachedTabSnapshot(snapshot.filePath, { entries: snapshot.entries, totalLines: 4, byteOffset: 256, formatDetected: snapshot.formatDetected, parserSelection: snapshot.parserSelection, sourceOpenMode: "single-file", selectedSourceFilePath: snapshot.filePath, activeColumns: ["message"] });
+    const control = state.beginFirewallWatch(snapshot.filePath);
+    const unsubscribe = useLogStore.subscribe(current => {
+      if (current.totalLines === 5 && current.aggregateFiles.length) useLogStore.setState({ aggregateFiles: [] });
+    });
+    try {
+      expect(() => state.applyFirewallTail(firewallPayload({ firewallControl: control, observedThroughLine: 5 }))).not.toThrow();
+      expect(getCachedTabSnapshot(snapshot.filePath)?.totalLines).toBe(4);
+    } finally { unsubscribe(); }
+  });
+  it.each(["reopen", "removeOwner", "switchView"] as const)("does not overwrite a cached snapshot after synchronous %s", transition => {
+    const snapshot = install(); const state = useLogStore.getState();
+    const cached = { entries: snapshot.entries, totalLines: 4, byteOffset: 256, formatDetected: snapshot.formatDetected, parserSelection: snapshot.parserSelection, sourceOpenMode: "single-file" as const, selectedSourceFilePath: snapshot.filePath, activeColumns: ["message" as const] };
+    setCachedTabSnapshot(snapshot.filePath, cached);
+    const control = state.beginFirewallWatch(snapshot.filePath);
+    const replacement = { ...cached, entries: [firewallEntry({ id: 12, lineNumber: 10, message: "new generation" })], totalLines: 10, byteOffset: 900 };
+    let transitioned = false;
+    const unsubscribe = useLogStore.subscribe(current => {
+      if (current.totalLines !== 5 || transitioned) return;
+      transitioned = true;
+      if (transition === "reopen") {
+        state.registerFirewallSource({ ...snapshot, firewallSessionId: "replacement-session", entries: replacement.entries });
+        setCachedTabSnapshot(snapshot.filePath, replacement);
+      } else if (transition === "removeOwner") {
+        state.registerFirewallSource({ ...snapshot, firewallSessionId: undefined });
+      } else {
+        useLogStore.setState({ openFilePath: "/synthetic/b.log", entries: [firewallEntry({ filePath: "/synthetic/b.log" })], totalLines: 99 });
+      }
+    });
+    try {
+      expect(() => state.applyFirewallTail(firewallPayload({ firewallControl: control, observedThroughLine: 5 }))).not.toThrow();
+      expect(transitioned).toBe(true);
+      expect(getCachedTabSnapshot(snapshot.filePath)).toEqual(transition === "reopen" ? replacement : cached);
+    } finally { unsubscribe(); }
+  });
   it("keeps epochs in source state and rejects stopped, stale and reopened sessions", () => {
     const snapshot = install(); const state = useLogStore.getState();
     const first = state.beginFirewallWatch(snapshot.filePath)!;

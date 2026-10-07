@@ -15,3 +15,12 @@ it("shows one cumulative source notice for coverage and decoding", () => {
   rerender(<FirewallCoverageNotice />);
   expect(screen.getByRole("status")).toHaveTextContent("Decoding gap: invalid encoding");
 });
+it("describes a decoding gap even when its reason is absent", () => {
+  const snapshot = firewallSnapshot();
+  snapshot.firewallDecoding = { kind: "gap", pendingBytes: 0, reason: null };
+  useLogStore.getState().clear(); useLogStore.getState().registerFirewallSource(snapshot);
+  useLogStore.setState({ openFilePath: snapshot.filePath, sourceOpenMode: "single-file" });
+  render(<FirewallCoverageNotice />);
+  expect(screen.getByRole("status")).toHaveTextContent("Decoding gap: reason unavailable");
+  expect(screen.getByRole("status")).not.toHaveTextContent("undefined");
+});

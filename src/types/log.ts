@@ -268,9 +268,9 @@ export interface FirewallDecodingStatus {
   reason: "readFailed" | "invalidEncoding" | "generationUnverifiable" | null;
 }
 export interface FirewallSourceMetadata {
-  firewallSessionId?: string;
+  firewallSessionId?: string | null;
   firewallCoverage?: FirewallCoverage | null;
-  firewallDecoding?: FirewallDecodingStatus;
+  firewallDecoding?: FirewallDecodingStatus | null;
 }
 
 export interface ParseResult extends FirewallSourceMetadata {

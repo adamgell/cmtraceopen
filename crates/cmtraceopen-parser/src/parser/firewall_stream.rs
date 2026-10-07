@@ -5,26 +5,40 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// A complete replacement of a provisional snapshot-EOF row.
 pub struct FirewallRowReplacement {
+    /// Source-local ID that the consumer must match before replacing.
     pub expected_id: u64,
+    /// Physical line that the consumer must match before replacing.
     pub expected_line_number: u32,
+    /// Complete revised row, retaining the provisional source-local identity.
     pub entry: LogEntry,
 }
 #[derive(Debug, Clone)]
+/// A directive checkpoint used to interpret subsequent physical records.
 pub struct FirewallContextChange {
+    /// Physical line at which this context becomes active.
     pub line_number: u32,
+    /// Validated schema and clock directives for this checkpoint.
     pub context: FirewallContext,
 }
 #[derive(Debug, Clone, Default)]
+/// Rows and cumulative coverage produced by one stream operation.
 pub struct FirewallDelta {
+    /// New source rows to append.
     pub entries: Vec<LogEntry>,
+    /// Complete replacements of previously emitted provisional rows.
     pub replacements: Vec<FirewallRowReplacement>,
+    /// Current cumulative coverage; consumers replace their previous snapshot.
     pub coverage: FirewallCoverage,
+    /// Greatest physical line completed or observed at snapshot EOF.
     pub observed_through_line: u32,
+    /// Directive checkpoints encountered during this operation.
     pub context_changes: Vec<FirewallContextChange>,
 }
 
 #[derive(Debug, Clone)]
+/// Bounded decoded-text continuation shared by snapshot and incremental parsing.
 pub struct FirewallStream {
     context: FirewallContext,
     next_id: u64,
@@ -40,6 +54,7 @@ pub struct FirewallStream {
     committed: FirewallCoverage,
 }
 impl FirewallStream {
+    /// Create an empty source generation at the supplied ID and physical line.
     pub fn new(next_id: u64, next_line: u32) -> Self {
         Self {
             context: FirewallContext::default(),
@@ -56,21 +71,27 @@ impl FirewallStream {
             committed: FirewallCoverage::default(),
         }
     }
+    /// Read the current validated schema and time directives.
     pub fn context(&self) -> &FirewallContext {
         &self.context
     }
+    /// ID to assign to the next new source row.
     pub fn next_id(&self) -> u64 {
         self.next_id
     }
+    /// Physical line currently being accumulated.
     pub fn next_line(&self) -> u32 {
         self.next_line
     }
+    /// Allocated byte capacity of the retained decoded line buffer.
     pub fn retained_text_bytes(&self) -> usize {
         self.pending.capacity()
     }
+    /// Discard old context and unfinished text; restart physical lines at one.
     pub fn reset_generation(&mut self, next_id: u64) {
         *self = Self::new(next_id, 1);
     }
+    /// Current cumulative coverage including reversible provisional contributions.
     pub fn coverage(&self) -> FirewallCoverage {
         let mut c = self.committed.clone();
         c.merge(&self.provisional_coverage);
@@ -169,6 +190,7 @@ impl FirewallStream {
         delta.observed_through_line = self.observed;
         delta
     }
+    /// Consume decoded text; newly begun unterminated rows wait for a line boundary.
     pub fn push_text(&mut self, text: &str, file_path: &str) -> FirewallDelta {
         let mut delta = FirewallDelta::default();
         for ch in text.chars() {
@@ -192,6 +214,7 @@ impl FirewallStream {
         }
         self.finish_delta(delta)
     }
+    /// Expose an unfinished data row provisionally without finalizing partial directives.
     pub fn snapshot_eof(&mut self, file_path: &str) -> FirewallDelta {
         let mut delta = FirewallDelta::default();
         if self.line_active {
@@ -207,6 +230,7 @@ impl FirewallStream {
 }
 
 /// Apply the same stable replacements used by native and frontend snapshot consumers.
+/// Apply source-local append and full replacement rows to a snapshot vector.
 pub fn apply_delta(entries: &mut Vec<LogEntry>, delta: FirewallDelta) {
     entries.extend(delta.entries);
     for replacement in delta.replacements {

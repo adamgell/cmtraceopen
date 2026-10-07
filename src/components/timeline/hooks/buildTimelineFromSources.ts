@@ -8,7 +8,7 @@ export async function buildTimelineFromSources(
   const origin = useTimelineStore.getState().beginBuild();
   try {
     const bundle = await buildTimeline(sources);
-    if (useTimelineStore.getState().isCurrent(origin)) useTimelineStore.getState().setBundle(bundle);
+    if (useTimelineStore.getState().isBuildCurrent(origin)) useTimelineStore.getState().setBundle(bundle);
     return bundle;
   } catch (error) {
     useTimelineStore.getState().reportBuildError(error, origin);

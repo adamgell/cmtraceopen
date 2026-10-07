@@ -14,7 +14,10 @@ function coverageText(source: FirewallSourceState): string {
   add(c.unplacedTimestamps.count, "without absolute time (excluded from timeline)");
   if (source.decoding.kind === "pending") parts.push(`${source.decoding.pendingBytes} undecoded bytes awaiting append`);
   if (source.decoding.kind === "gap") {
-    const reason = { invalidEncoding: "invalid encoding", readFailed: "source could not be read", generationUnverifiable: "source generation could not be verified" }[source.decoding.reason!];
+    const reason = source.decoding.reason === "invalidEncoding" ? "invalid encoding"
+      : source.decoding.reason === "readFailed" ? "source could not be read"
+      : source.decoding.reason === "generationUnverifiable" ? "source generation could not be verified"
+      : "reason unavailable";
     parts.push(`Decoding gap: ${reason}. Reopen the source when resolved.`);
   }
   return parts.join("; ");
