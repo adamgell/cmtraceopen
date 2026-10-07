@@ -202,3 +202,117 @@ fn firewall_timeline_validates_identity_once_per_request() {
         Err(FirewallMaterializationError::GenerationUnverifiable)
     ));
 }
+
+#[test]
+fn firewall_query_and_detail_fail_instead_of_returning_partial_success() {
+    use super::models::*;
+    use super::query::{query_incident_details, query_timeline_entries, QueryContext};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("synthetic.log");
+    artifact(&path, format!("{HEADER}{ROW}\n{ROW}\n").as_bytes());
+    let (mut timeline, runtimes) = super::builder::build_timeline(
+        &[super::builder::SourceRequest {
+            path: path.to_string_lossy().into_owned(),
+            display_name: None,
+        }],
+        10,
+        vec![],
+    )
+    .unwrap();
+    let initial = query_timeline_entries(
+        &QueryContext {
+            timeline: &timeline,
+            runtimes: &runtimes,
+        },
+        None,
+        None,
+        0,
+        10,
+    )
+    .unwrap();
+    assert_eq!(initial.len(), 2);
+    // First row remains readable. The second index now fails after one success.
+    timeline.indexes.get_mut(&0).unwrap()[1].byte_offset += 1;
+    timeline.raw_signals = vec![0, 1]
+        .into_iter()
+        .map(|entry_ref| Signal {
+            source_idx: 0,
+            entry_ref,
+            ts_ms: timeline.indexes[&0][0].timestamp_ms,
+            kind: SignalKind::ErrorSeverity,
+            correlation_id: None,
+        })
+        .collect();
+    timeline.bundle.incidents = vec![Incident {
+        id: 7,
+        ts_start_ms: timeline.indexes[&0][0].timestamp_ms,
+        ts_end_ms: timeline.indexes[&0][0].timestamp_ms,
+        signal_count: 2,
+        source_count: 1,
+        confidence: 0.5,
+        anchor_event_ref: None,
+        anchor_guid: None,
+        summary: "synthetic".into(),
+    }];
+    let ctx = QueryContext {
+        timeline: &timeline,
+        runtimes: &runtimes,
+    };
+    for failure in [
+        query_timeline_entries(&ctx, None, None, 0, 10).unwrap_err(),
+        query_incident_details(&ctx, 7).unwrap_err(),
+    ] {
+        assert!(matches!(
+            failure,
+            TimelineError::FirewallSource {
+                reason: FirewallMaterializationError::InvalidIndexContext,
+                ..
+            }
+        ));
+    }
+    // Correlation callbacks run only when a cluster has an IME GUID anchor.
+    // Supply one so recomputation really reads row 0 before failing on row 1.
+    let ts = timeline.indexes[&0][0].timestamp_ms;
+    timeline.ime_events.insert(1, vec![serde_json::from_value(serde_json::json!({
+        "id": 0, "eventType": "Win32App", "name": "Synthetic anchor", "guid": "11111111-2222-4333-8444-555555555555", "status": "Failed", "startTimeEpoch": ts,
+        "detail": "Invented test event", "sourceFile": "/synthetic/ime.log", "lineNumber": 1
+    })).unwrap()]);
+    timeline.raw_signals.push(Signal {
+        source_idx: 1,
+        entry_ref: 0,
+        ts_ms: ts,
+        kind: SignalKind::ImeFailed,
+        correlation_id: None,
+    });
+    let old = serde_json::to_value(&timeline.bundle).unwrap();
+    let tunables = TimelineTunables {
+        min_source_count: 1,
+        ..Default::default()
+    };
+    assert!(super::query::recompute_tunables(&mut timeline, &runtimes, tunables).is_err());
+    assert_eq!(serde_json::to_value(&timeline.bundle).unwrap(), old);
+}
+
+#[test]
+fn firewall_legacy_callback_retains_first_error_and_sampling_aborts() {
+    use super::query::MessageMaterializer;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("synthetic.log");
+    artifact(&path, format!("{HEADER}{ROW}\n{ROW}\n").as_bytes());
+    let (mut timeline, runtimes) = super::builder::build_timeline(
+        &[super::builder::SourceRequest {
+            path: path.to_string_lossy().into_owned(),
+            display_name: None,
+        }],
+        10,
+        vec![],
+    )
+    .unwrap();
+    timeline.indexes.get_mut(&0).unwrap()[1].byte_offset += 1;
+    let adapter = MessageMaterializer::new(&runtimes, &timeline.indexes);
+    assert!(adapter.message(0, 0).is_some());
+    assert!(adapter.message(0, 1).is_none());
+    assert!(adapter.finish().is_err());
+    let adapter = MessageMaterializer::new(&runtimes, &timeline.indexes);
+    assert!(super::builder::sample_source_messages(&timeline.indexes, 200, &adapter).is_err());
+}

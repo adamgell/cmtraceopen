@@ -21,6 +21,7 @@ export interface TimelineSourceMeta {
   displayName: string;
   color: string;
   entryCount: number;
+  firewallExcluded?: number | null;
 }
 
 export interface Incident {
@@ -90,7 +91,13 @@ export interface IncidentDetail {
 /**
  * Mirrors Rust `TimelineError` (tagged union via `#[serde(tag = "kind", rename_all = "camelCase")]`).
  */
+export interface TimelineRequestOrigin { bundleId: string | null; generation: number; }
+export interface FirewallTimelineError {
+  kind: "firewallSource"; sourceIdx: number; path: string;
+  reason: "sourceChanged" | "generationUnverifiable" | "readDecodeFailure" | "invalidIndexContext";
+}
 export type TimelineError =
+  | FirewallTimelineError
   | { kind: "notFound"; id: string }
   | { kind: "tooLarge"; estimated: number; limit: number }
   | { kind: "noSources" }

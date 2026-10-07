@@ -152,9 +152,16 @@ pub enum TimelineEntry {
     },
 }
 
-#[derive(thiserror::Error, Debug, serde::Serialize)]
+#[derive(thiserror::Error, Debug, Clone, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TimelineError {
+    #[error("{path}: {reason}")]
+    #[serde(rename_all = "camelCase")]
+    FirewallSource {
+        source_idx: u16,
+        path: String,
+        reason: super::firewall::FirewallMaterializationError,
+    },
     #[error("timeline not found: {id}")]
     NotFound { id: String },
     #[error("too large: estimated {estimated} entries exceeds limit of {limit}")]

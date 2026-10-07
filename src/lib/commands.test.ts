@@ -2228,3 +2228,11 @@ describe("firewall command tokens", () => {
     }
   });
 });
+
+describe("firewall timeline invoke boundary", () => {
+  it.each(["sourceChanged", "generationUnverifiable", "readDecodeFailure", "invalidIndexContext"])("preserves %s before generic error normalization", async reason => {
+    const error = { kind: "firewallSource", sourceIdx: 0, path: "/synthetic/firewall.log", reason };
+    vi.mocked(invoke).mockRejectedValueOnce(error);
+    await expect(buildTimeline([{ path: error.path }])).rejects.toEqual(error);
+  });
+});

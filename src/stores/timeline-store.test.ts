@@ -100,3 +100,11 @@ describe("timeline-store", () => {
     expect(useTimelineStore.getState().brushRange).toEqual([3000, 7500]);
   });
 });
+
+it("invalidation revokes an in-flight build without leaving queries blocked", () => {
+  useTimelineStore.getState().setBundle(bundle);
+  const origin = useTimelineStore.getState().beginBuild();
+  useTimelineStore.getState().invalidateCaches();
+  expect(useTimelineStore.getState().isCurrent(origin)).toBe(false);
+  expect(useTimelineStore.getState().building).toBe(false);
+});

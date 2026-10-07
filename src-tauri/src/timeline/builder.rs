@@ -91,7 +91,7 @@ mod tests_classify {
 use std::collections::{HashMap, HashSet};
 
 use crate::timeline::models::*;
-use crate::timeline::query::SourceRuntime;
+use crate::timeline::query::{MessageMaterializer, SourceRuntime};
 use crate::timeline::store::Timeline;
 
 pub const DEFAULT_ENTRY_LIMIT: u64 = 5_000_000;
@@ -213,10 +213,21 @@ pub fn build_timeline(
                     },
                 );
             }
-            Err(e) => errors.push(SourceError {
-                path: req.path.clone(),
-                message: e.to_string(),
-            }),
+            Err(e) => {
+                if let Some(reason) =
+                    e.downcast_ref::<super::firewall::FirewallMaterializationError>()
+                {
+                    return Err(TimelineError::FirewallSource {
+                        source_idx: idx,
+                        path: req.path.clone(),
+                        reason: *reason,
+                    });
+                }
+                errors.push(SourceError {
+                    path: req.path.clone(),
+                    message: e.to_string(),
+                });
+            }
         }
     }
 
@@ -229,7 +240,8 @@ pub fn build_timeline(
         .into_iter()
         .filter_map(|g| crate::timeline::correlation::normalize_guid(&g))
         .collect();
-    let samples = sample_source_messages(&runtimes, &indexes, 200);
+    let adapter = MessageMaterializer::new(&runtimes, &indexes);
+    let samples = sample_source_messages(&indexes, 200, &adapter)?;
     let samples_as_refs: HashMap<u16, Vec<&str>> = samples
         .iter()
         .map(|(k, v)| (*k, v.iter().map(|s| s.as_str()).collect()))
@@ -238,11 +250,7 @@ pub fn build_timeline(
     denied.extend(hf);
 
     let tunables = TimelineTunables::default();
-    let materialize = |src: u16, eref: u32| -> Option<String> {
-        let ei = indexes.get(&src).and_then(|v| v.get(eref as usize))?;
-        let rt = runtimes.get(&src)?;
-        crate::timeline::query::materialize_msg(&rt.path, &rt.parser, ei)
-    };
+    let materialize = |src, eref| adapter.message(src, eref);
     let (raw_signals, incidents) = crate::timeline::incidents::detect_incidents(
         &indexes,
         &ime_events,
@@ -251,6 +259,8 @@ pub fn build_timeline(
         &materialize,
     );
 
+    adapter.finish()?;
+    drop(adapter);
     let bundle = TimelineBundle {
         id: uuid::Uuid::new_v4().to_string(),
         sources,
@@ -427,25 +437,27 @@ const IME_LOG_HINTS: &[&str] = &[
     "imeui",
 ];
 
-fn sample_source_messages(
-    runtimes: &HashMap<u16, SourceRuntime>,
+pub(super) fn sample_source_messages(
     indexes: &HashMap<u16, Vec<EntryIndex>>,
     per_source_cap: usize,
-) -> HashMap<u16, Vec<String>> {
-    let mut out: HashMap<u16, Vec<String>> = HashMap::new();
+    adapter: &MessageMaterializer<'_>,
+) -> Result<HashMap<u16, Vec<String>>, TimelineError> {
+    let mut out = HashMap::new();
     for (src, idx_vec) in indexes {
-        let rt = match runtimes.get(src) {
-            Some(r) => r,
-            None => continue,
-        };
-        let step = (idx_vec.len() / per_source_cap).max(1);
-        let mut msgs: Vec<String> = Vec::with_capacity(per_source_cap);
-        for ei in idx_vec.iter().step_by(step).take(per_source_cap) {
-            if let Some(m) = crate::timeline::query::materialize_msg(&rt.path, &rt.parser, ei) {
-                msgs.push(m);
+        let step = (idx_vec.len() / per_source_cap.max(1)).max(1);
+        let mut msgs = Vec::with_capacity(per_source_cap);
+        for (eref, _) in idx_vec
+            .iter()
+            .enumerate()
+            .step_by(step)
+            .take(per_source_cap)
+        {
+            if let Some(message) = adapter.message(*src, eref as u32) {
+                msgs.push(message);
             }
         }
         out.insert(*src, msgs);
     }
-    out
+    adapter.finish()?;
+    Ok(out)
 }

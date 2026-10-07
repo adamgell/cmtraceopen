@@ -1,3 +1,4 @@
+import { isFirewallTimelineError } from "./timeline-errors";
 import type { FirewallControlToken } from "../types/log";
 import { invoke } from "@tauri-apps/api/core";
 import { boundUtf8WithDigest } from "./bounded-utf8";
@@ -337,6 +338,7 @@ async function invokeCommand(
   try {
     response = await invoke<unknown>(commandName, args);
   } catch (error) {
+    if (commandName === "build_timeline_cmd" && isFirewallTimelineError(error)) throw error;
     throw normalizeCommandInvokeError(commandName, error);
   }
 
@@ -739,7 +741,8 @@ function isTimelineSourceMeta(value: unknown): boolean {
     typeof value.path === "string" &&
     typeof value.displayName === "string" &&
     typeof value.color === "string" &&
-    isFiniteCommandNumber(value.entryCount)
+    isFiniteCommandNumber(value.entryCount) &&
+    (value.firewallExcluded == null || isNonNegativeCommandCount(value.firewallExcluded))
   );
 }
 

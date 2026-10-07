@@ -1,15 +1,27 @@
+import { formatTimelineError, isFirewallTimelineError } from "../lib/timeline-errors";
 import { create } from "zustand";
 import type {
   TimelineBundle,
   Incident,
   LaneBucket,
   TimelineEntry,
+  IncidentDetail, FirewallTimelineError, TimelineRequestOrigin,
 } from "../types/timeline";
 
 interface TimelineState {
   bundle: TimelineBundle | null;
   timelineGeneration: number;
   loadError: string | null;
+  queryError: string | null;
+  staleSource: FirewallTimelineError | null;
+  building: boolean;
+  detailCache: Map<string, IncidentDetail>;
+  requestOrigin(): TimelineRequestOrigin;
+  isCurrent(origin: TimelineRequestOrigin): boolean;
+  beginBuild(): TimelineRequestOrigin;
+  reportQueryError(error: unknown, origin: TimelineRequestOrigin): void;
+  reportBuildError(error: unknown, origin: TimelineRequestOrigin): void;
+  putDetail(key: string, value: IncidentDetail): void;
   selectedIncidentId: number | null;
   brushRange: [number, number] | null;
   laneVisibility: Record<number, boolean>;
@@ -40,6 +52,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   bundle: null,
   timelineGeneration: 0,
   loadError: null,
+  queryError: null, staleSource: null, building: false, detailCache: new Map(),
   selectedIncidentId: null,
   brushRange: null,
   laneVisibility: {},
@@ -55,6 +68,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
     set((state) => ({
       bundle: b,
       loadError: null,
+      queryError: null, staleSource: null, building: false, detailCache: new Map(),
       timelineGeneration: state.timelineGeneration + 1,
       selectedIncidentId: null,
       brushRange: null,
@@ -63,6 +77,28 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       bucketCache: new Map(),
       entryCache: new Map(),
     }));
+  },
+  requestOrigin() { const state = get(); return { bundleId: state.bundle?.id ?? null, generation: state.timelineGeneration }; },
+  isCurrent(origin) { const state = get(); return (state.bundle?.id ?? null) === origin.bundleId && state.timelineGeneration === origin.generation; },
+  beginBuild() {
+    set(state => ({ timelineGeneration: state.timelineGeneration + 1, building: true, entryCache: new Map(), detailCache: new Map() }));
+    return get().requestOrigin();
+  },
+  reportQueryError(error, origin) {
+    if (!get().isCurrent(origin)) return;
+    if (isFirewallTimelineError(error) && error.reason === "sourceChanged") {
+      set(state => ({ queryError: formatTimelineError(error), staleSource: error, timelineGeneration: state.timelineGeneration + 1, entryCache: new Map(), detailCache: new Map(), building: false }));
+    } else set({ queryError: formatTimelineError(error) });
+  },
+  reportBuildError(error, origin) {
+    if (!get().isCurrent(origin)) return;
+    set({ loadError: formatTimelineError(error), building: false });
+    if (isFirewallTimelineError(error) && error.reason === "sourceChanged" && get().bundle?.sources.some(source => source.path === error.path)) get().reportQueryError(error, origin);
+  },
+  putDetail(key, value) {
+    const cache = new Map(get().detailCache);
+    if (cache.size >= 32) { const first = cache.keys().next().value; if (first !== undefined) cache.delete(first); }
+    cache.set(key, value); set({ detailCache: cache });
   },
   setLoadError(error) {
     set({ loadError: error });
@@ -138,6 +174,6 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   },
 
   invalidateCaches() {
-    set({ bucketCache: new Map(), entryCache: new Map() });
+    set(state => ({ timelineGeneration: state.timelineGeneration + 1, building: false, bucketCache: new Map(), entryCache: new Map(), detailCache: new Map() }));
   },
 }));

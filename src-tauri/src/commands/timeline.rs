@@ -4,7 +4,6 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::state::app_state::AppState;
 use crate::timeline::builder::{build_timeline, SourceRequest, DEFAULT_ENTRY_LIMIT};
-use crate::timeline::incidents::redetect_from_signals;
 use crate::timeline::models::*;
 use crate::timeline::query::{
     query_incident_details as q_incident, query_lane_buckets as q_lane,
@@ -76,13 +75,7 @@ pub async fn query_timeline_entries_cmd(
         .ok_or(TimelineError::NotFound { id: id.clone() })?;
     let filter_set: Option<HashSet<u16>> = source_filter.map(|v| v.into_iter().collect());
     let ctx = QueryContext { timeline, runtimes };
-    Ok(q_entries(
-        &ctx,
-        range_ms,
-        filter_set.as_ref(),
-        offset,
-        limit,
-    ))
+    q_entries(&ctx, range_ms, filter_set.as_ref(), offset, limit)
 }
 
 #[tauri::command]
@@ -115,7 +108,7 @@ pub async fn query_incident_details_cmd(
         .get(&id)
         .ok_or(TimelineError::NotFound { id: id.clone() })?;
     let ctx = QueryContext { timeline, runtimes };
-    q_incident(&ctx, incident_id).ok_or(TimelineError::NotFound {
+    q_incident(&ctx, incident_id)?.ok_or(TimelineError::NotFound {
         id: format!("incident:{}", incident_id),
     })
 }
@@ -136,24 +129,7 @@ pub async fn update_timeline_tunables_cmd(
     let runtimes = rts
         .get(&id)
         .ok_or(TimelineError::NotFound { id: id.clone() })?;
-    let denied: HashSet<String> = timeline.bundle.denied_guids.iter().cloned().collect();
-
-    let indexes = timeline.indexes.clone();
-    let materialize = |src: u16, eref: u32| -> Option<String> {
-        let ei = indexes.get(&src).and_then(|v| v.get(eref as usize))?;
-        let rt = runtimes.get(&src)?;
-        crate::timeline::query::materialize_msg(&rt.path, &rt.parser, ei)
-    };
-    let incidents = redetect_from_signals(
-        &timeline.raw_signals,
-        &timeline.ime_events,
-        &tunables,
-        &denied,
-        &materialize,
-    );
-    timeline.bundle.tunables = tunables;
-    timeline.bundle.incidents = incidents.clone();
-    Ok(incidents)
+    crate::timeline::query::recompute_tunables(timeline, runtimes, tunables)
 }
 
 #[tauri::command]
