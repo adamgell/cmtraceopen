@@ -8,7 +8,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from appimage_abi import elf_files, jammy_origins, read_elf, resolve_tree, select_artifact, squashfs_offset, validate_closure, validate_imports, validate_launchers
+from appimage_abi import elf_files, jammy_origins, package_record, read_elf, resolve_tree, select_artifact, squashfs_offset, validate_closure, validate_imports, validate_launchers
 
 
 def fixture_elf(*, version="GLIBC_2.35", weak=False, machine=62, runpath=None):
@@ -273,6 +273,38 @@ class BuildContextTests(unittest.TestCase):
         for bad in [version(archive="noble"), version(origin="LP-PPA-test"), version(trusted=False), SimpleNamespace(origins=[])]:
             with self.assertRaisesRegex(ValueError, "Jammy"):
                 jammy_origins(bad)
+
+    def test_superseded_provider_error_identifies_package_version_and_empty_origins(self):
+        installed = SimpleNamespace(version="2.11.1+dfsg-1ubuntu0.3", origins=[])
+        cache = {"libfreetype6:amd64": SimpleNamespace(installed=installed)}
+        with self.assertRaises(ValueError) as failure:
+            package_record(cache, "libfreetype6:amd64")
+        message = str(failure.exception)
+        for detail in ["libfreetype6:amd64", installed.version, "trusted official Jammy", "observed origins=[]"]:
+            self.assertIn(detail, message)
+
+    def test_rejected_provider_error_reports_origins_without_accepting_them(self):
+        for origin, archive, trusted in [("Ubuntu", "jammy-security", False), ("Ubuntu", "noble", True), ("LP-PPA-test", "jammy", True)]:
+            observed = dict(origin=origin, archive=archive, site="packages.example", trusted=trusted)
+            installed = SimpleNamespace(version="1.0", origins=[SimpleNamespace(**observed)])
+            cache = {"provider:amd64": SimpleNamespace(installed=installed)}
+            with self.subTest(origin=origin, archive=archive, trusted=trusted), self.assertRaises(ValueError) as failure:
+                package_record(cache, "provider:amd64")
+            self.assertIn("provider:amd64", str(failure.exception))
+            self.assertIn(repr([observed]), str(failure.exception))
+
+    def test_provider_record_retains_only_trusted_official_jammy_origins(self):
+        official = dict(origin="Ubuntu", archive="jammy-security", site="archive.ubuntu.com")
+        installed = SimpleNamespace(version="2.11.1+dfsg-1ubuntu0.4", origins=[
+            SimpleNamespace(**official, trusted=True),
+            SimpleNamespace(origin="LP-PPA-test", archive="jammy", site="packages.example", trusted=True),
+        ])
+        cache = {"libfreetype6:amd64": SimpleNamespace(installed=installed)}
+        self.assertEqual(package_record(cache, "libfreetype6:amd64"), dict(version=installed.version, origins=[official]))
+
+    def test_missing_provider_still_fails_with_its_package_name(self):
+        with self.assertRaisesRegex(ValueError, "required package is not installed: missing:amd64"):
+            package_record({"missing:amd64": SimpleNamespace(installed=None)}, "missing:amd64")
 
 
 class ImportPolicyTests(unittest.TestCase):

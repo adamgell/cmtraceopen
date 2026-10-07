@@ -481,7 +481,7 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libc6 libstdc++6 \
+            libc6 libstdc++6 libfreetype6 \
             squashfs-tools python3-venv python3-apt
 
       - name: Install pinned AppImage inspection tools

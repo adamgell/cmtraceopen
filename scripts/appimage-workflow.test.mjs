@@ -4,6 +4,16 @@ import test from "node:test";
 
 const workflow = (name) => readFileSync(new URL(`../.github/workflows/${name}.yml`, import.meta.url), "utf8");
 
+test("Linux CI refreshes the preinstalled FreeType provider before archive inspection", () => {
+  const build = workflow("cmtrace-ci").split("\n  build:\n")[1];
+  const install = build.split("- name: Install Linux dependencies\n")[1].split("\n      - name:")[0];
+  assert.match(install, /sudo apt-get update/);
+  const packages = install.split("sudo apt-get install -y")[1];
+  assert.match(packages, /\blibfreetype6\b/);
+  assert.doesNotMatch(install, /apt-get (?:upgrade|dist-upgrade)|allow-unauthenticated|trusted=yes/);
+  assert.ok(build.indexOf("- name: Install Linux dependencies") < build.indexOf("- name: Build Tauri app"));
+});
+
 test("only application package producers select the Ubuntu 22.04 baseline", () => {
   for (const name of ["cmtrace-ci", "cmtrace-release"]) {
     assert.match(workflow(name), /- os: ubuntu-22\.04\n\s+target: x86_64-unknown-linux-gnu/);
