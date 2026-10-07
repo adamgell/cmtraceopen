@@ -143,7 +143,7 @@ The crate also carries the pure-analysis layers the app builds on top of parsing
 
 `0.x` — the public API may change in minor releases while it settles. Pin an exact version if you need stability.
 
-### Windows Firewall API migration (unreleased)
+### 0.4.0 Windows Firewall API migration (unreleased)
 
 Windows Firewall support adds public Rust fields and enum variants. Downstream source changes may be required even though older JSON payloads remain readable:
 
@@ -152,7 +152,7 @@ Windows Firewall support adds public Rust fields and enum variants. Downstream s
 - Exhaustive matches on `ParserKind` and `ParserImplementation` must handle `WindowsFirewall`. `LogFormat` has no new variant; use parser selection to distinguish Windows Firewall records.
 - A firewall wall-clock value without a confirmed UTC basis has no absolute `timestamp`. Preserve its display value and time-basis metadata instead of assigning the viewer's timezone.
 
-These are source API changes for the next parser release. The repository version is not a compatibility guarantee for unreleased branch snapshots.
+These source API changes require the parser version to advance to `0.4.0`. Crate publication remains a separate step.
 
 ## License
 
