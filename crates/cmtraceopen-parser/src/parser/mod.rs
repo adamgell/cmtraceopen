@@ -20,6 +20,7 @@ pub mod secureboot_log;
 pub mod severity;
 pub mod simple;
 pub mod timestamped;
+pub mod windows_firewall;
 
 use crate::{
     intune::device::windows::inventory::{self, DeviceInventoryLogDialect},
