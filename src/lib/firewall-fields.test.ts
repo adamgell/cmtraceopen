@@ -44,4 +44,25 @@ describe("firewall field and time contracts", () => {
     const store = useLogStore.getState(); store.clear(); store.setEntries([entry]); store.setActiveColumns(["message"]);
     for (const query of ["8801", "SYN-TEST", "invented-marker"]) { store.setFindQuery(query); store.recomputeFindMatches(); expect(useLogStore.getState().findMatchIds).toEqual([entry.id]); }
   });
+  it("keeps mixed ordinary and firewall timestamp sorting transitive across permutations", () => {
+    const ordinary = { ...firewallEntry({ id: 10, timestamp: null }), firewall: undefined };
+    const dated = { ...ordinary, id: 11, timestamp: 1 };
+    const utc = firewallEntry({ id: 12, timestamp: 2 });
+    const local = firewallEntry({ id: 13, timestamp: null });
+    const rows = [ordinary, dated, utc, local];
+    function permutations<T>(items: T[]): T[][] {
+      return items.length === 0 ? [[]] : items.flatMap((item, index) =>
+        permutations(items.filter((_, i) => i !== index)).map(rest => [item, ...rest]));
+    }
+    for (const permutation of permutations(rows)) {
+      expect([...permutation].sort(compareEntryTimes).map(row => row.id)).toEqual([10, 11, 12, 13]);
+    }
+    for (const a of rows) for (const b of rows) for (const c of rows) {
+      if (compareEntryTimes(a, b) <= 0 && compareEntryTimes(b, c) <= 0) {
+        expect(compareEntryTimes(a, c)).toBeLessThanOrEqual(0);
+      }
+    }
+    expect(compareEntryTimes(ordinary, { ...dated, timestamp: -1 })).toBeGreaterThan(0);
+    expect(compareEntryTimes(ordinary, { ...dated, timestamp: 0 })).toBe(0);
+  });
 });

@@ -21,10 +21,13 @@ function wallClock(display: string | null): string | null {
 }
 
 export function compareEntryTimes(a: LogEntry, b: LogEntry): number {
-  if (!a.firewall && !b.firewall) return (a.timestamp ?? 0) - (b.timestamp ?? 0);
-  if (a.timestamp != null && b.timestamp != null) return a.timestamp - b.timestamp;
-  if (a.timestamp != null) return -1;
-  if (b.timestamp != null) return 1;
+  // Ordinary undated rows retain their legacy numeric-zero ordering in every
+  // comparison. Only firewall rows without an epoch form the unplaced group.
+  const leftTime = a.firewall ? a.timestamp : a.timestamp ?? 0;
+  const rightTime = b.firewall ? b.timestamp : b.timestamp ?? 0;
+  if (leftTime != null && rightTime != null) return leftTime - rightTime;
+  if (leftTime != null) return -1;
+  if (rightTime != null) return 1;
   // No absolute ordering is implied between two different sources.
   const sourceOrder = a.filePath.localeCompare(b.filePath);
   if (sourceOrder) return sourceOrder;
