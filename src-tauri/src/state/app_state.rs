@@ -29,6 +29,7 @@ use crate::watcher::tail::{InitialLogicalRecord, TailSession};
 #[allow(dead_code)]
 /// Represents a currently open log file.
 pub struct OpenFile {
+    pub firewall: Option<crate::watcher::firewall::FirewallOwner>,
     pub path: PathBuf,
     pub parser_selection: ResolvedParser,
     /// One-shot, bounded handoff from initial parsing to the first tail session.

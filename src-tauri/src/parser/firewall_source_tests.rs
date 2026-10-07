@@ -7,7 +7,7 @@ use std::{
     io::Write,
 };
 
-const SYNTHETIC: &str = "#Software: Microsoft Windows Firewall\r\n#Time Format: UTC\r\n#Fields: date time action protocol src-ip dst-ip src-port dst-port size tcpflags tcpsyn tcpack tcpwin icmptype icmpcode info path pid future\r\n\0\02042-04-05 06:07:09 ALLOW TCP 192.0.2.11 203.0.113.21 54001 443 60 S - - - - - - SEND 8801 café😀\r\n2042-04-05 06:07:10 DROP UDP 2001:db8::1 2001:db8::2 54002 53 72 - - - - - - - RECEIVE 8802 inventé";
+const SYNTHETIC: &str = "#Software: Microsoft Windows Firewall\r\n#Time Format: UTC\r\n#Fields: date time action protocol src-ip dst-ip src-port dst-port size tcpflags tcpsyn tcpack tcpwin icmptype icmpcode info path pid future\r\n\x00\x002042-04-05 06:07:09 ALLOW TCP 192.0.2.11 203.0.113.21 54001 443 60 S - - - - - - SEND 8801 café😀\r\n2042-04-05 06:07:10 DROP UDP 2001:db8::1 2001:db8::2 54002 53 72 - - - - - - - RECEIVE 8802 inventé";
 
 fn encoded(text: &str, encoding: FirewallEncoding, bom: bool) -> Vec<u8> {
     let mut bytes = Vec::new();

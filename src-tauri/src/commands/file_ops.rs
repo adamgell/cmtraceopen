@@ -13,9 +13,7 @@ use super::bundle_ops::{
 };
 use super::known_sources::KnownSourcePathKind;
 use crate::intune::apps::windows::ime::models::EvidenceBundleMetadata;
-use crate::models::log_entry::{
-    AggregateParseResult, AggregateParsedFileResult, LogEntry, ParseResult, PathDiagnostic,
-};
+use crate::models::log_entry::{AggregateParsedFileResult, LogEntry, ParseResult, PathDiagnostic};
 use crate::parser;
 use crate::state::app_state::{AppState, OpenFile};
 use crate::watcher::tail::InitialLogicalRecord;
@@ -151,6 +149,78 @@ fn classify_open_failure(path: &str, reason: String) -> crate::error::AppError {
     }
 }
 
+/// Optional firewall extensions belong to the native source session, not the pure parser.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeParseResult {
+    #[serde(flatten)]
+    pub result: ParseResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firewall_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firewall_decoding: Option<crate::watcher::firewall::FirewallDecodingStatus>,
+}
+impl std::ops::Deref for NativeParseResult {
+    type Target = ParseResult;
+    fn deref(&self) -> &Self::Target {
+        &self.result
+    }
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeAggregateFileResult {
+    #[serde(flatten)]
+    pub result: AggregateParsedFileResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firewall_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firewall_coverage: Option<crate::models::firewall::FirewallCoverage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firewall_decoding: Option<crate::watcher::firewall::FirewallDecodingStatus>,
+}
+impl std::ops::Deref for NativeAggregateFileResult {
+    type Target = AggregateParsedFileResult;
+    fn deref(&self) -> &Self::Target {
+        &self.result
+    }
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeAggregateParseResult {
+    pub entries: Vec<LogEntry>,
+    pub total_lines: u32,
+    pub parse_errors: u32,
+    pub folder_path: String,
+    pub files: Vec<NativeAggregateFileResult>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub child_errors: Vec<PathDiagnostic>,
+}
+fn prepare_open_result(artifacts: parser::NativeParseArtifacts) -> (NativeParseResult, OpenFile) {
+    let parser::NativeParseArtifacts {
+        result,
+        selection,
+        identity,
+        firewall,
+    } = artifacts;
+    let initial_logical_record = InitialLogicalRecord::from_parse_result(&result, &selection);
+    let firewall =
+        firewall.map(|snapshot| crate::watcher::firewall::FirewallOwner::new(snapshot, identity));
+    let response = NativeParseResult {
+        firewall_session_id: firewall.as_ref().map(|owner| owner.session_id.clone()),
+        firewall_decoding: firewall.as_ref().map(|owner| owner.decoding.clone()),
+        result,
+    };
+    let opened = OpenFile {
+        path: PathBuf::from(&response.file_path),
+        parser_selection: selection,
+        initial_logical_record,
+        byte_offset: response.byte_offset,
+        file_identity: identity,
+        firewall,
+    };
+    (response, opened)
+}
+
 // ── Tauri Commands ──────────────────────────────────────────────────────
 
 /// Open and parse a log file, auto-detecting its format.
@@ -159,30 +229,15 @@ fn classify_open_failure(path: &str, reason: String) -> crate::error::AppError {
 pub fn open_log_file(
     path: String,
     state: State<'_, AppState>,
-) -> Result<ParseResult, crate::error::AppError> {
-    let (result, parser_selection, file_identity) = match parser::parse_file_identified(&path) {
-        Ok(value) => value,
-        Err(reason) => return Err(classify_open_failure(&path, reason)),
-    };
-    let initial_logical_record =
-        InitialLogicalRecord::from_parse_result(&result, &parser_selection);
-
-    // Store in AppState so tail parsing reuses the same backend parser selection.
-    let mut open_files = state
+) -> Result<NativeParseResult, crate::error::AppError> {
+    let artifacts = parser::parse_file_with_artifacts(&path)
+        .map_err(|reason| classify_open_failure(&path, reason))?;
+    let (result, opened) = prepare_open_result(artifacts);
+    state
         .open_files
         .lock()
-        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
-    open_files.insert(
-        PathBuf::from(&path),
-        OpenFile {
-            path: PathBuf::from(&path),
-            parser_selection,
-            initial_logical_record,
-            byte_offset: result.byte_offset,
-            file_identity,
-        },
-    );
-
+        .map_err(|e| crate::error::AppError::State(e.to_string()))?
+        .insert(opened.path.clone(), opened);
     Ok(result)
 }
 
@@ -214,7 +269,7 @@ pub fn parse_files_batch(
     completed_offset: u32,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<Vec<ParseResult>, crate::error::AppError> {
+) -> Result<Vec<NativeParseResult>, crate::error::AppError> {
     use rayon::prelude::*;
 
     let total = paths.len() as u32;
@@ -230,17 +285,12 @@ pub fn parse_files_batch(
     // Per-file failures are logged + emitted as progress inside the closure
     // (where `path` is in scope) so the UI's progress counter still advances
     // when files are skipped, and the warn log includes the offending path.
-    type BatchParseOutcome = (
-        ParseResult,
-        crate::parser::ResolvedParser,
-        String,
-        Option<crate::fs_identity::FileIdentity>,
-    );
+    type BatchParseOutcome = parser::NativeParseArtifacts;
     let results: Vec<Result<BatchParseOutcome, crate::error::AppError>> = paths
         .par_iter()
         .map(|path| {
             let file_start = std::time::Instant::now();
-            let parse_outcome = parser::parse_file_identified(path);
+            let parse_outcome = parser::parse_file_with_artifacts(path);
             let file_ms = file_start.elapsed().as_millis() as u64;
 
             let done = completed.fetch_add(1, AtomicOrdering::Relaxed) + 1;
@@ -250,7 +300,8 @@ pub fn parse_files_batch(
                 .unwrap_or_default();
 
             match parse_outcome {
-                Ok((result, parser_selection, file_identity)) => {
+                Ok(artifacts) => {
+                    let result = &artifacts.result;
                     log::info!(
                         "  event=parse_file_done [{done}/{total}] path=\"{path}\" entries={} lines={} size={} ms={file_ms}",
                         result.entries.len(),
@@ -273,7 +324,7 @@ pub fn parse_files_batch(
                         },
                     );
 
-                    Ok((result, parser_selection, path.clone(), file_identity))
+                    Ok(artifacts)
                 }
                 Err(error) => {
                     log::warn!(
@@ -319,19 +370,9 @@ pub fn parse_files_batch(
 
     for item in results {
         match item {
-            Ok((result, parser_selection, path, file_identity)) => {
-                let initial_logical_record =
-                    InitialLogicalRecord::from_parse_result(&result, &parser_selection);
-                open_files.insert(
-                    PathBuf::from(&path),
-                    OpenFile {
-                        path: PathBuf::from(&path),
-                        parser_selection,
-                        initial_logical_record,
-                        byte_offset: result.byte_offset,
-                        file_identity,
-                    },
-                );
+            Ok(artifacts) => {
+                let (result, opened) = prepare_open_result(artifacts);
+                open_files.insert(opened.path.clone(), opened);
                 parse_results.push(result);
             }
             Err(_) => {
@@ -356,7 +397,7 @@ pub fn parse_files_batch(
 pub fn open_log_folder_aggregate(
     path: String,
     state: State<'_, AppState>,
-) -> Result<AggregateParseResult, crate::error::AppError> {
+) -> Result<NativeAggregateParseResult, crate::error::AppError> {
     open_log_folder_aggregate_impl(path, &state)
 }
 
@@ -369,7 +410,7 @@ pub fn open_log_folder_aggregate(
 fn open_log_folder_aggregate_impl(
     path: String,
     state: &AppState,
-) -> Result<AggregateParseResult, crate::error::AppError> {
+) -> Result<NativeAggregateParseResult, crate::error::AppError> {
     let listing = list_log_folder(path.clone())?;
     let file_entries: Vec<&FolderEntry> = listing
         .entries
@@ -386,43 +427,40 @@ fn open_log_folder_aggregate_impl(
     for entry in file_entries {
         // Skip files we can't read (permission denied, missing, etc.) so a
         // single inaccessible file doesn't abort the whole folder load.
-        let (result, parser_selection, file_identity) =
-            match parser::parse_file_identified(&entry.path) {
-                Ok(value) => value,
-                Err(error) => {
-                    log::warn!(
-                        "event=open_log_folder_aggregate_skip path=\"{}\" error=\"{error}\"",
-                        entry.path
-                    );
-                    parse_child_errors.push(PathDiagnostic {
-                        path: entry.path.clone(),
-                        reason: error.to_string(),
-                    });
-                    parse_errors = parse_errors.saturating_add(1);
-                    continue;
-                }
-            };
-        let final_entry_line_number = result.entries.last().map(|entry| entry.line_number);
-
+        let artifacts = match parser::parse_file_with_artifacts(&entry.path) {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!(
+                    "event=open_log_folder_aggregate_skip path=\"{}\" error=\"{error}\"",
+                    entry.path
+                );
+                parse_child_errors.push(PathDiagnostic {
+                    path: entry.path.clone(),
+                    reason: error.to_string(),
+                });
+                parse_errors = parse_errors.saturating_add(1);
+                continue;
+            }
+        };
+        let (response, opened) = prepare_open_result(artifacts);
+        let final_entry_line_number = response.entries.last().map(|entry| entry.line_number);
+        let result = response.result;
         total_lines = total_lines.saturating_add(result.total_lines);
         parse_errors = parse_errors.saturating_add(result.parse_errors);
         aggregate_entries.extend(result.entries);
-        aggregate_files.push(AggregateParsedFileResult {
-            file_path: result.file_path.clone(),
-            total_lines: result.total_lines,
-            parse_errors: result.parse_errors,
-            file_size: result.file_size,
-            byte_offset: result.byte_offset,
+        aggregate_files.push(NativeAggregateFileResult {
+            firewall_session_id: response.firewall_session_id,
+            firewall_decoding: response.firewall_decoding,
+            firewall_coverage: result.firewall_coverage,
+            result: AggregateParsedFileResult {
+                file_path: result.file_path.clone(),
+                total_lines: result.total_lines,
+                parse_errors: result.parse_errors,
+                file_size: result.file_size,
+                byte_offset: result.byte_offset,
+            },
         });
-        open_file_states.push((
-            PathBuf::from(&result.file_path),
-            result.file_path.clone(),
-            parser_selection,
-            result.byte_offset,
-            result.total_lines,
-            final_entry_line_number,
-            file_identity,
-        ));
+        open_file_states.push((opened, result.total_lines, final_entry_line_number));
     }
 
     let file_order: std::collections::HashMap<String, usize> = aggregate_files
@@ -447,44 +485,28 @@ fn open_log_folder_aggregate_impl(
             .open_files
             .lock()
             .map_err(|e| crate::error::AppError::State(e.to_string()))?;
-        for (
-            path_buf,
-            file_path,
-            parser_selection,
-            byte_offset,
-            file_total_lines,
-            final_entry_line_number,
-            file_identity,
-        ) in open_file_states
-        {
-            let initial_logical_record = if InitialLogicalRecord::supports_parser(&parser_selection)
-            {
-                final_entry_line_number
+        for (mut opened, file_total_lines, final_entry_line_number) in open_file_states {
+            if InitialLogicalRecord::supports_parser(&opened.parser_selection) {
+                let file_path = opened.path.to_string_lossy();
+                opened.initial_logical_record = final_entry_line_number
                     .and_then(|line_number| {
                         aggregate_entry_lookup
-                            .get(&(file_path.as_str(), line_number))
+                            .get(&(file_path.as_ref(), line_number))
                             .copied()
                     })
                     .and_then(|entry| {
-                        InitialLogicalRecord::from_entry(entry, file_total_lines, &parser_selection)
-                    })
-            } else {
-                None
-            };
-            open_files.insert(
-                path_buf.clone(),
-                OpenFile {
-                    path: path_buf,
-                    parser_selection,
-                    initial_logical_record,
-                    byte_offset,
-                    file_identity,
-                },
-            );
+                        InitialLogicalRecord::from_entry(
+                            entry,
+                            file_total_lines,
+                            &opened.parser_selection,
+                        )
+                    });
+            }
+            open_files.insert(opened.path.clone(), opened);
         }
     }
 
-    Ok(AggregateParseResult {
+    Ok(NativeAggregateParseResult {
         entries: aggregate_entries,
         total_lines,
         parse_errors,
@@ -1470,5 +1492,66 @@ mod tests {
         ]
     }
 }"#
+    }
+}
+
+#[cfg(test)]
+mod firewall_wire_tests {
+    use super::*;
+    const SYNTHETIC: &str = "#Software: Microsoft Windows Firewall\n#Time Format: Local\n#Fields: date time action protocol src-ip dst-ip src-port dst-port size tcpflags tcpsyn tcpack tcpwin icmptype icmpcode info path pid\n2042-04-05 06:07:09 ALLOW TCP 192.0.2.11 203.0.113.21 54001 443 60 S - - - - - - SEND 8801\n";
+    #[test]
+    fn firewall_aggregate_open_owns_each_source_and_exposes_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["invented-a.log", "invented-b.log"] {
+            std::fs::write(dir.path().join(name), SYNTHETIC).unwrap();
+        }
+        let state = AppState::new(vec![]);
+        let response =
+            open_log_folder_aggregate_impl(dir.path().to_string_lossy().into_owned(), &state)
+                .unwrap();
+        let wire = serde_json::to_value(&response).unwrap();
+        let files = wire["files"].as_array().unwrap();
+        assert_eq!(files.len(), 2);
+        let ids = files
+            .iter()
+            .map(|f| f["firewallSessionId"].as_str().expect("source session"))
+            .collect::<Vec<_>>();
+        assert_ne!(ids[0], ids[1]);
+        assert!(state
+            .open_files
+            .lock()
+            .unwrap()
+            .values()
+            .all(|f| f.firewall.is_some()));
+        assert_eq!(
+            files[0]["firewallCoverage"]["unplacedTimestamps"]["count"],
+            "1"
+        );
+    }
+    #[test]
+    fn firewall_single_and_batch_preparation_share_the_native_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("invented.log");
+        std::fs::write(&path, SYNTHETIC).unwrap();
+        let a = parser::parse_file_with_artifacts(path.to_str().unwrap()).unwrap();
+        let (response, opened) = prepare_open_result(a);
+        assert_eq!(
+            response.firewall_session_id.as_deref(),
+            Some(opened.firewall.as_ref().unwrap().session_id.as_str())
+        );
+        assert_eq!(
+            serde_json::to_value(&response).unwrap()["entries"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        std::fs::write(&path, "ordinary text\n").unwrap();
+        let (response, opened) =
+            prepare_open_result(parser::parse_file_with_artifacts(path.to_str().unwrap()).unwrap());
+        let wire = serde_json::to_value(&response).unwrap();
+        assert!(wire.get("firewallSessionId").is_none());
+        assert!(wire.get("firewallDecoding").is_none());
+        assert!(opened.firewall.is_none());
     }
 }

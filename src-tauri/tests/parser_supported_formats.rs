@@ -6,12 +6,13 @@ use app_lib::parser::ResolvedParser;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-const DECLARED_PARSER_KINDS: [ParserKind; 22] = [
+const DECLARED_PARSER_KINDS: [ParserKind; 23] = [
     ParserKind::Ccm,
     ParserKind::Simple,
     ParserKind::Timestamped,
     ParserKind::Plain,
     ParserKind::IisW3c,
+    ParserKind::WindowsFirewall,
     ParserKind::Panther,
     ParserKind::Cbs,
     ParserKind::Dism,
@@ -38,6 +39,7 @@ fn contract_name(kind: ParserKind) -> &'static str {
         ParserKind::Timestamped => "timestamped",
         ParserKind::Plain => "plain",
         ParserKind::IisW3c => "iis_w3c",
+        ParserKind::WindowsFirewall => "windows_firewall",
         ParserKind::Panther => "panther",
         ParserKind::Cbs => "cbs",
         ParserKind::Dism => "dism",
@@ -675,4 +677,24 @@ fn secureboot_invalid_timestamp_is_preserved_as_parse_error() {
     assert_eq!(entries[0].format, LogFormat::Plain);
     assert!(entries[0].timestamp.is_none());
     assert!(entries[0].timestamp_display.is_none());
+}
+
+#[test]
+fn text_contract_windows_firewall_uses_genuinely_synthetic_fixture() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../crates/cmtraceopen-parser/tests/fixtures/issue_814/firewall-local-18-fields.log");
+    let (result, selection) = app_lib::parser::parse_file(&path.to_string_lossy()).unwrap();
+    assert_selection(
+        &selection,
+        ParserKind::WindowsFirewall,
+        ParserImplementation::WindowsFirewall,
+        RecordFraming::PhysicalLine,
+    );
+    assert_eq!(result.parse_errors, 0);
+    assert_eq!(result.entries.len(), 3);
+    assert!(result.entries.iter().all(|entry| entry.timestamp.is_none()));
+    assert_eq!(
+        result.entries[0].firewall.as_ref().unwrap().field("src-ip"),
+        Some("192.0.2.11")
+    );
 }

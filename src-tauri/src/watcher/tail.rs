@@ -1503,6 +1503,17 @@ pub struct TailSession {
 }
 
 impl TailSession {
+    pub(crate) fn controlled() -> (Self, Arc<AtomicBool>) {
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        (
+            Self {
+                stop_flag: stop_flag.clone(),
+                paused: Arc::new(AtomicBool::new(false)),
+            },
+            stop_flag,
+        )
+    }
+
     pub fn set_paused(&self, paused: bool) {
         self.paused.store(paused, Ordering::Relaxed);
     }
