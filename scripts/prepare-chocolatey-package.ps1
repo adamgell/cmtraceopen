@@ -29,7 +29,15 @@ $checksums = [regex]::Matches($source, "checksum\s*=\s*'([0-9a-f]{64})'")
 if ($checksums.Count -ne 1) { throw 'Expected one template checksum' }
 $templateUrl = "https://github.com/adamgell/cmtraceopen/releases/download/v$templateVersion/CMTrace-Open_${templateVersion}_x64.msi"
 $source = $source.Replace($templateUrl, $url).Replace($checksums[0].Groups[1].Value, $checksum)
-$nuspecText = $nuspecText.Replace("<version>$templateVersion</version>", "<version>$version</version>").Replace("<tags>cmtraceopen $templateVersion</tags>", "<tags>cmtraceopen $version</tags>")
+$replacements = @(
+  @{From="<version>$templateVersion</version>"; To="<version>$version</version>"},
+  @{From="<tags>cmtraceopen $templateVersion "; To="<tags>cmtraceopen $version "},
+  @{From="<iconUrl>https://cdn.jsdelivr.net/gh/adamgell/cmtraceopen@v$templateVersion/logo.png</iconUrl>"; To="<iconUrl>https://cdn.jsdelivr.net/gh/adamgell/cmtraceopen@$Tag/logo.png</iconUrl>"}
+)
+foreach ($replacement in $replacements) {
+  if ([regex]::Matches($nuspecText, [regex]::Escape($replacement.From)).Count -ne 1) { throw 'Missing or ambiguous package metadata template fragment' }
+}
+foreach ($replacement in $replacements) { $nuspecText = $nuspecText.Replace($replacement.From, $replacement.To) }
 if (Test-Path $OutputDirectory) { throw 'Output directory must not already exist' }
 New-Item -ItemType Directory -Path (Join-Path $OutputDirectory 'tools') | Out-Null
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'cmtraceopen.nuspec'), $nuspecText)

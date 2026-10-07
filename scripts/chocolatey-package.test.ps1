@@ -67,8 +67,27 @@ try {
   $rendered = & (Join-Path $PSScriptRoot 'prepare-chocolatey-package.ps1') -Tag 'v2.0.3' -ReleaseMetadataPath $releasePath -InstallerPath $installer -OutputDirectory (Join-Path $root 'rendered') -TemplateRoot $PackageRoot
   if ($rendered.Version -ne '2.0.3' -or $rendered.Sha256 -ne $digest) { throw 'Future release rendering mismatched' }
   $renderedNuspec = [xml](Get-Content (Join-Path $root 'rendered/cmtraceopen.nuspec') -Raw)
-  if ($renderedNuspec.package.metadata.tags -cne 'cmtraceopen 2.0.3') { throw 'Rendered package tags mismatched' }
+  if ($renderedNuspec.package.metadata.tags -cne 'cmtraceopen 2.0.3 log viewer cmtrace intune') { throw 'Rendered package tags mismatched' }
+  if ($renderedNuspec.package.metadata.iconUrl -cne 'https://cdn.jsdelivr.net/gh/adamgell/cmtraceopen@v2.0.3/logo.png') { throw 'Rendered package icon must use the selected release tag' }
+  if ($renderedNuspec.package.metadata.copyright -cne 'Copyright (c) 2026 Adam') { throw 'Rendered package copyright mismatched' }
   Write-Output 'PASS: future stable release renders and validates without source edits'
+  foreach ($fragment in @(
+    @{From='<version>'; To='<version >'; Label='version fragment'},
+    @{From='<tags>cmtraceopen '; To='<tags>logviewer '; Label='tags fragment'},
+    @{From='https://cdn.jsdelivr.net/gh/adamgell/cmtraceopen@'; To='https://example.invalid/cmtraceopen@'; Label='icon fragment'}
+  )) {
+    $badTemplate = Join-Path $root ('template-' + [guid]::NewGuid())
+    Copy-Item $PackageRoot $badTemplate -Recurse
+    $badNuspec = Join-Path $badTemplate 'cmtraceopen.nuspec'
+    [IO.File]::WriteAllText($badNuspec, (Get-Content $badNuspec -Raw).Replace($fragment.From, $fragment.To))
+    $badOutput = Join-Path $root ('output-' + [guid]::NewGuid())
+    $rejected = $false
+    try {
+      $null = & (Join-Path $PSScriptRoot 'prepare-chocolatey-package.ps1') -Tag 'v2.0.3' -ReleaseMetadataPath $releasePath -InstallerPath $installer -OutputDirectory $badOutput -TemplateRoot $badTemplate
+    } catch { $rejected = $true }
+    if (-not $rejected -or (Test-Path $badOutput)) { throw "Accepted missing template $($fragment.Label) or wrote output before rejecting it" }
+    Write-Output "PASS reject rendering: missing template $($fragment.Label)"
+  }
   foreach ($badTag in @('v2.0.3-beta', 'v2.0.4', 'v2.0.3;Write-Host injected')) {
     $rejected = $false
     try {

@@ -308,7 +308,12 @@ def package_record(cache, name):
     installed = cache[name].installed
     if installed is None:
         raise ValueError(f"required package is not installed: {name}")
-    return dict(version=installed.version, origins=jammy_origins(installed))
+    try:
+        origins = jammy_origins(installed)
+    except ValueError as error:
+        observed = [dict(origin=item.origin, archive=item.archive, site=item.site, trusted=item.trusted) for item in installed.origins]
+        raise ValueError(f"package {name!r} version {installed.version!r}: {error}; observed origins={observed!r}") from error
+    return dict(version=installed.version, origins=origins)
 
 
 def build_context():
