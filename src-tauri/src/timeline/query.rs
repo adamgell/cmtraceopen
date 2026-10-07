@@ -44,6 +44,7 @@ pub fn materialize_msg(path: &Path, parser: &ResolvedParser, ei: &EntryIndex) ->
 pub struct SourceRuntime {
     pub path: std::path::PathBuf,
     pub parser: ResolvedParser,
+    pub firewall: Option<super::firewall::FirewallRuntime>,
 }
 
 pub struct QueryContext<'a> {
@@ -341,6 +342,7 @@ mod tests_buckets {
             display_name: format!("src{idx}"),
             color: "#000".into(),
             entry_count: 0,
+            firewall_excluded: None,
         }
     }
 

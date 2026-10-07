@@ -54,6 +54,16 @@ pub struct FirewallDecoder {
 }
 
 impl FirewallDecoder {
+    /// Decode a row at a known raw offset using the snapshot's resolved encoding.
+    /// BOM handling has already happened at source open and must not run again.
+    pub(crate) fn for_encoding(encoding: FirewallEncoding) -> Self {
+        Self {
+            encoding,
+            explicit_bom: encoding != FirewallEncoding::Windows1252,
+            ..Self::default()
+        }
+    }
+
     pub fn windows1252() -> Self {
         Self {
             encoding: FirewallEncoding::Windows1252,

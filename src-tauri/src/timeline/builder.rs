@@ -161,6 +161,7 @@ pub fn build_timeline(
                         kind: TimelineSourceKind::IntuneEvents,
                         path: req.path.clone(),
                         entry_count: events.len() as u32,
+                        firewall_excluded: None,
                     });
                     ime_events.insert(idx, events);
                 }
@@ -173,7 +174,15 @@ pub fn build_timeline(
         }
 
         match parse_to_index(&path) {
-            Ok((parser_kind, idx_vec, parser, entry_count)) => {
+            Ok(indexed) => {
+                let IndexedSource {
+                    parser,
+                    entries: idx_vec,
+                    firewall,
+                    excluded,
+                } = indexed;
+                let parser_kind = parser.parser;
+                let entry_count = idx_vec.len() as u32;
                 for ei in &idx_vec {
                     time_min = time_min.min(ei.timestamp_ms);
                     time_max = time_max.max(ei.timestamp_ms);
@@ -192,9 +201,17 @@ pub fn build_timeline(
                     kind: TimelineSourceKind::LogFile { parser_kind },
                     path: req.path.clone(),
                     entry_count,
+                    firewall_excluded: excluded,
                 });
                 indexes.insert(idx, idx_vec);
-                runtimes.insert(idx, SourceRuntime { path, parser });
+                runtimes.insert(
+                    idx,
+                    SourceRuntime {
+                        path,
+                        parser,
+                        firewall,
+                    },
+                );
             }
             Err(e) => errors.push(SourceError {
                 path: req.path.clone(),
@@ -255,22 +272,28 @@ pub fn build_timeline(
     ))
 }
 
-/// Parse one log file. Returns parser kind, index vec, resolved parser,
-/// and entry count.
-fn parse_to_index(
-    path: &std::path::Path,
-) -> Result<
-    (
-        crate::models::log_entry::ParserKind,
-        Vec<EntryIndex>,
-        crate::parser::ResolvedParser,
-        u32,
-    ),
-    anyhow::Error,
-> {
+struct IndexedSource {
+    parser: crate::parser::ResolvedParser,
+    entries: Vec<EntryIndex>,
+    firewall: Option<super::firewall::FirewallRuntime>,
+    excluded: Option<u32>,
+}
+
+fn parse_to_index(path: &std::path::Path) -> Result<IndexedSource, anyhow::Error> {
     let path_str = path.to_string_lossy().to_string();
-    let (parse_result, parser) =
-        crate::parser::parse_file(&path_str).map_err(|e| anyhow::anyhow!("parse_file: {}", e))?;
+    let artifacts = crate::parser::parse_file_with_artifacts(&path_str)
+        .map_err(|e| anyhow::anyhow!("parse_file: {}", e))?;
+    if artifacts.firewall.is_some() {
+        let indexed = super::firewall::index_firewall(&artifacts)?;
+        return Ok(IndexedSource {
+            parser: artifacts.selection,
+            entries: indexed.entries,
+            firewall: Some(indexed.runtime),
+            excluded: Some(indexed.excluded),
+        });
+    }
+    let parse_result = artifacts.result;
+    let parser = artifacts.selection;
 
     // Re-read the raw bytes so we can compute per-line byte offsets.
     // The byte offset for line N (1-based) is offsets[N - 1]. offsets[0] is 0.
@@ -283,7 +306,6 @@ fn parse_to_index(
         }
     }
 
-    let parser_kind = parser.parser;
     let mut idx_vec: Vec<EntryIndex> = Vec::with_capacity(parse_result.entries.len());
     for entry in &parse_result.entries {
         let timestamp_ms = entry.timestamp.unwrap_or(0);
@@ -308,8 +330,12 @@ fn parse_to_index(
             signal_flags: flags,
         });
     }
-    let entry_count = idx_vec.len() as u32;
-    Ok((parser_kind, idx_vec, parser, entry_count))
+    Ok(IndexedSource {
+        parser,
+        entries: idx_vec,
+        firewall: None,
+        excluded: None,
+    })
 }
 
 /// Walk an IME-logs folder and extract Intune events by running the same

@@ -78,6 +78,8 @@ pub struct TimelineSourceMeta {
     pub display_name: String,
     pub color: String,
     pub entry_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firewall_excluded: Option<u32>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

@@ -49,6 +49,7 @@ fn bench_buckets(c: &mut Criterion) {
                 display_name: "x".into(),
                 color: "#111".into(),
                 entry_count: 1_000_000,
+                firewall_excluded: None,
                 kind: TimelineSourceKind::LogFile {
                     parser_kind: ParserKind::Plain,
                 },
