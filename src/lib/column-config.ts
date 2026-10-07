@@ -359,6 +359,7 @@ export function getColumnDef(id: ColumnId): ColumnDefinition | undefined {
 const PARSER_COLUMN_MAP: Record<ParserKind, ColumnId[]> = {
   ccm: ["severity", "dateTime", "message", "component", "thread", "sourceFile"],
   simple: ["severity", "dateTime", "message", "component", "thread"],
+  windowsFirewall: ["severity", "dateTime", "message"],
   iisW3c: ["severity", "dateTime", "message", "httpMethod", "uri", "statusCode", "clientIp", "timeTakenMs", "serverIp", "userAgent"],
   dism: ["severity", "dateTime", "message", "component"],
   panther: ["severity", "dateTime", "message", "component", "thread", "sourceFile", "resultCode", "gleCode", "setupPhase", "operationName"],

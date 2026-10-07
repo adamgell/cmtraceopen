@@ -168,6 +168,18 @@ impl ResolvedParser {
         )
     }
 
+    pub fn windows_firewall() -> Self {
+        Self::new(
+            ParserKind::WindowsFirewall,
+            ParserImplementation::WindowsFirewall,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::PhysicalLine,
+            DateOrder::default(),
+            None,
+        )
+    }
+
     pub fn reporting_events() -> Self {
         Self::new(
             ParserKind::ReportingEvents,
@@ -392,7 +404,9 @@ impl ResolvedParser {
             ParserImplementation::Ccm => LogFormat::Ccm,
             ParserImplementation::Simple => LogFormat::Simple,
             ParserImplementation::GenericTimestamped => LogFormat::Timestamped,
-            ParserImplementation::IisW3c => LogFormat::Timestamped,
+            ParserImplementation::IisW3c | ParserImplementation::WindowsFirewall => {
+                LogFormat::Timestamped
+            }
             ParserImplementation::ReportingEvents => LogFormat::Timestamped,
             ParserImplementation::Msi => LogFormat::Timestamped,
             ParserImplementation::PsadtLegacy => LogFormat::Timestamped,
@@ -673,6 +687,8 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         ResolvedParser::patchmypc_detection()
     } else if burn_count >= 2 {
         ResolvedParser::burn()
+    } else if super::windows_firewall::probe(content) {
+        ResolvedParser::windows_firewall()
     } else if (iis_w3c_path_hint && iis_w3c_count >= 1) || iis_w3c_count >= 3 {
         ResolvedParser::iis_w3c()
     } else if (dhcp_path_hint && dhcp_count >= 1) || dhcp_count >= 3 {

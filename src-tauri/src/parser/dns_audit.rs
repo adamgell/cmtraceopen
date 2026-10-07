@@ -108,6 +108,7 @@ fn parse_opened_evtx(file: std::fs::File, path: &str) -> Result<ParseResult, Str
     Ok(ParseResult {
         entries,
         format_detected: LogFormat::DnsAudit,
+        firewall_coverage: None,
         parser_selection: selection_info,
         total_lines,
         parse_errors,

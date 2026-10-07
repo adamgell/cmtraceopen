@@ -9,6 +9,7 @@ export type ParserKind =
   | "timestamped"
   | "plain"
   | "iisW3c"
+  | "windowsFirewall"
   | "panther"
   | "cbs"
   | "dism"
@@ -31,6 +32,7 @@ export type ParserImplementation =
   | "simple"
   | "genericTimestamped"
   | "iisW3c"
+  | "windowsFirewall"
   | "reportingEvents"
   | "plainText"
   | "msi"
@@ -259,6 +261,7 @@ export interface ParserSelectionInfo {
 }
 
 export interface ParseResult {
+  firewallCoverage?: FirewallCoverage | null;
   entries: LogEntry[];
   formatDetected: LogFormat;
   parserSelection: ParserSelectionInfo;

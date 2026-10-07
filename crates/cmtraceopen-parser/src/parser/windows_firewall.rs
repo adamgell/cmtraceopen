@@ -113,18 +113,42 @@ fn canonical(tokens: &[&str]) -> bool {
 
 /// Bounded meaningful-text probe; skips leading NUL padding without copying it.
 pub fn probe(content: &str) -> bool {
-    let mut budget = MAX_FIREWALL_LINE_BYTES;
+    probe_measured(content).0
+}
+
+fn probe_measured(content: &str) -> (bool, usize) {
+    let mut scanned = 0;
+    let mut cursor = 0;
     let mut meaningful = 0;
-    for physical in content.lines() {
-        let line = physical.trim_start_matches('\0');
+    let bytes = content.as_bytes();
+    while cursor < bytes.len() && meaningful < MAX_PROBE_LINES {
+        // Only leading NUL padding is exempt from the work budget. Inspect
+        // ordinary text byte by byte so a huge physical line cannot bypass it.
+        while bytes.get(cursor) == Some(&0) {
+            cursor += 1;
+        }
+        let start = cursor;
+        while cursor < bytes.len() && bytes[cursor] != b'\n' {
+            if scanned == MAX_FIREWALL_LINE_BYTES {
+                return (false, scanned);
+            }
+            cursor += 1;
+            scanned += 1;
+        }
+        // We only slice at a physical boundary; a budget hit inside a UTF-8
+        // scalar returns above without constructing an invalid string slice.
+        let line = &content[start..cursor];
+        if cursor < bytes.len() {
+            if scanned == MAX_FIREWALL_LINE_BYTES {
+                return (false, scanned);
+            }
+            cursor += 1;
+            scanned += 1;
+        }
         if line.trim().is_empty() {
             continue;
         }
-        if meaningful == MAX_PROBE_LINES || line.len() > budget {
-            break;
-        }
         meaningful += 1;
-        budget -= line.len();
         let trimmed = line.trim();
         if let Some((key, value)) = trimmed.strip_prefix('#').and_then(|s| s.split_once(':')) {
             if key.eq_ignore_ascii_case("Software")
@@ -132,7 +156,7 @@ pub fn probe(content: &str) -> bool {
                     .trim()
                     .eq_ignore_ascii_case("Microsoft Windows Firewall")
             {
-                return true;
+                return (true, scanned);
             }
             if key.eq_ignore_ascii_case("Fields") {
                 let mut c = FirewallContext::default();
@@ -147,15 +171,15 @@ pub fn probe(content: &str) -> bool {
                                 || f.eq_ignore_ascii_case("cs-uri-stem")
                         })
                     {
-                        return true;
+                        return (true, scanned);
                     }
                 }
             }
         } else if canonical(&trimmed.split_whitespace().collect::<Vec<_>>()) {
-            return true;
+            return (true, scanned);
         }
     }
-    false
+    (false, scanned)
 }
 
 pub struct FirewallRecordResult {
@@ -305,5 +329,23 @@ pub fn parse_record(
             ..Default::default()
         },
         coverage,
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+
+    #[test]
+    fn probe_stops_within_an_oversized_physical_line() {
+        for prefix in ["x".repeat(2 * 1024 * 1024), " ".repeat(2 * 1024 * 1024)] {
+            let content = format!("{prefix}\n#Software: Microsoft Windows Firewall\n");
+            let (found, inspected_text_bytes) = probe_measured(&content);
+            assert!(!found);
+            assert!(
+                inspected_text_bytes <= MAX_FIREWALL_LINE_BYTES,
+                "inspected {inspected_text_bytes} non-padding bytes"
+            );
+        }
     }
 }

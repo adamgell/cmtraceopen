@@ -298,6 +298,8 @@ function getParserLabel(parser: ParserSelectionInfo["parser"]): string {
       return "Timestamped";
     case "plain":
       return "Plain text";
+    case "windowsFirewall":
+      return "Windows Firewall";
     case "iisW3c":
       return "IIS W3C";
     case "panther":
@@ -347,6 +349,8 @@ function getImplementationLabel(
       return "Simple parser";
     case "genericTimestamped":
       return "Generic timestamped parser";
+    case "windowsFirewall":
+      return "Windows Firewall";
     case "iisW3c":
       return "IIS W3C Extended Log parser";
     case "reportingEvents":

@@ -58,6 +58,7 @@ pub enum ParserKind {
     Timestamped,
     Plain,
     IisW3c,
+    WindowsFirewall,
     Panther,
     Cbs,
     Dism,
@@ -85,6 +86,7 @@ pub enum ParserImplementation {
     Simple,
     GenericTimestamped,
     IisW3c,
+    WindowsFirewall,
     ReportingEvents,
     PlainText,
     Msi,
@@ -311,6 +313,8 @@ pub struct LogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParseResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firewall_coverage: Option<super::firewall::FirewallCoverage>,
     pub entries: Vec<LogEntry>,
     pub format_detected: LogFormat,
     pub parser_selection: ParserSelectionInfo,

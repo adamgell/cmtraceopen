@@ -685,6 +685,7 @@ const TIMELINE_PARSER_KIND_MEMBERS = {
   timestamped: true,
   plain: true,
   iisW3c: true,
+  windowsFirewall: true,
   panther: true,
   cbs: true,
   dism: true,
