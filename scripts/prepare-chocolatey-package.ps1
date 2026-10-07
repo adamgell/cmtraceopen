@@ -29,7 +29,9 @@ $checksums = [regex]::Matches($source, "checksum\s*=\s*'([0-9a-f]{64})'")
 if ($checksums.Count -ne 1) { throw 'Expected one template checksum' }
 $templateUrl = "https://github.com/adamgell/cmtraceopen/releases/download/v$templateVersion/CMTrace-Open_${templateVersion}_x64.msi"
 $source = $source.Replace($templateUrl, $url).Replace($checksums[0].Groups[1].Value, $checksum)
-$nuspecText = $nuspecText.Replace("<version>$templateVersion</version>", "<version>$version</version>").Replace("<tags>cmtraceopen $templateVersion</tags>", "<tags>cmtraceopen $version</tags>")
+$nuspecText = $nuspecText.Replace("<version>$templateVersion</version>", "<version>$version</version>").
+  Replace("<tags>cmtraceopen $templateVersion", "<tags>cmtraceopen $version").
+  Replace("https://cdn.jsdelivr.net/gh/adamgell/cmtraceopen@v$templateVersion/logo.png", "https://cdn.jsdelivr.net/gh/adamgell/cmtraceopen@$Tag/logo.png")
 if (Test-Path $OutputDirectory) { throw 'Output directory must not already exist' }
 New-Item -ItemType Directory -Path (Join-Path $OutputDirectory 'tools') | Out-Null
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'cmtraceopen.nuspec'), $nuspecText)

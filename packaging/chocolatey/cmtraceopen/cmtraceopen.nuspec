@@ -9,7 +9,7 @@
     <requireLicenseAcceptance>true</requireLicenseAcceptance>
     <licenseUrl>https://github.com/adamgell/cmtraceopen/blob/main/LICENSE</licenseUrl>
     <projectUrl>https://github.com/adamgell/cmtraceopen</projectUrl>
-    <iconUrl>https://raw.githubusercontent.com/adamgell/cmtraceopen/main/logo.png</iconUrl>
+    <iconUrl>https://cdn.jsdelivr.net/gh/adamgell/cmtraceopen@v1.6.2/logo.png</iconUrl>
     <description>A free, open-source log viewer and Windows troubleshooting tool. Drop in a log file and start reading — no install wizards, no prerequisites, no license keys.
 Built as a modern replacement for Microsoft's CMTrace.exe with added Intune diagnostics, DSRegCmd analysis, and real-time log tailing.
 
@@ -44,7 +44,8 @@ Analyze Intune Management Extension logs without reading raw text line by line.
 - See the DSRegCmd troubleshooting guide for a detailed walkthrough.</description>
     <summary>An open-source log viewer inspired by Microsoft's CMTrace.exe.</summary>
     <releaseNotes>https://github.com/adamgell/cmtraceopen/releases</releaseNotes>
-    <tags>cmtraceopen 1.6.2</tags>
+    <tags>cmtraceopen 1.6.2 log viewer cmtrace intune</tags>
+    <copyright>Copyright (c) 2026 Adam</copyright>
     <projectSourceUrl>https://github.com/adamgell/cmtraceopen</projectSourceUrl>
     <packageSourceUrl>https://github.com/adamgell/cmtraceopen</packageSourceUrl>
   </metadata>
