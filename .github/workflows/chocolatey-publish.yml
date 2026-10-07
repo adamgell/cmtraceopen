@@ -3,17 +3,23 @@ name: 'CMTrace Open: Publish to Chocolatey'
 on:
   release:
     types: [published]
-  # Backfill only: v1.6.2 predates this workflow. Future releases use published.
+  # v1.6.2 backfill/moderation correction only. Future releases use published.
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing release to backfill through the normal publishing jobs'
+        description: 'Existing release to submit through the publishing jobs'
         type: choice
         options: [v1.6.2]
         default: v1.6.2
         required: true
+      mode:
+        description: 'Normal submission or the reviewed, unapproved 1.6.2 metadata correction'
+        type: choice
+        options: [normal, moderator-correction]
+        default: normal
+        required: true
       publish:
-        description: 'Submit the backfill after validation (false checks Windows packing only)'
+        description: 'Submit after validation (false checks Windows packing only)'
         type: boolean
         required: true
         default: false
@@ -36,6 +42,7 @@ jobs:
     outputs:
       version: ${{ steps.pack.outputs.version }}
       sha256: ${{ steps.pack.outputs.sha256 }}
+      guard_sha256: ${{ steps.pack.outputs.guard_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,13 +85,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Chocolatey pack failed' }
           $package = "$output/cmtraceopen.$($validated.Version).nupkg"
           $hash = (Get-FileHash $package -Algorithm SHA256).Hash.ToLowerInvariant()
+          $guard = "$output/chocolatey-submission-guard.ps1"
+          Copy-Item scripts/chocolatey-submission-guard.ps1 $guard
+          $guardHash = (Get-FileHash $guard -Algorithm SHA256).Hash.ToLowerInvariant()
           "version=$($validated.Version)" >> $env:GITHUB_OUTPUT
           "sha256=$hash" >> $env:GITHUB_OUTPUT
+          "guard_sha256=$guardHash" >> $env:GITHUB_OUTPUT
           "Package: cmtraceopen.$($validated.Version).nupkg; SHA256: $hash" >> $env:GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: chocolatey-package
-          path: ${{ runner.temp }}/chocolatey-package/*.nupkg
+          path: ${{ runner.temp }}/chocolatey-package/*
           if-no-files-found: error
           retention-days: 7
 
@@ -108,35 +119,42 @@ jobs:
         env:
           PACKAGE_VERSION: ${{ needs.package.outputs.version }}
           PACKAGE_SHA256: ${{ needs.package.outputs.sha256 }}
+          GUARD_SHA256: ${{ needs.package.outputs.guard_sha256 }}
+          SUBMISSION_MODE: ${{ inputs.mode || 'normal' }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          PUBLISH_REQUESTED: ${{ inputs.publish }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+$' -or $env:PACKAGE_SHA256 -cnotmatch '^[0-9a-f]{64}$') { throw 'Invalid package identity' }
+          $guard = 'package/chocolatey-submission-guard.ps1'
+          if ($env:GUARD_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or (Get-FileHash $guard -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:GUARD_SHA256) { throw 'Submission guard changed after validation' }
           $file = "package/cmtraceopen.$env:PACKAGE_VERSION.nupkg"
-          if ((Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:PACKAGE_SHA256) { throw 'Package hash changed after validation' }
-          # BEGIN existing-version guard (exercised by the focused test script)
-          $response = Invoke-WebRequest -Uri "https://community.chocolatey.org/api/v2/package/cmtraceopen/$env:PACKAGE_VERSION" -OutFile existing.nupkg -PassThru -SkipHttpErrorCheck -TimeoutSec 60
-          if ($response.StatusCode -eq 404) {
-            'needs_push=true' >> $env:GITHUB_OUTPUT
-          } elseif ($response.StatusCode -eq 200) {
-            if ((Get-FileHash existing.nupkg -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:PACKAGE_SHA256) { throw 'This version already exists with different package bytes; refusing to replace it' }
-            'needs_push=false' >> $env:GITHUB_OUTPUT
-            'Identical package version already exists; no upload needed.' >> $env:GITHUB_STEP_SUMMARY
-          } else {
-            throw "Cannot determine existing package state (HTTP $($response.StatusCode)); refusing to publish"
-          }
-          # END existing-version guard
+          $needsPush = & $guard -PackagePath $file -Version $env:PACKAGE_VERSION -Sha256 $env:PACKAGE_SHA256 -Mode $env:SUBMISSION_MODE -Tag $env:RELEASE_TAG -PublishRequested:($env:PUBLISH_REQUESTED -ceq 'true')
+          if ($needsPush -isnot [bool]) { throw 'Invalid submission guard decision' }
+          "needs_push=$($needsPush.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          if (-not $needsPush) { 'Identical package version already exists; no upload needed.' >> $env:GITHUB_STEP_SUMMARY }
       - name: Submit to Chocolatey Community Repository
         if: steps.existing.outputs.needs_push == 'true'
         shell: pwsh
         env:
           PACKAGE_VERSION: ${{ needs.package.outputs.version }}
           PACKAGE_SHA256: ${{ needs.package.outputs.sha256 }}
+          GUARD_SHA256: ${{ needs.package.outputs.guard_sha256 }}
+          SUBMISSION_MODE: ${{ inputs.mode || 'normal' }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          PUBLISH_REQUESTED: ${{ inputs.publish }}
+          GH_TOKEN: ${{ github.token }}
           CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ([string]::IsNullOrWhiteSpace($env:CHOCOLATEY_API_KEY)) { throw 'Chocolatey publishing credential is not configured' }
           $file = "package/cmtraceopen.$env:PACKAGE_VERSION.nupkg"
-          if ((Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:PACKAGE_SHA256) { throw 'Package changed before upload' }
+          $guard = 'package/chocolatey-submission-guard.ps1'
+          if ($env:GUARD_SHA256 -cnotmatch '^[0-9a-f]{64}$' -or (Get-FileHash $guard -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:GUARD_SHA256) { throw 'Submission guard changed before upload' }
+          # Re-read server/release state immediately before the ordinary push.
+          $needsPush = & $guard -PackagePath $file -Version $env:PACKAGE_VERSION -Sha256 $env:PACKAGE_SHA256 -Mode $env:SUBMISSION_MODE -Tag $env:RELEASE_TAG -PublishRequested:($env:PUBLISH_REQUESTED -ceq 'true')
+          if ($needsPush -isnot [bool]) { throw 'Invalid submission guard decision' }
+          if (-not $needsPush) { 'Identical package already received; no upload needed.' >> $env:GITHUB_STEP_SUMMARY; exit 0 }
           choco push $file --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY --limit-output
           if ($LASTEXITCODE -ne 0) { throw 'Chocolatey submission failed' }
           'Package submitted; Chocolatey moderation and public availability must be checked separately.' >> $env:GITHUB_STEP_SUMMARY
