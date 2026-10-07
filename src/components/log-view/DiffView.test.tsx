@@ -1,3 +1,4 @@
+import { firewallEntry } from "../../test-utils/firewall";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { classifyEntries } from "../../lib/diff-entries";
@@ -73,4 +74,11 @@ describe("DiffView (LOG-017)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close diff" }));
     expect(useLogStore.getState().diffState).toBeNull();
   });
+});
+
+it("preserves literal firewall time in diff rows", () => {
+  const entriesA = [firewallEntry({ timestampDisplay: "2042-03-09 02:30:00" })];
+  useLogStore.setState({ diffState: { mode: "two-file", sourceA: { filePath: "a.log", label: "a" }, sourceB: { filePath: "b.log", label: "b" }, displayMode: "side-by-side", entriesA, entriesB: [], ...classifyEntries(entriesA, []) } });
+  render(<DiffView />);
+  expect(screen.getByText("2042-03-09 02:30:00")).toBeVisible();
 });

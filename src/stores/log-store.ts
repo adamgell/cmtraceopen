@@ -1,3 +1,4 @@
+import { firewallSearchText } from "../lib/firewall-fields";
 import { reconcileFirewallRows, sameFirewallControl, sourceFromSnapshot, type FirewallSourceState } from "./firewall-state";
 import { create } from "zustand";
 import type {
@@ -176,6 +177,7 @@ function buildFindMatcher(
  */
 function getSearchableText(entry: LogEntry, columns: ColumnId[]): string {
   const parts: string[] = [entry.message];
+  if (entry.firewall) parts.push(firewallSearchText(entry));
 
   for (const colId of columns) {
     if (colId === "message" || colId === "severity" || colId === "lineNumber") continue;

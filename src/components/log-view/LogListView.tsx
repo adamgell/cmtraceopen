@@ -1,3 +1,5 @@
+import { compareEntryTimes } from "../../lib/firewall-fields";
+import { FirewallCoverageNotice } from "./FirewallCoverageNotice";
 import {
   useRef,
   useEffect,
@@ -144,7 +146,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
       const sorted = [...result].sort((a, b) => {
         let cmp: number;
         if (sortColumn === "dateTime") {
-          cmp = (a.timestamp ?? 0) - (b.timestamp ?? 0);
+          cmp = compareEntryTimes(a, b);
         } else if (sortColumn === "lineNumber") {
           cmp = a.lineNumber - b.lineNumber;
         } else if (sortColumn === "severity") {
@@ -800,6 +802,7 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
         </Button>
       </div>
 
+      <FirewallCoverageNotice />
       {/* Column header with resize handles and drag-to-reorder */}
       <div
         style={{

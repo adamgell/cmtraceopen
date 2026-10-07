@@ -117,6 +117,12 @@ fn matches_clause(entry: &LogEntry, compiled: &CompiledClause) -> bool {
             match_string(&thread_str, &clause.op, needle_lower)
         }
         FilterField::Timestamp => {
+            if entry.firewall.is_some()
+                && entry.timestamp.is_none()
+                && !matches!(clause.op, FilterOp::Contains | FilterOp::NotContains)
+            {
+                return false;
+            }
             let ts = entry.timestamp.unwrap_or(0);
             match_timestamp(ts, &clause.op, *timestamp_target)
         }
@@ -228,6 +234,40 @@ fn invalid_timestamp_filter_value(value: &str) -> crate::error::AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firewall_without_absolute_time_never_matches_epoch_filters() {
+        let content = "#Software: Microsoft Windows Firewall\n#Time Format: Local\n#Fields: date time action protocol src-ip dst-ip src-port dst-port\n2042-04-05 06:07:09 ALLOW TCP 192.0.2.11 203.0.113.21 41000 443\n";
+        let (result, _) = cmtraceopen_parser::parser::parse_content(
+            content,
+            "synthetic.log",
+            content.len() as u64,
+        );
+        assert_eq!(result.entries.len(), 1);
+        for op in [
+            FilterOp::Before,
+            FilterOp::After,
+            FilterOp::Equals,
+            FilterOp::NotEquals,
+        ] {
+            let clause = FilterClause {
+                field: FilterField::Timestamp,
+                op,
+                value: "0".into(),
+            };
+            assert!(apply_filter(result.entries.clone(), vec![clause])
+                .unwrap()
+                .is_empty());
+        }
+        let mut utc = result.entries[0].clone();
+        utc.timestamp = Some(0);
+        let clause = FilterClause {
+            field: FilterField::Timestamp,
+            op: FilterOp::Equals,
+            value: "0".into(),
+        };
+        assert_eq!(apply_filter(vec![utc], vec![clause]).unwrap(), vec![0]);
+    }
 
     #[test]
     fn timestamp_filter_accepts_plain_iso_date() {

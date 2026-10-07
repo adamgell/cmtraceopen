@@ -1,3 +1,4 @@
+import { FirewallDetails } from "./FirewallDetails";
 import { Badge, Button, tokens } from "@fluentui/react-components";
 import { DismissRegular } from "@fluentui/react-icons";
 import {
@@ -222,6 +223,7 @@ export function InfoPane() {
           </div>
         );
       })()}
+      {selectedEntry.firewall && <FirewallDetails key={`${selectedEntry.filePath}:${selectedEntry.id}`} record={selectedEntry.firewall} />}
       <AppWorkloadScriptDetail message={selectedEntry.message} />
       {mergedTabState && correlatedEntries.length > 0 && (
         <div

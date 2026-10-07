@@ -66,7 +66,8 @@ export function formatDisplayTime(value: DateLikeValue): string | null {
   return formatWithWindowsPattern(parsed, cachedPreferences.timePattern, cachedPreferences);
 }
 
-export function formatLogEntryTimestamp(entry: Pick<LogEntry, "timestamp" | "timestampDisplay">): string | null {
+export function formatLogEntryTimestamp(entry: Pick<LogEntry, "timestamp" | "timestampDisplay" | "firewall">): string | null {
+  if (entry.firewall) return entry.timestampDisplay;
   return formatDisplayDateTime(entry.timestampDisplay ?? entry.timestamp);
 }
 

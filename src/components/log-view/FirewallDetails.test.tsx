@@ -1,0 +1,22 @@
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { firewallEntry } from "../../test-utils/firewall";
+import { useLogStore } from "../../stores/log-store";
+import { InfoPane } from "./InfoPane";
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn(async () => {}) }));
+afterEach(cleanup);
+it("shows ordered fields, missing versus hyphen and truncated raw copy inside details", () => {
+  const entry = firewallEntry();
+  entry.firewall!.fields = [{ name: "invented-first", value: "value-first" }, { name: "tcpflags", value: "-" }, { name: "pid", value: null }];
+  entry.firewall!.declaredFields = entry.firewall!.fields.map(f => f.name);
+  entry.firewall!.truncated = true;
+  useLogStore.setState({ entries: [entry], selectedId: entry.id });
+  const { container } = render(<InfoPane />);
+  expect(Array.from(container.querySelectorAll("dt")).map(e => e.textContent)).toEqual(entry.firewall!.declaredFields);
+  expect(screen.getByText("-")).toBeVisible(); expect(screen.getByText("Not present")).toBeVisible();
+  expect(screen.getByText(/Raw line.*truncated/)).toBeVisible();
+  expect(screen.getByText(entry.firewall!.rawLine)).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Copy raw line (truncated)" }));
+  expect(writeText).toHaveBeenCalledWith(entry.firewall!.rawLine);
+});
