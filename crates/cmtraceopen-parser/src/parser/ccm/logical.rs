@@ -151,6 +151,7 @@ pub fn parse_ime_entries(content: &str, file_path: &str) -> (Vec<LogEntry>, u32)
             dns_flags: None,
             dns_event_id: None,
             zone_name: None,
+            firewall: None,
             entry_kind: None,
             whatif: None,
             section_name: None,

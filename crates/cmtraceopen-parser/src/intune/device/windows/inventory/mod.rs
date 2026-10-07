@@ -661,6 +661,7 @@ fn log_entry(
         dns_flags: None,
         dns_event_id: None,
         zone_name: None,
+        firewall: None,
         entry_kind: None,
         whatif: None,
         section_name: None,

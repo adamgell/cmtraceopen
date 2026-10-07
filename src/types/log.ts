@@ -175,7 +175,29 @@ export interface ErrorCodeSpan {
   outcome: ErrorCodeOutcome;
 }
 
+export interface FirewallMetric { count: string; lines: number[]; }
+export interface FirewallCoverage {
+  padding: FirewallMetric;
+  malformed: FirewallMetric;
+  oversized: FirewallMetric;
+  lossEvents: FirewallMetric;
+  lostEvents: FirewallMetric;
+  unknownLossCount: FirewallMetric;
+  unplacedTimestamps: FirewallMetric;
+}
+export interface FirewallField { name: string; value: string | null; }
+export interface FirewallRecord {
+  rawLine: string;
+  declaredFields: string[];
+  fields: FirewallField[];
+  schemaOrigin: "header" | "canonical" | "unavailable";
+  timeBasis: "local" | "utc" | "unknown";
+  recordKind: "traffic" | "eventsLost" | "malformed";
+  truncated: boolean;
+}
+
 export interface LogEntry {
+  firewall?: FirewallRecord | null;
   id: number;
   lineNumber: number;
   message: string;

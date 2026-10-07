@@ -167,6 +167,9 @@ pub struct ParserSelectionInfo {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogEntry {
+    /// Original Windows Firewall fields; absent for other formats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firewall: Option<super::firewall::FirewallRecord>,
     /// Sequential ID for stable row identity
     pub id: u64,
     /// 1-based line number in the source file
