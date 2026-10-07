@@ -159,6 +159,7 @@ fn parse_serialized_record(
         extract_event_fields(event_id, event_data);
 
     Ok(Some(LogEntry {
+        firewall: None,
         id,
         line_number: id as u32 + 1,
         message,
