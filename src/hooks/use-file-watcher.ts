@@ -1,8 +1,35 @@
+import type { FirewallControlToken, LogFormat } from "../types/log";
+import { sameFirewallControl } from "../stores/firewall-state";
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useLogStore } from "../stores/log-store";
 import { startTail, stopTail, pauseTail, resumeTail } from "../lib/commands";
 import { parseTailPayload } from "../lib/tail-payload-validation";
+
+function currentFirewallControl(path: string): FirewallControlToken | undefined {
+  const source = useLogStore.getState().firewallSources[path];
+  return source?.active ? { sourceSessionId: source.sessionId, watchEpoch: source.watchEpoch } : undefined;
+}
+
+function startSourceWatch(path: string, format: LogFormat, offset: number, nextId: number, nextLine: number): () => void {
+  const token = useLogStore.getState().beginFirewallWatch(path);
+  if (!token && useLogStore.getState().firewallSources[path]) return () => {};
+  const started = token ? startTail(path, format, offset, nextId, nextLine, token) : startTail(path, format, offset, nextId, nextLine);
+  started.then(async () => {
+    if (!token) return;
+    const state = useLogStore.getState();
+    const source = state.firewallSources[path];
+    if (!source?.active || !sameFirewallControl(source, token)) return;
+    // The first pause may have reached native before start was admitted. Apply
+    // the latest pause state after start resolves; cancelled epochs stay stopped.
+    await (state.isPaused ? pauseTail : resumeTail)(path, token);
+  }).catch(err => console.error("Failed to start tail:", err));
+  return () => {
+    if (token) useLogStore.getState().endFirewallWatch(path, token);
+    const stopped = token ? stopTail(path, token) : stopTail(path);
+    stopped.catch(err => console.error("Failed to stop tail:", err));
+  };
+}
 
 /**
  * Hook that manages the file-tail lifecycle:
@@ -32,6 +59,9 @@ export function useFileWatcher() {
   const resetAggregateEntries = useLogStore((s) => s.resetAggregateEntries);
   const setParserSelection = useLogStore((s) => s.setParserSelection);
   const setTotalLines = useLogStore((s) => s.setTotalLines);
+  const firewallSessionKey = useLogStore(s => s.sourceOpenMode === "aggregate-folder"
+    ? JSON.stringify(s.aggregateFiles.map(file => [file.filePath, s.firewallSources[file.filePath]?.sessionId]))
+    : s.firewallSources[s.openFilePath ?? ""]?.sessionId ?? "");
   const aggregateTailKey = JSON.stringify(
     [
       aggregateTailGeneration,
@@ -48,19 +78,8 @@ export function useFileWatcher() {
 
       const tailFormat = formatDetected ?? "Plain";
 
-      for (const file of aggregateFiles) {
-        startTail(file.filePath, tailFormat, file.byteOffset, 0, file.totalLines + 1).catch(
-          (err) => console.error("Failed to start aggregate tail:", err)
-        );
-      }
-
-      return () => {
-        for (const file of aggregateFiles) {
-          stopTail(file.filePath).catch((err) =>
-            console.error("Failed to stop aggregate tail:", err)
-          );
-        }
-      };
+      const cleanups = aggregateFiles.map(file => startSourceWatch(file.filePath, tailFormat, file.byteOffset, 0, file.totalLines + 1));
+      return () => cleanups.forEach(cleanup => cleanup());
     }
 
     if (!openFilePath || !formatDetected) return;
@@ -74,16 +93,8 @@ export function useFileWatcher() {
         : 0;
     const nextLine = totalLines + 1;
 
-    startTail(openFilePath, formatDetected, byteOffset, nextId, nextLine).catch(
-      (err) => console.error("Failed to start tail:", err)
-    );
-
-    return () => {
-      stopTail(openFilePath).catch((err) =>
-        console.error("Failed to stop tail:", err)
-      );
-    };
-  }, [aggregateTailKey, formatDetected, openFilePath, sourceOpenMode]);
+    return startSourceWatch(openFilePath, formatDetected, byteOffset, nextId, nextLine);
+  }, [aggregateTailKey, firewallSessionKey, formatDetected, openFilePath, sourceOpenMode]);
 
   // Handle pause/resume
   useEffect(() => {
@@ -94,7 +105,9 @@ export function useFileWatcher() {
 
       for (const file of aggregateFiles) {
         const action = isPaused ? pauseTail : resumeTail;
-        action(file.filePath).catch((err) =>
+        const token = currentFirewallControl(file.filePath);
+        if (!token && useLogStore.getState().firewallSources[file.filePath]) continue;
+        (token ? action(file.filePath, token) : action(file.filePath)).catch((err) =>
           console.error(`Failed to ${isPaused ? "pause" : "resume"} aggregate tail:`, err)
         );
       }
@@ -103,16 +116,18 @@ export function useFileWatcher() {
 
     if (!openFilePath) return;
 
+    const token = currentFirewallControl(openFilePath);
+    if (!token && useLogStore.getState().firewallSources[openFilePath]) return;
     if (isPaused) {
-      pauseTail(openFilePath).catch((err) =>
+      (token ? pauseTail(openFilePath, token) : pauseTail(openFilePath)).catch((err) =>
         console.error("Failed to pause tail:", err)
       );
     } else {
-      resumeTail(openFilePath).catch((err) =>
+      (token ? resumeTail(openFilePath, token) : resumeTail(openFilePath)).catch((err) =>
         console.error("Failed to resume tail:", err)
       );
     }
-  }, [aggregateFiles, isPaused, openFilePath, sourceOpenMode]);
+  }, [aggregateFiles, firewallSessionKey, isPaused, openFilePath, sourceOpenMode]);
 
   // Listen for new tail entries from the Rust backend
   useEffect(() => {
@@ -132,6 +147,10 @@ export function useFileWatcher() {
         reset,
       } = payload;
       const state = useLogStore.getState();
+      if (payload.firewallControl || state.firewallSources[filePath]) {
+        state.applyFirewallTail(payload);
+        return;
+      }
 
       if (state.sourceOpenMode === "aggregate-folder") {
         const isTrackedFile = state.aggregateFiles.some((file) => file.filePath === filePath);

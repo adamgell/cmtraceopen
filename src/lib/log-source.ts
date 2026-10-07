@@ -153,14 +153,19 @@ async function stopCurrentTailIfNeeded(nextFilePath: string | null): Promise<voi
   }
 
   await Promise.all(
-    currentPaths.map((currentPath) =>
-      stopTail(currentPath).catch((error) => {
+    currentPaths.map((currentPath) => {
+      const owner = state.firewallSources[currentPath];
+      const control = owner && owner.watchEpoch > 0
+        ? { sourceSessionId: owner.sessionId, watchEpoch: owner.watchEpoch }
+        : undefined;
+      if (control) state.endFirewallWatch(currentPath, control);
+      return (control ? stopTail(currentPath, control) : stopTail(currentPath)).catch((error) => {
         console.warn("[log-source] failed to stop current tail", {
           currentPath,
           error,
         });
-      })
-    )
+      });
+    })
   );
 }
 
@@ -172,6 +177,7 @@ async function applyParseResultToStore(
 ): Promise<boolean> {
   if (!isCurrentTabSwitch(switchGeneration)) return false;
   const state = useLogStore.getState();
+  state.registerFirewallSource(result);
   // Registry files use a dedicated viewer — load structured data instead of log entries
   if (result.parserSelection?.parser === "registry") {
     let registryData: RegistryParseResult;
@@ -348,6 +354,7 @@ async function loadFolderProgressive(
 
   // Cache each file's entries for instant tab switching
   for (const result of allResults) {
+    state.registerFirewallSource(result);
     const fileColumns = getColumnsForParser(result.parserSelection.parser);
     setCachedTabSnapshot(result.filePath, {
       entries: result.entries,
@@ -378,6 +385,9 @@ async function loadFolderProgressive(
       byteOffset: result.byteOffset,
       formatDetected: result.formatDetected,
       parserSelection: result.parserSelection,
+      firewallSessionId: result.firewallSessionId,
+      firewallCoverage: result.firewallCoverage,
+      firewallDecoding: result.firewallDecoding,
     });
   }
 
@@ -935,6 +945,7 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<boolean> {
 
     // Cache each file for instant tab switching
     for (const result of results) {
+      state.registerFirewallSource(result);
       const fileColumns = getColumnsForParser(result.parserSelection.parser);
       setCachedTabSnapshot(result.filePath, {
         entries: result.entries,
@@ -964,6 +975,9 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<boolean> {
         byteOffset: result.byteOffset,
         formatDetected: result.formatDetected,
         parserSelection: result.parserSelection,
+        firewallSessionId: result.firewallSessionId,
+        firewallCoverage: result.firewallCoverage,
+        firewallDecoding: result.firewallDecoding,
       });
     }
 

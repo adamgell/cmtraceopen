@@ -1,6 +1,7 @@
+import { firewallSnapshot, firewallPayload } from "../test-utils/firewall";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { startTail, stopTail } from "../lib/commands";
+import { startTail, stopTail, pauseTail, resumeTail } from "../lib/commands";
 import { useLogStore } from "../stores/log-store";
 import type {
   AggregateSourceFile,
@@ -475,5 +476,63 @@ describe("useFileWatcher tail start state", () => {
     ]);
     expect(useLogStore.getState().totalLines).toBe(5);
     warnSpy.mockRestore();
+  });
+});
+
+describe("firewall watch epochs", () => {
+  beforeEach(() => { vi.clearAllMocks(); useLogStore.getState().clear(); });
+  afterEach(cleanup);
+  function install() {
+    const snapshot = firewallSnapshot();
+    useLogStore.getState().registerFirewallSource(snapshot);
+    useLogStore.setState({ openFilePath: snapshot.filePath, sourceOpenMode: "single-file", formatDetected: "Timestamped", entries: snapshot.entries });
+    return snapshot;
+  }
+  it("passes the current token through pause/resume and ignores a delayed cancelled start", async () => {
+    const snapshot = install();
+    let finish!: () => void;
+    startTailMock.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
+    const first = renderHook(() => useFileWatcher());
+    const oldToken = startTailMock.mock.calls[0][5];
+    act(() => useLogStore.setState({ isPaused: true }));
+    await waitFor(() => expect(pauseTail).toHaveBeenCalledWith(snapshot.filePath, oldToken));
+    first.unmount();
+    renderHook(() => useFileWatcher());
+    const token = startTailMock.mock.calls[1][5];
+    await waitFor(() => expect(pauseTail).toHaveBeenCalledWith(snapshot.filePath, token));
+    vi.mocked(pauseTail).mockClear(); vi.mocked(resumeTail).mockClear();
+    await act(async () => finish());
+    expect(pauseTail).not.toHaveBeenCalled(); expect(resumeTail).not.toHaveBeenCalled();
+    act(() => useLogStore.setState({ isPaused: false }));
+    await waitFor(() => expect(resumeTail).toHaveBeenCalledWith(snapshot.filePath, token));
+  });
+  it("ignores same-path events from an old native session or watch epoch", async () => {
+    const snapshot = install();
+    renderHook(() => useFileWatcher());
+    const current = startTailMock.mock.calls[0][5]!;
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    act(() => {
+      eventMocks.tailListener?.({ payload: firewallPayload({ reset: true, firewallControl: { ...current, sourceSessionId: "old-session" } }) });
+      eventMocks.tailListener?.({ payload: firewallPayload({ reset: true, firewallControl: { ...current, watchEpoch: current.watchEpoch + 1 } }) });
+      eventMocks.tailListener?.({ payload: emptyTailPayload({ reset: true, filePath: snapshot.filePath }) });
+    });
+    expect(useLogStore.getState().entries).toEqual(snapshot.entries);
+    act(() => eventMocks.tailListener?.({ payload: firewallPayload({ reset: true, observedThroughLine: 0, firewallControl: current }) }));
+    expect(useLogStore.getState().entries).toEqual([]);
+    error.mockRestore();
+  });
+  it("allocates a new source-owned epoch after remount and stops the captured epoch", async () => {
+    const snapshot = firewallSnapshot();
+    useLogStore.getState().registerFirewallSource(snapshot);
+    useLogStore.setState({ openFilePath: snapshot.filePath, sourceOpenMode: "single-file", formatDetected: "Timestamped", entries: snapshot.entries });
+    const first = renderHook(() => useFileWatcher());
+    await waitFor(() => expect(startTailMock).toHaveBeenCalledTimes(1));
+    const firstToken = startTailMock.mock.calls[0][5];
+    expect(firstToken).toMatchObject({ sourceSessionId: snapshot.firewallSessionId, watchEpoch: 1 });
+    first.unmount();
+    expect(stopTailMock).toHaveBeenCalledWith(snapshot.filePath, firstToken);
+    renderHook(() => useFileWatcher());
+    await waitFor(() => expect(startTailMock).toHaveBeenCalledTimes(2));
+    expect(startTailMock.mock.calls[1][5]).toMatchObject({ watchEpoch: 2 });
   });
 });

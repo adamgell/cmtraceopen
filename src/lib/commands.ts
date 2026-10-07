@@ -1,3 +1,4 @@
+import type { FirewallControlToken } from "../types/log";
 import { invoke } from "@tauri-apps/api/core";
 import { boundUtf8WithDigest } from "./bounded-utf8";
 import type {
@@ -2276,6 +2277,7 @@ export async function startTail(
   byteOffset: number,
   nextId: number,
   nextLine: number,
+  firewallControl?: FirewallControlToken,
 ): Promise<void> {
   return invokeCommand("start_tail", {
     path,
@@ -2283,19 +2285,20 @@ export async function startTail(
     byteOffset,
     nextId,
     nextLine,
+    ...(firewallControl ? { firewallControl } : {}),
   });
 }
 
-export async function stopTail(path: string): Promise<void> {
-  return invokeCommand("stop_tail", { path });
+export async function stopTail(path: string, firewallControl?: FirewallControlToken): Promise<void> {
+  return invokeCommand("stop_tail", { path, ...(firewallControl ? { firewallControl } : {}) });
 }
 
-export async function pauseTail(path: string): Promise<void> {
-  return invokeCommand("pause_tail", { path });
+export async function pauseTail(path: string, firewallControl?: FirewallControlToken): Promise<void> {
+  return invokeCommand("pause_tail", { path, ...(firewallControl ? { firewallControl } : {}) });
 }
 
-export async function resumeTail(path: string): Promise<void> {
-  return invokeCommand("resume_tail", { path });
+export async function resumeTail(path: string, firewallControl?: FirewallControlToken): Promise<void> {
+  return invokeCommand("resume_tail", { path, ...(firewallControl ? { firewallControl } : {}) });
 }
 
 export async function analyzeIntuneLogs(

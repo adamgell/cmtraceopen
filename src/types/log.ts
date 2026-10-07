@@ -260,8 +260,20 @@ export interface ParserSelectionInfo {
   specialization?: ParserSpecialization | null;
 }
 
-export interface ParseResult {
+export interface FirewallControlToken { sourceSessionId: string; watchEpoch: number; }
+export interface FirewallRowReplacement { expectedId: number; expectedLineNumber: number; entry: LogEntry; }
+export interface FirewallDecodingStatus {
+  kind: "ready" | "pending" | "gap";
+  pendingBytes: number;
+  reason: "readFailed" | "invalidEncoding" | "generationUnverifiable" | null;
+}
+export interface FirewallSourceMetadata {
+  firewallSessionId?: string;
   firewallCoverage?: FirewallCoverage | null;
+  firewallDecoding?: FirewallDecodingStatus;
+}
+
+export interface ParseResult extends FirewallSourceMetadata {
   entries: LogEntry[];
   formatDetected: LogFormat;
   parserSelection: ParserSelectionInfo;
@@ -278,7 +290,7 @@ export interface ParseResult {
   byteOffset: number;
 }
 
-export interface AggregateParsedFileResult {
+export interface AggregateParsedFileResult extends FirewallSourceMetadata {
   filePath: string;
   totalLines: number;
   parseErrors: number;
@@ -322,6 +334,10 @@ export interface TailEntryAmendment {
 
 /** Payload emitted by the Rust tail watcher */
 export interface TailPayload {
+  firewallControl?: FirewallControlToken;
+  firewallReplacements?: FirewallRowReplacement[];
+  firewallCoverage?: FirewallCoverage;
+  firewallDecoding?: FirewallDecodingStatus;
   entries: LogEntry[];
   amendments: TailEntryAmendment[];
   filePath: string;

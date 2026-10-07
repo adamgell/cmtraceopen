@@ -1,3 +1,4 @@
+import { firewallEntry, firewallPayload } from "../test-utils/firewall";
 import { describe, expect, it } from "vitest";
 import type {
   ErrorCodeOutcome,
@@ -341,5 +342,34 @@ describe("parseTailPayload", () => {
         }),
       ),
     ).toBeNull();
+  });
+});
+
+describe("Windows Firewall transport", () => {
+  it("accepts full replacements and a zero-line empty generation reset", () => {
+    const row = firewallEntry();
+    const value = firewallPayload({ firewallReplacements: [{ expectedId: row.id, expectedLineNumber: row.lineNumber, entry: row }] });
+    expect(parseTailPayload(value)).toEqual(value);
+    const empty = firewallPayload({ reset: true, observedThroughLine: 0 });
+    expect(parseTailPayload(empty)).toEqual(empty);
+  });
+  it.each([
+    ["time basis", (v: any) => { v.entries[0].firewall.timeBasis = "viewerLocal"; }],
+    ["field value", (v: any) => { v.entries[0].firewall.fields[0].value = 42; }],
+    ["schema origin", (v: any) => { v.entries[0].firewall.schemaOrigin = "guessed"; }],
+    ["record kind", (v: any) => { v.entries[0].firewall.recordKind = "blockedError"; }],
+    ["partial replacement", (v: any) => { v.firewallReplacements = [{ expectedId: 0, expectedLineNumber: 4, entry: { message: "partial" } }]; }],
+    ["replacement identity", (v: any) => { v.firewallReplacements = [{ expectedId: 9, expectedLineNumber: 4, entry: firewallEntry() }]; }],
+    ["replacement line", (v: any) => { v.firewallReplacements = [{ expectedId: 0, expectedLineNumber: 3, entry: firewallEntry() }]; }],
+    ["stale path", (v: any) => { v.entries[0].filePath = "/synthetic/other.log"; }],
+    ["missing token", (v: any) => { delete v.firewallControl; }],
+    ["epoch", (v: any) => { v.firewallControl.watchEpoch = -1; }],
+    ["rounded counter", (v: any) => { v.firewallCoverage.lostEvents.count = 9999999999999999; }],
+    ["overflow counter", (v: any) => { v.firewallCoverage.lostEvents.count = "18446744073709551616"; }],
+    ["too many samples", (v: any) => { v.firewallCoverage.padding = { count: "9", lines: [1,2,3,4,5,6,7,8,9] }; }],
+    ["unknown gap", (v: any) => { v.firewallDecoding = { kind: "gap", pendingBytes: 0, reason: "invented" }; }],
+  ])("rejects invalid %s", (_name, mutate) => {
+    const value = firewallPayload({ entries: [firewallEntry()] }); mutate(value);
+    expect(parseTailPayload(value)).toBeNull();
   });
 });

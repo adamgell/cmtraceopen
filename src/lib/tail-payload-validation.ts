@@ -1,3 +1,4 @@
+import { isFirewallRecord, isFirewallControl, isFirewallCoverage, isFirewallDecoding } from "./firewall";
 import type {
   ErrorCodeOutcome,
   ErrorCodeSpan,
@@ -183,6 +184,7 @@ function isLogEntry(value: unknown): value is LogEntry {
   const message = value.message;
 
   if (
+    (value.firewall === undefined || value.firewall === null || isFirewallRecord(value.firewall)) &&
     isSafeInteger(value.id, 0) &&
     isSafeInteger(value.lineNumber, 1, 4_294_967_295) &&
     isNullableString(value.component) &&
@@ -298,13 +300,31 @@ export function parseTailPayload(value: unknown): TailPayload | null {
     value.filePath.length === 0 ||
     !isSafeInteger(value.parseErrors, 0) ||
     (value.observedThroughLine !== null &&
-      !isSafeInteger(value.observedThroughLine, 1)) ||
+      !isSafeInteger(value.observedThroughLine, value.firewallControl === undefined ? 1 : 0, 4_294_967_295)) ||
     (value.parserSelection !== undefined &&
       !isParserSelection(value.parserSelection)) ||
     typeof value.reset !== "boolean"
   ) {
     return null;
   }
+
+  const hasFirewall = ["firewallControl", "firewallReplacements", "firewallCoverage", "firewallDecoding"].some(key => value[key] !== undefined);
+  if (hasFirewall) {
+    if (!isFirewallControl(value.firewallControl) || !isFirewallCoverage(value.firewallCoverage) ||
+      !isFirewallDecoding(value.firewallDecoding) || !Array.isArray(value.firewallReplacements) || value.amendments.length !== 0 ||
+      !value.entries.every(entry => entry.firewall && entry.filePath === value.filePath)) return null;
+    const replacementKeys = new Set<string>();
+    for (const replacement of value.firewallReplacements) {
+      if (!isRecord(replacement) || !isSafeInteger(replacement.expectedId, 0) ||
+        !isSafeInteger(replacement.expectedLineNumber, 1, 4_294_967_295) || !isLogEntry(replacement.entry) ||
+        !replacement.entry.firewall || replacement.entry.id !== replacement.expectedId ||
+        replacement.entry.lineNumber !== replacement.expectedLineNumber || replacement.entry.filePath !== value.filePath ||
+        value.observedThroughLine === null || replacement.entry.lineNumber > (value.observedThroughLine as number)) return null;
+      const key = `${replacement.expectedId}:${replacement.expectedLineNumber}`;
+      if (replacementKeys.has(key)) return null;
+      replacementKeys.add(key);
+    }
+  } else if (value.entries.some(entry => entry.firewall)) return null;
 
   const payload = value as unknown as TailPayload;
   let highestObservedLine: number | null = null;

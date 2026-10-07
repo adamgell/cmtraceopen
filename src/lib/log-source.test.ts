@@ -1,3 +1,4 @@
+import { firewallSnapshot } from "../test-utils/firewall";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deferred } from "../test-utils/deferred";
 import type {
@@ -1104,5 +1105,40 @@ describe("source loading progress ownership", () => {
 
     pendingBatch.resolve([]);
     await expect(staleLoad).resolves.toBe(false);
+  });
+});
+
+describe("firewall source ownership ingestion", () => {
+  beforeEach(() => {
+    vi.resetAllMocks(); useLogStore.getState().clear(); useUiStore.getState().clearTabs(); clearAllTabSnapshots();
+    commands.stopTail.mockResolvedValue(undefined);
+  });
+  it("installs the native session for a single file and stops that session on navigation", async () => {
+    const snapshot = firewallSnapshot();
+    commands.openLogSourceFile.mockResolvedValueOnce(snapshot);
+    await loadLogSource({ kind: "file", path: snapshot.filePath });
+    expect(useLogStore.getState().firewallSources[snapshot.filePath]?.sessionId).toBe(snapshot.firewallSessionId);
+    const token = useLogStore.getState().beginFirewallWatch(snapshot.filePath);
+    const next = "/synthetic/ordinary.log";
+    commands.openLogSourceFile.mockResolvedValueOnce({ ...parseResult, filePath: next });
+    await loadLogSource({ kind: "file", path: next });
+    expect(commands.stopTail).toHaveBeenCalledWith(snapshot.filePath, token);
+  });
+  it("captures native source IDs before assigning aggregate display IDs", async () => {
+    const sources = [firewallSnapshot("/synthetic/a.log"), firewallSnapshot("/synthetic/b.log")];
+    commands.parseFilesBatch.mockResolvedValueOnce(sources);
+    await loadFilesAsLogSource(sources.map(s => s.filePath));
+    expect(useLogStore.getState().entries.map(e => e.id)).toEqual([0, 1]);
+    for (const source of sources) {
+      expect(useLogStore.getState().firewallSources[source.filePath]?.sourceIds[4]).toBe(0);
+    }
+  });
+  it("installs independent sessions for folder batch loading", async () => {
+    const sources = [firewallSnapshot("/synthetic/a.log"), firewallSnapshot("/synthetic/b.log")];
+    commands.listLogSourceFolder.mockResolvedValueOnce({ sourceKind: "folder", source: { kind: "folder", path: "/synthetic" },
+      entries: sources.map(s => ({ name: s.filePath.split("/").pop(), path: s.filePath, isDir: false, sizeBytes: 256, modifiedUnixMs: null })) });
+    commands.parseFilesBatch.mockResolvedValueOnce(sources);
+    await loadLogSource({ kind: "folder", path: "/synthetic" });
+    expect(Object.keys(useLogStore.getState().firewallSources).sort()).toEqual(sources.map(s => s.filePath));
   });
 });
