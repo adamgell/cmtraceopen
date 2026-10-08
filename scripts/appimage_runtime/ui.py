@@ -261,6 +261,7 @@ class Controller:
                 entries.append(parents)
             if role in ("push button", "button") and node.name == "Close find bar":
                 closes.append(parents)
+        self.observe(scope_entries_unique=len(entries) == 1, scope_close_unique=len(closes) == 1)
         if len(entries) != 1 or len(closes) != 1:
             return []
         common = None
@@ -270,6 +271,10 @@ class Controller:
             common = entry_parent
         # The product's FindBar div maps to section. Refuse an application,
         # document or broader container that happens to include both controls.
+        self.observe(scope_common_present=common is not None,
+                     scope_common_section=common is not None and self.role(common) == "section",
+                     scope_common_tagdiv=common is not None and "tag:div" in common.getAttributes(),
+                     scope_common_showing=common is not None and self.showing(common))
         if common is None or self.role(common) != "section" or not self.showing(common):
             return []
         scoped = list(self.walk_paths(common))
@@ -280,13 +285,17 @@ class Controller:
         for node, _ in scoped:
             role = self.role(node)
             if role not in ("section", "static", "text", "image", "separator", "entry", "push button", "button", "toggle button"):
+                self.observe(scope_roles_valid=False)
                 return []
             if role == "entry":
                 inputs += 1
             if role in ("push button", "button", "toggle button"):
                 if not self.showing(node) or role not in expected.get(node.name, set()):
+                    self.observe(scope_buttons_valid=False)
                     return []
                 buttons.append(node.name)
+        self.observe(scope_roles_valid=True, scope_buttons_valid=sorted(buttons) == sorted(expected),
+                     scope_inputs_valid=inputs == 1)
         return scoped if inputs == 1 and sorted(buttons) == sorted(expected) else []
 
     def match_count(self):
