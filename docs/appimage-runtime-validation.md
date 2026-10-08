@@ -1,45 +1,46 @@
 # Fixed-candidate AppImage runtime acceptance
 
-This manual harness executes only the signed v1.6.2 draft-release candidate below, using one standard Ubuntu 22.04 VM and one standard Ubuntu 24.04 VM. Each job has a 20-minute limit (40 runner-minutes total). The first workflow attempt is the only accepted attempt. A second dispatch or rerun requires new authorization.
+This manual harness executes PR #821's unsigned 1.6.3 CI AppImage on one standard Ubuntu 22.04 x64 VM and one standard Ubuntu 24.04 x64 VM. Adam removed the voluntary 20-minute job / 40-runner-minute total limit for this task. There is no custom workflow job timeout; normal GitHub platform timeouts apply. The existing 300-second per-case, 660-second supervisor and bounded subprocess/cleanup hang protections remain unchanged. This is not unlimited retry authorization or final signed-release acceptance.
 
 ## Dispatch gate
 
-**Do not dispatch from the draft PR.** The sole integration coordinator must first confirm that the reviewed workflow has reached `main`, that the implementation files are unchanged, and that the artifact below is still available. Review the final harness commit independently and record its full SHA/tree in the handoff. A squash merge is supported by checking exact file content against that reviewed commit, rather than assuming ancestry.
+The task-specific dispatch ref is `codex/pr821-ubuntu-runtime`; no main merge is needed. The exact workflow SHA must equal `reviewed_harness_sha`. Repository restriction, first-attempt restriction, two-baseline matrix, max-parallel 2, read-only token permissions and immutable actions remain intact.
 
-After that explicit confirmation and the parent's separate instruction bound to the final candidate and harness, the authorized operator runs this command **once**, replacing the placeholder with the final reviewed harness commit:
+The initial authorized allocation was consumed by [run 37808889319, attempt 1](https://github.com/adamgell/cmtraceopen/actions/runs/37808889319), using signed harness `b740b6f5760e64c870bbc4944174d78f8210ae52`:
 
 ```sh
 gh workflow run cmtrace-appimage-runtime.yml \
-  --repo adamgell/cmtraceopen --ref main \
-  -f reviewed_harness_sha=FULL_REVIEWED_HARNESS_COMMIT
+  --repo adamgell/cmtraceopen --ref codex/pr821-ubuntu-runtime \
+  -f reviewed_harness_sha=b740b6f5760e64c870bbc4944174d78f8210ae52
 ```
 
-Monitor that run to a terminal state. Do not retry a blocked or failed job. Do not change host security policy to make a probe pass. This harness does not publish a release, trigger a catalog retest, or merge either PR.
+Do not repeat this command as a blind retry. Diagnose a recoverable in-scope failure before any recovery run. Do not change host security policy to make a probe pass. This harness does not publish a release, trigger a catalog retest, or merge a PR.
 
 ## Immutable candidate
 
 | Binding | Value |
 | --- | --- |
-| Product tag | `v1.6.2` |
-| Signed tag object | `7d7cb1bec8b372fbaf08845c2ac6bab6668ba6c0` |
-| Artifact / name | `11324800940` / `appimage-abi-Linux-x64` |
-| Producer run / attempt | `37260205745` / `1` |
-| Successful Linux job | `111605638405` |
-| Archive SHA256 | `b512e643397f886fb6bbdc6f52f1124d9b1457bb3fc58f9a757dbe3d6535e3a7` |
-| Inner AppImage path | `appimage/CMTrace Open_1.6.2_amd64.AppImage` |
-| AppImage bytes / SHA256 | `92326392` / `4c0a67bdd369f65fa962b8ca91204c0037a0aee058de07d999007d6749fdb9e2` |
+| Product candidate | PR #821, unsigned CI 1.6.3; no release tag |
+| Artifact / name | `11562044837` / `cmtrace-open-Linux-x64` |
+| Producer run / attempt | `37801602436` / `1` |
+| Archive SHA256 | `29a690fc30d9d52122a11b8a22c3b4284675f18a7b188ad7648c8dc7e6f8162e` |
+| Inner AppImage path | `appimage/CMTrace Open_1.6.3_amd64.AppImage` |
+| AppImage bytes / SHA256 | `92330488` / `381756ef4be7c209761c17b65a0c1c41b407f803cc66b1dea41043bf879cd466` |
 | ABI report path | `provenance/appimage-abi.json` |
-| ABI report SHA256 | `8f0adfdb637dc41d86cdde426c2c19359738fd664da5517001fa6b0880e6ed59` |
-| Product source | `c142b2294b4d686ecba3286cd42812587ca0a334` |
-| Built commit | `c142b2294b4d686ecba3286cd42812587ca0a334` |
-| Workflow commit | `c142b2294b4d686ecba3286cd42812587ca0a334` |
-| Built tree | `ec6daf5654332ad3c31a08b49b4a9e487338b1c4` |
-| Draft release / AppImage asset | `403346505` / `611409081` |
-| Draft asset name | `CMTrace.Open_1.6.2_amd64.AppImage` |
-| Updater signature asset | `611409180` / `CMTrace.Open_1.6.2_amd64.AppImage.sig` |
-| Updater signature SHA256 | `a5a9a7119edf7861163ca8e875fd83cf004334b437cc29f18614275ebd1408c1` |
+| ABI report SHA256 | `ecd1d854a12b698832cc5ef6470ec68800567f69cb5007e2920da7578fb96dc5` |
+| Product source | `ac7ad3862cf982a17a5ec761fa3891446c168a7f` |
+| Built / producer workflow commit | `ab42494e2049e1df2275e08aec50a80b559d3c9b` |
+| Built tree | `1a2b9730a203bf18da216987acee79d439907363` |
 
-The release owner's receipt verified identical AppImage bytes in the draft asset, archive and ABI report, the updater signature's trusted `version:1.6.2` comment, and provenance for producer attempt 1. The successful Linux job does not establish acceptance of the whole release: remaining producer/platform gates and draft publication belong to the release owner. The product tag and candidate bytes remain fixed; this harness does not rebuild or re-sign them. Recheck artifact availability before dispatch.
+The archive and inner AppImage digests were independently verified before dispatch. The runtime receipts bind source, built commit/tree, producer run/attempt and the AppImage digest. Candidate bytes remain fixed; this harness does not rebuild or re-sign them. Recheck artifact availability before any authorized recovery dispatch.
+
+## Initial exact-artifact result
+
+Both jobs ended with workflow failure while successfully uploading sanitized evidence. Ubuntu 22.04 passed identity/offline/bubblewrap/FUSE-device preflight. Both cases proved live read-only FUSE mounts and opened all three expected rows. Ordinary failed a UI assertion at `find-open-focus` after 30,167 ms: Close find bar was visible, but the intended input was not unique/focused according to the selector. The screenshot shows the Find bar open; it does not replace the failed accessibility assertion. Renderer-subset blocked with `harness-error` at `ready` after 95 ms. Find/filter/tail/reopen/normal exit acceptance is incomplete.
+
+Ubuntu 24.04 blocked both cases at `preflight` with `bubblewrap-unavailable`: probe return code 1, no signal/timeout/truncation, error category `other`. Read-only observations report AppArmor enabled and `apparmor_restrict_unprivileged_userns=1`, but those values do not prove causation. No app launched there. Do not weaken AppArmor, namespaces, bubblewrap or WebKit sandboxing. A compliant alternate route needs separate coordination before execution.
+
+The current allowlisted evidence does not identify the Ubuntu 22.04 selector mismatch or readiness exception precisely enough to justify changing acceptance assertions. Further recovery should first collect bounded, sanitized selector predicates and an allowlisted exception category, without uploading arbitrary accessibility strings or raw logs and without relaxing assertions.
 
 The supervisor hashes a root-owned copy before execution and checks its producer provenance. It never rebuilds, modifies, extracts, or replaces the candidate.
 
@@ -78,7 +79,7 @@ Each case retains only an allowlisted stage, bounded wait duration and boolean o
 
 The unchanged `/usr/bin/bwrap --ro-bind / / -- /usr/bin/true` gate records its numeric return code, signal, timeout, stderr truncation flag and a fixed error category. If both bounded reap waits expire, the timeout record retains unknown (`null`) return code and signal; the host still requires child-process cleanup before collection. At most 4096 stderr bytes are retained in memory for classification; raw stderr is never written to evidence. Read-only policy observations include available user-namespace sysctls, AppArmor enabled state/current-label classification, and bubblewrap mode, owner and file-capability presence. Missing/unreadable values remain unknown. A namespace denial does not establish AppArmor as its cause. Any failed, timed-out or unspawnable probe still blocks AppImage launch, and collected functional evidence additionally requires a valid successful probe record.
 
-The first approved allocation was consumed by [run 37268941550, attempt 1](https://github.com/adamgell/cmtraceopen/actions/runs/37268941550): Ubuntu 22.04 failed UI assertions and Ubuntu 24.04 blocked at the bubblewrap gate. This diagnostic correction does not authorize another dispatch or change host policy. A second run requires Adam's new approval bound to the reviewed harness.
+Historical run 37268941550 tested older 1.6.2 bytes, not this candidate. Its failures and consumed approval are not reused as acceptance evidence or runtime authorization.
 
 Application/helper output is discarded. Cleanup terminates only the newly allocated account's processes, using pidfds to avoid PID reuse races, then unmounts any remaining task-owned FUSE mounts under the newly created private temp root using the normal FUSE helper as the task account. This bounded cleanup verifies mount disappearance before deleting the account and files. It preserves a failed or blocked outcome and never substitutes for normal-exit acceptance. Evidence is read after cleanup of child processes, rejecting symlinks, hardlinks, special files, wrong owners and oversized files. Only an allowlisted JSON summary and four decoded/re-encoded PNGs can upload, capped at 10 MiB of screenshots per VM with seven-day retention. No raw logs, environment dump, arbitrary accessibility text, or artifact payload is uploaded.
 
