@@ -615,7 +615,7 @@ MDM URLs doesn't guarantee the device is managed. Split into `mdm_urls_present` 
 (keep `apply_enrollment_cross_reference`), update TS types and the visibility label sources.
 
 ### Acceptance
-- `cargo check`, `cargo test` and `cargo clippy --all-targets -- -D warnings`; wasm32 parser check; TS callers updated; Windows-lab evidence.
+- From `src-tauri/`: `cargo check --locked`, `cargo test --locked` and `cargo clippy --locked --all-targets -- -D warnings`; wasm32 parser check; TS callers updated; Windows-lab evidence.
 ```
 
 ### A.12 Follow-up: Link dsregcmd diagnostics to event-log entries
