@@ -31,16 +31,30 @@ def type_text(text):
     command(["xdotool", "type", "--clearmodifiers", "--delay", "12", "--", text])
 
 
+def is_atspi_error(error):
+    return type(error).__module__ in ("gi.repository.GLib", "gi.repository.Gio", "gi.repository.Atspi", "gi.overrides.GLib")
+
+
 def poll(predicate, seconds=30, reason="ui-assertion", blocked=False):
     deadline = time.monotonic() + seconds
+    inaccessible = False
     while time.monotonic() < deadline:
         try:
             result = predicate()
+            inaccessible = False
             if result:
                 return result
         except (ValueError, LookupError):
-            pass
+            inaccessible = False
+        except Exception as error:
+            if not is_atspi_error(error):
+                raise
+            # Startup/tree mutation may invalidate an AT-SPI object between
+            # samples. Resample within the original deadline, never infer pass.
+            inaccessible = True
         time.sleep(0.2)
+    if inaccessible:
+        raise Blocked("accessibility-unavailable")
     raise (Blocked(reason) if blocked else ValueError(reason))
 
 
@@ -102,6 +116,10 @@ class Controller:
                 raise Blocked("accessibility-unavailable") from error
 
     def role(self, node):
+        # WebKit's numeric GetRole is authoritative for text-control identity;
+        # GetRoleName follows rolePlatformString and need not say "entry".
+        if node.getRole() == self.atspi.ROLE_ENTRY:
+            return "entry"
         return contract.accessible_role(node.getRoleName(), node.getAttributes())
 
     def showing(self, node):
@@ -460,7 +478,7 @@ def exception_observations(error):
         category = "attribute"
     elif isinstance(error, TypeError):
         category = "type"
-    elif type(error).__module__ in ("gi.repository.GLib", "gi.repository.Gio", "gi.repository.Atspi", "gi.overrides.GLib"):
+    elif is_atspi_error(error):
         category = "atspi"
     else:
         category = "other"

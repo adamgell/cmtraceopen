@@ -23,6 +23,9 @@ class Node:
     def __iter__(self):
         return iter(self.children)
 
+    def getRole(self):
+        return 79 if self.role == "entry" else 0
+
     def getRoleName(self):
         return self.role
 
@@ -46,7 +49,7 @@ class DiagnosticsTests(unittest.TestCase):
 
     def controller(self, *nodes):
         atspi = SimpleNamespace(STATE_SHOWING="showing", STATE_SELECTED="selected",
-                                STATE_FOCUSED="focused", STATE_EDITABLE="editable")
+                                STATE_FOCUSED="focused", STATE_EDITABLE="editable", ROLE_ENTRY=79)
         controller = ui.Controller(Path("/tmp/offline-fixture"), "ordinary", atspi)
         rows = [Node(token, "list item", states=("showing", "selected") if i == 1 else ("showing",))
                 for i, token in enumerate(ui.TOKENS)]
@@ -185,6 +188,34 @@ class DiagnosticsTests(unittest.TestCase):
         for marker in (b"uid map", b"gid map", b"uid_map", b"gid_map"):
             self.assertEqual(sandbox.classify_error(b"private: "+marker+b": Permission denied"), "id-map-denied")
         self.assertEqual(sandbox.classify_error(b"private: uid map: unknown error"), "other")
+
+    def test_numeric_entry_role_handles_non_entry_role_name_without_accepting_static_text(self):
+        intended=self.entry(role="text")
+        intended.getRole=lambda: 79
+        controller=self.controller(intended)
+        self.assertIs(controller.find_input(), intended)
+        bar=self.bar(text="1 of 1"); bar.children[0]=intended
+        self.assertTrue(self.controller(bar).match_count())
+        static=self.entry(role="text")
+        self.assertIsNone(self.controller(static).find_input())
+
+    def test_transient_atspi_error_resamples_but_repeated_errors_never_pass(self):
+        Error=type("Error", (Exception,), {"__module__":"gi.repository.GLib"})
+        with patch.object(ui.time, "sleep"):
+            sequence=iter((Error("private object"), True))
+            def sample():
+                value=next(sequence)
+                if isinstance(value, Exception): raise value
+                return value
+            self.assertTrue(ui.poll(sample))
+        now=[0.0]
+        def tick(seconds): now[0]+=seconds
+        def inaccessible(): raise Error("private unavailable")
+        with patch.object(ui.time, "monotonic", side_effect=lambda: now[0]), patch.object(ui.time, "sleep", side_effect=tick):
+            with self.assertRaisesRegex(ui.Blocked, "accessibility-unavailable"):
+                ui.poll(inaccessible, seconds=0.4)
+        def unrelated(): raise TypeError("implementation defect")
+        with self.assertRaises(TypeError): ui.poll(unrelated)
 
     def test_find_readback_rejects_wrong_input_value_and_never_records_text(self):
         entry = self.entry()

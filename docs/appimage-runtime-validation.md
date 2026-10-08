@@ -4,7 +4,7 @@ This manual harness executes PR #821's unsigned 1.6.3 CI AppImage on one standar
 
 ## Dispatch gate
 
-The task-specific dispatch ref is `codex/pr821-ubuntu-runtime`; no main merge is needed. The exact workflow SHA must equal `reviewed_harness_sha`. Repository restriction, first-attempt restriction, two-baseline matrix, max-parallel 2, read-only token permissions and immutable actions remain intact.
+The task-specific dispatch ref is `codex/pr821-ubuntu-runtime`; no main merge is needed. The exact workflow SHA must equal `reviewed_harness_sha`. Repository restriction, first-attempt restriction, max-parallel 2, read-only token permissions and immutable actions remain intact.
 
 The initial authorized allocation was consumed by [run 37808889319, attempt 1](https://github.com/adamgell/cmtraceopen/actions/runs/37808889319), using signed harness `b740b6f5760e64c870bbc4944174d78f8210ae52`:
 
@@ -15,6 +15,12 @@ gh workflow run cmtrace-appimage-runtime.yml \
 ```
 
 Do not repeat this command as a blind retry. Diagnose a recoverable in-scope failure before any recovery run. Do not change host security policy to make a probe pass. This harness does not publish a release, trigger a catalog retest, or merge a PR.
+
+## Evidence-motivated diagnosis and recovery
+
+Diagnostic run [37809804187](https://github.com/adamgell/cmtraceopen/actions/runs/37809804187), harness `77a0c399bcc4773fa18ec7dc3ffb923ba9376606`, kept the same artifact and assertions. Ubuntu 22.04 observed a unique, visible Find placeholder with no `entry` role-name objects; the readiness exception was an AT-SPI error. WebKit exposes numeric `GetRole` and `GetRoleName` separately: the latter can follow `rolePlatformString`. Input identification now requires numeric `ROLE_ENTRY`, preserving uniqueness, visibility, focus/editability and all query/selection/count assertions. Bounded polling may resample AT-SPI exceptions within the original deadline; repeated inaccessible samples block, and unrelated exceptions still propagate.
+
+Ubuntu 24.04 diagnostic evidence classified bubblewrap's failure as `id-map-denied`, not an application failure. No policy change is allowed. The current recovery matrix contains only Ubuntu 22.04 to avoid repeating a known environment blocker. Ubuntu 24.04 is still required for release acceptance and needs a separately coordinated compatible disposable x64 environment where the unchanged unprivileged bubblewrap probe succeeds.
 
 ## Immutable candidate
 

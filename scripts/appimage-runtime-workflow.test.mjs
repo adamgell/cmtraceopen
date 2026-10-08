@@ -5,7 +5,7 @@ import test from "node:test";
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const workflow = () => read(".github/workflows/cmtrace-appimage-runtime.yml");
 
-test("runtime allocation is manual, reviewed-ref-only, first attempt, two VMs with platform timeout", () => {
+test("runtime allocation is manual, reviewed-ref-only, first attempt, Ubuntu 22.04 recovery with platform timeout", () => {
   const text = workflow();
   assert.match(text, /on:\n  workflow_dispatch:/);
   assert.doesNotMatch(text, /\n  (push|pull_request|pull_request_target|schedule|workflow_run):/);
@@ -14,7 +14,7 @@ test("runtime allocation is manual, reviewed-ref-only, first attempt, two VMs wi
   assert.match(text, /GITHUB_RUN_ATTEMPT.*== 1/);
   assert.doesNotMatch(text, /timeout-minutes:/);
   assert.match(text, /max-parallel: 2/);
-  assert.match(text, /os: \[ubuntu-22\.04, ubuntu-24\.04\]/);
+  assert.match(text, /os: \[ubuntu-22\.04\]/);
   assert.match(text, /cancel-in-progress: false/);
   assert.doesNotMatch(text, /continue-on-error|retry|workflow_call/);
 });
