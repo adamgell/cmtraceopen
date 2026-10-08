@@ -294,6 +294,27 @@ class DiagnosticsTests(unittest.TestCase):
         dialog.children.append(self.entry())
         self.assertIsNone(controller.chooser_location())
 
+    def test_native_final_capture_requires_active_window_owner_to_match_case_uid(self):
+        controller=self.controller()
+        for uid,expected in ((os.getuid(),"84"),(os.getuid()+1,"42")):
+            with patch.object(ui.subprocess,"check_output",side_effect=["84","123"]), patch.object(ui,"status",return_value={"Uid":str(uid)}), patch.object(ui,"command") as run:
+                controller.screenshot("final")
+                self.assertEqual(run.call_args.args[0][2],expected)
+        with patch.object(ui.subprocess,"check_output") as observe,patch.object(ui,"command") as run:
+            controller.screenshot("initial")
+            observe.assert_not_called()
+            self.assertEqual(run.call_args.args[0][2],"42")
+
+    def test_native_open_action_is_scoped_to_dialog_not_a_main_window_decoy(self):
+        intended=Node("Open","push button")
+        action=SimpleNamespace(nActions=1,getName=lambda index:"click",doAction=lambda index:True)
+        intended.queryAction=lambda:action
+        decoy=Node("Open","push button")
+        decoy.queryAction=lambda:self.fail("main-window decoy activated")
+        controller=self.controller(Node(role="dialog",children=[intended]),decoy)
+        controller.click("Open",chooser=True)
+        self.assertTrue(controller.result["diagnostics"]["observations"]["reopen_open_unique"])
+
     def test_find_readback_rejects_wrong_input_value_and_never_records_text(self):
         entry = self.entry()
         controller = self.controller(entry)
