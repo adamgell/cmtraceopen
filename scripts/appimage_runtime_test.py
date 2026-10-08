@@ -202,9 +202,9 @@ class ContractTests(unittest.TestCase):
 
     def test_exact_artifact_and_source_binding(self):
         validate = self.api("validate_binding")
-        self.assertEqual(contract.ARTIFACT_ID, 11324800940)
-        self.assertEqual(contract.ARTIFACT_NAME, "CMTrace Open_1.6.2_amd64.AppImage")
-        report = dict(build=dict(source_commit="c142b2294b4d686ecba3286cd42812587ca0a334", built_commit="c142b2294b4d686ecba3286cd42812587ca0a334", built_tree="ec6daf5654332ad3c31a08b49b4a9e487338b1c4", image=dict(GITHUB_RUN_ID="37260205745", GITHUB_RUN_ATTEMPT="1")), inspection=dict(sha256="4c0a67bdd369f65fa962b8ca91204c0037a0aee058de07d999007d6749fdb9e2"))
+        self.assertEqual(contract.ARTIFACT_ID, 11562044837)
+        self.assertEqual(contract.ARTIFACT_NAME, "CMTrace Open_1.6.3_amd64.AppImage")
+        report = dict(build=dict(source_commit="ac7ad3862cf982a17a5ec761fa3891446c168a7f", built_commit="ab42494e2049e1df2275e08aec50a80b559d3c9b", built_tree="1a2b9730a203bf18da216987acee79d439907363", image=dict(GITHUB_RUN_ID="37801602436", GITHUB_RUN_ATTEMPT="1")), inspection=dict(sha256="381756ef4be7c209761c17b65a0c1c41b407f803cc66b1dea41043bf879cd466"))
         digest=report["inspection"]["sha256"]
         validate(report, digest)
         for field in ["source_commit", "built_commit", "built_tree"]:
@@ -216,6 +216,11 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(ValueError): validate(report,"0"*64)
         bad=copy.deepcopy(report); bad["inspection"]["sha256"]="0"*64
         with self.assertRaises(ValueError): validate(bad,digest)
+
+    def test_superseded_162_candidate_tuple_is_rejected(self):
+        report = dict(build=dict(source_commit="c142b2294b4d686ecba3286cd42812587ca0a334", built_commit="c142b2294b4d686ecba3286cd42812587ca0a334", built_tree="ec6daf5654332ad3c31a08b49b4a9e487338b1c4", image=dict(GITHUB_RUN_ID="37260205745", GITHUB_RUN_ATTEMPT="1")), inspection=dict(sha256="4c0a67bdd369f65fa962b8ca91204c0037a0aee058de07d999007d6749fdb9e2"))
+        with self.assertRaisesRegex(ValueError, "artifact-mismatch"):
+            self.api("validate_binding")(report, report["inspection"]["sha256"])
 
     def test_old_160_candidate_tuple_is_rejected(self):
         report = dict(build=dict(source_commit="0a1bb21add1e7d331d4f4e2a00be8c317240bebf", built_commit="9433d28d28db986c0a2204b22cf20a7643d7f3df", built_tree="5481bee5fc7f503b075ed6501bc9556db65de76e", image=dict(GITHUB_RUN_ID="37222916777", GITHUB_RUN_ATTEMPT="1")), inspection=dict(sha256="fe80fa10c11b0dbd16198579169a08e4f2ed5ab5e72da876c3ec0197153b9873"))

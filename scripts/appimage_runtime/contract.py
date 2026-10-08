@@ -6,13 +6,13 @@ import re
 import stat
 from pathlib import PurePosixPath
 
-SOURCE = "c142b2294b4d686ecba3286cd42812587ca0a334"
-MERGE = "c142b2294b4d686ecba3286cd42812587ca0a334"
-TREE = "ec6daf5654332ad3c31a08b49b4a9e487338b1c4"
-RUN = "37260205745"
-ARTIFACT_ID = 11324800940
-ARTIFACT_SHA256 = "4c0a67bdd369f65fa962b8ca91204c0037a0aee058de07d999007d6749fdb9e2"
-ARTIFACT_NAME = "CMTrace Open_1.6.2_amd64.AppImage"
+SOURCE = "ac7ad3862cf982a17a5ec761fa3891446c168a7f"
+MERGE = "ab42494e2049e1df2275e08aec50a80b559d3c9b"
+TREE = "1a2b9730a203bf18da216987acee79d439907363"
+RUN = "37801602436"
+ARTIFACT_ID = 11562044837
+ARTIFACT_SHA256 = "381756ef4be7c209761c17b65a0c1c41b407f803cc66b1dea41043bf879cd466"
+ARTIFACT_NAME = "CMTrace Open_1.6.3_amd64.AppImage"
 CASES = ("ordinary", "catalog-renderer-subset")
 CHECKS = ("fuse", "open", "find", "filter", "tail", "reopen", "exited")
 REASONS = frozenset(("ok", "isolation-unavailable", "bubblewrap-unavailable",
