@@ -288,7 +288,16 @@ class Controller:
                               "embedded": "embedded", "grouping": "grouping", "statusbar_joined": "statusbar",
                               "checkbox": "check box", "redundant": "redundant object", "drawing_area": "drawing area",
                               "svg": "svg", "icon": "icon"}
+                native_role = int(node.getRole())
+                role_fact = ({"scope_unexpected_role_id_" + str(native_role): True}
+                             if 0 <= native_role <= 130 else {"scope_unexpected_role_id_outside": True})
                 self.observe(scope_roles_valid=False,
+                             scope_unexpected_named_case=node.name == "Match case",
+                             scope_unexpected_named_regex=node.name == "Use regular expression",
+                             scope_unexpected_tag_button="tag:button" in attrs,
+                             scope_unexpected_xml_button="xml-roles:button" in attrs,
+                             scope_unexpected_xml_checkbox="xml-roles:checkbox" in attrs,
+                             **role_fact,
                              scope_unexpected_showing=self.showing(node),
                              scope_unexpected_in_control=any(self.role(parent) in ("entry", "push button", "button", "toggle button") for parent in parents),
                              scope_unexpected_name_count=re.fullmatch(r"1\s+of\s+1", node.name or "") is not None,

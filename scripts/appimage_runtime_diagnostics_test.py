@@ -106,6 +106,19 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertTrue(facts[key])
         contract.sanitize_diagnostics(controller.result["diagnostics"])
 
+    def test_rejected_native_role_category_is_bounded_and_never_copies_role_name(self):
+        for role_id in (0, 62, 130, 131, -1):
+            node = Node("Match case", "private platform role", attrs=("tag:button", "xml-roles:button"))
+            node.getRole = lambda: role_id
+            controller = self.controller(self.bar(node))
+            self.assertFalse(controller.match_count())
+            facts = controller.result["diagnostics"]["observations"]
+            expected = "scope_unexpected_role_id_" + str(role_id) if 0 <= role_id <= 130 else "scope_unexpected_role_id_outside"
+            self.assertTrue(facts[expected])
+            self.assertTrue(facts["scope_unexpected_named_case"])
+            contract.sanitize_diagnostics(controller.result["diagnostics"])
+            self.assertNotIn("private", json.dumps(controller.result))
+
     def test_find_modes_require_actual_toggle_roles_and_navigation_requires_buttons(self):
         for index, role in ((1, "push button"), (2, "push button"), (3, "toggle button"), (4, "toggle button"), (5, "toggle button")):
             bar = self.bar(); bar.children[index].role = role
