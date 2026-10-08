@@ -4,6 +4,20 @@ The refreshed candidate is `08d4f19187c0798d9b0175fd60633868f474ebe9`, including
 
 This manual harness executes PR #821's unsigned 1.6.3 CI AppImage on a standard Ubuntu 22.04 x64 VM. Ubuntu 24.04 x64 remains a required release gate but is excluded from the current matrix after its unchanged bubblewrap preflight established an environment blocker. Adam removed the voluntary 20-minute job / 40-runner-minute total limit for this task. There is no custom workflow job timeout; normal GitHub platform timeouts apply. The existing 300-second per-case, 660-second supervisor and bounded subprocess/cleanup hang protections remain unchanged. This is not unlimited retry authorization or final signed-release acceptance.
 
+## Refreshed-source terminal acceptance
+
+[CI 37817985168](https://github.com/adamgell/cmtraceopen/actions/runs/37817985168) passed 10/10 jobs and [CodeQL 37817983515](https://github.com/adamgell/cmtraceopen/actions/runs/37817983515) passed 5/5 at source `08d4f19187c0798d9b0175fd60633868f474ebe9`.
+
+[Ubuntu 22.04 run 37827484240](https://github.com/adamgell/cmtraceopen/actions/runs/37827484240), attempt 1, executed signed harness `4e9bf429d3971161fa5a84d1b3f78be5ce774ed4` against the current immutable candidate below. Both ordinary and catalog-renderer-subset cases passed FUSE/open/find/filter/tail/reopen/normal-exit with row counts `3,1,3,4,4` and two live read-only FUSE proofs each. Identity, offline namespace, unchanged unprivileged bubblewrap and FUSE-device preflight passed. Independent review of all four screenshots confirms `1 of 1` with BETA selected in both Find states and four reopened rows in both final states. Xvfb X11 does not establish Wayland or physical GPU coverage.
+
+Sanitized evidence artifact `11571557718` has archive SHA-256 `ab2999cb6df3c80e29a3bb89e43d634579f3eee645796c084a655c5ff49f7741`, independently verified after download; retention is seven days. Current local harness checks: 72 Python tests, four workflow tests, actionlint and whitespace checks pass.
+
+The prior fresh-byte failures are preserved: runs 37824466639, 37825248936, 37825964521 and 37826762760 all stopped at the strict count scope gate. Fixed boolean diagnostics identified AT-SPI PAGE (enum 84) as the passive layout object rejected within the correctly named Find group. The repair admits that observed page layout inside the group only. It retains one intended input, exactly five expected controls, one visible named status, exact local count text, query readback and selected BETA; regressions reject a broad page as the group, unrelated controls, unnamed counts and global decoys. No failed result was converted to a pass, and diagnostic continuation remains removed.
+
+Source and strict-harness core independent CodeRabbit reviews completed with zero findings. A later optional external review of screenshot/documentation edits was rejected by automatic approval review; it was not retried or sent through another external service. Per coordinator instruction, subsequent bounded edits used local repository review and tests.
+
+Ubuntu 24.04 x64 remains blocked before app launch on the prior hosted route by UID/GID-map setup. The coordinator must select a compliant existing disposable x64 route with unchanged protections and a successful fresh probe. BigMac's stopped Ubuntu 24.04 ARM64 VM cannot prove this x64 baseline. Native Windows remains parent-owned on LABZ1-CM01. Final signed packages, updater coverage and distribution submissions remain separate unapproved gates. No further automatic runtime retries are scheduled.
+
 ## Dispatch gate
 
 The task-specific dispatch ref is `codex/pr821-ubuntu-runtime`; no main merge is needed. The exact workflow SHA must equal `reviewed_harness_sha`. Repository restriction, first-attempt restriction, max-parallel 2, read-only token permissions and immutable actions remain intact.
