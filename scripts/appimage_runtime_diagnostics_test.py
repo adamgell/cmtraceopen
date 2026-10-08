@@ -24,7 +24,7 @@ class Node:
         return iter(self.children)
 
     def getRole(self):
-        return 79 if self.role == "entry" else 0
+        return {"entry":79, "text":61}.get(self.role, 0)
 
     def getRoleName(self):
         return self.role
@@ -49,7 +49,7 @@ class DiagnosticsTests(unittest.TestCase):
 
     def controller(self, *nodes):
         atspi = SimpleNamespace(STATE_SHOWING="showing", STATE_SELECTED="selected",
-                                STATE_FOCUSED="focused", STATE_EDITABLE="editable", ROLE_ENTRY=79)
+                                STATE_FOCUSED="focused", STATE_EDITABLE="editable", ROLE_ENTRY=79, ROLE_TEXT=61)
         controller = ui.Controller(Path("/tmp/offline-fixture"), "ordinary", atspi)
         rows = [Node(token, "list item", states=("showing", "selected") if i == 1 else ("showing",))
                 for i, token in enumerate(ui.TOKENS)]
@@ -58,7 +58,7 @@ class DiagnosticsTests(unittest.TestCase):
         return controller
 
     def entry(self, **overrides):
-        return Node(**(dict(role="entry", attrs=("placeholder-text:Find...",),
+        return Node(**(dict(role="entry", attrs=("placeholder-text:Find...", "tag:input"),
                             states=("showing", "focused", "editable"), text=ui.TOKENS[1]) | overrides))
 
     def bar(self, count=None, text=None):
@@ -154,7 +154,7 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIsNone(self.controller(good, self.entry()).find_input())
 
     def test_find_diagnostics_distinguish_placeholder_role_visibility_without_relaxing_selector(self):
-        for node, entry, showing in ((self.entry(role="text"), False, True),
+        for node, entry, showing in ((self.entry(role="static"), False, True),
                                      (self.entry(states=("focused", "editable")), True, False)):
             controller = self.controller(node)
             self.assertIsNone(controller.find_input())
@@ -196,7 +196,7 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIs(controller.find_input(), intended)
         bar=self.bar(text="1 of 1"); bar.children[0]=intended
         self.assertTrue(self.controller(bar).match_count())
-        static=self.entry(role="text")
+        static=self.entry(role="text", attrs=("placeholder-text:Find...",))
         self.assertIsNone(self.controller(static).find_input())
 
     def test_transient_atspi_error_resamples_but_repeated_errors_never_pass(self):
@@ -216,6 +216,27 @@ class DiagnosticsTests(unittest.TestCase):
                 ui.poll(inaccessible, seconds=0.4)
         def unrelated(): raise TypeError("implementation defect")
         with self.assertRaises(TypeError): ui.poll(unrelated)
+
+    def test_text_role_requires_html_input_and_editable_state_and_preserves_scope(self):
+        intended=self.entry(role="text")
+        self.assertIs(self.controller(intended).find_input(), intended)
+        bar=self.bar(text="1 of 1"); bar.children[0]=intended
+        self.assertTrue(self.controller(bar).match_count())
+        for bad in (self.entry(role="text", attrs=("placeholder-text:Find...", "tag:span")),
+                    self.entry(role="text", states=("showing", "focused")),
+                    self.entry(role="push button")):
+            self.assertIsNone(self.controller(bad).find_input())
+
+    def test_tree_mutation_atspi_error_is_resampled_without_skipping_children(self):
+        Error=type("Error", (Exception,), {"__module__":"gi.repository.GLib"})
+        controller=self.controller()
+        original=controller.application.children[0]
+        class MutatingNode(Node):
+            def __iter__(self): raise Error("private missing child")
+        controller.application.children[0]=MutatingNode()
+        with self.assertRaises(Error): controller.nodes()
+        controller.application.children[0]=original
+        self.assertTrue(controller.nodes())
 
     def test_find_readback_rejects_wrong_input_value_and_never_records_text(self):
         entry = self.entry()

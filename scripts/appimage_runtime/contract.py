@@ -27,6 +27,8 @@ OBSERVATIONS = frozenset(("splash_absent", "window_active", "window_stable", "ro
                           "find_query_matches", "beta_selected", "find_scope_valid", "match_name", "match_text", "match_conflict",
                           "find_placeholder_present", "find_placeholder_unique", "find_placeholder_entry",
                           "find_placeholder_showing", "find_name_present", "find_entry_present",
+                          "find_placeholder_tag_input", "find_placeholder_text_role",
+                          "find_placeholder_editable", "find_placeholder_focused",
                           "error_os", "error_command", "error_value", "error_attribute", "error_type",
                           "error_atspi", "error_other"))
 

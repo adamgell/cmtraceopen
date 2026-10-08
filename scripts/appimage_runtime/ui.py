@@ -113,12 +113,16 @@ class Controller:
             try:
                 pending.extend((child, parents + (node,)) for child in reversed(list(node)))
             except Exception as error:
+                if is_atspi_error(error):
+                    raise  # Resample the whole tree, never skip a missing child.
                 raise Blocked("accessibility-unavailable") from error
 
     def role(self, node):
-        # WebKit's numeric GetRole is authoritative for text-control identity;
-        # GetRoleName follows rolePlatformString and need not say "entry".
-        if node.getRole() == self.atspi.ROLE_ENTRY:
+        # Bind text-control roles to the declared HTML input and editable
+        # state. Role names alone do not identify the intended control.
+        if (node.getRole() in (self.atspi.ROLE_ENTRY, self.atspi.ROLE_TEXT)
+                and "tag:input" in node.getAttributes()
+                and node.getState().contains(self.atspi.STATE_EDITABLE)):
             return "entry"
         return contract.accessible_role(node.getRoleName(), node.getAttributes())
 
@@ -211,7 +215,11 @@ class Controller:
                      find_placeholder_entry=any(self.role(node) == "entry" for node in placeholders),
                      find_placeholder_showing=any(self.showing(node) for node in placeholders),
                      find_name_present=any(node.name == "Find..." for node in nodes),
-                     find_entry_present=any(self.role(node) == "entry" for node in nodes))
+                     find_entry_present=any(self.role(node) == "entry" for node in nodes),
+                     find_placeholder_tag_input=any("tag:input" in node.getAttributes() for node in placeholders),
+                     find_placeholder_text_role=any(node.getRole() == self.atspi.ROLE_TEXT for node in placeholders),
+                     find_placeholder_editable=any(node.getState().contains(self.atspi.STATE_EDITABLE) for node in placeholders),
+                     find_placeholder_focused=any(node.getState().contains(self.atspi.STATE_FOCUSED) for node in placeholders))
         candidates = [node for node in placeholders if self.role(node) == "entry" and self.showing(node)]
         unique = len(candidates) == 1
         focused = unique and all(candidates[0].getState().contains(state)
