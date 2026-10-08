@@ -96,6 +96,16 @@ class DiagnosticsTests(unittest.TestCase):
             contract.sanitize_diagnostics(controller.result["diagnostics"])
             self.assertNotIn("private", json.dumps(controller.result))
 
+    def test_unexpected_control_descendant_diagnostics_do_not_accept_count_decoys(self):
+        bar = self.bar(text="0 of 1")
+        bar.children[1].children.append(Node("1 of 1", "redundant object", attrs=("tag:svg",)))
+        controller = self.controller(bar)
+        self.assertFalse(controller.match_count())
+        facts = controller.result["diagnostics"]["observations"]
+        for key in ("scope_unexpected_in_control", "scope_unexpected_name_count", "scope_unexpected_role_redundant", "scope_unexpected_tag_svg", "scope_unexpected_showing"):
+            self.assertTrue(facts[key])
+        contract.sanitize_diagnostics(controller.result["diagnostics"])
+
     def test_find_modes_require_actual_toggle_roles_and_navigation_requires_buttons(self):
         for index, role in ((1, "push button"), (2, "push button"), (3, "toggle button"), (4, "toggle button"), (5, "toggle button")):
             bar = self.bar(); bar.children[index].role = role

@@ -278,13 +278,21 @@ class Controller:
         expected = {"Match case": {"toggle button"}, "Use regular expression": {"toggle button"},
                     "Previous match": {"push button", "button"}, "Next match": {"push button", "button"},
                     "Close find bar": {"push button", "button"}}
-        for node, _ in scoped:
+        for node, parents in scoped:
             role = self.role(node)
             if role not in ("group", "status", "section", "static", "text", "image", "separator", "entry", "push button", "button", "toggle button"):
                 attrs = node.getAttributes()
                 categories = {"statusbar": "status bar", "panel": "panel", "label": "label",
-                              "filler": "filler", "unknown": "unknown", "invalid": "invalid"}
+                              "filler": "filler", "unknown": "unknown", "invalid": "invalid",
+                              "notification": "notification", "paragraph": "paragraph", "canvas": "canvas",
+                              "embedded": "embedded", "grouping": "grouping", "statusbar_joined": "statusbar",
+                              "checkbox": "check box", "redundant": "redundant object", "drawing_area": "drawing area",
+                              "svg": "svg", "icon": "icon"}
                 self.observe(scope_roles_valid=False,
+                             scope_unexpected_showing=self.showing(node),
+                             scope_unexpected_in_control=any(self.role(parent) in ("entry", "push button", "button", "toggle button") for parent in parents),
+                             scope_unexpected_name_count=re.fullmatch(r"1\s+of\s+1", node.name or "") is not None,
+                             scope_unexpected_tag_svg="tag:svg" in attrs,
                              scope_unexpected_named_status=node.name == "Find results",
                              scope_unexpected_xml_status="xml-roles:status" in attrs,
                              scope_unexpected_tag_span="tag:span" in attrs,

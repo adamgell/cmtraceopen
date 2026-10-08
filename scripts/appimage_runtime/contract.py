@@ -32,7 +32,11 @@ OBSERVATIONS = frozenset(("splash_absent", "window_active", "window_stable", "ro
                           "error_os", "error_command", "error_value", "error_attribute", "error_type",
                           "error_atspi", "error_other", "scope_entries_unique", "scope_close_unique",
                           "scope_common_present", "scope_named_group", "status_unique", "scope_common_showing",
-                          "scope_unexpected_named_status", "scope_unexpected_xml_status", "scope_unexpected_tag_span",
+                          "scope_unexpected_showing", "scope_unexpected_in_control", "scope_unexpected_name_count", "scope_unexpected_tag_svg",
+                          "scope_unexpected_role_notification", "scope_unexpected_role_paragraph", "scope_unexpected_role_canvas",
+                          "scope_unexpected_role_embedded", "scope_unexpected_role_grouping", "scope_unexpected_role_statusbar_joined",
+                          "scope_unexpected_role_checkbox", "scope_unexpected_role_redundant", "scope_unexpected_role_drawing_area",
+                          "scope_unexpected_role_svg", "scope_unexpected_role_icon", "scope_unexpected_named_status", "scope_unexpected_xml_status", "scope_unexpected_tag_span",
                           "scope_unexpected_tag_div", "scope_unexpected_role_other", "scope_unexpected_role_statusbar",
                           "scope_unexpected_role_panel", "scope_unexpected_role_label", "scope_unexpected_role_filler",
                           "scope_unexpected_role_unknown", "scope_unexpected_role_invalid", "scope_roles_valid", "scope_buttons_valid", "scope_inputs_valid", "reopen_chooser_in_app", "reopen_chooser_on_desktop", "reopen_path_matches", "reopen_location_unique", "reopen_open_unique"))
