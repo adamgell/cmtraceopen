@@ -1,6 +1,6 @@
 import { Badge, tokens } from "@fluentui/react-components";
 import {
-  CheckmarkCircle12Regular,
+  ArrowSync12Regular,
   ErrorCircle12Regular,
   Warning12Regular,
 } from "@fluentui/react-icons";
@@ -42,9 +42,11 @@ function GraphToneIcon({ phase }: { phase: EspGraphPhase }) {
   if (phase === "partial") {
     return <Warning12Regular role="img" aria-label="Warning" />;
   }
-  if (phase === "ready") {
-    return <CheckmarkCircle12Regular role="img" aria-label="Ready" />;
+  if (phase === "loading") {
+    return <ArrowSync12Regular role="img" aria-label="In progress" />;
   }
+  // "ready" deliberately has no icon: the store counts skipped and notFound
+  // sections as complete, so a check could hide a Graph coverage gap.
   return null;
 }
 
@@ -114,9 +116,9 @@ export function EspStatusBarContent() {
             height: 7,
             flexShrink: 0,
             borderRadius: "50%",
-            backgroundColor: isLive
-              ? tokens.colorPaletteGreenBackground3
-              : tokens.colorNeutralForegroundDisabled,
+            // Live is shape (filled vs hollow), not palette color, so it
+            // survives forced-color and high-contrast themes.
+            backgroundColor: isLive ? foreground : "transparent",
             boxShadow: `0 0 0 1px ${foreground}`,
           }}
         />

@@ -11,9 +11,10 @@ import { tokens } from "@fluentui/react-components";
 import { StatusBar } from "./StatusBar";
 import { useUiStore } from "../../stores/ui-store";
 import { useFilterStore } from "../../stores/filter-store";
-import { getAllThemes, getThemeById, type ThemeId } from "../../lib/themes";
+import { getAllThemes } from "../../lib/themes";
 import { EspStatusBarContent } from "../../workspaces/esp-diagnostics/EspStatusBarContent";
 import { useEspDiagnosticsStore } from "../../workspaces/esp-diagnostics/esp-diagnostics-store";
+import { useEvtxStore } from "../../workspaces/event-log/evtx-store";
 import {
   contrastRatio,
   pickStatusBarForeground,
@@ -51,7 +52,7 @@ describe("status bar foreground", () => {
     expect(contrastRatio("#000000", "#ffffff")).toBeCloseTo(21, 5);
   });
 
-  it.each(["red", "rgb(0, 0, 0)", "#ffffff80", "#ggg", ""])(
+  it.each(["red", "rgb(0, 0, 0)", "#ffffff80", "#ggg", "", "ffffff"])(
     "rejects %j instead of producing NaN",
     (color) => {
       expect(() => contrastRatio(color, "#ffffff")).toThrow(
@@ -84,16 +85,15 @@ describe("status bar foreground", () => {
   );
 });
 
-function expectedForeground(themeId: ThemeId): string {
-  const fluent = getThemeById(themeId).fluentTheme as unknown as Record<
-    string,
-    string
-  >;
-  return pickStatusBarForeground(
-    fluent.colorBrandBackground,
-    fluent.colorNeutralForegroundOnBrand,
-  );
-}
+/// Independent oracle: the foreground each theme must render, written out by
+/// hand so the test does not recompute it with the code under test.
+const EXPECTED_FOREGROUND = [
+  ["light", "#ffffff"],
+  ["dark", "#ffffff"],
+  ["high-contrast", "#000000"],
+  ["solarized-dark", "#000000"],
+  ["hotdog-stand", "#000000"],
+] as const;
 
 /// Phase 0b (#826): the global bar is 24px on the brand background in every
 /// workspace, with one readable foreground for all text and icons.
@@ -105,6 +105,7 @@ describe("status bar chrome", () => {
       useEspDiagnosticsStore.getInitialState(),
       true,
     );
+    useEvtxStore.setState(useEvtxStore.getInitialState(), true);
   });
 
   afterEach(() => {
@@ -122,15 +123,13 @@ describe("status bar chrome", () => {
     expect(bar.style.backgroundColor).toBe(tokens.colorBrandBackground);
   });
 
-  it.each(["light", "dark", "high-contrast", "solarized-dark", "hotdog-stand"] as const)(
+  it.each(EXPECTED_FOREGROUND)(
     "uses the readable foreground for the %s theme",
-    (themeId) => {
+    (themeId, color) => {
       useUiStore.setState({ themeId });
       render(<StatusBar />);
 
-      expect(screen.getByTestId("global-status-bar")).toHaveStyle({
-        color: expectedForeground(themeId),
-      });
+      expect(screen.getByTestId("global-status-bar")).toHaveStyle({ color });
     },
   );
 
@@ -151,7 +150,67 @@ describe("status bar chrome", () => {
     expect(screen.getByText("Graph error").style.color).toBe("");
     expect(screen.getByRole("img", { name: "Error" })).toBeInTheDocument();
     expect(screen.getByText("ESP")).toHaveStyle({
-      color: expectedForeground("solarized-dark"),
+      color: "#000000",
     });
+  });
+
+  it("never renders a success check for a ready Graph phase", () => {
+    useEspDiagnosticsStore.setState({ graphPhase: "ready" });
+    render(<EspStatusBarContent />);
+
+    expect(screen.queryAllByRole("img")).toHaveLength(0);
+  });
+
+  it("marks a partial Graph phase with a warning icon", () => {
+    useEspDiagnosticsStore.setState({ graphPhase: "partial" });
+    render(<EspStatusBarContent />);
+
+    expect(screen.getByRole("img", { name: "Warning" })).toBeInTheDocument();
+  });
+
+  it("marks a loading Graph phase with the progress icon", () => {
+    useEspDiagnosticsStore.setState({ graphPhase: "loading" });
+    render(<EspStatusBarContent />);
+
+    expect(screen.getByRole("img", { name: "In progress" })).toBeInTheDocument();
+  });
+
+  function getLiveDot(container: HTMLElement): HTMLElement {
+    const dot = Array.from(
+      container.querySelectorAll<HTMLElement>('span[aria-hidden="true"]'),
+    ).find((el) => el.style.width === "7px");
+    if (!dot) throw new Error("live dot not found");
+    return dot;
+  }
+
+  it("fills the live dot with the bar foreground when the session is live", () => {
+    useEspDiagnosticsStore.setState({ phase: "live" });
+    const { container } = render(<EspStatusBarContent />);
+
+    const dot = getLiveDot(container);
+    const root = container.querySelector<HTMLElement>(
+      "[data-status-content]",
+    ) as HTMLElement;
+    expect(dot.style.backgroundColor).not.toBe("transparent");
+    expect(dot.style.backgroundColor).toBe(root.style.color);
+  });
+
+  it("renders the live dot hollow when the session is not live", () => {
+    useEspDiagnosticsStore.setState({ phase: "idle" });
+    const { container } = render(<EspStatusBarContent />);
+
+    expect(getLiveDot(container).style.backgroundColor).toBe("transparent");
+  });
+
+  it("shows the progress icon, not a spinner, while the event log loads", () => {
+    useEvtxStore.setState({ isLoading: true });
+    useUiStore.setState({
+      activeWorkspace: "event-log",
+      activeView: "event-log",
+    });
+    const { container } = render(<StatusBar />);
+
+    expect(screen.getByRole("img", { name: "In progress" })).toBeInTheDocument();
+    expect(container.querySelector(".fui-Spinner")).toBeNull();
   });
 });

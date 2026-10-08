@@ -1,5 +1,5 @@
 import { Suspense, useMemo, type ReactNode } from "react";
-import { Badge, Spinner, tokens } from "@fluentui/react-components";
+import { Badge, tokens } from "@fluentui/react-components";
 import {
   ArrowSync12Regular,
   ErrorCircle12Regular,
@@ -609,12 +609,7 @@ export function StatusBar() {
   }
 
   const leftStatusText = leftParts.join(" • ");
-  const showEvtxSpinner = activeView === "event-log" && evtxIsLoading;
-  // The event-log spinner already says "in progress"; a second icon is noise.
-  const toneIcon =
-    rightTone && !(rightTone === "progress" && showEvtxSpinner)
-      ? STATUS_TONE_ICONS[rightTone]
-      : null;
+  const toneIcon = rightTone ? STATUS_TONE_ICONS[rightTone] : null;
 
   const activeViewLabel =
     activeView === "log"
@@ -718,7 +713,6 @@ export function StatusBar() {
                 {graphApiIndicator.label}
               </span>
             )}
-            {showEvtxSpinner && <Spinner size="tiny" appearance="inverted" />}
             {toneIcon && (
               <toneIcon.Icon
                 role="img"
