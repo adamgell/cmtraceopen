@@ -112,6 +112,76 @@ async function showEspCapture(
   await settle(page);
 }
 
+/** One row of a status-bar composite: a label and the bar captured as PNG. */
+interface StatusBarStrip {
+  label: string;
+  png: Buffer;
+}
+
+/**
+ * Puts the active workspace's global status bar into a given state and
+ * captures just the 24px bar.
+ */
+async function captureStatusBar(
+  page: import("@playwright/test").Page,
+  state: {
+    workspaceId: string;
+    platform: string;
+    graphApiStatus?: string;
+    filterError?: string;
+  },
+): Promise<Buffer> {
+  await page.evaluate(async (next) => {
+    const { useUiStore } = await import("/src/stores/ui-store.ts");
+    const { useFilterStore } = await import("/src/stores/filter-store.ts");
+    useUiStore.setState({
+      currentPlatform: next.platform as never,
+      enabledWorkspaces: null,
+      activeWorkspace: next.workspaceId as never,
+      activeView: next.workspaceId as never,
+      graphApiStatus: (next.graphApiStatus ?? "disconnected") as never,
+    });
+    useFilterStore.setState({ filterError: next.filterError ?? null });
+  }, state);
+  const bar = page.getByTestId("global-status-bar");
+  await expect(bar).toBeVisible({ timeout: 15_000 });
+  await settle(page);
+  return bar.screenshot({ animations: "disabled" });
+}
+
+/** Stacks labelled status-bar strips into one PNG for side-by-side review. */
+async function writeStatusBarComposite(
+  page: import("@playwright/test").Page,
+  themeLabel: string,
+  strips: StatusBarStrip[],
+  fileName: string,
+): Promise<void> {
+  const sheet = await page.context().newPage();
+  const rows = strips
+    .map(
+      (strip) => `
+        <div class="row">
+          <div class="label">${strip.label}</div>
+          <img src="data:image/png;base64,${strip.png.toString("base64")}" />
+        </div>`,
+    )
+    .join("");
+  await sheet.setContent(`
+    <html>
+      <body style="margin:0;padding:16px;background:#d0d0d0;font:13px 'Segoe UI',sans-serif;color:#000000">
+        <h1 style="font-size:15px;margin:0 0 12px">Global status bar: ${themeLabel}</h1>
+        <style>
+          .row { display:flex; align-items:center; gap:12px; margin-bottom:8px; }
+          .label { width:220px; flex-shrink:0; }
+          img { width:1440px; height:24px; display:block; outline:1px solid #606060; }
+        </style>
+        ${rows}
+      </body>
+    </html>`);
+  await sheet.screenshot({ path: outPath(fileName), fullPage: true });
+  await sheet.close();
+}
+
 test.describe("repo screenshots", () => {
   test("log-viewer", async ({ page }) => {
     const live = await bridgeIsUp();
@@ -308,6 +378,69 @@ test.describe("repo screenshots", () => {
         ),
         animations: "disabled",
       });
+    });
+  }
+
+  // Phase 0b (#826, spec section 8.18): every workspace's status bar in the
+  // three themes the acceptance names. One composite per theme keeps the
+  // review to three files instead of one strip per workspace and theme.
+  for (const theme of [
+    { id: "light", label: "Light" },
+    { id: "dark", label: "Dark" },
+    { id: "high-contrast", label: "High contrast" },
+  ]) {
+    test(`status bar ${theme.id}`, async ({ page }) => {
+      await page.goto("/");
+      await dismissSplash(page);
+
+      const workspaces = await page.evaluate(async (themeId) => {
+        const { useUiStore } = await import("/src/stores/ui-store.ts");
+        const { workspaceRegistry } =
+          await import("/src/workspaces/registry.ts");
+        useUiStore.getState().setThemeId(themeId as never);
+        return Array.from(workspaceRegistry.values()).map((ws) => ({
+          id: ws.id,
+          label: ws.label,
+          platform:
+            ws.platforms === "all" ? "windows" : (ws.platforms[0] as string),
+        }));
+      }, theme.id);
+
+      const strips: StatusBarStrip[] = [];
+      for (const ws of workspaces) {
+        strips.push({
+          label: ws.label,
+          png: await captureStatusBar(page, {
+            workspaceId: ws.id,
+            platform: ws.platform,
+          }),
+        });
+      }
+
+      // States that only exist with data: the Graph API ring and a tone icon.
+      strips.push({
+        label: "Log, Graph API connected",
+        png: await captureStatusBar(page, {
+          workspaceId: "log",
+          platform: "windows",
+          graphApiStatus: "connected",
+        }),
+      });
+      strips.push({
+        label: "Log, filter error",
+        png: await captureStatusBar(page, {
+          workspaceId: "log",
+          platform: "windows",
+          filterError: "Invalid clause",
+        }),
+      });
+
+      await writeStatusBarComposite(
+        page,
+        theme.label,
+        strips,
+        `status-bar-${theme.id}.png`,
+      );
     });
   }
 });
