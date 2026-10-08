@@ -15,10 +15,16 @@ if ! dpkg -s libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev lib
   SUDO=""
   [ "$(id -u)" -ne 0 ] && SUDO="sudo"
   export DEBIAN_FRONTEND=noninteractive
-  $SUDO apt-get update -qq
-  $SUDO apt-get install -y --no-install-recommends \
-    libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-    librsvg2-dev patchelf pkg-config
+  # Never let sudo prompt: without passwordless sudo, warn and continue so the
+  # Rust and npm setup below still runs (cargo will lack the GTK/WebKit libs).
+  if [ -n "$SUDO" ] && ! sudo -n true 2>/dev/null; then
+    echo "warning: passwordless sudo unavailable; skipping apt package install" >&2
+  else
+    $SUDO apt-get update -qq
+    $SUDO apt-get install -y --no-install-recommends \
+      libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+      librsvg2-dev patchelf pkg-config
+  fi
 fi
 
 # Rust: rust-toolchain.toml pins the channel and clippy; add the wasm target
