@@ -484,6 +484,7 @@ class Controller:
         self.wait("find-selection", self.beta_selected)
         self.wait("find-count", self.match_count)
         self.result["checks"]["find"] = True
+        self.screenshot("initial")  # Preserve the accepted Find state in the fixed evidence slot.
         self.stage("filter")
         self.click("Close find bar")
         key("ctrl+shift+l")

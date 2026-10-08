@@ -1,6 +1,8 @@
 # Fixed-candidate AppImage runtime acceptance
 
-This manual harness executes PR #821's unsigned 1.6.3 CI AppImage on one standard Ubuntu 22.04 x64 VM and one standard Ubuntu 24.04 x64 VM. Adam removed the voluntary 20-minute job / 40-runner-minute total limit for this task. There is no custom workflow job timeout; normal GitHub platform timeouts apply. The existing 300-second per-case, 660-second supervisor and bounded subprocess/cleanup hang protections remain unchanged. This is not unlimited retry authorization or final signed-release acceptance.
+The refreshed candidate is `08d4f19187c0798d9b0175fd60633868f474ebe9`, including named Find bar group and Find results status semantics. Fresh producer artifacts must replace the historical source/build/tree/digest tuple below before dispatch. The strict harness requires that unique visible named group and status with exact local `1 of 1` text, query readback, selected BETA and all three rows. It stops at a failed count gate; diagnostic continuation has been removed. Earlier old-source functional/visual results are historical and do not validate refreshed bytes.
+
+This manual harness executes PR #821's unsigned 1.6.3 CI AppImage on a standard Ubuntu 22.04 x64 VM. Ubuntu 24.04 x64 remains a required release gate but is excluded from the current matrix after its unchanged bubblewrap preflight established an environment blocker. Adam removed the voluntary 20-minute job / 40-runner-minute total limit for this task. There is no custom workflow job timeout; normal GitHub platform timeouts apply. The existing 300-second per-case, 660-second supervisor and bounded subprocess/cleanup hang protections remain unchanged. This is not unlimited retry authorization or final signed-release acceptance.
 
 ## Dispatch gate
 
