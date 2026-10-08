@@ -619,9 +619,9 @@ const DSREGCMD_RESULT = {
       id: "mdm-not-enrolled",
       severity: "Warning",
       category: "Management",
-      title: "Device is Entra joined but not MDM enrolled",
+      title: "MDM enrollment could not be confirmed",
       summary:
-        "No MDM enrollment URLs resolved to an active enrollment, so Intune compliance and policy may not apply.",
+        "The capture does not show an active MDM enrollment, so Intune compliance and policy may not apply. Enrollment state is unknown, not confirmed absent.",
       evidence: [
         "MdmUrl present but enrollment state not detected",
         "DeviceManagementSrvUrl is empty",
