@@ -966,7 +966,7 @@ These requirements follow `CLAUDE.md` and the epic.
 - `npx tsc --noEmit`.
 - `npm test -- <touched test files>`, then `npm test` before the final phase PR.
 - `git diff --check`.
-- If any Rust is touched (Phases 18a and 18b, and the Q-9 and Q-10 follow-ups), also run `cargo check`, `cargo test` and `cargo clippy -D warnings` with `--locked --manifest-path src-tauri/Cargo.toml --features event-log`, plus the epic's wasm32 parser check.
+- If any Rust is touched (Phases 18a and 18b, and the Q-9 and Q-10 follow-ups), also run `cargo check`, `cargo test` and `cargo clippy --all-targets -- -D warnings`, each with `--locked --manifest-path src-tauri/Cargo.toml --features event-log` placed before any `--`, plus the epic's wasm32 parser check.
 - Phase 0b: run the full `npm run screenshots` for every workspace.
 - From Phase 3 onward: `npm run screenshots -- -g event-logs`, with the PNGs attached to the PR beside the matching canvas board export. Reviewers compare them against §5 measurements and §4 deviations.
 - CodeRabbit plus an independent review, per the epic.
@@ -1723,7 +1723,7 @@ Spec: §8.17, Q-6
 
 ### Acceptance
 - Test: report built from the synthetic fixture contains no unredacted machine name, SID, or tenant ID.
-- cargo check / test / clippy -D warnings (--locked, --features event-log), wasm32 parser check, tsc, tests, diff-check pass.
+- `cargo check`, `cargo test` and `cargo clippy --all-targets -- -D warnings` (each with `--locked --features event-log` before any `--`), wasm32 parser check, tsc, tests, diff-check pass.
 ```
 
 ### A.23 Phase 18b: EVTX subset export (Windows)
