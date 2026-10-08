@@ -11,7 +11,7 @@ cd "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"
 
 # Tauri v2 Linux build dependencies (mirrors .github/workflows/cmtrace-ci.yml).
 # Skipped when already present so cached containers start fast.
-if ! dpkg -s libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf >/dev/null 2>&1; then
+if ! dpkg -s libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf pkg-config >/dev/null 2>&1; then
   SUDO=""
   [ "$(id -u)" -ne 0 ] && SUDO="sudo"
   export DEBIAN_FRONTEND=noninteractive
