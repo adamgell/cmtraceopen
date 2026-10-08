@@ -118,12 +118,16 @@ class Controller:
                 raise Blocked("accessibility-unavailable") from error
 
     def role(self, node):
-        # Bind text-control roles to the declared HTML input and editable
-        # state. Role names alone do not identify the intended control.
-        if (node.getRole() in (self.atspi.ROLE_ENTRY, self.atspi.ROLE_TEXT)
-                and "tag:input" in node.getAttributes()
+        # Identify the declared HTML input by its editable interface/state.
+        # The live bridge's role names/enums did not identify these controls.
+        if ("tag:input" in node.getAttributes()
                 and node.getState().contains(self.atspi.STATE_EDITABLE)):
-            return "entry"
+            try:
+                node.queryEditableText()
+            except NotImplementedError:
+                pass
+            else:
+                return "entry"
         return contract.accessible_role(node.getRoleName(), node.getAttributes())
 
     def showing(self, node):

@@ -35,6 +35,11 @@ class Node:
     def getState(self):
         return SimpleNamespace(contains=lambda state: state in self.states)
 
+    def queryEditableText(self):
+        if self.role not in ("entry", "text"):
+            raise NotImplementedError
+        return SimpleNamespace()
+
     def queryText(self):
         if self.value is None:
             raise NotImplementedError
