@@ -1,6 +1,5 @@
 """AT-SPI acceptance assertions inside the shared, offline X11/D-Bus session."""
 
-import copy
 import json
 import os
 from pathlib import Path
@@ -265,18 +264,14 @@ class Controller:
         self.observe(scope_entries_unique=len(entries) == 1, scope_close_unique=len(closes) == 1)
         if len(entries) != 1 or len(closes) != 1:
             return []
-        common = None
-        for entry_parent, close_parent in zip(entries[0], closes[0]):
-            if entry_parent is not close_parent:
-                break
-            common = entry_parent
-        # The product's FindBar div maps to section. Refuse an application,
-        # document or broader container that happens to include both controls.
+        groups = [node for node, _ in self.walk_paths(self.application)
+                  if self.role(node) == "group" and node.name == "Find bar" and self.showing(node)]
+        common = groups[0] if len(groups) == 1 else None
+        valid = common is not None and common in entries[0] and common in closes[0]
         self.observe(scope_common_present=common is not None,
-                     scope_common_section=common is not None and self.role(common) == "section",
-                     scope_common_tagdiv=common is not None and "tag:div" in common.getAttributes(),
+                     scope_named_group=valid,
                      scope_common_showing=common is not None and self.showing(common))
-        if common is None or self.role(common) != "section" or not self.showing(common):
+        if not valid:
             return []
         scoped = list(self.walk_paths(common))
         buttons, inputs = [], 0
@@ -285,7 +280,7 @@ class Controller:
                     "Close find bar": {"push button", "button"}}
         for node, _ in scoped:
             role = self.role(node)
-            if role not in ("section", "static", "text", "image", "separator", "entry", "push button", "button", "toggle button"):
+            if role not in ("group", "status", "section", "static", "text", "image", "separator", "entry", "push button", "button", "toggle button"):
                 self.observe(scope_roles_valid=False)
                 return []
             if role == "entry":
@@ -303,27 +298,15 @@ class Controller:
         selected = self.beta_selected()
         query = self.query_matches()
         scoped = self.find_scope()
-        names, texts, conflict = False, False, False
-        for node, parents in scoped:
-            if any(self.role(parent) in ("entry", "push button", "button", "toggle button") for parent in parents):
-                continue
-            # WebKit ignores ordinary spans/StaticText objects and exposes their
-            # Text on a containing section. Embedded controls use U+FFFC; only
-            # boundary markers/whitespace may be removed, never literal text.
-            if self.role(node) in ("section", "static", "text") and self.showing(node):
-                name = re.sub(r"^[\s\ufffc]+|[\s\ufffc]+$", "", node.name or "")
-                text = re.sub(r"^[\s\ufffc]+|[\s\ufffc]+$", "", self.direct_text(node))
-                name_match = re.fullmatch(r"1\s+of\s+1", name) is not None
-                text_match = re.fullmatch(r"1\s+of\s+1", text) is not None
-                conflict |= (re.fullmatch(r"\d+\s+of\s+\d+", name) is not None and not name_match
-                             or re.fullmatch(r"\d+\s+of\s+\d+", text) is not None and not text_match
-                             or name in ("No results", "Invalid regex") or text in ("No results", "Invalid regex")
-                             or name_match and bool(text) and not text_match)
-                # A name cannot override this object's nonempty Text value.
-                names |= name_match and not text
-                texts |= text_match
-        self.observe(find_scope_valid=bool(scoped), match_name=names, match_text=texts, match_conflict=conflict)
-        return selected and query and bool(scoped) and (names or texts) and not conflict
+        statuses = [node for node, parents in scoped
+                    if self.role(node) == "status" and node.name == "Find results"
+                    and self.showing(node)
+                    and not any(self.role(parent) in ("entry", "push button", "button", "toggle button")
+                                for parent in parents)]
+        texts = len(statuses) == 1 and re.fullmatch(r"1\s+of\s+1", self.direct_text(statuses[0]).strip()) is not None
+        self.observe(find_scope_valid=bool(scoped), status_unique=len(statuses) == 1,
+                     match_text=texts)
+        return selected and query and bool(scoped) and texts
 
     def focused_editable(self):
         for node in self.nodes():
@@ -499,21 +482,8 @@ class Controller:
         self.wait("find-query", self.query_matches)
         key("Return")
         self.wait("find-selection", self.beta_selected)
-        count_gap = None
-        try:
-            self.wait("find-count", self.match_count)
-        except ValueError as error:
-            facts = self.result["diagnostics"]["observations"]
-            if (str(error) != "ui-assertion" or facts.get("find_scope_valid") is not False
-                    or facts.get("find_query_matches") is not True
-                    or facts.get("beta_selected") is not True or facts.get("rows_match") is not True):
-                raise
-            # Diagnostic continuation only. Preserve the failed count gate;
-            # subsequent assertions cannot convert this case to a pass.
-            count_gap = copy.deepcopy(self.result["diagnostics"])
-            count_gap["observations"]["count_scope_deferred"] = True
-            self.screenshot("initial")  # Fixed slot: Find state for manual review.
-        self.result["checks"]["find"] = count_gap is None
+        self.wait("find-count", self.match_count)
+        self.result["checks"]["find"] = True
         self.stage("filter")
         self.click("Close find bar")
         key("ctrl+shift+l")
@@ -559,12 +529,8 @@ class Controller:
         self.result["diagnostics"]["final_image"] = "acceptance"
         self.exit_app()
         self.result["checks"]["exited"] = True
-        if count_gap is None:
-            self.result.update(status="passed", reason="ok")
-            self.stage("complete")
-        else:
-            self.result.update(status="failed", reason="ui-assertion", diagnostics=count_gap)
-            self.result["diagnostics"]["final_image"] = "failure"
+        self.result.update(status="passed", reason="ok")
+        self.stage("complete")
 
 
 def exception_observations(error):

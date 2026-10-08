@@ -31,8 +31,8 @@ OBSERVATIONS = frozenset(("splash_absent", "window_active", "window_stable", "ro
                           "find_placeholder_editable", "find_placeholder_focused",
                           "error_os", "error_command", "error_value", "error_attribute", "error_type",
                           "error_atspi", "error_other", "scope_entries_unique", "scope_close_unique",
-                          "scope_common_present", "scope_common_section", "scope_common_tagdiv", "scope_common_showing",
-                          "scope_roles_valid", "scope_buttons_valid", "scope_inputs_valid", "count_scope_deferred", "reopen_chooser_in_app", "reopen_chooser_on_desktop", "reopen_path_matches", "reopen_location_unique", "reopen_open_unique"))
+                          "scope_common_present", "scope_named_group", "status_unique", "scope_common_showing",
+                          "scope_roles_valid", "scope_buttons_valid", "scope_inputs_valid", "reopen_chooser_in_app", "reopen_chooser_on_desktop", "reopen_path_matches", "reopen_location_unique", "reopen_open_unique"))
 
 
 def diagnostics():
@@ -207,7 +207,7 @@ def sanitize_fuse(proofs, passed):
 
 def accessible_role(role, attributes):
     for attribute in attributes:
-        if attribute in ("xml-roles:listbox", "xml-roles:option"):
+        if attribute in ("xml-roles:listbox", "xml-roles:option", "xml-roles:group", "xml-roles:status"):
             return attribute.split(":", 1)[1]
     return {"list box": "listbox", "list item": "option"}.get(role, role)
 

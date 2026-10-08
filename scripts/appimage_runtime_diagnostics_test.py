@@ -66,56 +66,49 @@ class DiagnosticsTests(unittest.TestCase):
         return Node(**(dict(role="entry", attrs=("placeholder-text:Find...", "tag:input"),
                             states=("showing", "focused", "editable"), text=ui.TOKENS[1]) | overrides))
 
-    def bar(self, count=None, text=None):
+    def bar(self, count=None, text="1 of 1"):
         controls = [Node(name, "toggle button" if name in ("Match case", "Use regular expression") else "push button") for name in
                     ("Match case", "Use regular expression", "Previous match", "Next match", "Close find bar")]
-        return Node(role="section", text=text, children=[self.entry(), *controls] + ([count] if count else []))
+        status = count if count is not None else Node("Find results", "status", text=text)
+        return Node("Find bar", "group", children=[self.entry(), *controls, status])
 
-    def test_find_count_accepts_scoped_section_text_and_boundary_object_markers(self):
-        for bar in (self.bar(Node(role="section", text="1 of 1")),
-                    self.bar(text="\ufffc 1 of 1 \ufffc\ufffc\ufffc\ufffc\ufffc")):
-            self.assertTrue(self.controller(bar).match_count())
+    def test_find_count_requires_named_group_and_named_status_text(self):
+        self.assertTrue(self.controller(self.bar()).match_count())
+        for role in ("section", "application", "document"):
+            bar = self.bar(); bar.role = role
+            self.assertFalse(self.controller(bar).match_count())
+        for name in ("", "Other bar"):
+            bar = self.bar(); bar.name = name
+            self.assertFalse(self.controller(bar).match_count())
+        for count in (Node("1 of 1"), Node(text="1 of 1"), Node("Other results", "status", text="1 of 1"),
+                      Node("Find results", "status", text="1 of 1", states=())):
+            self.assertFalse(self.controller(self.bar(count)).match_count())
 
     def test_find_modes_require_actual_toggle_roles_and_navigation_requires_buttons(self):
-        bar = self.bar(text="1 of 1")
-        for control in bar.children[1:3]: control.role = "toggle button"
-        self.assertTrue(self.controller(bar).match_count())
         for index, role in ((1, "push button"), (2, "push button"), (3, "toggle button"), (4, "toggle button"), (5, "toggle button")):
-            bad = copy.deepcopy(bar); bad.children[index].role = role
-            self.assertFalse(self.controller(bad).match_count())
-
-    def test_find_count_rejects_known_failure_status_and_conflicting_nonempty_text(self):
-        for status in ("No results", "Invalid regex", "1 of 1 unexpected"):
-            self.assertFalse(self.controller(self.bar(Node(name="1 of 1", text=status))).match_count())
-        for status in ("No results", "Invalid regex"):
-            bar = self.bar(Node(name="1 of 1")); bar.children.append(Node(text=status))
+            bar = self.bar(); bar.children[index].role = role
             self.assertFalse(self.controller(bar).match_count())
 
-    def test_find_count_rejects_global_decoy_when_local_count_is_wrong(self):
-        controller = self.controller(self.bar(text="0 of 1"), Node(text="1 of 1"))
-        self.assertFalse(controller.match_count())
+    def test_find_count_rejects_wrong_status_and_global_or_control_decoys(self):
+        for text in ("0 of 1", "No results", "Invalid regex", "private 1 of 1", "1 of 1 unexpected", "1\ufffc of 1", ""):
+            bar = self.bar(text=text)
+            self.assertFalse(self.controller(bar, Node("Find results", "status", text="1 of 1")).match_count())
+            bar.children[1].children.append(Node("Find results", "status", text="1 of 1"))
+            self.assertFalse(self.controller(bar).match_count())
 
-    def test_find_count_rejects_ambiguous_or_broad_scope_and_unexpected_literal_text(self):
+    def test_find_count_rejects_ambiguous_scope_controls_and_status(self):
         for extra in (Node("Close find bar", "push button"), self.entry(), Node("unrelated", "push button"),
-                      Node("Filter", "dialog"), Node("Log entries", "list box")):
-            bar = self.bar(Node(text="1 of 1")); bar.children.append(extra)
+                      Node("Filter", "dialog"), Node("Log entries", "list box"), Node("Find results", "status", text="1 of 1")):
+            bar = self.bar(); bar.children.append(extra)
             self.assertFalse(self.controller(bar).match_count())
-        for value in ("0 of 1", "private 1 of 1", "1 of 1 .*", "1\ufffc of 1"):
-            self.assertFalse(self.controller(self.bar(text=value)).match_count())
-        bar = self.bar(Node(text="1 of 1")); bar.children[0].value = "wrong query"
+        bar = self.bar(); bar.children[0].value = "wrong query"
         self.assertFalse(self.controller(bar).match_count())
-        bar = self.bar(Node(text="1 of 1")); bar.states.clear()
+        bar = self.bar(); bar.states.clear()
         self.assertFalse(self.controller(bar).match_count())
-        bar = self.bar(Node(name="1 of 1", text="0 of 1"))
-        self.assertFalse(self.controller(bar).match_count())
-        bar = self.bar(text="0 of 1")
-        bar.children[1].children.append(Node(text="1 of 1"))
-        self.assertFalse(self.controller(bar).match_count())
-        bar = self.bar(Node(text="1 of 1"))
-        self.assertFalse(self.controller(bar, self.entry()).match_count())
-        bar = self.bar(Node(text="1 of 1"))
-        close = bar.children.pop(5)
-        self.assertFalse(self.controller(Node(role="section", children=[bar, close, Node("Log entries", "list box")])).match_count())
+        self.assertFalse(self.controller(self.bar(), self.bar()).match_count())
+        self.assertFalse(self.controller(self.bar(), self.entry()).match_count())
+        bar = self.bar(); close = bar.children.pop(5)
+        self.assertFalse(self.controller(Node(role="section", children=[bar, close])).match_count())
 
     def test_ready_waits_for_splash_removal_even_with_visible_fixture_rows(self):
         for splash in (Node(role="section", attrs=("id:splash",), states=()),
@@ -243,26 +236,20 @@ class DiagnosticsTests(unittest.TestCase):
         controller.application.children[0]=original
         self.assertTrue(controller.nodes())
 
-    def test_count_scope_diagnostic_continuation_preserves_failure_after_all_later_checks(self):
-        controller=self.controller()
+    def test_count_failure_stops_acceptance_before_later_checks(self):
+        controller = self.controller()
         def wait(stage, predicate, *args, **kwargs):
             controller.stage(stage)
             if stage == "find-count":
-                controller.observe(find_scope_valid=False, find_query_matches=True, beta_selected=True, rows_match=True)
                 raise ValueError("ui-assertion")
-        def rows(expected, *args): controller.result["counts"].append(len(expected))
-        with tempfile.TemporaryDirectory() as directory:
-            controller.fixture=Path(directory)/"fixture.log"
-            with patch.object(controller,"launch"), patch.object(controller,"wait",side_effect=wait), patch.object(controller,"expect_rows",side_effect=rows), patch.object(controller,"screenshot"), patch.object(controller,"click"), patch.object(controller,"exit_app"), patch.object(ui,"key"), patch.object(ui,"type_text"), patch.object(ui,"poll",return_value=True):
+        with tempfile.TemporaryDirectory() as directory, patch.object(controller, "launch"), patch.object(controller, "wait", side_effect=wait), patch.object(controller, "expect_rows"), patch.object(controller, "screenshot"), patch.object(controller, "click") as click, patch.object(ui, "key"), patch.object(ui, "type_text"):
+            controller.fixture = Path(directory) / "fixture.log"
+            with self.assertRaisesRegex(ValueError, "ui-assertion"):
                 controller.execute()
-        self.assertEqual(controller.result["status"],"failed")
-        self.assertEqual(controller.result["reason"],"ui-assertion")
-        self.assertFalse(controller.result["checks"]["find"])
-        for check in ("open","filter","tail","reopen","exited"): self.assertTrue(controller.result["checks"][check])
-        self.assertEqual(controller.result["counts"],[3,1,3,4,4])
-        self.assertEqual(controller.result["diagnostics"]["stage"],"find-count")
-        self.assertEqual(controller.result["diagnostics"]["final_image"],"failure")
-        contract.sanitize_case(controller.result)
+        self.assertNotIn("find", controller.result["checks"])
+        self.assertNotIn("filter", controller.result["checks"])
+        click.assert_not_called()
+        self.assertEqual(controller.result["diagnostics"]["stage"], "find-count")
 
     def test_external_chooser_diagnostic_is_read_only_and_rejects_other_accounts(self):
         controller=self.controller()
@@ -324,22 +311,15 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertFalse(matches())
         self.assertNotIn("private", json.dumps(controller.result))
 
-    def test_count_accepts_static_name_or_text_but_requires_beta_and_all_three_rows(self):
-        for count in (Node("1 of 1"), Node(text="1 of 1"), Node(role="text", text="1 of 1")):
-            controller = self.controller(self.bar(count))
-            count_matches = self.api(controller, "match_count")
-            self.assertTrue(count_matches())
-            rows = controller.application.children[0].children
-            rows[1].states.discard("selected")
-            rows[0].states.add("selected")
-            self.assertFalse(count_matches())
-            rows[0].states.discard("selected")
-            rows[1].states.add("selected")
-            rows.pop()
-            self.assertFalse(count_matches())
-        for count in (Node("1 of 1", "push button"), Node("1 of 1", states=()),
-                      Node(text="0 of 1"), Node(text="private 1 of 1")):
-            self.assertFalse(self.controller(self.bar(count)).match_count())
+    def test_count_requires_beta_selection_and_all_three_rows(self):
+        controller = self.controller(self.bar())
+        self.assertTrue(controller.match_count())
+        rows = controller.application.children[0].children
+        rows[1].states.discard("selected"); rows[0].states.add("selected")
+        self.assertFalse(controller.match_count())
+        rows[0].states.discard("selected"); rows[1].states.add("selected")
+        rows.pop()
+        self.assertFalse(controller.match_count())
 
     def test_wait_records_exact_stage_elapsed_and_only_boolean_observations(self):
         controller = self.controller(self.entry())

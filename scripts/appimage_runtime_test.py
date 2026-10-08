@@ -65,6 +65,8 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(role("list box",[]),"listbox")
         self.assertEqual(role("list item",[]),"option")
         self.assertEqual(role("unknown",["xml-roles:option"]),"option")
+        self.assertEqual(role("unknown",["xml-roles:group"]),"group")
+        self.assertEqual(role("unknown",["xml-roles:status"]),"status")
         self.assertEqual(role("table",[]),"table")
         self.assertEqual(role("table cell",[]),"table cell")
 
