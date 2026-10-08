@@ -187,8 +187,14 @@ class Controller:
 
     def find_input(self):
         # WebKit exposes HTML input[type=text] as entry, with placeholder-text.
-        candidates = [node for node in self.nodes() if self.role(node) == "entry"
-                      and "placeholder-text:Find..." in node.getAttributes() and self.showing(node)]
+        nodes = self.nodes()
+        placeholders = [node for node in nodes if "placeholder-text:Find..." in node.getAttributes()]
+        self.observe(find_placeholder_present=bool(placeholders), find_placeholder_unique=len(placeholders) == 1,
+                     find_placeholder_entry=any(self.role(node) == "entry" for node in placeholders),
+                     find_placeholder_showing=any(self.showing(node) for node in placeholders),
+                     find_name_present=any(node.name == "Find..." for node in nodes),
+                     find_entry_present=any(self.role(node) == "entry" for node in nodes))
+        candidates = [node for node in placeholders if self.role(node) == "entry" and self.showing(node)]
         unique = len(candidates) == 1
         focused = unique and all(candidates[0].getState().contains(state)
                                  for state in (self.atspi.STATE_FOCUSED, self.atspi.STATE_EDITABLE))
@@ -441,6 +447,27 @@ class Controller:
         self.stage("complete")
 
 
+def exception_observations(error):
+    # Fixed boolean categories only: never emit exception messages, tracebacks,
+    # arbitrary class names, subprocess commands or accessibility strings.
+    if isinstance(error, subprocess.CalledProcessError):
+        category = "command"
+    elif isinstance(error, OSError):
+        category = "os"
+    elif isinstance(error, ValueError):
+        category = "value"
+    elif isinstance(error, AttributeError):
+        category = "attribute"
+    elif isinstance(error, TypeError):
+        category = "type"
+    elif type(error).__module__ in ("gi.repository.GLib", "gi.repository.Gio", "gi.repository.Atspi", "gi.overrides.GLib"):
+        category = "atspi"
+    else:
+        category = "other"
+    return {"error_" + name: name == category for name in
+            ("command", "os", "value", "attribute", "type", "atspi", "other")}
+
+
 def main(root, case):
     controller = None
     try:
@@ -461,6 +488,7 @@ def main(root, case):
                 result.update(status="failed", reason="ui-assertion")
             else:
                 result.update(status="blocked", reason="harness-error")
+            controller.observe(**exception_observations(error))
             controller.capture_failure()
     else:
         result = controller.result

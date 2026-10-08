@@ -12,7 +12,7 @@ STDERR_LIMIT = 4096
 POLICY_INTS = {"apparmor_restrict_unprivileged_userns": 1, "unprivileged_userns_clone": 1,
                "max_user_namespaces": 2**31 - 1, "bwrap_mode": 0o7777,
                "bwrap_uid": 2**32 - 1, "bwrap_gid": 2**32 - 1}
-ERRORS = frozenset(("ok", "namespace-denied", "mount-denied", "other", "signal", "timeout", "spawn-error"))
+ERRORS = frozenset(("ok", "namespace-denied", "mount-denied", "id-map-denied", "other", "signal", "timeout", "spawn-error"))
 
 
 def unknown_policy():
@@ -61,6 +61,8 @@ def classify_error(raw):
     # These are error categories, not attribution to AppArmor or another policy.
     text = raw.lower()
     denied = b"operation not permitted" in text or b"permission denied" in text or b"no permissions" in text
+    if denied and any(marker in text for marker in (b"uid map", b"gid map", b"uid_map", b"gid_map")):
+        return "id-map-denied"
     if b"namespace" in text and denied:
         return "namespace-denied"
     if b"mount" in text and denied:
@@ -88,7 +90,7 @@ def sanitize(data):
     elif rc < 0:
         valid = category == "signal"
     else:
-        valid = category in ("namespace-denied", "mount-denied", "other")
+        valid = category in ("namespace-denied", "mount-denied", "id-map-denied", "other")
     policy = data["policy"]
     if not valid or not isinstance(policy, dict) or set(policy) != set(unknown_policy()):
         raise ValueError("evidence-invalid")

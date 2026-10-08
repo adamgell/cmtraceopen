@@ -150,6 +150,42 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertIsNone(controller.find_input())
         self.assertIsNone(self.controller(good, self.entry()).find_input())
 
+    def test_find_diagnostics_distinguish_placeholder_role_visibility_without_relaxing_selector(self):
+        for node, entry, showing in ((self.entry(role="text"), False, True),
+                                     (self.entry(states=("focused", "editable")), True, False)):
+            controller = self.controller(node)
+            self.assertIsNone(controller.find_input())
+            facts = controller.result["diagnostics"]["observations"]
+            self.assertTrue(facts["find_placeholder_present"])
+            self.assertTrue(facts["find_placeholder_unique"])
+            self.assertEqual(facts["find_placeholder_entry"], entry)
+            self.assertEqual(facts["find_placeholder_showing"], showing)
+            contract.sanitize_diagnostics(controller.result["diagnostics"])
+        controller = self.controller(self.entry(attrs=(), name="Find..."))
+        self.assertIsNone(controller.find_input())
+        self.assertTrue(controller.result["diagnostics"]["observations"]["find_name_present"])
+        self.assertFalse(controller.result["diagnostics"]["observations"]["find_placeholder_present"])
+
+    def test_exception_diagnostics_are_fixed_boolean_categories_without_private_strings(self):
+        for error, category in ((ValueError("private value"), "value"),
+                                (TypeError("private type"), "type"),
+                                (AttributeError("private attribute"), "attribute"),
+                                (OSError("private path"), "os"),
+                                (subprocess.CalledProcessError(1, "private command"), "command"),
+                                (RuntimeError("private other"), "other")):
+            facts = ui.exception_observations(error)
+            self.assertTrue(facts["error_"+category])
+            self.assertEqual(sum(facts.values()), 1)
+            diagnostic=contract.diagnostics(); diagnostic["observations"]=facts
+            contract.sanitize_diagnostics(diagnostic)
+            self.assertNotIn("private", json.dumps(facts))
+
+    def test_bubblewrap_id_map_denial_classification_does_not_emit_raw_stderr(self):
+        from appimage_runtime import sandbox
+        for marker in (b"uid map", b"gid map", b"uid_map", b"gid_map"):
+            self.assertEqual(sandbox.classify_error(b"private: "+marker+b": Permission denied"), "id-map-denied")
+        self.assertEqual(sandbox.classify_error(b"private: uid map: unknown error"), "other")
+
     def test_find_readback_rejects_wrong_input_value_and_never_records_text(self):
         entry = self.entry()
         controller = self.controller(entry)
