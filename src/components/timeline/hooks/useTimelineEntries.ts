@@ -7,6 +7,8 @@ const PAGE_SIZE = 1000;
 
 export function useTimelineEntries(offset: number): TimelineEntry[] {
   const bundle = useTimelineStore((s) => s.bundle);
+  const generation = useTimelineStore(s => s.timelineGeneration);
+  const blocked = useTimelineStore(s => Boolean(s.staleSource) || s.building);
   const brushRange = useTimelineStore((s) => s.brushRange);
   const laneVisibility = useTimelineStore((s) => s.laneVisibility);
   const soloSourceIdx = useTimelineStore((s) => s.soloSourceIdx);
@@ -26,7 +28,8 @@ export function useTimelineEntries(offset: number): TimelineEntry[] {
   const cached = cache.get(key);
 
   useEffect(() => {
-    if (!bundle || cached) return;
+    if (!bundle || cached || blocked) return;
+    const origin = { bundleId: bundle.id, generation };
     let cancelled = false;
     invoke<TimelineEntry[]>("query_timeline_entries_cmd", {
       id: bundle.id,
@@ -36,14 +39,14 @@ export function useTimelineEntries(offset: number): TimelineEntry[] {
       limit: PAGE_SIZE,
     })
       .then((v) => {
-        if (!cancelled) putEntries(key, v);
+        if (!cancelled && useTimelineStore.getState().isCurrent(origin)) putEntries(key, v);
       })
-      .catch(() => {});
+      .catch(error => { if (!cancelled) useTimelineStore.getState().reportQueryError(error, origin); });
     return () => {
       cancelled = true;
     };
   }, [
-    bundle,
+    bundle, generation, blocked,
     offset,
     brushRange,
     filterKey,
@@ -53,5 +56,5 @@ export function useTimelineEntries(offset: number): TimelineEntry[] {
     sourceFilter,
   ]);
 
-  return cached ?? [];
+  return blocked ? [] : (cached ?? []);
 }

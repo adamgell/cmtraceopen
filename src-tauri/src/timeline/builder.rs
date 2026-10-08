@@ -91,7 +91,7 @@ mod tests_classify {
 use std::collections::{HashMap, HashSet};
 
 use crate::timeline::models::*;
-use crate::timeline::query::SourceRuntime;
+use crate::timeline::query::{MessageMaterializer, SourceRuntime};
 use crate::timeline::store::Timeline;
 
 pub const DEFAULT_ENTRY_LIMIT: u64 = 5_000_000;
@@ -161,6 +161,7 @@ pub fn build_timeline(
                         kind: TimelineSourceKind::IntuneEvents,
                         path: req.path.clone(),
                         entry_count: events.len() as u32,
+                        firewall_excluded: None,
                     });
                     ime_events.insert(idx, events);
                 }
@@ -173,7 +174,15 @@ pub fn build_timeline(
         }
 
         match parse_to_index(&path) {
-            Ok((parser_kind, idx_vec, parser, entry_count)) => {
+            Ok(indexed) => {
+                let IndexedSource {
+                    parser,
+                    entries: idx_vec,
+                    firewall,
+                    excluded,
+                } = indexed;
+                let parser_kind = parser.parser;
+                let entry_count = idx_vec.len() as u32;
                 for ei in &idx_vec {
                     time_min = time_min.min(ei.timestamp_ms);
                     time_max = time_max.max(ei.timestamp_ms);
@@ -192,14 +201,33 @@ pub fn build_timeline(
                     kind: TimelineSourceKind::LogFile { parser_kind },
                     path: req.path.clone(),
                     entry_count,
+                    firewall_excluded: excluded,
                 });
                 indexes.insert(idx, idx_vec);
-                runtimes.insert(idx, SourceRuntime { path, parser });
+                runtimes.insert(
+                    idx,
+                    SourceRuntime {
+                        path,
+                        parser,
+                        firewall,
+                    },
+                );
             }
-            Err(e) => errors.push(SourceError {
-                path: req.path.clone(),
-                message: e.to_string(),
-            }),
+            Err(e) => {
+                if let Some(reason) =
+                    e.downcast_ref::<super::firewall::FirewallMaterializationError>()
+                {
+                    return Err(TimelineError::FirewallSource {
+                        source_idx: idx,
+                        path: req.path.clone(),
+                        reason: *reason,
+                    });
+                }
+                errors.push(SourceError {
+                    path: req.path.clone(),
+                    message: e.to_string(),
+                });
+            }
         }
     }
 
@@ -212,7 +240,8 @@ pub fn build_timeline(
         .into_iter()
         .filter_map(|g| crate::timeline::correlation::normalize_guid(&g))
         .collect();
-    let samples = sample_source_messages(&runtimes, &indexes, 200);
+    let adapter = MessageMaterializer::new(&runtimes, &indexes);
+    let samples = sample_source_messages(&indexes, 200, &adapter)?;
     let samples_as_refs: HashMap<u16, Vec<&str>> = samples
         .iter()
         .map(|(k, v)| (*k, v.iter().map(|s| s.as_str()).collect()))
@@ -221,11 +250,7 @@ pub fn build_timeline(
     denied.extend(hf);
 
     let tunables = TimelineTunables::default();
-    let materialize = |src: u16, eref: u32| -> Option<String> {
-        let ei = indexes.get(&src).and_then(|v| v.get(eref as usize))?;
-        let rt = runtimes.get(&src)?;
-        crate::timeline::query::materialize_msg(&rt.path, &rt.parser, ei)
-    };
+    let materialize = |src, eref| adapter.message(src, eref);
     let (raw_signals, incidents) = crate::timeline::incidents::detect_incidents(
         &indexes,
         &ime_events,
@@ -234,6 +259,8 @@ pub fn build_timeline(
         &materialize,
     );
 
+    adapter.finish()?;
+    drop(adapter);
     let bundle = TimelineBundle {
         id: uuid::Uuid::new_v4().to_string(),
         sources,
@@ -255,22 +282,28 @@ pub fn build_timeline(
     ))
 }
 
-/// Parse one log file. Returns parser kind, index vec, resolved parser,
-/// and entry count.
-fn parse_to_index(
-    path: &std::path::Path,
-) -> Result<
-    (
-        crate::models::log_entry::ParserKind,
-        Vec<EntryIndex>,
-        crate::parser::ResolvedParser,
-        u32,
-    ),
-    anyhow::Error,
-> {
+struct IndexedSource {
+    parser: crate::parser::ResolvedParser,
+    entries: Vec<EntryIndex>,
+    firewall: Option<super::firewall::FirewallRuntime>,
+    excluded: Option<u32>,
+}
+
+fn parse_to_index(path: &std::path::Path) -> Result<IndexedSource, anyhow::Error> {
     let path_str = path.to_string_lossy().to_string();
-    let (parse_result, parser) =
-        crate::parser::parse_file(&path_str).map_err(|e| anyhow::anyhow!("parse_file: {}", e))?;
+    let artifacts = crate::parser::parse_file_with_artifacts(&path_str)
+        .map_err(|e| anyhow::anyhow!("parse_file: {}", e))?;
+    if artifacts.firewall.is_some() {
+        let indexed = super::firewall::index_firewall(&artifacts)?;
+        return Ok(IndexedSource {
+            parser: artifacts.selection,
+            entries: indexed.entries,
+            firewall: Some(indexed.runtime),
+            excluded: Some(indexed.excluded),
+        });
+    }
+    let parse_result = artifacts.result;
+    let parser = artifacts.selection;
 
     // Re-read the raw bytes so we can compute per-line byte offsets.
     // The byte offset for line N (1-based) is offsets[N - 1]. offsets[0] is 0.
@@ -283,7 +316,6 @@ fn parse_to_index(
         }
     }
 
-    let parser_kind = parser.parser;
     let mut idx_vec: Vec<EntryIndex> = Vec::with_capacity(parse_result.entries.len());
     for entry in &parse_result.entries {
         let timestamp_ms = entry.timestamp.unwrap_or(0);
@@ -308,8 +340,12 @@ fn parse_to_index(
             signal_flags: flags,
         });
     }
-    let entry_count = idx_vec.len() as u32;
-    Ok((parser_kind, idx_vec, parser, entry_count))
+    Ok(IndexedSource {
+        parser,
+        entries: idx_vec,
+        firewall: None,
+        excluded: None,
+    })
 }
 
 /// Walk an IME-logs folder and extract Intune events by running the same
@@ -401,25 +437,27 @@ const IME_LOG_HINTS: &[&str] = &[
     "imeui",
 ];
 
-fn sample_source_messages(
-    runtimes: &HashMap<u16, SourceRuntime>,
+pub(super) fn sample_source_messages(
     indexes: &HashMap<u16, Vec<EntryIndex>>,
     per_source_cap: usize,
-) -> HashMap<u16, Vec<String>> {
-    let mut out: HashMap<u16, Vec<String>> = HashMap::new();
+    adapter: &MessageMaterializer<'_>,
+) -> Result<HashMap<u16, Vec<String>>, TimelineError> {
+    let mut out = HashMap::new();
     for (src, idx_vec) in indexes {
-        let rt = match runtimes.get(src) {
-            Some(r) => r,
-            None => continue,
-        };
-        let step = (idx_vec.len() / per_source_cap).max(1);
-        let mut msgs: Vec<String> = Vec::with_capacity(per_source_cap);
-        for ei in idx_vec.iter().step_by(step).take(per_source_cap) {
-            if let Some(m) = crate::timeline::query::materialize_msg(&rt.path, &rt.parser, ei) {
-                msgs.push(m);
+        let step = (idx_vec.len() / per_source_cap.max(1)).max(1);
+        let mut msgs = Vec::with_capacity(per_source_cap);
+        for (eref, _) in idx_vec
+            .iter()
+            .enumerate()
+            .step_by(step)
+            .take(per_source_cap)
+        {
+            if let Some(message) = adapter.message(*src, eref as u32) {
+                msgs.push(message);
             }
         }
         out.insert(*src, msgs);
     }
-    out
+    adapter.finish()?;
+    Ok(out)
 }

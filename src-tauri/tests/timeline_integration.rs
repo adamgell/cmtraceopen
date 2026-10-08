@@ -59,7 +59,7 @@ fn win32app_failure_yields_multi_source_incident() {
         timeline: &timeline,
         runtimes: &runtimes,
     };
-    let entries = query_timeline_entries(&ctx, None, None, 0, 100);
+    let entries = query_timeline_entries(&ctx, None, None, 0, 100).unwrap();
     assert!(!entries.is_empty(), "expected materialized entries");
 }
 

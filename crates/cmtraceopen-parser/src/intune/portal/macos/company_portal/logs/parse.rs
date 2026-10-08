@@ -516,6 +516,7 @@ fn empty_log_entry(id: u64, line_number: u32, file_path: &str) -> LogEntry {
         dns_flags: None,
         dns_event_id: None,
         zone_name: None,
+        firewall: None,
         entry_kind: None,
         whatif: None,
         section_name: None,

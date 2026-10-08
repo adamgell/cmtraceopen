@@ -4,7 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Parser source compatibility (#814)**: Advance `cmtraceopen-parser` to `0.4.0` for the new Windows Firewall enum variants and public struct fields. Downstream callers must update exhaustive matches and struct literals; see the [migration notes](crates/cmtraceopen-parser/README.md#versioning). The desktop app version remains `1.6.2`; this change does not publish the parser crate.
+
 ### Fixed
+
+- **Windows Firewall logs (#814)**: Recognize firewall records separately from IIS, preserve all fields and Local wall-clock timestamps, report padding/loss coverage, and retain encoding and source identity through tailing and timeline queries.
 
 - **DsRegCmd live capture reports evidence-write failures (#760)**: Connectivity, event-log, and scheduled-task evidence now report directory creation, serialization, and file-write errors instead of returning a successful capture with missing evidence.
 

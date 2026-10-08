@@ -35,15 +35,110 @@ pub fn materialize_log_entry(
     parser.parse_one_line(&text, ei.line_number).ok()
 }
 
-/// Materialize just the message text — cheap path for GUID scanning.
+/// Ordinary formats retain their existing optional message path.
 pub fn materialize_msg(path: &Path, parser: &ResolvedParser, ei: &EntryIndex) -> Option<String> {
-    materialize_log_entry(path, parser, ei).map(|e| e.message)
+    materialize_log_entry(path, parser, ei).map(|entry| entry.message)
 }
 
 /// A parsed source — holds path and parser for materialization.
 pub struct SourceRuntime {
     pub path: std::path::PathBuf,
     pub parser: ResolvedParser,
+    pub firewall: Option<super::firewall::FirewallRuntime>,
+}
+
+/// Bridges legacy Option callbacks without losing a firewall failure. One reader
+/// is opened and validated per source for the entire enclosing request.
+pub struct MessageMaterializer<'a> {
+    runtimes: &'a HashMap<u16, SourceRuntime>,
+    indexes: &'a HashMap<u16, Vec<EntryIndex>>,
+    sessions: std::cell::RefCell<HashMap<u16, super::firewall::FirewallReadSession<'a>>>,
+    first_error: std::cell::RefCell<Option<TimelineError>>,
+}
+impl<'a> MessageMaterializer<'a> {
+    pub fn new(
+        runtimes: &'a HashMap<u16, SourceRuntime>,
+        indexes: &'a HashMap<u16, Vec<EntryIndex>>,
+    ) -> Self {
+        Self {
+            runtimes,
+            indexes,
+            sessions: Default::default(),
+            first_error: Default::default(),
+        }
+    }
+    pub fn entry(&self, src: u16, eref: u32) -> Result<Option<LogEntry>, TimelineError> {
+        let Some(rt) = self.runtimes.get(&src) else {
+            return Ok(None);
+        };
+        let Some(ei) = self
+            .indexes
+            .get(&src)
+            .and_then(|rows| rows.get(eref as usize))
+        else {
+            return Ok(None);
+        };
+        let Some(firewall) = &rt.firewall else {
+            return Ok(materialize_log_entry(&rt.path, &rt.parser, ei));
+        };
+        let scoped = |reason| TimelineError::FirewallSource {
+            source_idx: src,
+            path: rt.path.to_string_lossy().into_owned(),
+            reason,
+        };
+        let context = firewall.context_at(ei.line_number).ok_or_else(|| {
+            scoped(super::firewall::FirewallMaterializationError::InvalidIndexContext)
+        })?;
+        let mut sessions = self.sessions.borrow_mut();
+        let session = match sessions.entry(src) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => entry.insert(
+                super::firewall::FirewallReadSession::open(&rt.path, firewall).map_err(scoped)?,
+            ),
+        };
+        super::firewall::materialize_firewall_entry(session, context, ei)
+            .map(Some)
+            .map_err(scoped)
+    }
+    pub fn message(&self, src: u16, eref: u32) -> Option<String> {
+        if self.first_error.borrow().is_some() {
+            return None;
+        }
+        if let Some(rt) = self.runtimes.get(&src).filter(|rt| rt.firewall.is_none()) {
+            let ei = self.indexes.get(&src)?.get(eref as usize)?;
+            return materialize_msg(&rt.path, &rt.parser, ei);
+        }
+        match self.entry(src, eref) {
+            Ok(entry) => entry.map(|entry| entry.message),
+            Err(error) => {
+                *self.first_error.borrow_mut() = Some(error);
+                None
+            }
+        }
+    }
+    pub fn finish(&self) -> Result<(), TimelineError> {
+        self.first_error.borrow().clone().map_or(Ok(()), Err)
+    }
+}
+
+pub fn recompute_tunables(
+    timeline: &mut Timeline,
+    runtimes: &HashMap<u16, SourceRuntime>,
+    tunables: TimelineTunables,
+) -> Result<Vec<Incident>, TimelineError> {
+    let denied = timeline.bundle.denied_guids.iter().cloned().collect();
+    let adapter = MessageMaterializer::new(runtimes, &timeline.indexes);
+    let incidents = super::incidents::redetect_from_signals(
+        &timeline.raw_signals,
+        &timeline.ime_events,
+        &tunables,
+        &denied,
+        &|src, eref| adapter.message(src, eref),
+    );
+    adapter.finish()?;
+    timeline.bundle.tunables = tunables;
+    timeline.bundle.incidents = incidents.clone();
+    Ok(incidents)
 }
 
 pub struct QueryContext<'a> {
@@ -60,7 +155,7 @@ pub fn query_timeline_entries(
     source_filter: Option<&std::collections::HashSet<u16>>,
     offset: u64,
     limit: u32,
-) -> Vec<TimelineEntry> {
+) -> Result<Vec<TimelineEntry>, TimelineError> {
     let mut view: Vec<(i64, u16, u32, bool)> = Vec::new();
     let (lo, hi) = range_ms.unwrap_or((i64::MIN, i64::MAX));
 
@@ -96,6 +191,7 @@ pub fn query_timeline_entries(
     let start = (offset as usize).min(view.len());
     let slice = &view[start..end];
 
+    let materializer = MessageMaterializer::new(ctx.runtimes, &ctx.timeline.indexes);
     let mut out = Vec::with_capacity(slice.len());
     for (_ts, src, eref, is_ime) in slice {
         if *is_ime {
@@ -112,23 +208,15 @@ pub fn query_timeline_entries(
                 });
             }
         } else {
-            let ei = ctx
-                .timeline
-                .indexes
-                .get(src)
-                .and_then(|v| v.get(*eref as usize));
-            let rt = ctx.runtimes.get(src);
-            if let (Some(ei), Some(rt)) = (ei, rt) {
-                if let Some(entry) = materialize_log_entry(&rt.path, &rt.parser, ei) {
-                    out.push(TimelineEntry::Log {
-                        source_idx: *src,
-                        entry: Box::new(entry),
-                    });
-                }
+            if let Some(entry) = materializer.entry(*src, *eref)? {
+                out.push(TimelineEntry::Log {
+                    source_idx: *src,
+                    entry: Box::new(entry),
+                });
             }
         }
     }
-    out
+    Ok(out)
 }
 
 pub fn query_lane_buckets(
@@ -212,14 +300,21 @@ pub struct IncidentDetail {
     pub per_source_signal_counts: std::collections::HashMap<String, u32>,
 }
 
-pub fn query_incident_details(ctx: &QueryContext<'_>, incident_id: u32) -> Option<IncidentDetail> {
-    let incident = ctx
+pub fn query_incident_details(
+    ctx: &QueryContext<'_>,
+    incident_id: u32,
+) -> Result<Option<IncidentDetail>, TimelineError> {
+    let materializer = MessageMaterializer::new(ctx.runtimes, &ctx.timeline.indexes);
+    let Some(incident) = ctx
         .timeline
         .bundle
         .incidents
         .iter()
-        .find(|i| i.id == incident_id)?
-        .clone();
+        .find(|i| i.id == incident_id)
+        .cloned()
+    else {
+        return Ok(None);
+    };
 
     let (lo, hi) = (incident.ts_start_ms, incident.ts_end_ms);
     let mut sigs: Vec<IncidentSignalDetail> = Vec::new();
@@ -250,14 +345,17 @@ pub fn query_incident_details(ctx: &QueryContext<'_>, incident_id: u32) -> Optio
         *counts.entry(name.clone()).or_insert(0) += 1;
 
         let (line_number, preview) = match ctx.runtimes.get(&s.source_idx) {
-            Some(rt) => {
+            Some(_) => {
                 let ei = ctx
                     .timeline
                     .indexes
                     .get(&s.source_idx)
                     .and_then(|v| v.get(s.entry_ref as usize));
                 if let Some(ei) = ei {
-                    let msg = materialize_msg(&rt.path, &rt.parser, ei).unwrap_or_default();
+                    let msg = materializer
+                        .entry(s.source_idx, s.entry_ref)?
+                        .map(|entry| entry.message)
+                        .unwrap_or_default();
                     (ei.line_number, truncate(&msg, 200))
                 } else {
                     (0, String::new())
@@ -281,11 +379,11 @@ pub fn query_incident_details(ctx: &QueryContext<'_>, incident_id: u32) -> Optio
         });
     }
 
-    Some(IncidentDetail {
+    Ok(Some(IncidentDetail {
         incident,
         signals: sigs,
         per_source_signal_counts: counts,
-    })
+    }))
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -341,6 +439,7 @@ mod tests_buckets {
             display_name: format!("src{idx}"),
             color: "#000".into(),
             entry_count: 0,
+            firewall_excluded: None,
         }
     }
 

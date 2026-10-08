@@ -1,3 +1,4 @@
+import { formatTimelineError } from "../../lib/timeline-errors";
 import { buildTimelineFromSources } from "../../components/timeline/hooks/buildTimelineFromSources";
 import { listLogFolder } from "../../lib/commands";
 import { useTimelineStore } from "../../stores/timeline-store";
@@ -25,16 +26,20 @@ function incomingFromListing(
 
 let timelineOpenQueue: Promise<void> = Promise.resolve();
 
-function enqueueTimelineOpen(operation: () => Promise<void>): Promise<void> {
-  const queued = timelineOpenQueue.then(() => {
+function enqueueTimelineOpen(operation: (refreshOrigin: () => void, isCurrent: () => boolean) => Promise<void>): Promise<void> {
+  const queued = timelineOpenQueue.then(async () => {
+    let origin = useTimelineStore.getState().buildOrigin();
+    const refreshOrigin = () => { origin = useTimelineStore.getState().buildOrigin(); };
     useTimelineStore.getState().setLoadError(null);
-    return operation();
+    try { await operation(refreshOrigin, () => useTimelineStore.getState().isBuildCurrent(origin)); }
+    catch (error) {
+      // Builds have their own guarded error handler. This handles listing errors
+      // only while the queue operation still owns the same visible timeline.
+      if (useTimelineStore.getState().isBuildCurrent(origin)) useTimelineStore.getState().setLoadError(formatTimelineError(error));
+      throw error;
+    }
   });
-  timelineOpenQueue = queued.catch((error) => {
-    useTimelineStore
-      .getState()
-      .setLoadError(error instanceof Error ? error.message : String(error));
-  });
+  timelineOpenQueue = queued.catch(() => {});
   return queued;
 }
 
@@ -81,15 +86,20 @@ async function incomingFromSource(source: LogSource): Promise<string[]> {
 }
 
 export function openTimelineSource(source: LogSource): Promise<void> {
-  return enqueueTimelineOpen(async () => {
-    await appendTimelineSources(await incomingFromSource(source));
+  return enqueueTimelineOpen(async (_refreshOrigin, isCurrent) => {
+    const incoming = await incomingFromSource(source);
+    if (isCurrent()) await appendTimelineSources(incoming);
   });
 }
 
 export function replaceTimelineSource(source: LogSource): Promise<void> {
-  return enqueueTimelineOpen(async () => {
-    useTimelineStore.getState().setBundle(null);
-    await replaceTimelineSources(await incomingFromSource(source));
+  return enqueueTimelineOpen(async (refreshOrigin, isCurrent) => {
+    if (!useTimelineStore.getState().staleSource) {
+      useTimelineStore.getState().setBundle(null);
+      refreshOrigin();
+    }
+    const incoming = await incomingFromSource(source);
+    if (isCurrent()) await replaceTimelineSources(incoming);
   });
 }
 

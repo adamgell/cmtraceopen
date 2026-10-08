@@ -1,0 +1,8 @@
+#Version: 1.5
+#Software: Microsoft Windows Firewall
+#Time Format: Local
+#Start-Date: 2042-04-05 06:07:08
+#Fields: date time action protocol src-ip dst-ip src-port dst-port size tcpflags tcpsyn tcpack tcpwin icmptype icmpcode info path pid
+2042-04-05 06:07:09 ALLOW TCP 192.0.2.11 198.51.100.22 54001 443 60 S 123 0 65535 - - - SEND 4242
+2042-04-05 06:07:10 DROP UDP 2001:db8:10::11 2001:db8:20::22 54002 53 78 - - - - - - - RECEIVE -
+2042-04-05 06:07:11 DROP ICMP 203.0.113.31 192.0.2.41 - - 84 - - - - 8 0 - RECEIVE 7301

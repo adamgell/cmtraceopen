@@ -78,6 +78,8 @@ pub struct TimelineSourceMeta {
     pub display_name: String,
     pub color: String,
     pub entry_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firewall_excluded: Option<u32>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -150,9 +152,16 @@ pub enum TimelineEntry {
     },
 }
 
-#[derive(thiserror::Error, Debug, serde::Serialize)]
+#[derive(thiserror::Error, Debug, Clone, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TimelineError {
+    #[error("{path}: {reason}")]
+    #[serde(rename_all = "camelCase")]
+    FirewallSource {
+        source_idx: u16,
+        path: String,
+        reason: super::firewall::FirewallMaterializationError,
+    },
     #[error("timeline not found: {id}")]
     NotFound { id: String },
     #[error("too large: estimated {estimated} entries exceeds limit of {limit}")]
@@ -240,6 +249,7 @@ mod tests {
                 dns_flags: None,
                 dns_event_id: None,
                 zone_name: None,
+                firewall: None,
                 entry_kind: None,
                 whatif: None,
                 section_name: None,

@@ -1,3 +1,6 @@
+import { isFirewallTimelineError } from "./timeline-errors";
+import { isFirewallCoverage, isFirewallDecoding, isFirewallRecord } from "./firewall";
+import type { FirewallControlToken } from "../types/log";
 import { invoke } from "@tauri-apps/api/core";
 import { boundUtf8WithDigest } from "./bounded-utf8";
 import type {
@@ -336,6 +339,7 @@ async function invokeCommand(
   try {
     response = await invoke<unknown>(commandName, args);
   } catch (error) {
+    if (commandName === "build_timeline_cmd" && isFirewallTimelineError(error)) throw error;
     throw normalizeCommandInvokeError(commandName, error);
   }
 
@@ -592,6 +596,13 @@ function isParserSelectionResponse(value: unknown): boolean {
   );
 }
 
+function isFirewallSourceMetadata(value: Record<string, unknown>): boolean {
+  return (value.firewallSessionId == null ||
+    (typeof value.firewallSessionId === "string" && value.firewallSessionId.length > 0 && value.firewallSessionId.length <= 128)) &&
+    (value.firewallCoverage == null || isFirewallCoverage(value.firewallCoverage)) &&
+    (value.firewallDecoding == null || isFirewallDecoding(value.firewallDecoding));
+}
+
 function isLogEntryResponse(value: unknown): boolean {
   return (
     isCommandRecord(value) &&
@@ -607,7 +618,8 @@ function isLogEntryResponse(value: unknown): boolean {
     isNullableCommandString(value.sourceFile) &&
     typeof value.format === "string" &&
     typeof value.filePath === "string" &&
-    isNullableCommandNumber(value.timezoneOffset)
+    isNullableCommandNumber(value.timezoneOffset) &&
+    (value.firewall == null || isFirewallRecord(value.firewall))
   );
 }
 
@@ -623,7 +635,8 @@ function isParseResultResponse(value: unknown): value is ParseResult {
     typeof value.filePath === "string" &&
     isFiniteCommandNumber(value.fileSize) &&
     isNullableCommandNumber(value.modifiedUnixMs) &&
-    isFiniteCommandNumber(value.byteOffset)
+    isFiniteCommandNumber(value.byteOffset) &&
+    isFirewallSourceMetadata(value)
   );
 }
 
@@ -685,6 +698,7 @@ const TIMELINE_PARSER_KIND_MEMBERS = {
   timestamped: true,
   plain: true,
   iisW3c: true,
+  windowsFirewall: true,
   panther: true,
   cbs: true,
   dism: true,
@@ -737,7 +751,8 @@ function isTimelineSourceMeta(value: unknown): boolean {
     typeof value.path === "string" &&
     typeof value.displayName === "string" &&
     typeof value.color === "string" &&
-    isFiniteCommandNumber(value.entryCount)
+    isFiniteCommandNumber(value.entryCount) &&
+    (value.firewallExcluded == null || isNonNegativeCommandCount(value.firewallExcluded))
   );
 }
 
@@ -1063,7 +1078,8 @@ function decodeAggregateParseResult(
           isFiniteCommandNumber(file.totalLines) &&
           isFiniteCommandNumber(file.parseErrors) &&
           isFiniteCommandNumber(file.fileSize) &&
-          isFiniteCommandNumber(file.byteOffset),
+          isFiniteCommandNumber(file.byteOffset) &&
+          isFirewallSourceMetadata(file),
       ),
   });
 }
@@ -2275,6 +2291,7 @@ export async function startTail(
   byteOffset: number,
   nextId: number,
   nextLine: number,
+  firewallControl?: FirewallControlToken,
 ): Promise<void> {
   return invokeCommand("start_tail", {
     path,
@@ -2282,19 +2299,20 @@ export async function startTail(
     byteOffset,
     nextId,
     nextLine,
+    ...(firewallControl ? { firewallControl } : {}),
   });
 }
 
-export async function stopTail(path: string): Promise<void> {
-  return invokeCommand("stop_tail", { path });
+export async function stopTail(path: string, firewallControl?: FirewallControlToken): Promise<void> {
+  return invokeCommand("stop_tail", { path, ...(firewallControl ? { firewallControl } : {}) });
 }
 
-export async function pauseTail(path: string): Promise<void> {
-  return invokeCommand("pause_tail", { path });
+export async function pauseTail(path: string, firewallControl?: FirewallControlToken): Promise<void> {
+  return invokeCommand("pause_tail", { path, ...(firewallControl ? { firewallControl } : {}) });
 }
 
-export async function resumeTail(path: string): Promise<void> {
-  return invokeCommand("resume_tail", { path });
+export async function resumeTail(path: string, firewallControl?: FirewallControlToken): Promise<void> {
+  return invokeCommand("resume_tail", { path, ...(firewallControl ? { firewallControl } : {}) });
 }
 
 export async function analyzeIntuneLogs(

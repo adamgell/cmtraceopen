@@ -3,7 +3,7 @@ import { tokens } from "@fluentui/react-components";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useLogStore } from "../../stores/log-store";
 import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
-import { formatDisplayDateTime } from "../../lib/date-time-format";
+import { formatLogEntryTimestamp } from "../../lib/date-time-format";
 import { diffFileBaseName } from "../../lib/diff-entries";
 import { useUiStore } from "../../stores/ui-store";
 import { DiffHeader } from "./DiffHeader";
@@ -260,7 +260,7 @@ function DiffRow({
         </span>
       )}
       <span style={{ fontSize: `${monoFont}px`, color: isSelected ? "inherit" : tokens.colorNeutralForeground3, fontFamily: LOG_MONOSPACE_FONT_FAMILY, flexShrink: 0, width: "145px" }}>
-        {formatDisplayDateTime(entry.timestampDisplay ?? entry.timestamp) ?? "\u2014"}
+        {formatLogEntryTimestamp(entry) ?? "\u2014"}
       </span>
       <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: LOG_MONOSPACE_FONT_FAMILY, fontSize: `${monoFont}px` }}>
         {entry.message}

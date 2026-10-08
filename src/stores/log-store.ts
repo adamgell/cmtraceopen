@@ -1,5 +1,10 @@
+import { firewallSearchText } from "../lib/firewall-fields";
+import { reconcileFirewallRows, sameFirewallControl, sourceFromSnapshot, type FirewallSourceState } from "./firewall-state";
 import { create } from "zustand";
 import type {
+  FirewallControlToken,
+  ParseResult,
+  TailPayload,
   AggregateSourceFile,
   EvidenceBundleMetadata,
   FolderEntry,
@@ -172,6 +177,7 @@ function buildFindMatcher(
  */
 function getSearchableText(entry: LogEntry, columns: ColumnId[]): string {
   const parts: string[] = [entry.message];
+  if (entry.firewall) parts.push(firewallSearchText(entry));
 
   for (const colId of columns) {
     if (colId === "message" || colId === "severity" || colId === "lineNumber") continue;
@@ -298,6 +304,8 @@ function getParserLabel(parser: ParserSelectionInfo["parser"]): string {
       return "Timestamped";
     case "plain":
       return "Plain text";
+    case "windowsFirewall":
+      return "Windows Firewall";
     case "iisW3c":
       return "IIS W3C";
     case "panther":
@@ -347,6 +355,8 @@ function getImplementationLabel(
       return "Simple parser";
     case "genericTimestamped":
       return "Generic timestamped parser";
+    case "windowsFirewall":
+      return "Windows Firewall";
     case "iisW3c":
       return "IIS W3C Extended Log parser";
     case "reportingEvents":
@@ -661,6 +671,12 @@ interface LogState {
   /** Pending scroll target set by deployment workspace — consumed by LogListView after load. */
   pendingScrollTarget: { filePath: string; lineNumber: number } | null;
 
+  firewallSources: Record<string, FirewallSourceState>;
+  registerFirewallSource: (snapshot: ParseResult) => void;
+  beginFirewallWatch: (filePath: string) => FirewallControlToken | undefined;
+  endFirewallWatch: (filePath: string, token: FirewallControlToken) => void;
+  applyFirewallTail: (payload: TailPayload) => void;
+
   hasActiveSource: () => boolean;
   canRefreshSource: () => boolean;
   hasFindSession: () => boolean;
@@ -810,6 +826,75 @@ function recomputeAndSetMatches(): void {
 }
 
 export const useLogStore = create<LogState>((set, get) => ({
+  firewallSources: {},
+  registerFirewallSource: (snapshot) => set(state => {
+    const sources = { ...state.firewallSources };
+    const source = sourceFromSnapshot(snapshot, sources[snapshot.filePath]);
+    if (source) sources[snapshot.filePath] = source;
+    else delete sources[snapshot.filePath];
+    return { firewallSources: sources };
+  }),
+  beginFirewallWatch: (filePath) => {
+    let token: FirewallControlToken | undefined;
+    set(state => {
+      const source = state.firewallSources[filePath];
+      if (!source || source.watchEpoch >= Number.MAX_SAFE_INTEGER) return state;
+      token = { sourceSessionId: source.sessionId, watchEpoch: source.watchEpoch + 1 };
+      return { firewallSources: { ...state.firewallSources, [filePath]: { ...source, watchEpoch: token.watchEpoch, active: true } } };
+    });
+    return token;
+  },
+  endFirewallWatch: (filePath, token) => set(state => {
+    const source = state.firewallSources[filePath];
+    if (!sameFirewallControl(source, token)) return state;
+    return { firewallSources: { ...state.firewallSources, [filePath]: { ...source, active: false } } };
+  }),
+  applyFirewallTail: (payload) => {
+    let applied = false;
+    let acceptedSource: FirewallSourceState | undefined;
+    set(state => {
+      const aggregate = state.sourceOpenMode === "aggregate-folder";
+      if (aggregate ? !state.aggregateFiles.some(file => file.filePath === payload.filePath) : state.openFilePath !== payload.filePath) return state;
+      const source = state.firewallSources[payload.filePath];
+      if (!source) return state;
+      const reconciled = reconcileFirewallRows(state.entries, source, payload, aggregate);
+      if (!reconciled) return state;
+      const observed = payload.observedThroughLine ?? 0;
+      const aggregateFiles = aggregate ? state.aggregateFiles.map(file => file.filePath === payload.filePath ? {
+        ...file, totalLines: payload.reset ? observed : Math.max(file.totalLines, observed),
+        parseErrors: reconciled.source.parseErrors, firewallCoverage: reconciled.source.coverage, firewallDecoding: reconciled.source.decoding,
+      } : file) : state.aggregateFiles;
+      const entries = reconciled.entries;
+      if (aggregate) {
+        const fileOrder = buildAggregateFileOrder(aggregateFiles);
+        entries.sort((left, right) => compareMergedLogEntries(left, right, fileOrder));
+      }
+      applied = true;
+      acceptedSource = reconciled.source;
+      return { entries, aggregateFiles,
+        firewallSources: { ...state.firewallSources, [payload.filePath]: reconciled.source },
+        totalLines: aggregate ? aggregateFiles.reduce((sum, file) => sum + file.totalLines, 0) : payload.reset ? observed : Math.max(state.totalLines, observed),
+        guidNameMap: buildGuidNameMap(entries),
+        selectedId: state.selectedId !== null && !entries.some(row => row.id === state.selectedId) ? null : state.selectedId };
+    });
+    if (applied) {
+      const state = get();
+      const cached = getCachedTabSnapshot(payload.filePath);
+      const source = state.firewallSources[payload.filePath];
+      const ownsView = state.sourceOpenMode === "aggregate-folder"
+        ? state.aggregateFiles.some(file => file.filePath === payload.filePath)
+        : state.openFilePath === payload.filePath;
+      // Subscribers can replace the source or active view during publication.
+      if (cached && source && source === acceptedSource && ownsView) {
+        const entries = state.entries.filter(row => row.filePath === payload.filePath).map(row => ({ ...row, id: source.sourceIds[row.lineNumber] }));
+        const totalLines = state.sourceOpenMode === "aggregate-folder"
+          ? state.aggregateFiles.find(file => file.filePath === payload.filePath)?.totalLines ?? cached.totalLines
+          : state.totalLines;
+        setCachedTabSnapshot(payload.filePath, { ...cached, entries, totalLines });
+      }
+      recomputeAndSetMatches();
+    }
+  },
   entries: [],
   selectedId: null,
   isPaused: false,
@@ -1207,6 +1292,7 @@ export const useLogStore = create<LogState>((set, get) => ({
     }),
   clear: () =>
     set({
+      firewallSources: {},
       entries: [],
       selectedId: null,
       isPaused: false,

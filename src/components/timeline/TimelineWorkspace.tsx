@@ -1,3 +1,5 @@
+import { formatTimelineError } from "../../lib/timeline-errors";
+import { buildTimelineFromSources } from "./hooks/buildTimelineFromSources";
 import { useEffect, useRef, useState } from "react";
 import { tokens } from "@fluentui/react-components";
 import { useTimelineStore } from "../../stores/timeline-store";
@@ -16,6 +18,9 @@ const LANE_HEIGHT = 22;
 export function TimelineWorkspace() {
   const bundle = useTimelineStore((s) => s.bundle);
   const loadError = useTimelineStore((s) => s.loadError);
+  const queryError = useTimelineStore(s => s.queryError);
+  const staleSource = useTimelineStore(s => s.staleSource);
+  const building = useTimelineStore(s => s.building);
   const laneVisibility = useTimelineStore((s) => s.laneVisibility);
   const soloSourceIdx = useTimelineStore((s) => s.soloSourceIdx);
   const [hover, setHover] = useState<string | null>(null);
@@ -52,16 +57,15 @@ export function TimelineWorkspace() {
       .map((f) => (f as File & { path?: string }).path)
       .filter((p): p is string => typeof p === "string" && p.length > 0);
     if (paths.length === 0) return;
+    const origin = useTimelineStore.getState().buildOrigin();
     try {
       const { openTimelineFiles } = await import(
         "../../workspaces/timeline/open-timeline-source"
       );
-      await openTimelineFiles(paths);
+      if (useTimelineStore.getState().isBuildCurrent(origin)) await openTimelineFiles(paths);
     } catch (error) {
       console.error("[timeline] failed to add sources to timeline", error);
-      useTimelineStore
-        .getState()
-        .setLoadError(error instanceof Error ? error.message : String(error));
+      if (useTimelineStore.getState().isBuildCurrent(origin)) useTimelineStore.getState().setLoadError(formatTimelineError(error));
     }
   };
 
@@ -107,7 +111,8 @@ export function TimelineWorkspace() {
       laneVisibility[s.idx] !== false,
   ).length;
   const laneAreaHeight = Math.max(LANE_HEIGHT, visibleCount * LANE_HEIGHT);
-  const hasLoadAlerts = Boolean(loadError) || bundle.errors.length > 0;
+  const excludedSources = bundle.sources.filter(source => (source.firewallExcluded ?? 0) > 0);
+  const hasLoadAlerts = Boolean(loadError || queryError || staleSource) || bundle.errors.length > 0 || excludedSources.length > 0;
 
   return (
     <div
@@ -137,6 +142,17 @@ export function TimelineWorkspace() {
           }}
         >
           {loadError && <div role="alert">{loadError}</div>}
+          {queryError && <div role="alert">{queryError}</div>}
+          {staleSource && <div role="alert">
+            <strong>Source changed. Rebuild the timeline to continue.</strong>
+            <div>Counts and lanes are stale until the timeline is rebuilt.</div>
+          </div>}
+          {(staleSource || queryError) && <button disabled={building} onClick={() => {
+            void buildTimelineFromSources(bundle.sources.map(source => ({ path: source.path, displayName: source.displayName }))).catch(() => {});
+          }}>{building ? "Rebuilding…" : "Rebuild timeline"}</button>}
+          {excludedSources.map(source => <div role="status" key={source.idx}>
+            {source.displayName}: {source.firewallExcluded} firewall records were excluded from the timeline because they have no valid UTC timestamp. They remain available in Log Explorer.
+          </div>)}
           {bundle.errors.length > 0 && (
             <div role="alert" aria-label="Timeline source errors">
               <strong>

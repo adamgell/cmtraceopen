@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  startTail, stopTail, pauseTail, resumeTail,
   captureSccmDiagnostics,
   authorizeSccmAdvancedCapture,
   cancelSccmAdvancedCapture,
@@ -2212,4 +2213,26 @@ describe("event-log analysis timeline IPC boundary", () => {
       );
     },
   );
+});
+
+describe("firewall command tokens", () => {
+  it("passes the same source token to all four controls", async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    const token = { sourceSessionId: "synthetic-session", watchEpoch: 7 };
+    await startTail("/synthetic/firewall.log", "Timestamped", 0, 0, 1, token);
+    await pauseTail("/synthetic/firewall.log", token);
+    await resumeTail("/synthetic/firewall.log", token);
+    await stopTail("/synthetic/firewall.log", token);
+    for (const command of ["start_tail", "pause_tail", "resume_tail", "stop_tail"]) {
+      expect(invoke).toHaveBeenCalledWith(command, expect.objectContaining({ firewallControl: token }));
+    }
+  });
+});
+
+describe("firewall timeline invoke boundary", () => {
+  it.each(["sourceChanged", "generationUnverifiable", "readDecodeFailure", "invalidIndexContext"])("preserves %s before generic error normalization", async reason => {
+    const error = { kind: "firewallSource", sourceIdx: 0, path: "/synthetic/firewall.log", reason };
+    vi.mocked(invoke).mockRejectedValueOnce(error);
+    await expect(buildTimeline([{ path: error.path }])).rejects.toEqual(error);
+  });
 });

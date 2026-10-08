@@ -1,0 +1,7 @@
+#Software: Microsoft Internet Information Services 10.0
+#Version: 1.0
+#Date: 2042-04-05 06:07:08
+#Fields: date time s-ip cs-method cs-uri-stem cs-uri-query s-port cs-username c-ip cs(User-Agent) sc-status sc-substatus sc-win32-status time-taken
+2042-04-05 06:07:09 192.0.2.80 GET /synthetic/ready - 443 - 198.51.100.81 FixtureAgent/1.0 200 0 0 7
+2042-04-05 06:07:10 192.0.2.80 POST /synthetic/missing case=2 443 - 2001:db8:30::81 FixtureAgent/1.0 404 0 0 11
+2042-04-05 06:07:11 192.0.2.80 GET /synthetic/unavailable - 443 - 203.0.113.82 FixtureAgent/1.0 503 0 0 13

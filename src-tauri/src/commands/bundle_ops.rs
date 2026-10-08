@@ -1009,6 +1009,7 @@ fn describe_parser_selection(parser_selection: &ParserSelectionInfo) -> String {
             ParserKind::Simple => "Simple format log".to_string(),
             ParserKind::Timestamped => "Generic timestamped log".to_string(),
             ParserKind::Plain => "Plain text log".to_string(),
+            ParserKind::WindowsFirewall => "Windows Firewall log".to_string(),
             ParserKind::IisW3c => "IIS W3C Extended log".to_string(),
             ParserKind::Panther => "Windows Panther log".to_string(),
             ParserKind::Cbs => "CBS servicing log".to_string(),

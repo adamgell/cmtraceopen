@@ -10,6 +10,7 @@
 // `crate::parser::*` or `app_lib::parser::*` keep resolving unchanged.
 
 pub use cmtraceopen_parser::parser::*;
+pub mod firewall_source;
 
 #[cfg(feature = "event-log")]
 pub mod dns_audit;
@@ -43,6 +44,18 @@ pub fn parse_file_identified(
     ),
     String,
 > {
+    parse_file_with_artifacts(path).map(|a| (a.result, a.selection, a.identity))
+}
+
+pub struct NativeParseArtifacts {
+    pub result: ParseResult,
+    pub selection: ResolvedParser,
+    pub identity: Option<crate::fs_identity::FileIdentity>,
+    pub firewall: Option<firewall_source::FirewallSourceSnapshot>,
+}
+
+/// Parse once from a single opened handle and retain firewall continuation/index artifacts.
+pub fn parse_file_with_artifacts(path: &str) -> Result<NativeParseArtifacts, String> {
     let path_obj = Path::new(path);
 
     // Binary file detection by extension — intercept before text decoding
@@ -73,7 +86,12 @@ pub fn parse_file_identified(
                     let selection = ResolvedParser::dns_audit();
                     // The EVTX reader opens its own handle, so no identity is claimed
                     // for it rather than one that might describe a later file.
-                    return Ok((result, selection, None));
+                    return Ok(NativeParseArtifacts {
+                        result,
+                        selection,
+                        identity: None,
+                        firewall: None,
+                    });
                 }
                 return Err("This EVTX file does not contain DNS audit events. \
                      Try opening it in the Sysmon workspace instead."
@@ -86,11 +104,48 @@ pub fn parse_file_identified(
         }
     }
 
-    let (content, identity, file_size, modified_unix_ms) = read_file_content_identified(path)?;
-    let (mut result, selection) =
-        cmtraceopen_parser::parser::parse_content(&content, path, file_size);
+    let file = std::fs::File::open(path).map_err(|e| format!("Failed to read file {path}: {e}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| format!("Failed to read file {path}: {e}"))?;
+    parse_opened_file_with_artifacts(file, metadata, path)
+}
+
+fn parse_opened_file_with_artifacts(
+    mut file: std::fs::File,
+    metadata: std::fs::Metadata,
+    path: &str,
+) -> Result<NativeParseArtifacts, String> {
+    use std::io::Read;
+    let identity = crate::fs_identity::file_identity(&file, &metadata);
+    let modified_unix_ms = crate::commands::file_ops::metadata_modified_unix_ms(&metadata);
+    let mut bytes = Vec::with_capacity(metadata.len().min(8 * 1024 * 1024) as usize);
+    file.read_to_end(&mut bytes)
+        .map_err(|e| format!("Failed to read file {path}: {e}"))?;
+    // The existing decoder is used only for format selection here. Firewall
+    // publication uses the strict resumable decoder below; other formats retain
+    // their existing decoding behavior, including CRLF normalization.
+    let content = decode_bytes(&bytes, detect_encoding(&bytes))?;
+    let selection = detect::detect_parser(path, &content);
+    let (mut result, firewall) =
+        if selection.parser == crate::models::log_entry::ParserKind::WindowsFirewall {
+            drop(content);
+            let (result, snapshot) = firewall_source::snapshot_bytes(&bytes, path, 0, false)
+                .map_err(|e| e.to_string())?;
+            (result, Some(snapshot))
+        } else {
+            (
+                cmtraceopen_parser::parser::parse_content(&content, path, bytes.len() as u64).0,
+                None,
+            )
+        };
     result.modified_unix_ms = modified_unix_ms;
-    Ok((result, selection, identity))
+    Ok(NativeParseArtifacts {
+        result,
+        selection,
+        identity,
+        firewall,
+    })
 }
 
 /// Read file content, handling BOM and encoding fallback.
@@ -345,3 +400,6 @@ mod handoff_tests {
         assert_eq!(consumed, first.len() as u64);
     }
 }
+
+#[cfg(test)]
+mod firewall_source_tests;

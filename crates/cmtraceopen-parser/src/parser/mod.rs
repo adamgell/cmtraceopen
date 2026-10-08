@@ -7,6 +7,7 @@ pub mod dhcp;
 pub mod dism;
 pub mod dns_debug;
 pub mod dns_types;
+pub mod firewall_stream;
 pub mod iis_w3c;
 pub mod intune_macos;
 pub mod msi;
@@ -20,6 +21,7 @@ pub mod secureboot_log;
 pub mod severity;
 pub mod simple;
 pub mod timestamped;
+pub mod windows_firewall;
 
 use crate::{
     intune::device::windows::inventory::{self, DeviceInventoryLogDialect},
@@ -125,6 +127,7 @@ pub use detect::ResolvedParser;
 
 /// Result of parsing a single batch of records with a preselected parser.
 pub struct ParsedChunk {
+    pub firewall_coverage: Option<crate::models::firewall::FirewallCoverage>,
     pub entries: Vec<LogEntry>,
     pub total_lines: u32,
     pub parse_errors: u32,
@@ -149,6 +152,7 @@ pub fn parse_content(
     let parsed_chunk = parse_content_with_selection(content, file_path, &selection);
 
     let result = ParseResult {
+        firewall_coverage: parsed_chunk.firewall_coverage,
         entries: parsed_chunk.entries,
         format_detected: selection.compatibility_format(),
         parser_selection: selection.to_info(),
@@ -171,6 +175,10 @@ pub fn parse_lines_with_selection(
     selection: &ResolvedParser,
 ) -> (Vec<LogEntry>, u32) {
     let (mut entries, parse_errors) = match selection.implementation {
+        crate::models::log_entry::ParserImplementation::WindowsFirewall => {
+            let parsed = parse_content_with_selection(&lines.join("\n"), file_path, selection);
+            (parsed.entries, parsed.parse_errors)
+        }
         crate::models::log_entry::ParserImplementation::Ccm => {
             ccm::parse_lines_with_specialization(lines, file_path, selection.specialization)
         }
@@ -253,6 +261,21 @@ pub fn parse_content_with_selection(
     file_path: &str,
     selection: &ResolvedParser,
 ) -> ParsedChunk {
+    if selection.implementation == crate::models::log_entry::ParserImplementation::WindowsFirewall {
+        let mut stream = firewall_stream::FirewallStream::new(0, 1);
+        let mut entries = Vec::new();
+        firewall_stream::apply_delta(&mut entries, stream.push_text(content, file_path));
+        let end = stream.snapshot_eof(file_path);
+        let total_lines = end.observed_through_line;
+        let coverage = end.coverage.clone();
+        firewall_stream::apply_delta(&mut entries, end);
+        return ParsedChunk {
+            entries,
+            total_lines,
+            parse_errors: coverage.parse_errors(),
+            firewall_coverage: Some(coverage),
+        };
+    }
     let total_lines = content.lines().count() as u32;
     let (mut entries, parse_errors) = match selection.implementation {
         crate::models::log_entry::ParserImplementation::Ccm => {
@@ -293,6 +316,7 @@ pub fn parse_content_with_selection(
     }
 
     ParsedChunk {
+        firewall_coverage: None,
         entries,
         total_lines,
         parse_errors,

@@ -1,3 +1,4 @@
+import { firewallField } from "./firewall-fields";
 import type { LogEntry, ParserKind } from "../types/log";
 
 /** Unique identifier for each possible log viewer column. */
@@ -32,7 +33,9 @@ export type ColumnId =
   | "sourceIp"
   | "dnsFlags"
   | "dnsEventId"
-  | "zoneName";
+  | "zoneName"
+  | "firewallAction" | "firewallProtocol" | "firewallSourceIp" | "firewallSourcePort"
+  | "firewallDestinationIp" | "firewallDestinationPort" | "firewallPath";
 
 /** Static definition for a column — label, width, and how to read data from a LogEntry. */
 export interface ColumnDefinition {
@@ -96,6 +99,13 @@ export const ALL_COLUMNS: readonly ColumnDefinition[] = [
     isDetail: false,
     accessor: (e) => e.message,
   },
+  { id: "firewallAction", label: "Action", defaultWidth: 95, minWidth: 60, isFlex: false, isDetail: true, accessor: e => firewallField(e, "action") },
+  { id: "firewallProtocol", label: "Protocol", defaultWidth: 85, minWidth: 60, isFlex: false, isDetail: true, accessor: e => firewallField(e, "protocol") },
+  { id: "firewallSourceIp", label: "Source IP", defaultWidth: 160, minWidth: 60, isFlex: false, isDetail: true, accessor: e => firewallField(e, "src-ip") },
+  { id: "firewallSourcePort", label: "Source Port", defaultWidth: 95, minWidth: 60, isFlex: false, isDetail: true, accessor: e => firewallField(e, "src-port") },
+  { id: "firewallDestinationIp", label: "Destination IP", defaultWidth: 160, minWidth: 60, isFlex: false, isDetail: true, accessor: e => firewallField(e, "dst-ip") },
+  { id: "firewallDestinationPort", label: "Destination Port", defaultWidth: 120, minWidth: 60, isFlex: false, isDetail: true, accessor: e => firewallField(e, "dst-port") },
+  { id: "firewallPath", label: "Path", defaultWidth: 95, minWidth: 60, isFlex: false, isDetail: true, accessor: e => firewallField(e, "path") },
   {
     id: "component",
     label: "Component",
@@ -359,6 +369,7 @@ export function getColumnDef(id: ColumnId): ColumnDefinition | undefined {
 const PARSER_COLUMN_MAP: Record<ParserKind, ColumnId[]> = {
   ccm: ["severity", "dateTime", "message", "component", "thread", "sourceFile"],
   simple: ["severity", "dateTime", "message", "component", "thread"],
+  windowsFirewall: ["severity", "dateTime", "message", "firewallAction", "firewallProtocol", "firewallSourceIp", "firewallSourcePort", "firewallDestinationIp", "firewallDestinationPort", "firewallPath"],
   iisW3c: ["severity", "dateTime", "message", "httpMethod", "uri", "statusCode", "clientIp", "timeTakenMs", "serverIp", "userAgent"],
   dism: ["severity", "dateTime", "message", "component"],
   panther: ["severity", "dateTime", "message", "component", "thread", "sourceFile", "resultCode", "gleCode", "setupPhase", "operationName"],

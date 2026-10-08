@@ -9,6 +9,7 @@ export type ParserKind =
   | "timestamped"
   | "plain"
   | "iisW3c"
+  | "windowsFirewall"
   | "panther"
   | "cbs"
   | "dism"
@@ -31,6 +32,7 @@ export type ParserImplementation =
   | "simple"
   | "genericTimestamped"
   | "iisW3c"
+  | "windowsFirewall"
   | "reportingEvents"
   | "plainText"
   | "msi"
@@ -175,7 +177,29 @@ export interface ErrorCodeSpan {
   outcome: ErrorCodeOutcome;
 }
 
+export interface FirewallMetric { count: string; lines: number[]; }
+export interface FirewallCoverage {
+  padding: FirewallMetric;
+  malformed: FirewallMetric;
+  oversized: FirewallMetric;
+  lossEvents: FirewallMetric;
+  lostEvents: FirewallMetric;
+  unknownLossCount: FirewallMetric;
+  unplacedTimestamps: FirewallMetric;
+}
+export interface FirewallField { name: string; value: string | null; }
+export interface FirewallRecord {
+  rawLine: string;
+  declaredFields: string[];
+  fields: FirewallField[];
+  schemaOrigin: "header" | "canonical" | "unavailable";
+  timeBasis: "local" | "utc" | "unknown";
+  recordKind: "traffic" | "eventsLost" | "malformed";
+  truncated: boolean;
+}
+
 export interface LogEntry {
+  firewall?: FirewallRecord | null;
   id: number;
   lineNumber: number;
   message: string;
@@ -236,7 +260,20 @@ export interface ParserSelectionInfo {
   specialization?: ParserSpecialization | null;
 }
 
-export interface ParseResult {
+export interface FirewallControlToken { sourceSessionId: string; watchEpoch: number; }
+export interface FirewallRowReplacement { expectedId: number; expectedLineNumber: number; entry: LogEntry; }
+export interface FirewallDecodingStatus {
+  kind: "ready" | "pending" | "gap";
+  pendingBytes: number;
+  reason: "readFailed" | "invalidEncoding" | "generationUnverifiable" | null;
+}
+export interface FirewallSourceMetadata {
+  firewallSessionId?: string | null;
+  firewallCoverage?: FirewallCoverage | null;
+  firewallDecoding?: FirewallDecodingStatus | null;
+}
+
+export interface ParseResult extends FirewallSourceMetadata {
   entries: LogEntry[];
   formatDetected: LogFormat;
   parserSelection: ParserSelectionInfo;
@@ -253,7 +290,7 @@ export interface ParseResult {
   byteOffset: number;
 }
 
-export interface AggregateParsedFileResult {
+export interface AggregateParsedFileResult extends FirewallSourceMetadata {
   filePath: string;
   totalLines: number;
   parseErrors: number;
@@ -297,6 +334,10 @@ export interface TailEntryAmendment {
 
 /** Payload emitted by the Rust tail watcher */
 export interface TailPayload {
+  firewallControl?: FirewallControlToken;
+  firewallReplacements?: FirewallRowReplacement[];
+  firewallCoverage?: FirewallCoverage;
+  firewallDecoding?: FirewallDecodingStatus;
   entries: LogEntry[];
   amendments: TailEntryAmendment[];
   filePath: string;

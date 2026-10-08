@@ -1,3 +1,4 @@
+import { firewallEntry, firewallSnapshot, firewallPayload, firewallCoverage } from "../test-utils/firewall";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   useLogStore,
@@ -895,5 +896,98 @@ describe("tab entry cache", () => {
 
   it("returns undefined for uncached paths", () => {
     expect(getCachedTabSnapshot("/nonexistent.log")).toBeUndefined();
+  });
+});
+
+describe("Windows Firewall source state", () => {
+  beforeEach(() => useLogStore.getState().clear());
+  function install(path = "/synthetic/firewall.log") {
+    const snapshot = firewallSnapshot(path);
+    useLogStore.getState().registerFirewallSource(snapshot);
+    useLogStore.setState({ sourceOpenMode: "single-file", openFilePath: path, entries: snapshot.entries });
+    return snapshot;
+  }
+  it("keeps cached line coverage when a subscriber removes the aggregate file during publication", () => {
+    const snapshot = install(); const state = useLogStore.getState();
+    useLogStore.setState({ sourceOpenMode: "aggregate-folder", aggregateFiles: [snapshot] });
+    setCachedTabSnapshot(snapshot.filePath, { entries: snapshot.entries, totalLines: 4, byteOffset: 256, formatDetected: snapshot.formatDetected, parserSelection: snapshot.parserSelection, sourceOpenMode: "single-file", selectedSourceFilePath: snapshot.filePath, activeColumns: ["message"] });
+    const control = state.beginFirewallWatch(snapshot.filePath);
+    const unsubscribe = useLogStore.subscribe(current => {
+      if (current.totalLines === 5 && current.aggregateFiles.length) useLogStore.setState({ aggregateFiles: [] });
+    });
+    try {
+      expect(() => state.applyFirewallTail(firewallPayload({ firewallControl: control, observedThroughLine: 5 }))).not.toThrow();
+      expect(getCachedTabSnapshot(snapshot.filePath)?.totalLines).toBe(4);
+    } finally { unsubscribe(); }
+  });
+  it.each(["reopen", "removeOwner", "switchView"] as const)("does not overwrite a cached snapshot after synchronous %s", transition => {
+    const snapshot = install(); const state = useLogStore.getState();
+    const cached = { entries: snapshot.entries, totalLines: 4, byteOffset: 256, formatDetected: snapshot.formatDetected, parserSelection: snapshot.parserSelection, sourceOpenMode: "single-file" as const, selectedSourceFilePath: snapshot.filePath, activeColumns: ["message" as const] };
+    setCachedTabSnapshot(snapshot.filePath, cached);
+    const control = state.beginFirewallWatch(snapshot.filePath);
+    const replacement = { ...cached, entries: [firewallEntry({ id: 12, lineNumber: 10, message: "new generation" })], totalLines: 10, byteOffset: 900 };
+    let transitioned = false;
+    const unsubscribe = useLogStore.subscribe(current => {
+      if (current.totalLines !== 5 || transitioned) return;
+      transitioned = true;
+      if (transition === "reopen") {
+        state.registerFirewallSource({ ...snapshot, firewallSessionId: "replacement-session", entries: replacement.entries });
+        setCachedTabSnapshot(snapshot.filePath, replacement);
+      } else if (transition === "removeOwner") {
+        state.registerFirewallSource({ ...snapshot, firewallSessionId: undefined });
+      } else {
+        useLogStore.setState({ openFilePath: "/synthetic/b.log", entries: [firewallEntry({ filePath: "/synthetic/b.log" })], totalLines: 99 });
+      }
+    });
+    try {
+      expect(() => state.applyFirewallTail(firewallPayload({ firewallControl: control, observedThroughLine: 5 }))).not.toThrow();
+      expect(transitioned).toBe(true);
+      expect(getCachedTabSnapshot(snapshot.filePath)).toEqual(transition === "reopen" ? replacement : cached);
+    } finally { unsubscribe(); }
+  });
+  it("keeps epochs in source state and rejects stopped, stale and reopened sessions", () => {
+    const snapshot = install(); const state = useLogStore.getState();
+    const first = state.beginFirewallWatch(snapshot.filePath)!;
+    state.endFirewallWatch(snapshot.filePath, first);
+    const second = state.beginFirewallWatch(snapshot.filePath)!;
+    expect(second.watchEpoch).toBe(first.watchEpoch + 1);
+    state.applyFirewallTail(firewallPayload({ reset: true, entries: [], firewallControl: first }));
+    expect(useLogStore.getState().entries).toHaveLength(1);
+    state.registerFirewallSource({ ...snapshot, firewallSessionId: "reopened" });
+    state.applyFirewallTail(firewallPayload({ reset: true, entries: [], firewallControl: second }));
+    expect(useLogStore.getState().entries).toHaveLength(1);
+  });
+  it("replaces the whole provisional row idempotently and repairs coverage", () => {
+    const snapshot = install(); const state = useLogStore.getState();
+    state.registerFirewallSource({ ...snapshot, firewallSessionId: "provisional", firewallCoverage: firewallCoverage({ malformed: { count: "1", lines: [4] } }) });
+    expect(useLogStore.getState().firewallSources[snapshot.filePath].parseErrors).toBe(1);
+    const control = state.beginFirewallWatch(snapshot.filePath)!;
+    const repaired = firewallEntry({ message: "repaired", severity: "Warning" });
+    const payload = firewallPayload({ firewallControl: control, firewallReplacements: [{ expectedId: 0, expectedLineNumber: 4, entry: repaired }], firewallCoverage: firewallCoverage() });
+    state.applyFirewallTail(payload); state.applyFirewallTail(payload);
+    expect(useLogStore.getState().entries).toEqual([repaired]);
+    expect(useLogStore.getState().firewallSources[snapshot.filePath].parseErrors).toBe(0);
+  });
+  it("maps source-local IDs in aggregate rows and replaces cumulative coverage", () => {
+    const a = firewallSnapshot("/synthetic/a.log"); const b = firewallSnapshot("/synthetic/b.log");
+    const state = useLogStore.getState(); state.registerFirewallSource(a); state.registerFirewallSource(b);
+    useLogStore.setState({ sourceOpenMode: "aggregate-folder", entries: [{ ...a.entries[0], id: 10 }, { ...b.entries[0], id: 11 }],
+      aggregateFiles: [a, b].map(r => ({ filePath: r.filePath, totalLines: r.totalLines, parseErrors: 0, fileSize: r.fileSize, byteOffset: r.byteOffset, formatDetected: r.formatDetected, parserSelection: r.parserSelection })) });
+    const control = state.beginFirewallWatch(a.filePath)!; const untouched = useLogStore.getState().entries[1];
+    state.beginFirewallWatch(b.filePath);
+    setCachedTabSnapshot(a.filePath, { entries: a.entries, totalLines: a.totalLines, byteOffset: a.byteOffset, formatDetected: a.formatDetected, parserSelection: a.parserSelection, sourceOpenMode: "single-file", selectedSourceFilePath: a.filePath, activeColumns: ["message"] });
+    const coverage = firewallCoverage({ malformed: { count: "1", lines: [4] } });
+    const payload = firewallPayload({ filePath: a.filePath, firewallControl: control, firewallCoverage: coverage,
+      firewallReplacements: [{ expectedId: 0, expectedLineNumber: 4, entry: firewallEntry({ filePath: a.filePath, message: "A repaired" }) }] });
+    state.applyFirewallTail(payload); state.applyFirewallTail(payload);
+    expect(useLogStore.getState().entries.find(e => e.filePath === a.filePath)).toMatchObject({ id: 10, message: "A repaired" });
+    expect(useLogStore.getState().entries.find(e => e.filePath === b.filePath)).toEqual(untouched);
+    expect(useLogStore.getState().firewallSources[a.filePath].coverage).toEqual(coverage);
+    expect(useLogStore.getState().aggregateFiles[0].parseErrors).toBe(1);
+    expect(getCachedTabSnapshot(a.filePath)?.entries).toMatchObject([{ id: 0, message: "A repaired" }]);
+    expect(useLogStore.getState().firewallSources[b.filePath].watchEpoch).toBe(1);
+    state.applyFirewallTail(firewallPayload({ filePath: a.filePath, firewallControl: control, reset: true, observedThroughLine: 0 }));
+    expect(useLogStore.getState().entries).toEqual([untouched]);
+    expect(useLogStore.getState().aggregateFiles[0].parseErrors).toBe(0);
   });
 });
