@@ -1,3 +1,7 @@
+import { useMemo } from "react";
+import { getThemeById } from "../../lib/themes";
+import { useUiStore } from "../../stores/ui-store";
+
 /** WCAG AA minimum contrast for normal-size text. */
 export const WCAG_AA_NORMAL_TEXT = 4.5;
 
@@ -57,4 +61,16 @@ export function pickStatusBarForeground(
     contrastRatio(WHITE, brandBackground)
     ? BLACK
     : WHITE;
+}
+
+/** The status bar foreground for the active theme. */
+export function useStatusBarForeground(): string {
+  const themeId = useUiStore((s) => s.themeId);
+  return useMemo(() => {
+    const fluent = getThemeById(themeId).fluentTheme;
+    return pickStatusBarForeground(
+      fluent.colorBrandBackground as string,
+      fluent.colorNeutralForegroundOnBrand as string,
+    );
+  }, [themeId]);
 }

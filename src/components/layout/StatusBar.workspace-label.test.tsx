@@ -7,9 +7,13 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
 }));
 
+import { tokens } from "@fluentui/react-components";
 import { StatusBar } from "./StatusBar";
 import { useUiStore } from "../../stores/ui-store";
-import { getAllThemes } from "../../lib/themes";
+import { useFilterStore } from "../../stores/filter-store";
+import { getAllThemes, getThemeById, type ThemeId } from "../../lib/themes";
+import { EspStatusBarContent } from "../../workspaces/esp-diagnostics/EspStatusBarContent";
+import { useEspDiagnosticsStore } from "../../workspaces/esp-diagnostics/esp-diagnostics-store";
 import {
   contrastRatio,
   pickStatusBarForeground,
@@ -69,4 +73,76 @@ describe("status bar foreground", () => {
       ).toBeGreaterThanOrEqual(4.5);
     },
   );
+});
+
+function expectedForeground(themeId: ThemeId): string {
+  const fluent = getThemeById(themeId).fluentTheme as unknown as Record<
+    string,
+    string
+  >;
+  return pickStatusBarForeground(
+    fluent.colorBrandBackground,
+    fluent.colorNeutralForegroundOnBrand,
+  );
+}
+
+/// Phase 0b (#826): the global bar is 24px on the brand background in every
+/// workspace, with one readable foreground for all text and icons.
+describe("status bar chrome", () => {
+  beforeEach(() => {
+    useUiStore.setState(useUiStore.getInitialState(), true);
+    useFilterStore.setState(useFilterStore.getInitialState(), true);
+    useEspDiagnosticsStore.setState(
+      useEspDiagnosticsStore.getInitialState(),
+      true,
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders 24px tall on the brand background with no top border", () => {
+    render(<StatusBar />);
+
+    const bar = screen.getByTestId("global-status-bar");
+    expect(bar.style.height).toBe("24px");
+    expect(bar.style.minHeight).toBe("");
+    expect(bar.style.padding).toBe("0px 10px");
+    expect(bar.style.borderTop).toBe("");
+    expect(bar.style.backgroundColor).toBe(tokens.colorBrandBackground);
+  });
+
+  it.each(["light", "dark", "high-contrast", "solarized-dark", "hotdog-stand"] as const)(
+    "uses the readable foreground for the %s theme",
+    (themeId) => {
+      useUiStore.setState({ themeId });
+      render(<StatusBar />);
+
+      expect(screen.getByTestId("global-status-bar")).toHaveStyle({
+        color: expectedForeground(themeId),
+      });
+    },
+  );
+
+  it("conveys an error with an icon and label instead of colored text", () => {
+    useFilterStore.setState({ filterError: "bad clause" });
+    render(<StatusBar />);
+
+    expect(screen.getByRole("img", { name: "Error" })).toBeInTheDocument();
+    const status = screen.getByText(/Filter error: bad clause/);
+    expect(status.style.color).toBe("");
+  });
+
+  it("keeps the ESP contribution on the bar foreground", () => {
+    useUiStore.setState({ themeId: "solarized-dark" });
+    useEspDiagnosticsStore.setState({ graphPhase: "error" });
+    render(<EspStatusBarContent />);
+
+    expect(screen.getByText("Graph error").style.color).toBe("");
+    expect(screen.getByRole("img", { name: "Error" })).toBeInTheDocument();
+    expect(screen.getByText("ESP")).toHaveStyle({
+      color: expectedForeground("solarized-dark"),
+    });
+  });
 });
