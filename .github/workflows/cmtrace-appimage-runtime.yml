@@ -13,7 +13,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: appimage-runtime-11562044837
+  group: appimage-runtime-11569479897
   cancel-in-progress: false
 
 jobs:
@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/runtime-evidence"
-          printf '%s\n' '{"artifact_id":11562044837,"status":"blocked","reason":"harness-error","stage":"setup"}' > "$RUNNER_TEMP/runtime-evidence/summary.json"
+          printf '%s\n' '{"artifact_id":11569479897,"status":"blocked","reason":"harness-error","stage":"setup"}' > "$RUNNER_TEMP/runtime-evidence/summary.json"
           [[ "$GITHUB_RUN_ATTEMPT" == 1 ]]
           [[ "$REVIEWED_HARNESS_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$GITHUB_SHA" == "$REVIEWED_HARNESS_SHA" ]]
@@ -49,8 +49,8 @@ jobs:
       - name: Download fixed candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          artifact-ids: '11562044837'
-          run-id: '37801602436'
+          artifact-ids: '11569479897'
+          run-id: '37817985168'
           repository: adamgell/cmtraceopen
           github-token: ${{ github.token }}
           merge-multiple: true
@@ -88,7 +88,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: appimage-runtime-${{ matrix.os }}-11562044837
+          name: appimage-runtime-${{ matrix.os }}-11569479897
           retention-days: 7
           if-no-files-found: error
           path: |

@@ -6,12 +6,12 @@ import re
 import stat
 from pathlib import PurePosixPath
 
-SOURCE = "ac7ad3862cf982a17a5ec761fa3891446c168a7f"
-MERGE = "ab42494e2049e1df2275e08aec50a80b559d3c9b"
-TREE = "1a2b9730a203bf18da216987acee79d439907363"
-RUN = "37801602436"
-ARTIFACT_ID = 11562044837
-ARTIFACT_SHA256 = "381756ef4be7c209761c17b65a0c1c41b407f803cc66b1dea41043bf879cd466"
+SOURCE = "08d4f19187c0798d9b0175fd60633868f474ebe9"
+MERGE = "75187bc67655e2d34adb55baa50ea749a5573608"
+TREE = "f7b17ae264d059e6f24db2a5efcfbdf643d5bcb1"
+RUN = "37817985168"
+ARTIFACT_ID = 11569479897
+ARTIFACT_SHA256 = "471782dccb2a7f8f7b1f0c6d1a986c332b83c31243699996b089303989c51627"
 ARTIFACT_NAME = "CMTrace Open_1.6.3_amd64.AppImage"
 CASES = ("ordinary", "catalog-renderer-subset")
 CHECKS = ("fuse", "open", "find", "filter", "tail", "reopen", "exited")

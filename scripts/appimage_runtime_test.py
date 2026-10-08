@@ -204,9 +204,9 @@ class ContractTests(unittest.TestCase):
 
     def test_exact_artifact_and_source_binding(self):
         validate = self.api("validate_binding")
-        self.assertEqual(contract.ARTIFACT_ID, 11562044837)
+        self.assertEqual(contract.ARTIFACT_ID, 11569479897)
         self.assertEqual(contract.ARTIFACT_NAME, "CMTrace Open_1.6.3_amd64.AppImage")
-        report = dict(build=dict(source_commit="ac7ad3862cf982a17a5ec761fa3891446c168a7f", built_commit="ab42494e2049e1df2275e08aec50a80b559d3c9b", built_tree="1a2b9730a203bf18da216987acee79d439907363", image=dict(GITHUB_RUN_ID="37801602436", GITHUB_RUN_ATTEMPT="1")), inspection=dict(sha256="381756ef4be7c209761c17b65a0c1c41b407f803cc66b1dea41043bf879cd466"))
+        report = dict(build=dict(source_commit="08d4f19187c0798d9b0175fd60633868f474ebe9", built_commit="75187bc67655e2d34adb55baa50ea749a5573608", built_tree="f7b17ae264d059e6f24db2a5efcfbdf643d5bcb1", image=dict(GITHUB_RUN_ID="37817985168", GITHUB_RUN_ATTEMPT="1")), inspection=dict(sha256="471782dccb2a7f8f7b1f0c6d1a986c332b83c31243699996b089303989c51627"))
         digest=report["inspection"]["sha256"]
         validate(report, digest)
         for field in ["source_commit", "built_commit", "built_tree"]:

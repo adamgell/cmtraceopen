@@ -1,6 +1,6 @@
 # Fixed-candidate AppImage runtime acceptance
 
-The refreshed candidate is `08d4f19187c0798d9b0175fd60633868f474ebe9`, including named Find bar group and Find results status semantics. Fresh producer artifacts must replace the historical source/build/tree/digest tuple below before dispatch. The strict harness requires that unique visible named group and status with exact local `1 of 1` text, query readback, selected BETA and all three rows. It stops at a failed count gate; diagnostic continuation has been removed. Earlier old-source functional/visual results are historical and do not validate refreshed bytes.
+The refreshed candidate is `08d4f19187c0798d9b0175fd60633868f474ebe9`, including named Find bar group and Find results status semantics. The current immutable table below identifies independently verified fresh producer bytes, replacing the old candidate binding. The strict harness requires that unique visible named group and status with exact local `1 of 1` text, query readback, selected BETA and all three rows. It stops at a failed count gate; diagnostic continuation has been removed. Earlier old-source functional/visual results are historical and do not validate refreshed bytes.
 
 This manual harness executes PR #821's unsigned 1.6.3 CI AppImage on a standard Ubuntu 22.04 x64 VM. Ubuntu 24.04 x64 remains a required release gate but is excluded from the current matrix after its unchanged bubblewrap preflight established an environment blocker. Adam removed the voluntary 20-minute job / 40-runner-minute total limit for this task. There is no custom workflow job timeout; normal GitHub platform timeouts apply. The existing 300-second per-case, 660-second supervisor and bounded subprocess/cleanup hang protections remain unchanged. This is not unlimited retry authorization or final signed-release acceptance.
 
@@ -18,31 +18,31 @@ gh workflow run cmtrace-appimage-runtime.yml \
 
 Do not repeat this command as a blind retry. Diagnose a recoverable in-scope failure before any recovery run. Do not change host security policy to make a probe pass. This harness does not publish a release, trigger a catalog retest, or merge a PR.
 
-## Evidence-motivated diagnosis and recovery
+## Historical old-source diagnosis and recovery
 
 Diagnostic run [37809804187](https://github.com/adamgell/cmtraceopen/actions/runs/37809804187), harness `77a0c399bcc4773fa18ec7dc3ffb923ba9376606`, kept the same artifact and assertions. Ubuntu 22.04 observed a unique, visible Find placeholder with no `entry` role-name objects; the readiness exception was an AT-SPI error. WebKit exposes numeric `GetRole` and `GetRoleName` separately: the latter can follow `rolePlatformString`. Input identification requires declared `tag:input`, editable state; no unobserved role or unused EditableText-interface assumption, preserving uniqueness, visibility, focus/editability and all query/selection/count assertions. The first recovery (run 37810428462, harness e58195c7c0b0df7d069902644b992555acb9b374) showed that numeric Entry alone was still insufficient and exposed a traversal error during readiness. Run 37810968020 (harness d5d08679aa9d3afe0ef3847ad58d059131af2394) reached Find in both cases and proved the unique visible HTML input was editable and focused; only role-enum assumptions rejected it. The current repair uses the declared HTML/state/interface boundary and resamples whole-tree AT-SPI mutation errors instead of discarding children. Bounded polling may resample AT-SPI exceptions within the original deadline; repeated inaccessible samples block, and unrelated exceptions still propagate.
 
 Ubuntu 24.04 diagnostic evidence classified bubblewrap's failure as `id-map-denied`, not an application failure. No policy change is allowed. The current recovery matrix contains only Ubuntu 22.04 to avoid repeating a known environment blocker. Ubuntu 24.04 is still required for release acceptance and needs a separately coordinated compatible disposable x64 environment where the unchanged unprivileged bubblewrap probe succeeds.
 
-## Immutable candidate
+## Current immutable candidate
 
 | Binding | Value |
 | --- | --- |
 | Product candidate | PR #821, unsigned CI 1.6.3; no release tag |
-| Artifact / name | `11562044837` / `cmtrace-open-Linux-x64` |
-| Producer run / attempt | `37801602436` / `1` |
-| Archive SHA256 | `29a690fc30d9d52122a11b8a22c3b4284675f18a7b188ad7648c8dc7e6f8162e` |
+| Artifact / name | `11569479897` / `cmtrace-open-Linux-x64` |
+| Producer run / attempt | `37817985168` / `1` |
+| Archive SHA256 | `2339771aca4593909dbf9648311f3e9c6701f32fb4eb46937c1b504103494052` |
 | Inner AppImage path | `appimage/CMTrace Open_1.6.3_amd64.AppImage` |
-| AppImage bytes / SHA256 | `92330488` / `381756ef4be7c209761c17b65a0c1c41b407f803cc66b1dea41043bf879cd466` |
+| AppImage bytes / SHA256 | `92334584` / `471782dccb2a7f8f7b1f0c6d1a986c332b83c31243699996b089303989c51627` |
 | ABI report path | `provenance/appimage-abi.json` |
-| ABI report SHA256 | `ecd1d854a12b698832cc5ef6470ec68800567f69cb5007e2920da7578fb96dc5` |
-| Product source | `ac7ad3862cf982a17a5ec761fa3891446c168a7f` |
-| Built / producer workflow commit | `ab42494e2049e1df2275e08aec50a80b559d3c9b` |
-| Built tree | `1a2b9730a203bf18da216987acee79d439907363` |
+| ABI report SHA256 | `5786236b89e14002a7081c3e5daca3a98f0e27d93894389bf7c1d141dfc8a163` |
+| Product source | `08d4f19187c0798d9b0175fd60633868f474ebe9` |
+| Built / producer workflow commit | `75187bc67655e2d34adb55baa50ea749a5573608` |
+| Built tree | `f7b17ae264d059e6f24db2a5efcfbdf643d5bcb1` |
 
 The archive and inner AppImage digests were independently verified before dispatch. The runtime receipts bind source, built commit/tree, producer run/attempt and the AppImage digest. Candidate bytes remain fixed; this harness does not rebuild or re-sign them. Recheck artifact availability before any authorized recovery dispatch.
 
-## Initial exact-artifact result
+## Historical initial exact-artifact result
 
 Both jobs ended with workflow failure while successfully uploading sanitized evidence. Ubuntu 22.04 passed identity/offline/bubblewrap/FUSE-device preflight. Both cases proved live read-only FUSE mounts and opened all three expected rows. Ordinary failed a UI assertion at `find-open-focus` after 30,167 ms: Close find bar was visible, but the intended input was not unique/focused according to the selector. The screenshot shows the Find bar open; it does not replace the failed accessibility assertion. Renderer-subset blocked with `harness-error` at `ready` after 95 ms. Find/filter/tail/reopen/normal exit acceptance is incomplete.
 
