@@ -596,7 +596,7 @@ const DSREGCMD_RESULT = {
     captureConfidence: "high",
     captureConfidenceReason:
       "Capture ran in the signed-in user context with a full SSO State section present.",
-    mdmEnrolled: false,
+    mdmEnrolled: null,
     missingMdm: true,
     complianceUrlPresent: true,
     missingComplianceUrl: false,
