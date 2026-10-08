@@ -250,6 +250,9 @@ jobs:
       - name: Winget access diagnostic tests
         run: python3 -B -m unittest discover -s .github/scripts -p winget_access_diagnostic_test.py
 
+      - name: Winget publication guard tests
+        run: python3 -B -m unittest discover -s .github/scripts -p winget_publication_guard_test.py
+
       - name: Exporter workflow contract tests
         run: node --test scripts/event-log-export-workflow.test.mjs scripts/notarize-existing-dmg-workflow.test.mjs
 
