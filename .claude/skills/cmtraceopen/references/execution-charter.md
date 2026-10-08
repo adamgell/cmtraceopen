@@ -23,6 +23,25 @@ tracking, and safe integration. Reverify all remote state before acting on it.
   explicit approval.
 - Adam alone merges.
 
+## Advisor and subagents (Claude Code)
+
+- **Use `/advisor`.** The repository's `.claude/settings.json` sets `advisorModel`
+  to `opus`. Consult the advisor before committing to an approach, when a failure
+  survives a fix, and before declaring a slice GREEN or a pull request ready. The
+  advisor must rank at or above the main model, so a Sonnet advisor does not attach
+  to an Opus session.
+- **Code through subagents.** Main writes a cold brief and dispatches `cmtrace-coder`
+  (Sonnet). It returns RED-first proposals; Main reviews them, applies them, and runs
+  every gate itself. Pass the effort on each dispatch:
+  - `effort: "medium"` for an issue slice taken from RED to GREEN;
+  - `effort: "low"` for mechanical edits: renames, fixtures, test boilerplate, doc
+    skeletons.
+- **Review independently.** Before a pull request is reported ready, dispatch
+  `cmtrace-code-review` (Opus) on the exact head and act on its findings. The author
+  never reviews its own work.
+- If these agents are missing from a session, the session started from a stale
+  checkout. Restart it from a worktree cut from current `origin/main`.
+
 ## Autonomy and hard stops
 
 An approved issue lane runs to an open pull request with green gates without asking

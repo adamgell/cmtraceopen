@@ -171,7 +171,8 @@ where it matters.
 | `tech-writer` | `sonnet`, `effort: low` | `cmtraceopen` |
 | `ui-design` | `sonnet` | `frontend-design`, `test-driven-development`, `systematic-debugging` |
 
-OMP's `advisor: true` has no Claude equivalent; `.omp/WATCHDOG.md` priorities
+OMP's `advisor: true` maps to Claude Code's advisor: `.claude/settings.json` sets
+`advisorModel` to `opus` (added 2026-10-08; see the execution charter); `.omp/WATCHDOG.md` priorities
 become Main's responsibility in piece 3.
 
 ### Validator change

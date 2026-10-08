@@ -43,6 +43,10 @@ Read it from GitHub and `git ls-remote` at the moment you act.
 5. **Conservative parse stance.** Malformed input parses conservatively; never assert rejection.
 6. **Isolation discipline.** One worktree per lane. Commit and push before ending a cycle.
 7. **Independent verification.** Never accept another agent's say-so.
+8. **Use `/advisor` and code through subagents.** Consult the Opus advisor at
+   decision points, dispatch `cmtrace-coder` (Sonnet, `medium` for slices, `low` for
+   mechanical edits) for code, and get `cmtrace-code-review` before reporting a PR
+   ready. Details: the execution charter's "Advisor and subagents" section.
 
 ## Where things live
 
