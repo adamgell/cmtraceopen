@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Public Autopilot parser projection**: Mask short typed identities consistently in narrative while preserving generated redaction tokens. This addresses the parser-library projection contract; the desktop has no caller of this Autopilot leaf projection.
+
 - **Development tooling dependencies (#816, #817)**: Update `source-map-js` to `1.2.2` in the application and download-metrics lockfiles, addressing indexed source-map offset validation ([GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q)).
 
 - **Windows Firewall logs (#814)**: Recognize firewall records separately from IIS, preserve all fields and Local wall-clock timestamps, report skipped NUL padding and warn about lost events, and retain encoding and source identity through live tailing and timeline queries.
