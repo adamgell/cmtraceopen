@@ -1,5 +1,6 @@
 """AT-SPI acceptance assertions inside the shared, offline X11/D-Bus session."""
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -443,8 +444,21 @@ class Controller:
         self.wait("find-query", self.query_matches)
         key("Return")
         self.wait("find-selection", self.beta_selected)
-        self.wait("find-count", self.match_count)
-        self.result["checks"]["find"] = True
+        count_gap = None
+        try:
+            self.wait("find-count", self.match_count)
+        except ValueError as error:
+            facts = self.result["diagnostics"]["observations"]
+            if (str(error) != "ui-assertion" or facts.get("find_scope_valid") is not False
+                    or facts.get("find_query_matches") is not True
+                    or facts.get("beta_selected") is not True or facts.get("rows_match") is not True):
+                raise
+            # Diagnostic continuation only. Preserve the failed count gate;
+            # subsequent assertions cannot convert this case to a pass.
+            count_gap = copy.deepcopy(self.result["diagnostics"])
+            count_gap["observations"]["count_scope_deferred"] = True
+            self.screenshot("initial")  # Fixed slot: Find state for manual review.
+        self.result["checks"]["find"] = count_gap is None
         self.stage("filter")
         self.click("Close find bar")
         key("ctrl+shift+l")
@@ -485,8 +499,12 @@ class Controller:
         self.result["diagnostics"]["final_image"] = "acceptance"
         self.exit_app()
         self.result["checks"]["exited"] = True
-        self.result.update(status="passed", reason="ok")
-        self.stage("complete")
+        if count_gap is None:
+            self.result.update(status="passed", reason="ok")
+            self.stage("complete")
+        else:
+            self.result.update(status="failed", reason="ui-assertion", diagnostics=count_gap)
+            self.result["diagnostics"]["final_image"] = "failure"
 
 
 def exception_observations(error):

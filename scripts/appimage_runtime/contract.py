@@ -32,7 +32,7 @@ OBSERVATIONS = frozenset(("splash_absent", "window_active", "window_stable", "ro
                           "error_os", "error_command", "error_value", "error_attribute", "error_type",
                           "error_atspi", "error_other", "scope_entries_unique", "scope_close_unique",
                           "scope_common_present", "scope_common_section", "scope_common_tagdiv", "scope_common_showing",
-                          "scope_roles_valid", "scope_buttons_valid", "scope_inputs_valid"))
+                          "scope_roles_valid", "scope_buttons_valid", "scope_inputs_valid", "count_scope_deferred"))
 
 
 def diagnostics():

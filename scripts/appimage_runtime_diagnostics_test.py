@@ -243,6 +243,27 @@ class DiagnosticsTests(unittest.TestCase):
         controller.application.children[0]=original
         self.assertTrue(controller.nodes())
 
+    def test_count_scope_diagnostic_continuation_preserves_failure_after_all_later_checks(self):
+        controller=self.controller()
+        def wait(stage, predicate, *args, **kwargs):
+            controller.stage(stage)
+            if stage == "find-count":
+                controller.observe(find_scope_valid=False, find_query_matches=True, beta_selected=True, rows_match=True)
+                raise ValueError("ui-assertion")
+        def rows(expected, *args): controller.result["counts"].append(len(expected))
+        with tempfile.TemporaryDirectory() as directory:
+            controller.fixture=Path(directory)/"fixture.log"
+            with patch.object(controller,"launch"), patch.object(controller,"wait",side_effect=wait), patch.object(controller,"expect_rows",side_effect=rows), patch.object(controller,"screenshot"), patch.object(controller,"click"), patch.object(controller,"exit_app"), patch.object(ui,"key"), patch.object(ui,"type_text"), patch.object(ui,"poll",return_value=True):
+                controller.execute()
+        self.assertEqual(controller.result["status"],"failed")
+        self.assertEqual(controller.result["reason"],"ui-assertion")
+        self.assertFalse(controller.result["checks"]["find"])
+        for check in ("open","filter","tail","reopen","exited"): self.assertTrue(controller.result["checks"][check])
+        self.assertEqual(controller.result["counts"],[3,1,3,4,4])
+        self.assertEqual(controller.result["diagnostics"]["stage"],"find-count")
+        self.assertEqual(controller.result["diagnostics"]["final_image"],"failure")
+        contract.sanitize_case(controller.result)
+
     def test_find_readback_rejects_wrong_input_value_and_never_records_text(self):
         entry = self.entry()
         controller = self.controller(entry)
