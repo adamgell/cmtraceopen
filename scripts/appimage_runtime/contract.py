@@ -21,7 +21,7 @@ REASONS = frozenset(("ok", "isolation-unavailable", "bubblewrap-unavailable",
                      "evidence-invalid", "artifact-mismatch", "harness-error"))
 STAGES = frozenset(("unobserved", "preflight", "launch", "open", "ready", "find-open-focus", "find-query",
                     "find-selection", "find-count", "filter", "clear-filter", "tail", "exit",
-                    "relaunch", "reopen", "reopen-dialog", "reopen-location", "reopen-path", "reopen-count", "final-image", "complete"))
+                    "relaunch", "reopen", "reopen-dialog", "reopen-location", "reopen-path", "reopen-submit", "reopen-count", "final-image", "complete"))
 OBSERVATIONS = frozenset(("splash_absent", "window_active", "window_stable", "rows_match",
                           "find_button_visible", "find_input_unique", "find_input_focused",
                           "find_query_matches", "beta_selected", "find_scope_valid", "match_name", "match_text", "match_conflict",
@@ -32,7 +32,7 @@ OBSERVATIONS = frozenset(("splash_absent", "window_active", "window_stable", "ro
                           "error_os", "error_command", "error_value", "error_attribute", "error_type",
                           "error_atspi", "error_other", "scope_entries_unique", "scope_close_unique",
                           "scope_common_present", "scope_common_section", "scope_common_tagdiv", "scope_common_showing",
-                          "scope_roles_valid", "scope_buttons_valid", "scope_inputs_valid", "count_scope_deferred", "reopen_chooser_in_app", "reopen_chooser_on_desktop", "reopen_path_matches"))
+                          "scope_roles_valid", "scope_buttons_valid", "scope_inputs_valid", "count_scope_deferred", "reopen_chooser_in_app", "reopen_chooser_on_desktop", "reopen_path_matches", "reopen_location_unique", "reopen_open_unique"))
 
 
 def diagnostics():

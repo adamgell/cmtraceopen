@@ -332,8 +332,32 @@ class Controller:
                 return node
         return None
 
-    def click(self, name):
-        node = poll(lambda: self.find(name, {"push button", "button"}))
+    def chooser_nodes(self):
+        return [node for node, parents in self.walk_paths(self.application)
+                if any(self.role(parent) in ("file chooser", "dialog") and self.showing(parent) for parent in parents)]
+
+    def chooser_location(self):
+        candidates = [node for node in self.chooser_nodes() if self.showing(node)
+                      and all(node.getState().contains(state) for state in
+                              (self.atspi.STATE_FOCUSED, self.atspi.STATE_EDITABLE))]
+        self.observe(reopen_location_unique=len(candidates) == 1)
+        return candidates[0] if len(candidates) == 1 else None
+
+    def chooser_path_matches(self):
+        node = self.chooser_location()
+        matches = node is not None and self.direct_text(node) == str(self.fixture)
+        self.observe(reopen_path_matches=matches)
+        return matches
+
+    def click(self, name, chooser=False):
+        def intended():
+            if not chooser:
+                return self.find(name, {"push button", "button"})
+            candidates = [node for node in self.chooser_nodes() if node.name == name
+                          and self.showing(node) and self.role(node) in ("push button", "button")]
+            self.observe(reopen_open_unique=len(candidates) == 1)
+            return candidates[0] if len(candidates) == 1 else None
+        node = poll(intended)
         action = node.queryAction()
         for index in range(action.nActions):
             if action.getName(index) in ("click", "press", "activate") and action.doAction(index):
@@ -398,7 +422,21 @@ class Controller:
         return any(self.showing(node) and self.role(node) in ("frame", "window") for node in self.nodes())
 
     def screenshot(self, phase):
-        command(["import", "-window", self.window, str(self.out / f"{phase}.png")])
+        window = self.window
+        if phase == "final":
+            # A native modal can obscure the app. Capture only an active window
+            # owned by this disposable case UID; never another account's UI.
+            try:
+                active = subprocess.check_output(["xdotool", "getactivewindow"], text=True,
+                                                 timeout=5, stderr=subprocess.DEVNULL).strip()
+                pid = subprocess.check_output(["xdotool", "getwindowpid", active], text=True,
+                                              timeout=5, stderr=subprocess.DEVNULL).strip()
+                if active.isdecimal() and pid.isdecimal() and int(pid) > 0:
+                    if int(status(pid)["Uid"].split()[0]) == os.getuid():
+                        window = active
+            except (OSError, ValueError, subprocess.CalledProcessError):
+                pass
+        command(["import", "-window", window, str(self.out / f"{phase}.png")])
 
     def capture_failure(self):
         self.result["diagnostics"]["final_image"] = "absent"
@@ -506,12 +544,13 @@ class Controller:
         key("ctrl+o")
         self.wait("reopen-dialog", self.chooser_visible)
         key("ctrl+l")
-        self.wait("reopen-location", self.focused_editable)
+        self.wait("reopen-location", self.chooser_location)
         type_text(str(self.fixture))
-        self.stage("reopen-path")
-        node = self.focused_editable()
-        self.observe(reopen_path_matches=node is not None and self.direct_text(node) == str(self.fixture))
-        key("Return")
+        self.wait("reopen-path", self.chooser_path_matches)
+        # Location entry activation is not the dialog's explicit Open action,
+        # particularly for the product's multi-file picker. Activate that action.
+        self.stage("reopen-submit")
+        self.click("Open", chooser=True)
         self.stage("reopen-count")
         self.expect_rows(expected)
         self.result["checks"]["reopen"] = True

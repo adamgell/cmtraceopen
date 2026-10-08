@@ -281,6 +281,19 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertFalse(facts["reopen_chooser_on_desktop"])
         contract.sanitize_diagnostics(controller.result["diagnostics"])
 
+    def test_chooser_location_requires_unique_native_dialog_field_and_exact_path_readback(self):
+        intended=self.entry(text="/tmp/offline-fixture/ordinary/data/runtime-fixture.log")
+        unrelated=self.entry(text="private unrelated")
+        dialog=Node(role="dialog",children=[intended])
+        controller=self.controller(dialog,unrelated)
+        self.assertIs(controller.chooser_location(),intended)
+        self.assertTrue(controller.chooser_path_matches())
+        intended.value="private wrong path"
+        self.assertFalse(controller.chooser_path_matches())
+        self.assertNotIn("private",json.dumps(controller.result))
+        dialog.children.append(self.entry())
+        self.assertIsNone(controller.chooser_location())
+
     def test_find_readback_rejects_wrong_input_value_and_never_records_text(self):
         entry = self.entry()
         controller = self.controller(entry)
