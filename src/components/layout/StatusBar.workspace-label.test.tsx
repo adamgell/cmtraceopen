@@ -12,6 +12,7 @@ import { StatusBar } from "./StatusBar";
 import { useUiStore } from "../../stores/ui-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { getAllThemes, getThemeById, type ThemeId } from "../../lib/themes";
+import { getWorkspace } from "../../workspaces/registry";
 import { EspStatusBarContent } from "../../workspaces/esp-diagnostics/EspStatusBarContent";
 import { useEspDiagnosticsStore } from "../../workspaces/esp-diagnostics/esp-diagnostics-store";
 import {
@@ -40,6 +41,38 @@ describe("StatusBar workspace label", () => {
     expect(screen.getByText("macOS JAMF")).toBeInTheDocument();
     expect(screen.queryByText("macos-jamf")).not.toBeInTheDocument();
   });
+
+  // Workspaces without a status branch of their own used to fall into the
+  // dsregcmd branch and report "dsregcmd • No analysis".
+  it.each([
+    ["macos-diag", "macos"],
+    ["macos-jamf", "macos"],
+    ["sccm", "windows"],
+    ["timeline", "windows"],
+    ["dns-dhcp", "windows"],
+  ] as const)(
+    "gives the %s workspace its own status instead of dsregcmd's",
+    (workspaceId, platform) => {
+      useUiStore.setState({
+        currentPlatform: platform,
+        activeWorkspace: workspaceId,
+        activeView: workspaceId,
+      });
+      const workspace = getWorkspace(workspaceId);
+
+      render(<StatusBar />);
+
+      const bar = screen.getByTestId("global-status-bar");
+      expect(bar).not.toHaveTextContent(/dsregcmd/i);
+      expect(screen.queryByText(workspaceId)).not.toBeInTheDocument();
+      expect(screen.getAllByText(workspace.label).length).toBeGreaterThan(0);
+      expect(
+        screen.getAllByText(
+          workspace.statusLabel ?? `${workspace.label} workspace`,
+        ).length,
+      ).toBeGreaterThan(0);
+    },
+  );
 });
 
 /// The status bar sits on `colorBrandBackground`. Some themes ship an on-brand

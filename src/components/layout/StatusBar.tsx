@@ -562,7 +562,7 @@ export function StatusBar() {
     } else {
       rightStatusText = securebootAnalysisState.message;
     }
-  } else {
+  } else if (activeView === "dsregcmd") {
     const diagnostics = dsregcmdResult?.diagnostics ?? [];
     const errorCount = diagnostics.filter(
       (item) => item.severity === "Error",
@@ -606,6 +606,10 @@ export function StatusBar() {
     } else {
       rightStatusText = dsregcmdAnalysisState.message;
     }
+  } else {
+    // Workspaces without a branch above report only their view label rather
+    // than borrowing another workspace's analysis state.
+    leftParts = [uiChromeStatus.viewLabel];
   }
 
   const leftStatusText = leftParts.join(" • ");
@@ -637,7 +641,7 @@ export function StatusBar() {
                       ? "Secure Boot"
                       : activeView === "dsregcmd"
                         ? "dsregcmd"
-                        : activeView;
+                        : getWorkspace(activeView).label;
 
   return (
     <div
