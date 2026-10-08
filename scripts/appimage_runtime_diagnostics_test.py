@@ -84,6 +84,18 @@ class DiagnosticsTests(unittest.TestCase):
                       Node("Find results", "status", text="1 of 1", states=())):
             self.assertFalse(self.controller(self.bar(count)).match_count())
 
+    def test_unexpected_scope_role_diagnostics_remain_fixed_booleans_and_fail_closed(self):
+        for role in ("status bar", "panel", "private unsupported role"):
+            controller = self.controller(self.bar(Node("Find results", role, attrs=("tag:span",), text="1 of 1")))
+            self.assertFalse(controller.match_count())
+            facts = controller.result["diagnostics"]["observations"]
+            self.assertTrue(facts["scope_unexpected_named_status"])
+            self.assertTrue(facts["scope_unexpected_tag_span"])
+            self.assertEqual(facts["scope_unexpected_role_statusbar"], role == "status bar")
+            self.assertEqual(facts["scope_unexpected_role_other"], role == "private unsupported role")
+            contract.sanitize_diagnostics(controller.result["diagnostics"])
+            self.assertNotIn("private", json.dumps(controller.result))
+
     def test_find_modes_require_actual_toggle_roles_and_navigation_requires_buttons(self):
         for index, role in ((1, "push button"), (2, "push button"), (3, "toggle button"), (4, "toggle button"), (5, "toggle button")):
             bar = self.bar(); bar.children[index].role = role

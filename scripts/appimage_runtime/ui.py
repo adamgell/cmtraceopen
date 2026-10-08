@@ -281,7 +281,17 @@ class Controller:
         for node, _ in scoped:
             role = self.role(node)
             if role not in ("group", "status", "section", "static", "text", "image", "separator", "entry", "push button", "button", "toggle button"):
-                self.observe(scope_roles_valid=False)
+                attrs = node.getAttributes()
+                categories = {"statusbar": "status bar", "panel": "panel", "label": "label",
+                              "filler": "filler", "unknown": "unknown", "invalid": "invalid"}
+                self.observe(scope_roles_valid=False,
+                             scope_unexpected_named_status=node.name == "Find results",
+                             scope_unexpected_xml_status="xml-roles:status" in attrs,
+                             scope_unexpected_tag_span="tag:span" in attrs,
+                             scope_unexpected_tag_div="tag:div" in attrs,
+                             scope_unexpected_role_other=role not in categories.values(),
+                             **{"scope_unexpected_role_" + key: role == value
+                                for key, value in categories.items()})
                 return []
             if role == "entry":
                 inputs += 1
