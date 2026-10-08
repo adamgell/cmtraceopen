@@ -151,7 +151,7 @@ class DiagnosticsTests(unittest.TestCase):
         controller = self.controller(good, self.entry(attrs=("placeholder-text:Highlight...",)))
         find = self.api(controller, "find_input")
         self.assertIs(find(), good)
-        for bad in (self.entry(role="push button"), self.entry(attrs=()),
+        for bad in (self.entry(role="push button", attrs=("placeholder-text:Find...", "tag:button")), self.entry(attrs=()),
                     self.entry(states=("focused", "editable")), self.entry(states=("showing", "editable")),
                     self.entry(states=("showing", "focused"))):
             controller = self.controller(bad)
@@ -159,7 +159,7 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIsNone(self.controller(good, self.entry()).find_input())
 
     def test_find_diagnostics_distinguish_placeholder_role_visibility_without_relaxing_selector(self):
-        for node, entry, showing in ((self.entry(role="static"), False, True),
+        for node, entry, showing in ((self.entry(role="static", attrs=("placeholder-text:Find...", "tag:span")), False, True),
                                      (self.entry(states=("focused", "editable")), True, False)):
             controller = self.controller(node)
             self.assertIsNone(controller.find_input())
@@ -194,7 +194,7 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertEqual(sandbox.classify_error(b"private: "+marker+b": Permission denied"), "id-map-denied")
         self.assertEqual(sandbox.classify_error(b"private: uid map: unknown error"), "other")
 
-    def test_numeric_entry_role_handles_non_entry_role_name_without_accepting_static_text(self):
+    def test_declared_input_handles_non_entry_role_name_without_accepting_static_text(self):
         intended=self.entry(role="text")
         intended.getRole=lambda: 79
         controller=self.controller(intended)
@@ -222,14 +222,14 @@ class DiagnosticsTests(unittest.TestCase):
         def unrelated(): raise TypeError("implementation defect")
         with self.assertRaises(TypeError): ui.poll(unrelated)
 
-    def test_text_role_requires_html_input_and_editable_state_and_preserves_scope(self):
+    def test_input_requires_html_tag_and_editable_state_and_preserves_scope(self):
         intended=self.entry(role="text")
         self.assertIs(self.controller(intended).find_input(), intended)
         bar=self.bar(text="1 of 1"); bar.children[0]=intended
         self.assertTrue(self.controller(bar).match_count())
         for bad in (self.entry(role="text", attrs=("placeholder-text:Find...", "tag:span")),
                     self.entry(role="text", states=("showing", "focused")),
-                    self.entry(role="push button")):
+                    self.entry(role="push button", attrs=("placeholder-text:Find...", "tag:button"))):
             self.assertIsNone(self.controller(bad).find_input())
 
     def test_tree_mutation_atspi_error_is_resampled_without_skipping_children(self):

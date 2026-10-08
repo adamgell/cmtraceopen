@@ -118,16 +118,11 @@ class Controller:
                 raise Blocked("accessibility-unavailable") from error
 
     def role(self, node):
-        # Identify the declared HTML input by its editable interface/state.
-        # The live bridge's role names/enums did not identify these controls.
+        # The actual Find control is a declared HTML input with editable state.
+        # Enum/name/interface guesses failed on this fixed artifact's bridge.
         if ("tag:input" in node.getAttributes()
                 and node.getState().contains(self.atspi.STATE_EDITABLE)):
-            try:
-                node.queryEditableText()
-            except NotImplementedError:
-                pass
-            else:
-                return "entry"
+            return "entry"
         return contract.accessible_role(node.getRoleName(), node.getAttributes())
 
     def showing(self, node):
@@ -375,8 +370,16 @@ class Controller:
             found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(pid)], capture_output=True, text=True, timeout=5)
             return next((line for line in found.stdout.splitlines() if line.isdecimal()), None)
         self.window = poll(visible_window, reason="gui-unavailable", blocked=True)
-        command(["xdotool", "windowsize", self.window, "1100", "780"])
-        command(["xdotool", "windowactivate", "--sync", self.window])
+        def configure_window():
+            try:
+                command(["xdotool", "windowsize", self.window, "1100", "780"])
+                command(["xdotool", "windowactivate", "--sync", self.window])
+            except subprocess.CalledProcessError as error:
+                if error.returncode != 1:
+                    raise
+                return False  # IceWM may not have managed the new window yet.
+            return True
+        poll(configure_window, reason="gui-unavailable", blocked=True)
         # The listbox is the required accessibility baseline even before opening a file.
         poll(lambda: self.find("Log entries", {"listbox"}) if with_file else self.focused_or_window(),
              reason="accessibility-unavailable", blocked=True)
