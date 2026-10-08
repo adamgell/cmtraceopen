@@ -280,7 +280,7 @@ class Controller:
                     "Close find bar": {"push button", "button"}}
         for node, parents in scoped:
             role = self.role(node)
-            if role not in ("group", "status", "section", "static", "text", "image", "separator", "entry", "push button", "button", "toggle button"):
+            if role not in ("group", "status", "page", "section", "static", "text", "image", "separator", "entry", "push button", "button", "toggle button"):
                 attrs = node.getAttributes()
                 categories = {"statusbar": "status bar", "panel": "panel", "label": "label",
                               "filler": "filler", "unknown": "unknown", "invalid": "invalid",

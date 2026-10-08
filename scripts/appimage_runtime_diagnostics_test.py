@@ -119,6 +119,22 @@ class DiagnosticsTests(unittest.TestCase):
             contract.sanitize_diagnostics(controller.result["diagnostics"])
             self.assertNotIn("private", json.dumps(controller.result))
 
+    def test_native_page_layout_is_allowed_only_inside_named_find_group(self):
+        bar = self.bar()
+        bar.children = [Node(role="page", children=bar.children)]
+        self.assertTrue(self.controller(bar).match_count())
+        page = Node("Find bar", "page", children=bar.children)
+        self.assertFalse(self.controller(page).match_count())
+        bar.children[0].children.append(Node("unrelated", "push button"))
+        self.assertFalse(self.controller(bar).match_count())
+
+    def test_page_layout_cannot_supply_a_global_or_unnamed_count(self):
+        bar = self.bar(text="0 of 1")
+        bar.children = [Node(role="page", children=bar.children)]
+        self.assertFalse(self.controller(bar, Node("Find results", "status", text="1 of 1")).match_count())
+        bar.children[0].children[-1] = Node(text="1 of 1")
+        self.assertFalse(self.controller(bar).match_count())
+
     def test_find_modes_require_actual_toggle_roles_and_navigation_requires_buttons(self):
         for index, role in ((1, "push button"), (2, "push button"), (3, "toggle button"), (4, "toggle button"), (5, "toggle button")):
             bar = self.bar(); bar.children[index].role = role
