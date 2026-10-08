@@ -427,6 +427,23 @@ class Controller:
         poll(gone, 20)
         self.application = None
 
+    def chooser_visible(self):
+        in_app = any(self.role(node) in ("file chooser", "dialog") and self.showing(node) for node in self.nodes())
+        # Observation only, from this case's private accessibility bus.
+        # Never act on another app or copy arbitrary names/text to evidence.
+        on_desktop = False
+        for app in self.atspi.Registry.getDesktop(0):
+            pid = app.get_process_id()
+            try:
+                if pid <= 0 or int(status(pid)["Uid"].split()[0]) != os.getuid():
+                    continue
+            except OSError:
+                continue  # A vanished app is not an observed chooser.
+            on_desktop |= any(self.role(node) in ("file chooser", "dialog") and self.showing(node)
+                              for node in self.walk(app))
+        self.observe(reopen_chooser_in_app=in_app, reopen_chooser_on_desktop=on_desktop)
+        return in_app
+
     def execute(self):
         self.fixture.write_text("".join(fixture_line(token, i) for i, token in enumerate(TOKENS, 1)))
         self.stage("launch")
@@ -487,11 +504,15 @@ class Controller:
         self.wait("ready", lambda: self.ready(None))
         self.stage("reopen")
         key("ctrl+o")
-        poll(lambda: any(self.role(node) in ("file chooser", "dialog") and self.showing(node) for node in self.nodes()))
+        self.wait("reopen-dialog", self.chooser_visible)
         key("ctrl+l")
-        poll(self.focused_editable)
+        self.wait("reopen-location", self.focused_editable)
         type_text(str(self.fixture))
+        self.stage("reopen-path")
+        node = self.focused_editable()
+        self.observe(reopen_path_matches=node is not None and self.direct_text(node) == str(self.fixture))
         key("Return")
+        self.stage("reopen-count")
         self.expect_rows(expected)
         self.result["checks"]["reopen"] = True
         self.stage("final-image")

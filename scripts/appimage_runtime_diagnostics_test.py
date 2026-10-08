@@ -264,6 +264,23 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(controller.result["diagnostics"]["final_image"],"failure")
         contract.sanitize_case(controller.result)
 
+    def test_external_chooser_diagnostic_is_read_only_and_rejects_other_accounts(self):
+        controller=self.controller()
+        original=controller.application
+        external=Node(role="application",children=[Node(role="dialog")])
+        external.get_process_id=lambda: 123
+        controller.atspi.Registry=SimpleNamespace(getDesktop=lambda index:[external])
+        with patch.object(ui,"status",return_value={"Uid":str(os.getuid())}):
+            self.assertFalse(controller.chooser_visible())
+        self.assertIs(controller.application,original)
+        facts=controller.result["diagnostics"]["observations"]
+        self.assertFalse(facts["reopen_chooser_in_app"])
+        self.assertTrue(facts["reopen_chooser_on_desktop"])
+        with patch.object(ui,"status",return_value={"Uid":str(os.getuid()+1)}):
+            self.assertFalse(controller.chooser_visible())
+        self.assertFalse(facts["reopen_chooser_on_desktop"])
+        contract.sanitize_diagnostics(controller.result["diagnostics"])
+
     def test_find_readback_rejects_wrong_input_value_and_never_records_text(self):
         entry = self.entry()
         controller = self.controller(entry)
