@@ -127,8 +127,12 @@ async function captureStatusBar(
   state: {
     workspaceId: string;
     platform: string;
+    /** The workspace renders lazy `statusBarContent` instead of the default. */
+    hasStatusContent?: boolean;
     graphApiStatus?: string;
     filterError?: string;
+    /** Text that proves the requested state has rendered. */
+    expectText?: string;
   },
 ): Promise<Buffer> {
   await page.evaluate(async (next) => {
@@ -144,8 +148,18 @@ async function captureStatusBar(
     useFilterStore.setState({ filterError: next.filterError ?? null });
   }, state);
   const bar = page.getByTestId("global-status-bar");
-  await expect(bar).toBeVisible({ timeout: 15_000 });
-  await settle(page);
+  await expect(bar).toHaveAttribute("data-workspace", state.workspaceId, {
+    timeout: 15_000,
+  });
+  if (state.hasStatusContent) {
+    // The Suspense fallback shows the default bar until the lazy content loads.
+    await expect(
+      bar.locator(`[data-status-content="${state.workspaceId}"]`),
+    ).toBeVisible({ timeout: 15_000 });
+  }
+  if (state.expectText) {
+    await expect(bar.getByText(state.expectText)).toBeVisible();
+  }
   return bar.screenshot({ animations: "disabled" });
 }
 
@@ -398,12 +412,18 @@ test.describe("repo screenshots", () => {
         const { workspaceRegistry } =
           await import("/src/workspaces/registry.ts");
         useUiStore.getState().setThemeId(themeId as never);
-        return Array.from(workspaceRegistry.values()).map((ws) => ({
-          id: ws.id,
-          label: ws.label,
-          platform:
-            ws.platforms === "all" ? "windows" : (ws.platforms[0] as string),
-        }));
+        return Array.from(workspaceRegistry.values()).map((ws) => {
+          if (ws.platforms !== "all" && ws.platforms.length === 0) {
+            throw new Error(`Workspace "${ws.id}" declares no platforms`);
+          }
+          return {
+            id: ws.id,
+            label: ws.label,
+            hasStatusContent: Boolean(ws.statusBarContent),
+            platform:
+              ws.platforms === "all" ? "windows" : (ws.platforms[0] as string),
+          };
+        });
       }, theme.id);
 
       const strips: StatusBarStrip[] = [];
@@ -413,6 +433,7 @@ test.describe("repo screenshots", () => {
           png: await captureStatusBar(page, {
             workspaceId: ws.id,
             platform: ws.platform,
+            hasStatusContent: ws.hasStatusContent,
           }),
         });
       }
@@ -424,6 +445,7 @@ test.describe("repo screenshots", () => {
           workspaceId: "log",
           platform: "windows",
           graphApiStatus: "connected",
+          expectText: "Graph API: Connected",
         }),
       });
       strips.push({
@@ -432,6 +454,7 @@ test.describe("repo screenshots", () => {
           workspaceId: "log",
           platform: "windows",
           filterError: "Invalid clause",
+          expectText: "Filter error: Invalid clause",
         }),
       });
 

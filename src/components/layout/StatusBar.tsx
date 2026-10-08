@@ -642,6 +642,7 @@ export function StatusBar() {
   return (
     <div
       data-testid="global-status-bar"
+      data-workspace={activeView}
       style={{
         display: "flex",
         justifyContent: "space-between",

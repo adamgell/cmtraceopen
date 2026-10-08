@@ -79,6 +79,7 @@ export function EspStatusBarContent() {
 
   return (
     <div
+      data-status-content="esp-diagnostics"
       style={{
         width: "100%",
         minWidth: 0,

@@ -13,7 +13,15 @@ function channelToLinear(channel: number): number {
   return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
 }
 
+const HEX_COLOR = /^#?(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
 function relativeLuminance(hex: string): number {
+  // Theme tokens are expected to be plain hex. Anything else would parse to
+  // NaN and silently pick a foreground, so fail loudly instead; the per-theme
+  // contrast test turns that into a CI failure.
+  if (!HEX_COLOR.test(hex)) {
+    throw new Error(`Expected a #rgb or #rrggbb color, got "${hex}"`);
+  }
   const digits = hex.replace("#", "");
   const full =
     digits.length === 3

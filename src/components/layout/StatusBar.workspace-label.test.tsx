@@ -51,6 +51,15 @@ describe("status bar foreground", () => {
     expect(contrastRatio("#000000", "#ffffff")).toBeCloseTo(21, 5);
   });
 
+  it.each(["red", "rgb(0, 0, 0)", "#ffffff80", "#ggg", ""])(
+    "rejects %j instead of producing NaN",
+    (color) => {
+      expect(() => contrastRatio(color, "#ffffff")).toThrow(
+        /#rgb or #rrggbb/,
+      );
+    },
+  );
+
   it("keeps the on-brand foreground when it already meets 4.5:1", () => {
     expect(pickStatusBarForeground("#007768", "#ffffff")).toBe("#ffffff");
   });
