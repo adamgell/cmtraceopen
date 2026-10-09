@@ -29,7 +29,7 @@ import {
   Warning16Regular,
   type FluentIcon,
 } from "@fluentui/react-icons";
-import { readableOn } from "../../lib/color-contrast";
+import { contrastRatio, readableOn } from "../../lib/color-contrast";
 import { getThemeById } from "../../lib/themes";
 import type { CMTraceTheme } from "../../lib/themes/types";
 import { useUiStore } from "../../stores/ui-store";
@@ -53,6 +53,14 @@ export interface EvtxLevelVisual {
    * background). The icon shape and its aria-label carry the level.
    */
   selectedIconColor: string;
+  /**
+   * The level word or count drawn as text off the row tint: finding-card
+   * eyebrow and grammar error on the surface, Details level word and the
+   * 8.6 err and warn counts on the rail, and the same counts on a selected
+   * row. 4.5:1 on Background1, Background2 and the selection background.
+   * Not for text on the row tint; that pairing is `rowText`.
+   */
+  textColor: string;
   /** Rail icon, drawn on colorNeutralBackground2. Same as the mark. */
   railIconColor: string;
   rowBackground: string;
@@ -127,13 +135,16 @@ const HEAT_STEP_PERCENTAGES = [15, 30, 45, 60, 75, 90] as const;
  * else returns the value unchanged. Used only where a `readableOn` decision
  * needs a concrete background.
  */
-function resolveToken(value: string, theme: CMTraceTheme): string {
+export function resolveToken(value: string, theme: CMTraceTheme): string {
   const match = /^var\(\s*--([\w-]+)\s*(?:,[^)]*)?\)$/.exec(value.trim());
   if (!match) return value;
   const resolved = (theme.fluentTheme as unknown as Record<string, string>)[
     match[1]
   ];
-  return typeof resolved === "string" ? resolved : value;
+  if (typeof resolved !== "string") {
+    throw new Error(`Unknown Fluent token ${match[1]} in theme ${theme.id}`);
+  }
+  return resolved;
 }
 
 export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
@@ -149,6 +160,19 @@ export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
     rowText: tokens.colorNeutralForeground1,
   };
 
+  // Text surfaces: Background1, Background2 and the selection background.
+  const textSurfaces = [
+    tokens.colorNeutralBackground1,
+    tokens.colorNeutralBackground2,
+    selection.background,
+  ].map((value) => resolveToken(value, theme));
+  // Information and Verbose use their mark as text when it reaches 4.5:1 on
+  // every text surface, otherwise the selection foreground (4.5:1 on all three).
+  const neutralText = (mark: string) =>
+    textSurfaces.every((surface) => contrastRatio(mark, surface) >= 4.5)
+      ? mark
+      : selection.foreground;
+
   const levels: Record<EvtxLevel, EvtxLevelVisual> = {
     Critical: {
       label: "Critical",
@@ -157,6 +181,7 @@ export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
       iconColor: readableOn(palette.error.background, eventLog.critical),
       selectedIconColor: selection.foreground,
       railIconColor: eventLog.critical,
+      textColor: eventLog.text.critical,
       rowBackground: palette.error.background,
       rowText: palette.error.text,
       GridIcon: DismissCircle12Regular,
@@ -169,6 +194,7 @@ export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
       iconColor: readableOn(palette.error.background, eventLog.error),
       selectedIconColor: selection.foreground,
       railIconColor: eventLog.error,
+      textColor: eventLog.text.error,
       rowBackground: palette.error.background,
       rowText: palette.error.text,
       GridIcon: ErrorCircle12Regular,
@@ -181,6 +207,7 @@ export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
       iconColor: readableOn(palette.warning.background, eventLog.warning),
       selectedIconColor: selection.foreground,
       railIconColor: eventLog.warning,
+      textColor: eventLog.text.warning,
       rowBackground: palette.warning.background,
       rowText: palette.warning.text,
       GridIcon: Warning12Regular,
@@ -193,6 +220,7 @@ export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
       iconColor: eventLog.information,
       selectedIconColor: selection.foreground,
       railIconColor: eventLog.information,
+      textColor: neutralText(eventLog.information),
       ...plainRow,
       GridIcon: Info12Regular,
       RailIcon: Info16Regular,
@@ -206,6 +234,7 @@ export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
       iconColor: eventLog.verbose,
       selectedIconColor: selection.foreground,
       railIconColor: eventLog.verbose,
+      textColor: neutralText(eventLog.verbose),
       ...plainRow,
       GridIcon: Circle12Regular,
       RailIcon: Circle16Regular,
@@ -302,24 +331,28 @@ export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
     scenario: {
       succeeded: {
         // Deviates from spec 6.3 (colorPaletteGreenBackground3), which is
-        // 2.33 to 2.80:1 on the dark-family surfaces; the green active
-        // border reaches 3:1 on every surface and stays 20 dE00 from every
-        // level mark in all themes (the success foreground was 18.1 from
-        // Warning in solarized-dark).
-        bar: tokens.colorPaletteGreenBorderActive,
+        // 2.33 to 2.80:1 on the dark-family surfaces. The per-theme
+        // eventLog.scenario fields keep each state 3:1 on the surface and 20
+        // dE00 from every level mark, from the selection border and from each
+        // other; high-contrast maps every Fluent border token to the
+        // selection cyan, so tokens cannot do this.
+        bar: eventLog.scenario.succeeded,
         foreground: palette.status.success.foreground,
         background: tokens.colorPaletteGreenBackground1,
       },
-      running: tokens.colorPaletteBlueBorderActive,
-      retrying: tokens.colorPaletteBlueBorderActive,
+      // Deviates from spec 6.3 (colorPaletteBlueBorderActive), which is the
+      // selection border itself. Running and retrying share this one color
+      // by spec design.
+      running: eventLog.scenario.running,
+      retrying: eventLog.scenario.running,
       // Deviates from spec 6.3 (colorPaletteBlueBackground2), a pale tint
-      // (1.2 to 1.6:1 on the surface). The lavender active border reaches
-      // 3:1 on every surface, stays 20 dE00 from every level mark (the
-      // neutral foreground it replaced equalled the Information mark) and is
-      // distinct from the blue running and retrying states.
-      sleep: tokens.colorPaletteLavenderBorderActive,
+      // (1.2 to 1.6:1 on the surface), for the same reason as above. It is a
+      // violet, 20 dE00 from running, succeeded and the selection border.
+      sleep: eventLog.scenario.sleep,
       notStarted: {
-        stroke: tokens.colorNeutralStroke2,
+        // Deviates from spec 6.3 (colorNeutralStroke2), which is 1.1 to 2.4:1
+        // on Background3; the accessible stroke reaches 3:1 in every theme.
+        stroke: tokens.colorNeutralStrokeAccessible,
         background: tokens.colorNeutralBackground3,
       },
     },

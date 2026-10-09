@@ -2,9 +2,8 @@ import { tokens } from "@fluentui/react-components";
 import { describe, expect, it } from "vitest";
 import { contrastRatio, parseHex, readableOn } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
-import type { CMTraceTheme } from "../../lib/themes";
 import type { DiagnosisCorrelationStatus, EvtxLevel } from "./types";
-import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
+import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import moduleSource from "./evtx-visual-tokens.ts?raw";
 
 const LEVELS: EvtxLevel[] = [
@@ -41,19 +40,6 @@ const surfaceThemes = themes.filter(
   ([id]) => !HOTDOG_REMOVED_IN_878.includes(id),
 );
 const classicTheme = themes.filter(([id]) => id === "classic-cmtrace");
-
-/** Resolves a `var(--name)` reference through the theme, else returns the value. */
-function resolve(value: string, theme: CMTraceTheme): string {
-  const match = /^var\(\s*--([\w-]+)\s*(?:,[^)]*)?\)$/.exec(value.trim());
-  if (!match) return value;
-  const resolved = (theme.fluentTheme as unknown as Record<string, string>)[
-    match[1]
-  ];
-  if (typeof resolved !== "string") {
-    throw new Error(`Theme ${theme.id} has no token ${match[1]}`);
-  }
-  return resolved;
-}
 
 type Lab = [number, number, number];
 
@@ -216,7 +202,6 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
       },
       { surface: "surface", section: "8.13 finding card top border" },
       { surface: "rail", section: "8.13 level mix and top event IDs bars" },
-      { surface: "rail", section: "8.8 expanded items container (bg2)" },
       { surface: "group", section: "8.8 expanded group row trend sparkline" },
     ],
   },
@@ -228,6 +213,14 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
     placements: [
       { surface: "surface", section: "8.3 level toggle dots" },
       { surface: "surface", section: "8.13 chain card steps (card bg1)" },
+      {
+        surface: "surface",
+        section: "8.11 correlation lane markers (lane plot)",
+      },
+      {
+        surface: "surface",
+        section: "8.12 dock lane markers (dock inner panel bg1)",
+      },
     ],
   },
   {
@@ -277,6 +270,32 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
     ],
   },
   {
+    role: "level text",
+    minimum: 4.5,
+    colors: (v) =>
+      Object.fromEntries(LEVELS.map((l) => [l, v.levels[l].textColor])),
+    placements: [
+      {
+        surface: "surface",
+        section: "8.13 finding card eyebrow; 8.3 grammar error",
+      },
+      {
+        surface: "rail",
+        section: "8.13 Details level word; 8.6 err and warn counts",
+      },
+      {
+        surface: "selected",
+        section: "8.6 err and warn counts on a selected row",
+      },
+    ],
+  },
+  {
+    role: "selection text",
+    minimum: 4.5,
+    colors: (v) => ({ selectionForeground: v.selection.foreground }),
+    placements: [{ surface: "selected", section: "6.2 selected row text" }],
+  },
+  {
     role: "selected data color",
     minimum: 3,
     colors: (v) => ({ selectedDataColor: v.selectedDataColor }),
@@ -293,10 +312,9 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
       ),
     placements: [
       { surface: "surface", section: "8.7 Channel cell swatch on plain rows" },
-      { surface: "surface", section: "8.9 channel swimlanes" },
       {
         surface: "surface",
-        section: "8.10 events by channel bars and heat map",
+        section: "8.10 events by channel bars",
       },
       { surface: "rail", section: "8.6 channel pane swatch and sparkline" },
     ],
@@ -355,11 +373,6 @@ const INVENTORY_EXEMPTIONS: readonly {
     reason: "a sequential ramp of data fills; the faint steps are intentional",
   },
   {
-    what: "Not started hatch (stroke2 on bg3)",
-    section: "6.3, 15.1",
-    reason: "a placeholder state the spec makes deliberately quiet",
-  },
-  {
     what: "row text, level words and finding callout text on error or warning tints",
     section: "6.3, 8.13",
     reason:
@@ -369,7 +382,7 @@ const INVENTORY_EXEMPTIONS: readonly {
     what: "selection inset border and Exact badge border on the selection background (light, classic-cmtrace: 2.87:1)",
     section: "6.2, Q-1, 8.11, 8.13",
     reason:
-      "the selection triplet is fixed by Q-1; the border is also the row's 3px inset",
+      "accepted by Adam 2026-10-08 (Q-1); the border is also the row's 3px inset",
   },
   {
     what: "severity eyebrow text in finding cards",
@@ -461,6 +474,18 @@ describe("contrastRatio", () => {
     expect(() => contrastRatio("red", "#fff")).toThrow(
       "Expected a #rgb or #rrggbb color, got red",
     );
+  });
+});
+
+describe("resolveToken", () => {
+  it("throws on an unknown Fluent token", () => {
+    expect(() =>
+      resolveToken("var(--colorDoesNotExist)", getAllThemes()[0]),
+    ).toThrow("Unknown Fluent token");
+  });
+
+  it("returns non-token values unchanged", () => {
+    expect(resolveToken("#123456", getAllThemes()[0])).toBe("#123456");
   });
 });
 
@@ -574,37 +599,15 @@ describe("evtx visual tokens", () => {
 
   describe.each(themes)("resolved colors in the %s theme", (id, theme) => {
     const visual = buildEvtxVisualTokens(theme);
-    const surface = resolve(tokens.colorNeutralBackground1, theme);
-    const selectionBorder = resolve(tokens.colorPaletteBlueBorderActive, theme);
-    const brandBackground = resolve(tokens.colorBrandBackground, theme);
-    const brandLink = resolve(tokens.colorBrandForegroundLink, theme);
+    const selectionBorder = resolveToken(
+      tokens.colorPaletteBlueBorderActive,
+      theme,
+    );
+    const brandBackground = resolveToken(tokens.colorBrandBackground, theme);
+    const brandLink = resolveToken(tokens.colorBrandForegroundLink, theme);
     const mark = (level: EvtxLevel) =>
-      resolve(visual.levels[level].barColor, theme);
-    const channel = (i: number) => resolve(visual.channelColor(i), theme);
-
-    it("keeps every level icon at 3:1 against its own row background", () => {
-      for (const level of LEVELS) {
-        const icon = resolve(visual.levels[level].iconColor, theme);
-        const row = resolve(visual.levels[level].rowBackground, theme);
-        const ratio = contrastRatio(icon, row);
-        expect(
-          ratio,
-          `${id}: ${level} icon ${icon} on row ${row} = ${ratio.toFixed(2)}`,
-        ).toBeGreaterThanOrEqual(3);
-      }
-    });
-
-    it("keeps selected-row icons at 4.5:1 on the selection background", () => {
-      const bg = resolve(visual.selection.background, theme);
-      for (const level of LEVELS) {
-        const icon = resolve(visual.levels[level].selectedIconColor, theme);
-        const ratio = contrastRatio(icon, bg);
-        expect(
-          ratio,
-          `${id}: ${level} selected icon ${icon} on selection ${bg} = ${ratio.toFixed(2)}`,
-        ).toBeGreaterThanOrEqual(4.5);
-      }
-    });
+      resolveToken(visual.levels[level].barColor, theme);
+    const channel = (i: number) => resolveToken(visual.channelColor(i), theme);
 
     it("keeps level marks perceptually apart", () => {
       for (let i = 0; i < LEVELS.length; i++) {
@@ -660,40 +663,11 @@ describe("evtx visual tokens", () => {
       }
     });
 
-    it("keeps badge label text at 4.5:1 on its badge background", () => {
-      for (const strength of ["coverageBlocked", "notCausal"] as const) {
-        const badge = visual.strengths[strength];
-        const fg = resolve(badge.foreground, theme);
-        const bg = resolve(badge.background, theme);
-        const ratio = contrastRatio(fg, bg);
-        expect(
-          ratio,
-          `${id}: ${strength} label ${fg} on ${bg} = ${ratio.toFixed(2)}`,
-        ).toBeGreaterThanOrEqual(4.5);
-      }
-    });
-
-    it("gives coverageBlocked a visible border unlike Candidate's", () => {
-      const border = resolve(visual.strengths.coverageBlocked.border, theme);
-      const ratio = contrastRatio(border, surface);
-      expect(
-        ratio,
-        `${id}: coverageBlocked border ${border} on surface ${surface} = ${ratio.toFixed(2)}`,
-      ).toBeGreaterThanOrEqual(3);
+    it("gives coverageBlocked a distinct border style and an icon", () => {
       expect(visual.strengths.coverageBlocked.borderStyle).not.toBe(
         visual.strengths.candidate.borderStyle,
       );
       expect(visual.strengths.coverageBlocked.Icon).toBeDefined();
-    });
-
-    it("keeps selection text at 4.5:1 on the selection background", () => {
-      const fg = resolve(visual.selection.foreground, theme);
-      const bg = resolve(visual.selection.background, theme);
-      const ratio = contrastRatio(fg, bg);
-      expect(
-        ratio,
-        `${id}: selection foreground ${fg} on ${bg} = ${ratio.toFixed(2)}`,
-      ).toBeGreaterThanOrEqual(4.5);
     });
   });
 
@@ -701,7 +675,7 @@ describe("evtx visual tokens", () => {
     const visual = buildEvtxVisualTokens(theme);
 
     it.each(["Critical", "Error"] as const)("keeps %s red", (level) => {
-      const color = resolve(visual.levels[level].barColor, theme);
+      const color = resolveToken(visual.levels[level].barColor, theme);
       const { hue, saturation } = hueSaturation(color);
       expect(
         inRedBand(hue) && saturation >= 0.35,
@@ -718,7 +692,7 @@ describe("evtx visual tokens", () => {
       it.each(["Critical", "Error"] as const)(
         "keeps the %s mark vivid (Lab chroma >= 40)",
         (level) => {
-          const color = resolve(visual.levels[level].barColor, theme);
+          const color = resolveToken(visual.levels[level].barColor, theme);
           const [, a, b] = hexToLab(color);
           const chroma = Math.hypot(a, b);
           expect(
@@ -738,17 +712,17 @@ describe("evtx visual tokens", () => {
       const surfaceFor = (key: SurfaceKey, name: string): string => {
         switch (key) {
           case "surface":
-            return resolve(tokens.colorNeutralBackground1, theme);
+            return resolveToken(tokens.colorNeutralBackground1, theme);
           case "rail":
-            return resolve(tokens.colorNeutralBackground2, theme);
+            return resolveToken(tokens.colorNeutralBackground2, theme);
           case "group":
-            return resolve(tokens.colorNeutralBackground3, theme);
+            return resolveToken(tokens.colorNeutralBackground3, theme);
           case "pressed":
-            return resolve(tokens.colorNeutralBackground1Selected, theme);
+            return resolveToken(tokens.colorNeutralBackground1Selected, theme);
           case "selected":
-            return resolve(visual.selection.background, theme);
+            return resolveToken(visual.selection.background, theme);
           case "ownRow":
-            return resolve(
+            return resolveToken(
               visual.levels[name as EvtxLevel].rowBackground,
               theme,
             );
@@ -775,7 +749,7 @@ describe("evtx visual tokens", () => {
         (role, entry) => {
           const failures: string[] = [];
           for (const [name, value] of Object.entries(entry.colors(visual))) {
-            const color = resolve(value, theme);
+            const color = resolveToken(value, theme);
             for (const placement of entry.placements) {
               if (placement.exempt?.names.includes(name)) continue;
               const surface = surfaceFor(placement.surface, name);
@@ -814,7 +788,7 @@ describe("evtx visual tokens", () => {
           ["pressed", "pressed", "8.3 and 6.2 pressed level toggles"],
         ];
         for (const [context, key, section] of contexts) {
-          const outline = resolve(visual.markOutline(context), theme);
+          const outline = resolveToken(visual.markOutline(context), theme);
           const background = surfaceFor(key, context);
           const ratio = contrastRatio(outline, background);
           if (ratio < 3) {
@@ -827,7 +801,7 @@ describe("evtx visual tokens", () => {
       });
 
       it("keeps channels apart from the single-series color and all selection colors", () => {
-        const single = resolve(visual.singleSeries, theme);
+        const single = resolveToken(visual.singleSeries, theme);
         const selection = [
           ["selection background", visual.selection.background],
           ["selection border", visual.selection.border],
@@ -835,12 +809,12 @@ describe("evtx visual tokens", () => {
         ] as const;
         const failures: string[] = [];
         for (let i = 0; i < 6; i++) {
-          const color = resolve(visual.channelColor(i), theme);
+          const color = resolveToken(visual.channelColor(i), theme);
           const others: [string, string][] = [
             ["single series", single],
             ...selection.map(
               ([name, value]) =>
-                [name, resolve(value, theme)] as [string, string],
+                [name, resolveToken(value, theme)] as [string, string],
             ),
           ];
           for (const [name, other] of others) {
@@ -858,7 +832,7 @@ describe("evtx visual tokens", () => {
       it("keeps every channel at Lab chroma >= 25 in the cool band [175, 290]", () => {
         const failures: string[] = [];
         for (let i = 0; i < 6; i++) {
-          const color = resolve(visual.channelColor(i), theme);
+          const color = resolveToken(visual.channelColor(i), theme);
           const [, a, b] = hexToLab(color);
           const chroma = Math.hypot(a, b);
           const { hue } = hueSaturation(color);
@@ -875,7 +849,7 @@ describe("evtx visual tokens", () => {
         const failures: string[] = [];
         for (const strength of STRENGTHS) {
           const badge = visual.strengths[strength];
-          const border = resolve(badge.border, theme);
+          const border = resolveToken(badge.border, theme);
           for (const placement of BADGE_PLACEMENTS) {
             if (placement.exempt?.names.includes(strength)) continue;
             const surface = surfaceFor(placement.surface, strength);
@@ -886,8 +860,8 @@ describe("evtx visual tokens", () => {
               );
             }
           }
-          const label = resolve(badge.foreground, theme);
-          const background = resolve(badge.background, theme);
+          const label = resolveToken(badge.foreground, theme);
+          const background = resolveToken(badge.background, theme);
           const labelRatio = contrastRatio(label, background);
           if (labelRatio < 4.5) {
             failures.push(
@@ -907,9 +881,9 @@ describe("evtx visual tokens", () => {
           sleep: visual.scenario.sleep,
         };
         for (const [name, value] of Object.entries(scenario)) {
-          const color = resolve(value, theme);
+          const color = resolveToken(value, theme);
           for (const level of LEVELS) {
-            const mark = resolve(visual.levels[level].barColor, theme);
+            const mark = resolveToken(visual.levels[level].barColor, theme);
             const d = deltaE00(color, mark);
             if (d < 20) {
               failures.push(
@@ -921,9 +895,51 @@ describe("evtx visual tokens", () => {
         expect(failures, failures.join("; ")).toEqual([]);
       });
 
+      it("keeps scenario states and the selection border apart (dE00 >= 20)", () => {
+        const failures: string[] = [];
+        // running and retrying share one token by spec design (6.3).
+        const states: [string, string][] = [
+          ["running", visual.scenario.running],
+          ["sleep", visual.scenario.sleep],
+          ["succeeded bar", visual.scenario.succeeded.bar],
+          ["not started stroke", visual.scenario.notStarted.stroke],
+        ].map(([n, v]) => [n, resolveToken(v, theme)] as [string, string]);
+        const selectionBorder = resolveToken(visual.selection.border, theme);
+        for (let i = 0; i < states.length; i++) {
+          const d = deltaE00(states[i][1], selectionBorder);
+          if (d < 20) {
+            failures.push(
+              `${id}: ${states[i][0]} ${states[i][1]} vs selection border ${selectionBorder} dE00 = ${d.toFixed(1)}`,
+            );
+          }
+          for (let j = i + 1; j < states.length; j++) {
+            const e = deltaE00(states[i][1], states[j][1]);
+            if (e < 20) {
+              failures.push(
+                `${id}: ${states[i][0]} ${states[i][1]} vs ${states[j][0]} ${states[j][1]} dE00 = ${e.toFixed(1)}`,
+              );
+            }
+          }
+        }
+        expect(failures, failures.join("; ")).toEqual([]);
+      });
+
+      it("keeps the not-started stroke at 3:1 on its background", () => {
+        const stroke = resolveToken(visual.scenario.notStarted.stroke, theme);
+        const background = resolveToken(
+          visual.scenario.notStarted.background,
+          theme,
+        );
+        const ratio = contrastRatio(stroke, background);
+        expect(
+          ratio,
+          `${id}: not-started stroke ${stroke} on ${background} (15.1 hatch) = ${ratio.toFixed(2)}`,
+        ).toBeGreaterThanOrEqual(3);
+      });
+
       it("keeps the succeeded label at 4.5:1 on its background", () => {
-        const fg = resolve(visual.scenario.succeeded.foreground, theme);
-        const bg = resolve(visual.scenario.succeeded.background, theme);
+        const fg = resolveToken(visual.scenario.succeeded.foreground, theme);
+        const bg = resolveToken(visual.scenario.succeeded.background, theme);
         const ratio = contrastRatio(fg, bg);
         expect(
           ratio,
@@ -936,7 +952,7 @@ describe("evtx visual tokens", () => {
   describe.each(classicTheme)("%s error bar", (id, theme) => {
     it("is a visible red, not near-black", () => {
       const visual = buildEvtxVisualTokens(theme);
-      const color = resolve(visual.levels.Error.barColor, theme);
+      const color = resolveToken(visual.levels.Error.barColor, theme);
       const { hue, saturation } = hueSaturation(color);
       const lightness = hslLightness(color);
       expect(
@@ -951,7 +967,7 @@ describe("evtx visual tokens", () => {
     (id, theme) => {
       const visual = buildEvtxVisualTokens(theme);
       const palette = theme.severityPalette;
-      const surface = resolve(tokens.colorNeutralBackground1, theme);
+      const surface = resolveToken(tokens.colorNeutralBackground1, theme);
 
       it("are perceptually unlike outcome colors (dE00 >= 10)", () => {
         const outcomes = [
@@ -963,7 +979,7 @@ describe("evtx visual tokens", () => {
           palette.success.background,
           visual.levels.Critical.barColor,
           visual.levels.Error.barColor,
-        ].map((value) => resolve(value, theme));
+        ].map((value) => resolveToken(value, theme));
         // A background may equal the surface but not an outcome tint that
         // differs from it by dE00 >= 10 (error, success and warning backgrounds);
         // a tint closer to the surface than that is not a distinct tint.
@@ -972,7 +988,7 @@ describe("evtx visual tokens", () => {
           palette.success.background,
           palette.warning.background,
         ]
-          .map((value) => resolve(value, theme))
+          .map((value) => resolveToken(value, theme))
           .filter((tint) => deltaE00(tint, surface) >= 10);
 
         const problems: string[] = [];
@@ -982,7 +998,7 @@ describe("evtx visual tokens", () => {
             ["foreground", badge.foreground],
             ["border", badge.border],
           ] as const) {
-            const color = resolve(value, theme);
+            const color = resolveToken(value, theme);
             for (const outcome of outcomes) {
               const d = deltaE00(color, outcome);
               if (d < 10) {
@@ -992,7 +1008,7 @@ describe("evtx visual tokens", () => {
               }
             }
           }
-          const background = resolve(badge.background, theme);
+          const background = resolveToken(badge.background, theme);
           for (const tint of tints) {
             const d = deltaE00(background, tint);
             if (d < 10) {

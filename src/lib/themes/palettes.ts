@@ -25,6 +25,8 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: "#a16207",
       information: "#616161",
       verbose: "#707070",
+      text: { critical: "#881337", error: "#7F1D1D", warning: "#78350F" },
+      scenario: { running: "#084191", sleep: "#7c3aed", succeeded: "#16a34a" },
       channels: [
         "#a855f7", "#1a1a4d", "#0891b2", "#3e25d0", "#7e89c8", "#00647a",
       ],
@@ -53,6 +55,8 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: "#fbbf24",
       information: "#adadad",
       verbose: "#999999",
+      text: { critical: "#ffb3c7", error: "#fca5a5", warning: "#fbbf24" },
+      scenario: { running: "#6366f1", sleep: "#c4b5fd", succeeded: "#16a34a" },
       channels: [
         "#c084fc", "#93ecec", "#1f7ead", "#bb26d9", "#6666cc", "#cbc6fa",
       ],
@@ -81,6 +85,8 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: "#FFFF00",
       information: "#FFFFFF",
       verbose: "#FFFFFF",
+      text: { critical: "#ff4d80", error: "#FF0000", warning: "#FFFF00" },
+      scenario: { running: "#2563eb", sleep: "#a78bfa", succeeded: "#16a34a" },
       channels: [
         "#c084fc", "#6366f1", "#0083a3", "#f3d0fb", "#3d98ff", "#c300eb",
       ],
@@ -109,6 +115,8 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: "#a16207",
       information: "#616161",
       verbose: "#707070",
+      text: { critical: "#881337", error: "#7F1D1D", warning: "#78350F" },
+      scenario: { running: "#084191", sleep: "#7c3aed", succeeded: "#16a34a" },
       channels: [
         "#a855f7", "#1a1a4d", "#0d0df2", "#772d86", "#0a717b", "#0f9dbd",
       ],
@@ -137,6 +145,8 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: "#B58900",
       information: "#adadad",
       verbose: "#858585",
+      text: { critical: "#ffb3c7", error: "#fca5a5", warning: "#fbbf24" },
+      scenario: { running: "#6366f1", sleep: "#c4b5fd", succeeded: "#16a34a" },
       channels: [
         "#a9acda", "#cc00ff", "#526cff", "#f5ccff", "#de85ff", "#9470c2",
       ],
@@ -165,6 +175,8 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: "#d4a72c",
       information: "#A6A6A6",
       verbose: "#999999",
+      text: { critical: "#ffb3c7", error: "#fca5a5", warning: "#EBCB8B" },
+      scenario: { running: "#6e6ef7", sleep: "#c4b5fd", succeeded: "#16a34a" },
       channels: [
         "#9e9efa", "#00ada5", "#f3d0fb", "#d152ff", "#00ffee", "#c38dce",
       ],
@@ -193,6 +205,8 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: "#F1FA8C",
       information: "#9A9A9A",
       verbose: "#949494",
+      text: { critical: "#ffb3c7", error: "#fca5a5", warning: "#F1FA8C" },
+      scenario: { running: "#6366f1", sleep: "#c4b5fd", succeeded: "#16a34a" },
       channels: [
         "#de5cff", "#7a88ff", "#11d0c6", "#2c968f", "#2378c7", "#0c7e97",
       ],
@@ -221,6 +235,8 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: "#000000",
       information: "#00FFFF",
       verbose: "#00FFFF",
+      text: { critical: "#FFFF00", error: "#FFFFFF", warning: "#000000" },
+      scenario: { running: "#084191", sleep: "#7c3aed", succeeded: "#16a34a" },
       channels: [
         "#00005a", "#003c3c", "#00ffc3", "#f7e0ff", "#b8edff", "#211226",
       ],

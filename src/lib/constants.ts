@@ -28,6 +28,10 @@ export interface LogSeverityPalette {
     warning: string;
     information: string;
     verbose: string;
+    /** Level words and counts drawn as text off the row tint (4.5:1). */
+    text: { critical: string; error: string; warning: string };
+    /** v2 scenario state colors; distinct from each other and the selection. */
+    scenario: { running: string; sleep: string; succeeded: string };
     channels: readonly [string, string, string, string, string, string];
   };
 
