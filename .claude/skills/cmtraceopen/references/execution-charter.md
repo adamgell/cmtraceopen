@@ -42,10 +42,13 @@ tracking, and safe integration. Reverify all remote state before acting on it.
   `scaffold-pipeline.md` (anchored to real exemplars and graded). Documentation of
   merged behavior goes to `cmtrace-tech-writer`.
 - **Review independently.** Before any pull request is reported ready, dispatch
-  `cmtrace-code-review` (Opus) on the exact head, validate its output the same
-  three ways with `--role code-review` (accept only `{"ok":true,"role":"code-review"}`),
+  `cmtrace-code-review` (Opus) on the exact head, validate its output in the same
+  three steps with `--role code-review` (accept only `{"ok":true,"role":"code-review"}`),
   act on its findings, and post the
   clean report on the pull request (`.Clairvoyance/staff/code-review-charter.md`).
+  A clean review means no P1 or P2 findings; each P3 is fixed or routed, and Main
+  records the disposition in a PR comment. A report with only P3 findings validates
+  as `phase: blocked`, which is expected until those dispositions are posted.
   The author never reviews its own work.
 - If these agents are missing from a session, find out why before acting. Check
   that the session's checkout contains them (`git cat-file -e
@@ -127,7 +130,9 @@ whether `main` already has an equivalent before opening a pull request.
    warning findings, then rerun until clean.
 6. Get an independent review of every pull request (`cmtrace-code-review`, see
    "Advisor and subagents"), following `.Clairvoyance/staff/code-review-charter.md`,
-   and post the clean report on the pull request.
+   and post the clean report on the pull request. Clean means no P1 or P2 findings;
+   each P3 is fixed or routed, with Main recording the disposition in a PR comment
+   (a P3-only report validates as `phase: blocked` until then).
 7. Confirm with `git ls-remote origin <branch>` that the remote head equals the
    reviewed SHA.
 
