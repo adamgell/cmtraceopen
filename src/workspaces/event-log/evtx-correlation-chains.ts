@@ -68,16 +68,30 @@ export interface ChainFindingCoverage {
   title: string;
   originIds: readonly string[];
   /**
-   * When several findings cover a chain, a `confirmedFailure` wins over every other class (and
-   * over an unset class), then the lowest `findingId` wins.
+   * Required, mirroring `DiagnosisFinding.class`: a caller that drops it gets a type error rather
+   * than a finding that silently competes for titles. Only `TITLE_CONCLUSION_CLASSES` may title a
+   * chain; any other value, including one this build does not know, is ignored for titles.
+   *
+   * When several findings cover a chain, a `confirmedFailure` wins over every other class, then
+   * the lowest `findingId` wins.
    */
-  findingClass?: DiagnosisFindingClass;
+  findingClass: DiagnosisFindingClass;
 }
 
 export interface CorrelationChainInput {
   /** Placed timeline items, used for titles, spans and member order. */
   items: readonly TimelineItem[];
+  /**
+   * The edges that were loaded. The backend reply carries a bounded preview (at most 100 edges
+   * within a byte budget), so this can be a prefix of the session's edges.
+   */
   timelineEdges: readonly TimelineCorrelationEdge[];
+  /**
+   * Every timeline edge the session holds (the backend `totalEdges`), loaded or not. Required so a
+   * bounded preview cannot be mistaken for the whole set. Compared with `timelineEdges.length`
+   * to fill `edgeInputComplete` and `unloadedEdgeCount`.
+   */
+  totalTimelineEdges: number;
   findings: readonly ChainFindingCoverage[];
 }
 
@@ -117,9 +131,17 @@ export interface CorrelationChain {
 export interface CorrelationChainModel {
   /** Ordered rows, capped at `CORRELATION_CHAIN_RENDER_LIMIT`. */
   chains: CorrelationChain[];
-  /** Rows before the cap. */
+  /** Rows before the 100-row render cap. This is NOT about edges that were never loaded. */
   totalCount: number;
+  /** Rows dropped by the 100-row render cap only. See `unloadedEdgeCount` for unloaded edges. */
   omittedCount: number;
+  /**
+   * False when the loaded edges are fewer than `totalTimelineEdges`: the chains above were built
+   * from a bounded preview and more may exist. Drives the spec 8.11 "paged and bounded" copy.
+   */
+  edgeInputComplete: boolean;
+  /** Timeline edges the session holds that were not loaded into this model (never negative). */
+  unloadedEdgeCount: number;
   /** Rows per strength before the cap, after collapsing. */
   counts: Record<CorrelationChainStrength, number>;
   /**
@@ -316,8 +338,10 @@ function messageHead(message: string): string {
       .split(/\r?\n/)
       .map((part) => part.trim())
       .find((part) => part !== "") ?? "";
-  return line.length > TITLE_HEAD_LIMIT
-    ? `${line.slice(0, TITLE_HEAD_LIMIT - 3)}...`
+  // Count code points, not UTF-16 units, so a cut never lands inside a surrogate pair.
+  const points = Array.from(line);
+  return points.length > TITLE_HEAD_LIMIT
+    ? `${points.slice(0, TITLE_HEAD_LIMIT - 3).join("")}...`
     : line;
 }
 
@@ -361,13 +385,16 @@ function derivedTitle(
 }
 
 /**
- * Classes that describe the absence or contradiction of a conclusion, not a conclusion. A chain
- * title is a claim about the chain, so these never lend their title.
+ * The finding classes that state a conclusion, and so may lend their title to a chain. This is an
+ * allow-list over `DiagnosisFindingClass` (`types.ts`): `coverageGap`, `contradictoryEvidence` and
+ * `unknown` describe the absence or contradiction of a conclusion and are left out, as is any
+ * class added later, so a new class fails closed until someone lists it here.
  */
-const NON_CONCLUSION_CLASSES: ReadonlySet<DiagnosisFindingClass> = new Set([
-  "coverageGap",
-  "contradictoryEvidence",
-  "unknown",
+const TITLE_CONCLUSION_CLASSES: ReadonlySet<string> = new Set<DiagnosisFindingClass>([
+  "confirmedFailure",
+  "likelyContributor",
+  "symptom",
+  "recovered",
 ]);
 
 /**
@@ -375,9 +402,10 @@ const NON_CONCLUSION_CLASSES: ReadonlySet<DiagnosisFindingClass> = new Set([
  *
  * Covers ALL members, resolved or not: a finding must account for the whole chain.
  *
- * Only conclusion classes may title a chain: never `coverageGap`, `contradictoryEvidence` or
- * `unknown`. Callers pass `originIds: []` today, so this never fires in the app. When the owner
- * restores the finding join (decision B on #838), keep this restriction: a finding that says "we
+ * Only the allow-listed conclusion classes may title a chain: never `coverageGap`,
+ * `contradictoryEvidence`, `unknown`, an unset class or a class this build does not know.
+ * Callers pass `originIds: []` today, so this never fires in the app. When the owner restores
+ * the finding join (decision B on #838), keep this restriction: a finding that says "we
  * could not see" or "the evidence conflicts" must not be shown as the name of a correlated chain.
  */
 function coveringFindingTitle(
@@ -388,12 +416,7 @@ function coveringFindingTitle(
     finding.findingClass === "confirmedFailure" ? 0 : 1;
   const covering = findings
     .filter((finding) => {
-      if (
-        finding.findingClass !== undefined &&
-        NON_CONCLUSION_CLASSES.has(finding.findingClass)
-      ) {
-        return false;
-      }
+      if (!TITLE_CONCLUSION_CLASSES.has(finding.findingClass)) return false;
       const covered = new Set(finding.originIds);
       return allMemberIds.every((id) => covered.has(id));
     })
@@ -595,6 +618,11 @@ export function buildCorrelationChains(
     chains,
     totalCount: rows.length,
     omittedCount: rows.length - chains.length,
+    edgeInputComplete: input.timelineEdges.length >= input.totalTimelineEdges,
+    unloadedEdgeCount: Math.max(
+      0,
+      input.totalTimelineEdges - input.timelineEdges.length,
+    ),
     counts,
     ignoredRelationCount,
   };

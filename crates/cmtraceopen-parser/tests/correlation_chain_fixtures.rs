@@ -230,6 +230,23 @@ fn build_scenarios() -> Map<String, Value> {
     s
 }
 
+/// The full fixture document. The generator and the drift guard both call this, so they cannot
+/// diverge. `parser_commit` is the only run-dependent field.
+fn fixture_document(parser_commit: &str) -> Value {
+    json!({
+        "provenance": {
+            "generator": "crates/cmtraceopen-parser/tests/correlation_chain_fixtures.rs",
+            "api": "cmtraceopen_parser::unified_timeline::correlate_observations",
+            "parserCommit": parser_commit,
+            "regenerate": format!(
+                "{OUTPUT_ENV}=$PWD/src/workspaces/event-log/__fixtures__/correlation-edges.json {COMMIT_ENV}=$(git rev-parse --short HEAD) cargo test --locked -p cmtraceopen-parser --test correlation_chain_fixtures -- --ignored --nocapture"
+            ),
+            "note": "Edges are the real backend output, serialized exactly as the frontend decodes TimelineCorrelationEdge. Do not edit by hand."
+        },
+        "scenarios": build_scenarios(),
+    })
+}
+
 #[test]
 #[ignore = "fixture generator; set CMTRACE_CORRELATION_FIXTURES_OUTPUT and run with --ignored"]
 fn generate_correlation_chain_fixtures() {
@@ -238,26 +255,43 @@ fn generate_correlation_chain_fixtures() {
         return;
     };
     let commit = std::env::var(COMMIT_ENV).unwrap_or_else(|_| "unknown".to_string());
-    let document = json!({
-        "provenance": {
-            "generator": "crates/cmtraceopen-parser/tests/correlation_chain_fixtures.rs",
-            "api": "cmtraceopen_parser::unified_timeline::correlate_observations",
-            "parserCommit": commit,
-            "regenerate": format!(
-                "{OUTPUT_ENV}=$PWD/src/workspaces/event-log/__fixtures__/correlation-edges.json {COMMIT_ENV}=$(git rev-parse --short HEAD) cargo test --locked -p cmtraceopen-parser --test correlation_chain_fixtures -- --ignored --nocapture"
-            ),
-            "note": "Edges are the real backend output, serialized exactly as the frontend decodes TimelineCorrelationEdge. Do not edit by hand."
-        },
-        "scenarios": build_scenarios(),
-    });
+    let document = fixture_document(&commit);
     let mut text = serde_json::to_string_pretty(&document).expect("fixture serializes");
     text.push('\n');
     std::fs::write(&path, text).expect("fixture file is writable");
     println!("wrote correlation fixtures to {path}");
 }
 
-/// The always-on guard: the shapes the frontend tests lean on must keep their backend behavior, so
-/// a parser change that alters them fails here before it silently stales the committed JSON.
+/// The always-on drift guard: the full document the generator would write must equal the
+/// committed `correlation-edges.json`. Only `provenance.parserCommit` is ignored, because it names
+/// the commit the file was generated at and so differs on every run. Everything else (every
+/// scenario's edges, keys, coverage gaps, candidate ids and evidence, and the rest of the
+/// provenance) is compared. A parser change that alters any scenario fails here until the JSON is
+/// regenerated; regenerating is how the frontend tests learn about the new behavior.
+#[test]
+fn committed_fixture_matches_the_backend() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../src/workspaces/event-log/__fixtures__/correlation-edges.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!("cannot read committed fixture {}: {error}", path.display())
+    });
+    let committed: Value = serde_json::from_str(&text).expect("committed fixture is valid JSON");
+    let committed_commit = committed["provenance"]["parserCommit"]
+        .as_str()
+        .expect("committed fixture records provenance.parserCommit");
+    let expected = fixture_document(committed_commit);
+    assert!(
+        committed == expected,
+        "src/workspaces/event-log/__fixtures__/correlation-edges.json is stale: parser behavior \
+         changed. Regenerate it (command in the file header) and review the diff.\n\
+         expected:\n{}\ncommitted:\n{}",
+        serde_json::to_string_pretty(&expected).expect("serializes"),
+        serde_json::to_string_pretty(&committed).expect("serializes"),
+    );
+}
+
+/// The shapes the frontend tests lean on, stated explicitly so a failure of the whole-document
+/// guard above is easy to read against the intent.
 #[test]
 fn scenario_shapes_match_the_documented_backend_behavior() {
     let scenarios = build_scenarios();

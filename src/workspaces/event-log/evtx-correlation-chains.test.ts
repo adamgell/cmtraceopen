@@ -7,6 +7,7 @@ import {
   type CorrelationChainInput,
   type CorrelationChainModel,
 } from "./evtx-correlation-chains";
+import type { DiagnosisFindingClass } from "./types";
 import type {
   TimelineCorrelationEdge,
   TimelineCorrelationStrength,
@@ -179,12 +180,20 @@ function records(chain: CorrelationChain): number[] {
     .sort((a, b) => a - b);
 }
 
+function hasLoneSurrogate(value: string): boolean {
+  return /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(
+    value,
+  );
+}
+
 function build(input: Partial<CorrelationChainInput>): CorrelationChainModel {
+  const timelineEdges = input.timelineEdges ?? [];
   return buildCorrelationChains({
     items: [],
-    timelineEdges: [],
+    totalTimelineEdges: timelineEdges.length,
     findings: [],
     ...input,
+    timelineEdges,
   });
 }
 
@@ -639,7 +648,7 @@ describe("partial members", () => {
   it("gives a null title when every member is unresolved, even if a finding covers the chain", () => {
     const model = build({
       timelineEdges: [tEdge("e1", "a", "b", "exact")],
-      findings: [{ findingId: "f1", title: "Covers it", originIds: ["a", "b"] }],
+      findings: [{ findingId: "f1", title: "Covers it", originIds: ["a", "b"], findingClass: "confirmedFailure" }],
     });
     expect(model.chains[0]?.memberIds).toEqual([]);
     expect(model.chains[0]?.title).toBeNull();
@@ -803,6 +812,43 @@ describe("render cap", () => {
   });
 });
 
+describe("edge input completeness", () => {
+  const edges = [
+    tEdge("e1", "a", "b", "exact"),
+    tEdge("e2", "c", "d", "exact"),
+  ];
+
+  it("is complete when every timeline edge was loaded", () => {
+    const model = build({ timelineEdges: edges, totalTimelineEdges: 2 });
+    expect(model.edgeInputComplete).toBe(true);
+    expect(model.unloadedEdgeCount).toBe(0);
+  });
+
+  it("reports the edges the bounded preview did not carry", () => {
+    const model = build({ timelineEdges: edges, totalTimelineEdges: 5000 });
+    expect(model.edgeInputComplete).toBe(false);
+    expect(model.unloadedEdgeCount).toBe(4998);
+  });
+
+  it("keeps the render-cap counts independent of edge completeness", () => {
+    const model = build({ timelineEdges: edges, totalTimelineEdges: 5000 });
+    expect(model.totalCount).toBe(2);
+    expect(model.omittedCount).toBe(0);
+  });
+
+  it("never reports a negative count when the total is below the loaded edges", () => {
+    const model = build({ timelineEdges: edges, totalTimelineEdges: 1 });
+    expect(model.edgeInputComplete).toBe(true);
+    expect(model.unloadedEdgeCount).toBe(0);
+  });
+
+  it("requires the total edge count", () => {
+    // @ts-expect-error totalTimelineEdges is required, so a preview cannot pass for the whole set
+    const input: CorrelationChainInput = { items: [], timelineEdges: [], findings: [] };
+    expect(typeof input).toBe("object");
+  });
+});
+
 describe("D19 titles", () => {
   it("uses eventId and message head of the highest-severity member", () => {
     const model = build({
@@ -846,7 +892,7 @@ describe("D19 titles", () => {
       items,
       timelineEdges,
       findings: [
-        { findingId: "f1", title: "Enrollment failed", originIds: ["a", "b", "z"] },
+        { findingId: "f1", title: "Enrollment failed", originIds: ["a", "b", "z"], findingClass: "confirmedFailure" },
       ],
     });
     expect(covering.chains[0]?.title).toBe("Enrollment failed");
@@ -854,7 +900,7 @@ describe("D19 titles", () => {
     const partial = build({
       items,
       timelineEdges,
-      findings: [{ findingId: "f1", title: "Enrollment failed", originIds: ["a"] }],
+      findings: [{ findingId: "f1", title: "Enrollment failed", originIds: ["a"], findingClass: "confirmedFailure" }],
     });
     expect(partial.chains[0]?.title).toBe("7 · boom");
   });
@@ -863,7 +909,7 @@ describe("D19 titles", () => {
     const model = build({
       items: [eventItem("a", 1000, "error", "boom", 7)],
       timelineEdges: [tEdge("e1", "a", "z", "exact")],
-      findings: [{ findingId: "f1", title: "Finding", originIds: ["a"] }],
+      findings: [{ findingId: "f1", title: "Finding", originIds: ["a"], findingClass: "confirmedFailure" }],
     });
     expect(model.chains[0]?.title).toBe("7 · boom");
   });
@@ -873,8 +919,8 @@ describe("D19 titles", () => {
       items: [eventItem("a", 1000)],
       timelineEdges: [tEdge("e1", "a", "b", "exact")],
       findings: [
-        { findingId: "f2", title: "Second", originIds: ["a", "b"] },
-        { findingId: "f1", title: "First", originIds: ["a", "b"] },
+        { findingId: "f2", title: "Second", originIds: ["a", "b"], findingClass: "symptom" },
+        { findingId: "f1", title: "First", originIds: ["a", "b"], findingClass: "symptom" },
       ],
     });
     expect(model.chains[0]?.title).toBe("First");
@@ -888,7 +934,6 @@ describe("D19 titles", () => {
         { findingId: "f1", title: "Symptom", originIds: ["a", "b"], findingClass: "symptom" },
         { findingId: "f9", title: "Confirmed late", originIds: ["a", "b"], findingClass: "confirmedFailure" },
         { findingId: "f5", title: "Confirmed early", originIds: ["a", "b"], findingClass: "confirmedFailure" },
-        { findingId: "f0", title: "Unclassed", originIds: ["a", "b"] },
       ],
     });
     expect(model.chains[0]?.title).toBe("Confirmed early");
@@ -898,7 +943,7 @@ describe("D19 titles", () => {
     const model = build({
       items: [eventItem("a", 1000, "error", "boom", 7)],
       timelineEdges: ambiguousGroup("g", ["a", "b"]),
-      findings: [{ findingId: "f1", title: "Finding", originIds: ["a", "b"] }],
+      findings: [{ findingId: "f1", title: "Finding", originIds: ["a", "b"], findingClass: "confirmedFailure" }],
     });
     expect(model.chains[0]?.title).toBe("7 · boom");
   });
@@ -929,6 +974,85 @@ describe("D19 titles", () => {
       ],
     });
     expect(withConclusion.chains[0]?.title).toBe("Conclusion");
+  });
+
+  it("only the conclusion classes may title a chain (allow-list, fails closed)", () => {
+    const items = [eventItem("a", 1000, "error", "boom", 7), eventItem("b", 2000)];
+    const timelineEdges = [tEdge("e1", "a", "b", "exact")];
+    for (const findingClass of [
+      "confirmedFailure",
+      "likelyContributor",
+      "symptom",
+      "recovered",
+    ] as const) {
+      const model = build({
+        items,
+        timelineEdges,
+        findings: [
+          { findingId: "f1", title: "A conclusion", originIds: ["a", "b"], findingClass },
+        ],
+      });
+      expect(model.chains[0]?.title).toBe("A conclusion");
+    }
+  });
+
+  it("does not title a chain with a class the model does not know", () => {
+    const model = build({
+      items: [eventItem("a", 1000, "error", "boom", 7), eventItem("b", 2000)],
+      timelineEdges: [tEdge("e1", "a", "b", "exact")],
+      findings: [
+        {
+          findingId: "f1",
+          title: "From a future class",
+          originIds: ["a", "b"],
+          findingClass: "someFutureClass" as unknown as DiagnosisFindingClass,
+        },
+        {
+          findingId: "f2",
+          title: "Class dropped by a caller",
+          originIds: ["a", "b"],
+          findingClass: undefined as unknown as DiagnosisFindingClass,
+        },
+      ],
+    });
+    expect(model.chains[0]?.title).toBe("7 · boom");
+  });
+
+  it("requires a finding class", () => {
+    const input: CorrelationChainInput = {
+      items: [],
+      timelineEdges: [],
+      totalTimelineEdges: 0,
+      findings: [
+        // @ts-expect-error findingClass is required, so dropping it is a type error
+        { findingId: "f1", title: "No class", originIds: [] },
+      ],
+    };
+    expect(buildCorrelationChains(input).totalCount).toBe(0);
+  });
+
+  it("truncates on code points, never inside a surrogate pair", () => {
+    for (const prefix of [76, 77, 78, 79]) {
+      const message = `${"x".repeat(prefix)}\u{1F600}${"y".repeat(40)}`;
+      const model = build({
+        items: [eventItem("a", 1000, "error", message, 5)],
+        timelineEdges: [tEdge("e1", "a", "b", "exact")],
+      });
+      const title = model.chains[0]?.title ?? "";
+      expect(hasLoneSurrogate(title)).toBe(false);
+      expect(title.endsWith("...")).toBe(true);
+      const head = title.slice("5 · ".length);
+      expect(Array.from(head)).toHaveLength(80);
+    }
+  });
+
+  it("keeps a message of exactly the head limit in code points untruncated", () => {
+    const message = "\u{1F600}".repeat(80);
+    const model = build({
+      items: [eventItem("a", 1000, "error", message, 5)],
+      timelineEdges: [tEdge("e1", "a", "b", "exact")],
+    });
+    expect(model.chains[0]?.title).toBe(`5 · ${message}`);
   });
 
   it("truncates a long message head", () => {
@@ -966,6 +1090,7 @@ describe("input contract", () => {
     const input: CorrelationChainInput = {
       items: [],
       timelineEdges: [],
+      totalTimelineEdges: 0,
       findings: [],
       // @ts-expect-error diagnosis edges are a redacted projection and are not an input
       diagnosisEdges: [],
