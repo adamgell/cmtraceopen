@@ -223,13 +223,14 @@ The light-theme hexes below are informative only. They were checked against `src
 The level rules below are stated once and apply to all five levels. Components read the token map fields named here, never a palette or a phrase such as "the level color".
 
 - **Level marks (bars, dots):** `levels.<L>.barColor` / `dotColor`, which are `severityPalette.eventLog.<level>`.
-- **Level icons:** the grid icon is `levels.<L>.iconColor` (the mark, black or white below 3:1 on the row tint). Rail and §8.8 group-row icons are `levels.<L>.railIconColor` (the mark). The selected row uses `levels.<L>.selectedIconColor` (`colorPaletteBlueForeground2`).
+- **Level icons:** the grid icon is `levels.<L>.iconColor` (the mark, black or white below 3:1 on the row tint). Rail icons (the §8.13 Details header) and §8.8 group-row icons are `levels.<L>.railIconColor` (the mark). The selected row uses `levels.<L>.selectedIconColor` (`colorPaletteBlueForeground2`).
+- **Marks on a non-neutral background:** a dot or swatch on a row tint, the selection background or a pressed toggle draws a 1 px outline in `markOutline(<level> | "selected" | "pressed")`. A sparkline on a selected row uses `selectedDataColor`.
 - **Level text, all five levels:** `levels.<L>.textColor`, which is `severityPalette.eventLog.text.*`. Information and Verbose text are neutral grays, Verbose the dimmer.
 - **Text on a level's own row tint:** keeps D3's pairing, `severityPalette.<kind>.text` on `severityPalette.<kind>.background`. Classic Error rows stay yellow on red, because their red identity is the background.
 - **Error text:** Critical and Error share the red family. In the light and classic themes the Error text is a true red; a red-orange Error is accepted in dark themes only.
 
-Distance floors, in CIEDE2000:
-- Across families (level marks, level text, channels, live, single series, selection, brand): 20 when either color is a level mark, otherwise 15. Critical and Error pairs, mark or text, are 15. Exempt: a level's text and its own mark; Information and Verbose across mark and text; the theme-owned selection, brand and single-series pairs.
+Distance floors, in CIEDE2000. Critical and Error pairs, mark or text, within or across families, are 15; this governs both bullets below.
+- Across families (level marks, level text, channels, live, single series, selection, brand): 20 when either color is a level mark, otherwise 15. Exempt: a level's text and its own mark; Information and Verbose across mark and text; the theme-owned selection, brand and single-series pairs.
 - Within families: level marks are 20 apart, with the Verbose mark at least 10 from the Information mark. Critical, Error and Warning text are 20 apart. Channels are 15 apart.
 - The live label and dot follow the cross-family rule: 20 from level marks and 15 from other families.
 
@@ -304,7 +305,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
 - **Visual:**
   - pill, radius 8 (the design-system maximum, D21), padding `3px 10px`, *f* − 2, 600 weight;
   - 7 px status dot;
-  - live: a v1 token owned by Phase 1's token map (`liveSource`): bg `colorPaletteGreenBackground1`, border `colorPaletteGreenBackground3` as decoration, text and dot the per-theme token `severityPalette.eventLog.live` (each theme's success foreground by default, with solarized-dark differing so the pill stays clear of the Warning mark); text 4.5:1 and dot 3:1 on the pill background;
+  - live: a v1 token owned by Phase 1's token map (`liveSource`): bg `colorPaletteGreenBackground1`, border `colorPaletteGreenBackground3` as decoration, text and dot `liveSource.foreground` (the per-theme token `severityPalette.eventLog.live` (each theme's success foreground by default, with solarized-dark differing so the pill stays clear of the Warning mark)); text 4.5:1 and dot 3:1 on the pill background;
   - files: neutral bg3 / stroke1 / fg2, with the copy "Files · {n} sources".
 - **Data:**
   - `sourceMode`, `tailMode`, `remoteMachine`;
@@ -356,11 +357,11 @@ Each subsection gives the mockup reference, the structure, the data source and t
     - `source:` (text-log source label, matching items in the analysis session);
     - `data.<Name>:` (an EventData field).
   - **Operators:** terms are ANDed. `OR` (upper case) between terms, `-` negation, quoted values, and bare words are free text.
-  - **Errors:** a malformed term is shown inline under the input in `severityPalette.eventLog.text.warning` (the token map's `levels.Warning.textColor`), and the query is not applied.
+  - **Errors:** a malformed term is shown inline under the input in `levels.Warning.textColor` (`severityPalette.eventLog.text.warning`), and the query is not applied.
   - **Compatibility:** older builds' `sanitizeQuickFilter` falls back to the default mode for the unknown mode value **[Verified fallback behavior]**, so saved filters remain loadable.
 - **Level toggles:**
   - `role="group"`, `aria-label="Level"`, 26 px buttons, padding `0 9px`, *f* − 2;
-  - each button: an 8 px dot in `levels.<L>.dotColor`, the label (Critical, Error, Warning, Info, Verbose), then the count (numeric font, fg3, 400 weight);
+  - each button: an 8 px dot in `levels.<L>.dotColor` (outlined per the marks rule when the toggle is pressed), the label (Critical, Error, Warning, Info, Verbose), then the count (numeric font, fg3, 400 weight);
   - pressed style per §6.2;
   - drive `toggleFilterLevel`;
   - counts come from the loaded `records` before level filtering, computed by `countByLevel` in `evtx-filter.ts` *(new function)*.
@@ -419,9 +420,9 @@ Each subsection gives the mockup reference, the structure, the data source and t
 
   Group headers render as in `Main`: `ChevronDown12Regular` / `ChevronRight12Regular`, then the group name (*f* − 2, 600 weight, fg2), collapsible.
 - **Row** (padding `7px 12px`, gap 3, bottom border `colorNeutralStroke3`):
-  1. A 10 px swatch (radius 2, channel color §6.3), the name (ellipsis), and the total right-aligned (numeric, *f* − 3).
-  2. A sparkline, 18 px tall, 24 bins, indented 16 px. Bars use the channel color; empty bins draw as 1 px `colorNeutralStroke2`.
-  3. "{e} err" (`severityPalette.eventLog.text.error`), "{w} warn" (`severityPalette.eventLog.text.warning`), and a status: "· live", "not read", "needs elevation", and so on.
+  1. A 10 px swatch (radius 2, `channelColor(i)`; outlined per the marks rule on the selected row), the name (ellipsis), and the total right-aligned (numeric, *f* − 3).
+  2. A sparkline, 18 px tall, 24 bins, indented 16 px. Bars use `channelColor(i)` (`selectedDataColor` on the selected row); empty bins draw as 1 px `colorNeutralStroke2`.
+  3. "{e} err" (`levels.Error.textColor`), "{w} warn" (`levels.Warning.textColor`), and a status: "· live", "not read", "needs elevation", and so on.
 - **Selection:** the existing checkbox and channel selection behavior stays. The selected row uses the selection triplet.
 - **Unavailable channels:** a channel with a coverage gap of kind `accessDenied` renders the name in fg3 with "needs elevation", total "—" and a flat sparkline. `EvtxCoverageGapKind` includes `accessDenied`, `unsupported`, `missing`, `empty` and others **[Verified]**.
 - **"ALSO CORRELATING" section:** lists the text-log sources in the analysis session with line counts, from `EventLogAnalysisSessionStatus.logItems` and the source labels. It ends with the "Add log source…" link (§8.19).
@@ -454,7 +455,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
   - Level cell: centered icon (§7.3) in `levels.<L>.iconColor`, or `selectedIconColor` on the selected row;
   - Time: numeric font at *f* − 1, fg2, `white-space: nowrap`;
   - ID: numeric font, 700 weight;
-  - Channel: a 7 px swatch (radius 2) plus the short name, ellipsis, with the full name in a tooltip;
+  - Channel: a 7 px swatch (radius 2, `channelColor(i)`; outlined per the marks rule on tinted and selected rows) plus the short name, ellipsis, with the full name in a tooltip;
   - Provider: fg2, ellipsis;
   - Message: mono, fg1, ellipsis;
   - Links: `Link12Regular` plus the count, in `colorBrandForegroundLink`, 600 weight, *f* − 3. Empty when the record has no Exact or Candidate edge.
@@ -529,15 +530,15 @@ Each subsection gives the mockup reference, the structure, the data source and t
   - caption: title *f* − 1 600 weight, then a qualifier at *f* − 3 fg3.
 
   1. **Events by channel:**
-     - rows of label (150 px) · bar (14 px, channel color, radius `0 4px 4px 0`) · value (40 px, numeric);
+     - rows of label (150 px) · bar (14 px, `channelColor(i)`, radius `0 4px 4px 0`) · value (40 px, numeric);
      - tooltip "{channel}: {n} events, {e} errors, {w} warnings".
   2. **Top event IDs:**
-     - rows of ID (44 px, numeric bold) · provider (170 px) · bar (12 px, `mergeColors[0]`) · count (34 px);
+     - rows of ID (44 px, numeric bold) · provider (170 px) · bar (12 px, `singleSeries`) · count (34 px);
      - top 9;
      - the caption qualifier lists the IDs excluded by active quick-filter hide rules, for example "excluding 7036 / 16384". The list is not hard-coded.
   3. **Activity by hour and channel:**
      - a heat map: 120 px label column plus 24 cells, gap 2, 18 px tall, radius 2;
-     - colors per D11;
+     - colors from `heatSteps` (D11);
      - tooltip "{channel} · {HH}:00 · {n} events".
   4. **Errors and warnings per hour:**
      - stacked columns, 120 px tall, Error on the bottom and Warning on top;
@@ -578,7 +579,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
 - **Overview strip** (from `Focus`):
   - placed above the lane plot, 48 px tall, border stroke2, radius 6;
   - caption "Overview" with the hint "drag the band to zoom" (*f* − 3, fg3);
-  - shows every chain's span across the full session window as a thin bar in its strength color, with the selected chain at full opacity and the others at 40%;
+  - shows every chain's span across the full session window as a thin bar in `strengths.<s>.border` (the solid hue of the strength; `background` is a pale fill and `foreground` is label text), with the selected chain at full opacity and the others at 40%;
   - a draggable, resizable **zoom band** (fill `colorNeutralBackground1Selected` at 60% opacity, 2 px side handles `colorNeutralForeground3`) sets the lane plot's window. By default the band equals the chain span padded by 25%;
   - keyboard: ←/→ move the band, Shift+←/→ resize it, Home resets it;
   - the axis shows 5 ticks (numeric, *f* − 4).
@@ -695,7 +696,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
    - row 1: strength badge, spacer, and the span (numeric, *f* − 3, fg3);
    - title (*f*, 600 weight, D19);
    - `key: {kind} {value}` (mono, *f* − 3, fg2);
-   - steps (an ordered list of up to 6): a level dot (8 px, `levels.<L>.dotColor`), the time (numeric, *f* − 3, 52 px), a kind chip (`EVT` or `LOG`, mono *f* − 4, 700 weight; `EVT` on the blue triplet background, `LOG` on bg4), then the message. Further steps collapse into "+{n} more";
+   - steps (an ordered list of up to 6): a level dot (8 px, `levels.<L>.dotColor`, outlined per the marks rule on the selected card), the time (numeric, *f* − 3, 52 px), a kind chip (`EVT` or `LOG`, mono *f* − 4, 700 weight; `EVT` on the blue triplet background, `LOG` on bg4), then the message. Further steps collapse into "+{n} more";
    - actions: "Show in table" (applies the record-scope chip and switches to Table) and "Open in correlation view".
 3. **Ambiguous and Coverage blocked** items follow as compact rows (badge, title, span), with no steps.
 4. **"Nearby, not linked ({n})"**: a collapsed disclosure listing time-adjacent items with the reason "time only, not linked". It has no strength badge and no connector vocabulary (D7).
@@ -705,7 +706,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
 **Details tab** (the selected record)
 
 1. **Header:**
-   - the level icon at 16 px (`levels.<L>.iconColor`, or `selectedIconColor` when the row is selected);
+   - the level icon at 16 px (`RailIcon` in `levels.<L>.railIconColor`; the header sits on the rail);
    - "Event {eventId}" (*f* + 1, 600 weight);
    - the level word (*f* − 2, 600 weight, `levels.<L>.textColor`);
    - spacer;
@@ -1088,10 +1089,10 @@ Event 1001 also exists under Windows Error Reporting in the Application log (APP
 | KPI tile: Bugchecks | Count of WER-SystemErrorReporting 1001 | "no BugCheck" copy when 0 |
 | KPI tile: Failed resumes | 41 whose preceding power event is a sleep (42) with no resume (Power-Troubleshooter 1) | **[Unverified heuristic]**. Shipped only after Windows-lab confirmation; otherwise the tile is omitted. |
 | Boot sessions bar (running, sleep, crash ticks, unclean markers) | As above. Crash ticks come from 1000; unclean markers use `Flash16Regular` | Intent only, designed in the v2 phases (#855, owner decision 2026-10-09; matches §6.3): running a cool blue or indigo, sleep a muted violet (see the #855 hue bands) |
-| Session cards (span, end state, uptime, crashes, errors, sleep/resume) | Session model in `evtx-boot-sessions.ts` | Intent only, designed in #855 (owner decision 2026-10-09): End-state badge: Running (a cool blue or indigo per the #855 hue bands; Succeeded green), Clean · {reason} (neutral), Unclean · Kernel-Power 41 (error palette) |
+| Session cards (span, end state, uptime, crashes, errors, sleep/resume) | Session model in `evtx-boot-sessions.ts` | Intent only, designed in #855 (owner decision 2026-10-09): End-state badge: Running (a cool blue or indigo per the #855 hue bands; Succeeded green), Clean · {reason} (neutral), Unclean · Kernel-Power 41 (color owned by #855) |
 | "Last events before the unclean shutdown" list | The N records before the session end, plus an explicit "No clean-shutdown events (1074 / 6006) before power loss" row when none exist | **Context only, with no causal wording** (D8) |
 | Top crashing apps (count, module, exception code) | Event 1000 data fields: faulting application, module and exception code | Event-data field names are confirmed against real 1000 records in Phase S2 |
-| App crashes per day | Event 1000 bucketed by local day | Single-series bars use `mergeColors[0]` |
+| App crashes per day | Event 1000 bucketed by local day | Single-series bars use `singleSeries` |
 
 **Autopilot / ESP (S4), board `WB-Autopilot`**
 
@@ -1275,7 +1276,7 @@ system for every workspace.
 Spec: §6, §7.3
 
 ### Scope (5 files)
-- `evtx-visual-tokens.ts` (new): level → {barColor, dotColor, iconColor, textColor, icon, rowBackground, rowText};
+- `evtx-visual-tokens.ts` (new): level → {barColor, dotColor, iconColor, textColor, icon, rowBackground, rowText}; `markOutline(context)`; `selectedDataColor`;
   strength → badge triplet; selection triplet (Q-1: colorPaletteBlueBackground2 / BorderActive / Foreground2);
   channel colors as per-theme semantic tokens (Q-17, D22); heat-map steps (Q-3 interim color-mix).
   live source pill triplet (`liveSource`, §8.1). v2 scenario state colors are out of scope (#855).
@@ -1454,7 +1455,7 @@ Spec: §4 (D1, D3, D4, D13), §8.7
 - `EvtxTimeline.tsx`: header styling; row height from getLogListMetrics only.
 
 ### Acceptance
-- Error and Critical rows tinted row-wide with severityPalette.error; Warning with severityPalette.warning.
+- Error and Critical rows tinted row-wide with `levels.<L>.rowBackground` / `rowText` (`severityPalette.error`); Warning likewise (`severityPalette.warning`).
 - Level communicated by icon + accessible name, not color alone.
 - tsc / tests / diff-check / screenshots pass.
 ```
