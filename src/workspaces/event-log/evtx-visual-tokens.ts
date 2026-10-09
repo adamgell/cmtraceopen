@@ -30,8 +30,8 @@ import {
   type FluentIcon,
 } from "@fluentui/react-icons";
 import { readableOn } from "../../lib/color-contrast";
-import type { LogSeverityPalette } from "../../lib/constants";
 import { getThemeById } from "../../lib/themes";
+import type { CMTraceTheme } from "../../lib/themes/types";
 import { useUiStore } from "../../stores/ui-store";
 import type { DiagnosisCorrelationStatus, EvtxLevel } from "./types";
 
@@ -88,14 +88,25 @@ export interface EvtxVisualTokens {
   /** Color for the channel at `index` in channel display order. */
   channelColor: (index: number) => string;
   /**
-   * 1px outline color for a channel swatch drawn on a level's row tint (grid
-   * Channel cell, 8.7) or on the selection background (selected pane row,
-   * 8.6). Swatch fills are not guaranteed 3:1 on every tint, so grid and
-   * selected-row swatches must draw this border. A level context returns that
-   * level's `iconColor`; "selected" returns `selectedIconColor`.
+   * 1px outline for any dot, swatch or similar small mark drawn on a
+   * non-neutral background. The context names that background: a level (its
+   * row tint, 8.7) returns the level's `iconColor`; "selected" (the selection
+   * background: selected grid row, channel pane row, chain row or card)
+   * returns `selectedIconColor`; "pressed" (`colorNeutralBackground1Selected`,
+   * pressed level toggles in 8.3 and 6.2) returns the active-toggle text token
+   * `colorBrandForeground1`, resolved per theme: high-contrast inverts
+   * polarity on pressed toggles (white on cyan), so there the black or white
+   * fallback is returned instead of the brand foreground. Fills are not guaranteed 3:1 on those
+   * backgrounds, so such marks must draw this outline.
    */
-  channelSwatchBorder: (context: EvtxLevel | "selected") => string;
-  /** Heat-map fills, lightest first (Q-3 interim, no ramp token yet). */
+  markOutline: (context: EvtxLevel | "selected" | "pressed") => string;
+  /**
+   * Thin data lines (sparklines) on a selected row cannot carry an outline;
+   * they use the selection foreground, 3:1 or better on the selection
+   * background (8.6 selected channel rows).
+   */
+  selectedDataColor: string;
+  /** Heat-map fills, faintest first (Q-3 interim, no ramp token yet). */
   heatSteps: readonly string[];
   /** Bars of single-series charts (top IDs, crashes per day). */
   singleSeries: string;
@@ -111,9 +122,22 @@ export interface EvtxVisualTokens {
 
 const HEAT_STEP_PERCENTAGES = [15, 30, 45, 60, 75, 90] as const;
 
-export function buildEvtxVisualTokens(
-  palette: LogSeverityPalette,
-): EvtxVisualTokens {
+/**
+ * Resolves a Fluent token value (`var(--name)`) to its hex in this theme,
+ * else returns the value unchanged. Used only where a `readableOn` decision
+ * needs a concrete background.
+ */
+function resolveToken(value: string, theme: CMTraceTheme): string {
+  const match = /^var\(\s*--([\w-]+)\s*(?:,[^)]*)?\)$/.exec(value.trim());
+  if (!match) return value;
+  const resolved = (theme.fluentTheme as unknown as Record<string, string>)[
+    match[1]
+  ];
+  return typeof resolved === "string" ? resolved : value;
+}
+
+export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
+  const palette = theme.severityPalette;
   const { eventLog } = palette;
   const selection: EvtxColorTriplet = {
     background: tokens.colorPaletteBlueBackground2,
@@ -208,8 +232,15 @@ export function buildEvtxVisualTokens(
       ambiguous: {
         label: "Ambiguous",
         background: palette.warning.background,
-        foreground: palette.warning.text,
-        // Deviates from spec 6.4 (colorPaletteMarigoldBorder2): that token is
+        // Deviates from spec 6.3 (palette.warning.text label): in
+        // solarized-dark that pair is 4.05:1 on the badge, so the label falls
+        // back to black or white when it misses 4.5:1.
+        foreground: readableOn(
+          palette.warning.background,
+          palette.warning.text,
+          4.5,
+        ),
+        // Deviates from spec 6.3 (colorPaletteMarigoldBorder2): that token is
         // 2.16:1 on the light surface; the warning text color reaches 3:1.
         border: palette.warning.text,
         borderStyle: "solid",
@@ -233,7 +264,11 @@ export function buildEvtxVisualTokens(
         label: "Not linked",
         background: tokens.colorNeutralBackground3,
         foreground: tokens.colorNeutralForeground2,
-        border: tokens.colorNeutralForeground3,
+        // Deviates from spec 6.3 (colorNeutralForeground3): that token is
+        // 2.92:1 on the solarized-dark rail and 2.16 to 2.28:1 on the
+        // selection background; the accessible stroke reaches 3:1 on every
+        // surface the badge sits on. The dotted style still marks the state.
+        border: tokens.colorNeutralStrokeAccessible,
         borderStyle: "dotted",
       },
     },
@@ -247,8 +282,18 @@ export function buildEvtxVisualTokens(
       const count = eventLog.channels.length;
       return eventLog.channels[((index % count) + count) % count];
     },
-    channelSwatchBorder: (context) =>
-      context === "selected" ? selection.foreground : levels[context].iconColor,
+    markOutline: (context) => {
+      // Every level shares selectedIconColor (the selection foreground).
+      if (context === "selected") return selection.foreground;
+      if (context === "pressed") {
+        return readableOn(
+          resolveToken(tokens.colorNeutralBackground1Selected, theme),
+          resolveToken(tokens.colorBrandForeground1, theme),
+        );
+      }
+      return levels[context].iconColor;
+    },
+    selectedDataColor: selection.foreground,
     heatSteps: HEAT_STEP_PERCENTAGES.map(
       (percent) =>
         `color-mix(in srgb, ${palette.mergeColors[0]} ${percent}%, ${tokens.colorNeutralBackground1})`,
@@ -256,19 +301,23 @@ export function buildEvtxVisualTokens(
     singleSeries: palette.mergeColors[0],
     scenario: {
       succeeded: {
-        // Deviates from the spec's colorPaletteGreenBackground3, which is
-        // 2.33 to 2.80:1 on the dark-family surfaces; the success status
-        // foreground reaches 3:1 in every theme.
-        bar: palette.status.success.foreground,
+        // Deviates from spec 6.3 (colorPaletteGreenBackground3), which is
+        // 2.33 to 2.80:1 on the dark-family surfaces; the green active
+        // border reaches 3:1 on every surface and stays 20 dE00 from every
+        // level mark in all themes (the success foreground was 18.1 from
+        // Warning in solarized-dark).
+        bar: tokens.colorPaletteGreenBorderActive,
         foreground: palette.status.success.foreground,
         background: tokens.colorPaletteGreenBackground1,
       },
       running: tokens.colorPaletteBlueBorderActive,
       retrying: tokens.colorPaletteBlueBorderActive,
-      // Deviates from the spec's colorPaletteBlueBackground2, a pale tint
-      // (1.2 to 1.6:1 on the surface); a neutral foreground reaches 3:1 and
-      // stays distinct from the blue running and retrying states.
-      sleep: tokens.colorNeutralForeground3,
+      // Deviates from spec 6.3 (colorPaletteBlueBackground2), a pale tint
+      // (1.2 to 1.6:1 on the surface). The lavender active border reaches
+      // 3:1 on every surface, stays 20 dE00 from every level mark (the
+      // neutral foreground it replaced equalled the Information mark) and is
+      // distinct from the blue running and retrying states.
+      sleep: tokens.colorPaletteLavenderBorderActive,
       notStarted: {
         stroke: tokens.colorNeutralStroke2,
         background: tokens.colorNeutralBackground3,
@@ -280,8 +329,5 @@ export function buildEvtxVisualTokens(
 /** Event Logs visual tokens for the active theme. */
 export function useEvtxVisualTokens(): EvtxVisualTokens {
   const themeId = useUiStore((s) => s.themeId);
-  return useMemo(
-    () => buildEvtxVisualTokens(getThemeById(themeId).severityPalette),
-    [themeId],
-  );
+  return useMemo(() => buildEvtxVisualTokens(getThemeById(themeId)), [themeId]);
 }

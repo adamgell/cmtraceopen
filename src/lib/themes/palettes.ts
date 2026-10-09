@@ -135,8 +135,8 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       critical: "#ff4d80",
       error: "#ff5a1f",
       warning: "#B58900",
-      information: "#839496",
-      verbose: "#839496",
+      information: "#adadad",
+      verbose: "#858585",
       channels: [
         "#a9acda", "#cc00ff", "#526cff", "#f5ccff", "#de85ff", "#9470c2",
       ],
