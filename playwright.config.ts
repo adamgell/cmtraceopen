@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
+  globalSetup: "./e2e/assert-own-dev-server.ts",
   // The screenshot harness has its own opt-in config (playwright.screenshots.config.ts)
   // and writes committed PNGs, so it must not run as part of the normal e2e suite.
   testIgnore: "**/screenshots/**",

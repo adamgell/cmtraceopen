@@ -15,6 +15,7 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./e2e/screenshots",
+  globalSetup: "./e2e/assert-own-dev-server.ts",
   fullyParallel: false,
   workers: 1,
   retries: 0,
