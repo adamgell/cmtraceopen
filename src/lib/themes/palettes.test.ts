@@ -72,6 +72,11 @@ const themeIds = (Object.keys(themeSeverityPalettes) as ThemeId[]).filter(
 // Every kind LogRow.tsx renders from the palette (rowStyle and the dot color).
 const rowKinds = ["error", "warning", "info", "success"] as const;
 
+// Every unordered pair of row kinds must be distinguishable at a glance.
+const rowKindPairs = rowKinds.flatMap((first, index) =>
+  rowKinds.slice(index + 1).map((second) => [first, second] as const),
+);
+
 describe("theme severity row palettes", () => {
   describe.each(themeIds)("%s", (themeId) => {
     const palette = themeSeverityPalettes[themeId];
@@ -81,13 +86,13 @@ describe("theme severity row palettes", () => {
       expect(contrastRatio(text, background)).toBeGreaterThanOrEqual(WCAG_AA_TEXT);
     });
 
-    it("error row is visually distinct from the info row", () => {
-      expect(palette.error).not.toEqual(palette.info);
-      const errorLook = Math.max(
-        deltaE76(palette.error.text, palette.info.text),
-        deltaE76(palette.error.background, palette.info.background),
+    it.each(rowKindPairs)("%s and %s rows are visually distinct", (first, second) => {
+      expect(palette[first]).not.toEqual(palette[second]);
+      const look = Math.max(
+        deltaE76(palette[first].text, palette[second].text),
+        deltaE76(palette[first].background, palette[second].background),
       );
-      expect(errorLook).toBeGreaterThanOrEqual(MIN_ROW_DELTA_E);
+      expect(look).toBeGreaterThanOrEqual(MIN_ROW_DELTA_E);
     });
 
     it("error row reads red (text or background in the red family)", () => {
