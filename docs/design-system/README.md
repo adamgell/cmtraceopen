@@ -5,7 +5,7 @@ This folder is the **canonical, human-readable design system** for CMTrace Open.
 ## Files
 
 - **`SKILL.md`** -- read this first when designing anything new. Decision tree, six rules, anti-patterns, and a map from "I need X" to "look in file Y."
-- **`tokens.css`** -- every color, type, spacing, radius, shadow, and motion token for all eight themes, exposed as CSS variables. Source-of-truth mirror of `src/lib/themes/*.ts`.
+- **`tokens.css`** -- every color, type, spacing, radius, shadow, and motion token for all seven themes, exposed as CSS variables. Source-of-truth mirror of `src/lib/themes/*.ts`.
 - **`OPEN-QUESTIONS.md`** -- unresolved design decisions that need human judgment. If you find a genuine new design need not covered by the system, document it here rather than inventing a token.
 
 ## How this relates to the codebase
@@ -33,8 +33,8 @@ When you change a theme in `src/lib/themes/`:
 2. Update `SKILL.md` if the change affects a rule, anti-pattern, or "where things live" pointer
 3. Sync the live design-system project (or ask "re-sync from the codebase")
 
-## Eight themes
+## Seven themes
 
-`light` · `dark` · `high-contrast` · `classic-cmtrace` · `solarized-dark` · `nord` · `dracula` · `hotdog-stand`
+`light` · `dark` · `high-contrast` · `classic-cmtrace` · `solarized-dark` · `nord` · `dracula`
 
 Switch in HTML with `<html data-cmt-theme="dark">`. Switch in the app via `useTheme()` from `src/lib/themes/`.
