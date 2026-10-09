@@ -43,8 +43,9 @@ tracking, and safe integration. Reverify all remote state before acting on it.
   merged behavior goes to `cmtrace-tech-writer`.
 - **Review independently.** Before any pull request is reported ready, dispatch
   `cmtrace-code-review` (Opus) on the exact head, validate its output in the same
-  three steps with `--role code-review` (accept only `{"ok":true,"role":"code-review"}`),
-  act on its findings, and post the
+  three steps with
+  `python3 .omp/skills/cmtraceopen-dev/scripts/validate_agent_output.py --role code-review --input FILE`
+  (accept only `{"ok":true,"role":"code-review"}`), act on its findings, and post the
   clean report on the pull request (`.Clairvoyance/staff/code-review-charter.md`).
   The author never reviews its own work.
 - If these agents are missing from a session, find out why before acting. Check
