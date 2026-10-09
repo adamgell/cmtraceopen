@@ -1,27 +1,32 @@
 /**
  * Correlation chain model for the Event Logs workbench (spec section 8.11, decision Q-4).
  *
- * Pure: no React, no stores, no IO. Turns correlation relations into the rows the Correlation
- * view and the rail show, and nothing more than the relations support.
+ * Pure: no React, no stores, no IO. Turns the unified timeline's correlation edges into the rows
+ * the Correlation view and the rail show, and nothing more than those edges support.
  *
  * Rules, all enforced here:
- * - A chain is a connected component over `exact` and `candidate` relations. Its strength is its
- *   weakest relation.
- * - `ambiguous` and `coverageBlocked` relations never merge components. Each is one standalone
- *   item. Ambiguous and blocked relations are not evidence of a link.
- * - `timestampOnly` basis and `notCausal` status are never a chain, a chain count or a connector
- *   (D7). They only populate `nearby`. Time alone does not establish causality.
+ * - Every timeline edge is one observation about an unordered pair of entries. Observations are
+ *   reduced to ONE relation per pair, taking the WEAKEST label (exact > candidate > ambiguous >
+ *   coverageBlocked). A non-linking observation (ambiguous or coverageBlocked) therefore vetoes a
+ *   link, and the same link seen twice is still one edge.
+ * - A chain is a connected component over pairs labeled `exact` or `candidate`. Its strength is
+ *   its weakest relation.
+ * - `ambiguous` and `coverageBlocked` relations never merge components. They are collapsed by the
+ *   exact key (label, sorted member set): a backend ambiguous group of N ids arrives as N(N-1)/2
+ *   pairwise edges that all share one member set and so become ONE row. Overlapping but unequal
+ *   member sets are never merged.
+ * - The backend produces no timestamp-only or not-causal edge, and the decoder rejects them (D7).
+ *   Diagnosis correlations are a redacted, truncated projection of the same edges and are not an
+ *   input here.
  */
 
-import type {
-  DiagnosisCorrelationEdge,
-  DiagnosisCorrelationEvidence,
-} from "./types";
+import type { DiagnosisFindingClass } from "./types";
 import {
   TIMELINE_SEVERITY_RANK,
   timelineOriginId,
   type TimelineCorrelationEdge,
   type TimelineCorrelationKey,
+  type TimelineCoverageGap,
   type TimelineItem,
 } from "./unified-timeline";
 
@@ -36,6 +41,7 @@ export type CorrelationChainStrength =
   | "ambiguous"
   | "coverageBlocked";
 
+/** Strongest first. A higher index is a weaker label and wins a contradiction. */
 const STRENGTH_ORDER: readonly CorrelationChainStrength[] = [
   "exact",
   "candidate",
@@ -50,27 +56,36 @@ export interface CorrelationEvidenceRow {
 }
 
 /**
- * A diagnosis finding reduced to what the chain title needs. The caller resolves the finding's
- * evidence references to timeline origin ids; `DiagnosisEvidence` does not carry them.
+ * A diagnosis finding reduced to what the chain title needs.
+ *
+ * `originIds` must be EXACT timeline origin ids. They must never be rebuilt from redacted
+ * diagnosis evidence, or from partial tuples such as event id + record id: that is weak identity
+ * (ADR-002) and can attach a title to the wrong chain. Callers pass `[]` until the owner decides
+ * how to restore that join.
  */
 export interface ChainFindingCoverage {
   findingId: string;
   title: string;
   originIds: readonly string[];
+  /**
+   * When several findings cover a chain, a `confirmedFailure` wins over every other class (and
+   * over an unset class), then the lowest `findingId` wins.
+   */
+  findingClass?: DiagnosisFindingClass;
 }
 
 export interface CorrelationChainInput {
   /** Placed timeline items, used for titles, spans and member order. */
   items: readonly TimelineItem[];
   timelineEdges: readonly TimelineCorrelationEdge[];
-  diagnosisEdges: readonly DiagnosisCorrelationEdge[];
   findings: readonly ChainFindingCoverage[];
 }
 
 export interface CorrelationChainEdge {
-  /** Endpoints are ordered; `right` is null only for a relation with candidates. */
+  /** Endpoints are ordered (`left` <= `right`); `right` is null only for a relation with candidates. */
   left: string;
   right: string | null;
+  /** The reduced label of this pair, after every observation of it was combined. */
   strength: CorrelationChainStrength;
   keys: TimelineCorrelationKey[];
 }
@@ -78,34 +93,39 @@ export interface CorrelationChainEdge {
 export interface CorrelationChain {
   id: string;
   strength: CorrelationChainStrength;
-  /** Members in timestamp order, unknown timestamps last, then by id. */
+  /**
+   * Resolved members only (those present in `items`), in timestamp order, ties broken by id.
+   * The view must mark a chain partial whenever `unresolvedMemberIds` is non-empty.
+   */
   memberIds: string[];
+  /** Members with no loaded timeline item, sorted by id. They are never given a position. */
+  unresolvedMemberIds: string[];
+  /** Total members, resolved and unresolved. Drives the "{n} entries" label and the row order. */
+  memberCount: number;
   edges: CorrelationChainEdge[];
   keys: TimelineCorrelationKey[];
   evidence: CorrelationEvidenceRow[];
+  /** De-duplicated, sorted union of the coverage gaps of this row's edges. */
+  coverageGaps: TimelineCoverageGap[];
+  /** From resolved members only. Null when none is resolved. */
   startMs: number | null;
   endMs: number | null;
-  /** D19. Null when no member has a placed timeline item to derive a title from. */
+  /** D19. From resolved members only. Null when none is resolved. */
   title: string | null;
-}
-
-export interface NearbyRelation {
-  left: string;
-  right: string | null;
-  evidence: CorrelationEvidenceRow[];
 }
 
 export interface CorrelationChainModel {
   /** Ordered rows, capped at `CORRELATION_CHAIN_RENDER_LIMIT`. */
   chains: CorrelationChain[];
-  /** Rows before the cap. Never includes `nearby`. */
+  /** Rows before the cap. */
   totalCount: number;
   omittedCount: number;
-  /** Rows per strength before the cap. Never includes `nearby`. */
+  /** Rows per strength before the cap, after collapsing. */
   counts: Record<CorrelationChainStrength, number>;
-  /** "Nearby, not linked": timestamp-only and not-causal relations. Not capped. */
-  nearby: NearbyRelation[];
-  /** Exact or candidate relations that cannot link two entries (no second endpoint, or a self-link). */
+  /**
+   * Reduced pairs that cannot link two entries: fewer than 2 distinct member ids, or an exact or
+   * candidate relation with no second endpoint. Counted once per reduced pair, whatever the label.
+   */
   ignoredRelationCount: number;
 }
 
@@ -120,6 +140,28 @@ function compareNullableNumber(a: number | null, b: number | null): number {
   return a - b;
 }
 
+// Same length-prefixed convention as `timelineKeyPart` in unified-timeline.ts, so a value that
+// contains a separator can never collide with a different tuple.
+const utf8Encoder = new TextEncoder();
+function keyPart(value: string): string {
+  return `${utf8Encoder.encode(value).length}:${value}`;
+}
+
+function keyOf(...parts: readonly string[]): string {
+  return parts.map(keyPart).join("|");
+}
+
+function strengthIndex(strength: CorrelationChainStrength): number {
+  return STRENGTH_ORDER.indexOf(strength);
+}
+
+function isLinking(
+  strength: CorrelationChainStrength,
+): strength is "exact" | "candidate" {
+  return strength === "exact" || strength === "candidate";
+}
+
+/** One reduced relation: every observation of one ordered pair, combined. */
 interface Relation {
   left: string;
   right: string | null;
@@ -127,11 +169,8 @@ interface Relation {
   candidateIds: string[];
   keys: TimelineCorrelationKey[];
   evidence: CorrelationEvidenceRow[];
+  gaps: TimelineCoverageGap[];
 }
-
-type Classified =
-  | { kind: "relation"; relation: Relation }
-  | { kind: "nearby"; relation: Relation };
 
 function orderEndpoints(
   left: string,
@@ -142,68 +181,47 @@ function orderEndpoints(
     : { left, right };
 }
 
-function evidenceRows(
-  rows: readonly DiagnosisCorrelationEvidence[],
-): CorrelationEvidenceRow[] {
-  return rows.map(({ originId, field, value }) => ({ originId, field, value }));
-}
-
-function classifyTimelineEdge(edge: TimelineCorrelationEdge): Classified {
-  // A coverage gap blocks the link, whatever the edge strength says.
-  let strength: CorrelationChainStrength =
-    edge.coverage.state === "gap" ? "coverageBlocked" : edge.strength;
-  // A secondary key is a candidate identifier and can never be stronger than candidate.
-  if (strength === "exact" && edge.key.kind === "secondary") {
+function classifyTimelineEdge(edge: TimelineCorrelationEdge): Relation {
+  let strength: CorrelationChainStrength;
+  if (edge.strength === "ambiguous") {
+    // Ambiguous stays ambiguous even when the edge also carries a coverage gap.
+    strength = "ambiguous";
+  } else if (edge.coverage.state === "gap") {
+    strength = "coverageBlocked";
+  } else if (edge.strength === "exact" && edge.key.kind === "secondary") {
+    // A secondary key is a candidate identifier and can never be stronger than candidate.
     strength = "candidate";
+  } else {
+    strength = edge.strength;
   }
+  const gap = edge.coverage.gap;
   return {
-    kind: "relation",
-    relation: {
-      ...orderEndpoints(edge.fromId, edge.toId),
-      strength,
-      candidateIds: [...edge.candidateIds],
-      keys: [{ kind: edge.key.kind, value: edge.key.value }],
-      evidence: evidenceRows(edge.evidence),
-    },
-  };
-}
-
-function classifyDiagnosisEdge(edge: DiagnosisCorrelationEdge): Classified {
-  const base = {
-    ...orderEndpoints(edge.left, edge.right),
+    ...orderEndpoints(edge.fromId, edge.toId),
+    strength,
     candidateIds: [...edge.candidateIds],
-    keys: [],
-    evidence: evidenceRows(edge.evidence),
+    keys: [{ kind: edge.key.kind, value: edge.key.value }],
+    evidence: edge.evidence.map(({ originId, field, value }) => ({
+      originId,
+      field,
+      value,
+    })),
+    gaps:
+      edge.coverage.state === "gap" && gap !== undefined && gap !== null
+        ? [{ source: gap.source, reason: gap.reason }]
+        : [],
   };
-  // D7: time alone is never a link, whatever status was attached to it.
-  if (edge.basis === "timestampOnly" || edge.status === "notCausal") {
-    return {
-      kind: "nearby",
-      relation: { ...base, strength: "ambiguous" },
-    };
-  }
-  let strength: CorrelationChainStrength = edge.status;
-  if (strength === "exact" && edge.basis === "candidateIdentifier") {
-    strength = "candidate";
-  }
-  return { kind: "relation", relation: { ...base, strength } };
 }
 
-function relationKey(relation: Relation): string {
-  return [
-    relation.strength,
-    relation.left,
-    relation.right ?? "",
-    [...relation.candidateIds].sort().join("\u0000"),
-  ].join("\u0001");
+function relationKeyId(key: TimelineCorrelationKey): string {
+  return keyOf(key.kind, key.value);
 }
 
-function keyId(key: TimelineCorrelationKey): string {
-  return `${key.kind}\u0001${key.value}`;
+function evidenceId(row: CorrelationEvidenceRow): string {
+  return keyOf(row.originId, row.field, row.value);
 }
 
-function rowId(row: CorrelationEvidenceRow): string {
-  return `${row.originId}\u0001${row.field}\u0001${row.value}`;
+function gapId(gap: TimelineCoverageGap): string {
+  return keyOf(gap.source, gap.reason);
 }
 
 function uniqueSorted<T>(values: readonly T[], id: (value: T) => string): T[] {
@@ -214,34 +232,61 @@ function uniqueSorted<T>(values: readonly T[], id: (value: T) => string): T[] {
     .map(([, value]) => value);
 }
 
-/** Collapses duplicate relations (the same link seen by both inputs) into one. */
-function mergeRelations(
-  relations: readonly Relation[],
-  keyOf: (relation: Relation) => string,
-): Relation[] {
-  const merged = new Map<string, Relation>();
+function uniqueSortedStrings(values: Iterable<string>): string[] {
+  return [...new Set(values)].sort(compareStrings);
+}
+
+function combine(relations: readonly Relation[]): Relation {
+  const first = relations[0] as Relation;
+  let strength = first.strength;
   for (const relation of relations) {
-    const key = keyOf(relation);
-    const existing = merged.get(key);
-    merged.set(
-      key,
-      existing === undefined
-        ? relation
-        : {
-            ...existing,
-            keys: [...existing.keys, ...relation.keys],
-            evidence: [...existing.evidence, ...relation.evidence],
-          },
-    );
+    if (strengthIndex(relation.strength) > strengthIndex(strength)) {
+      strength = relation.strength;
+    }
   }
-  return [...merged.entries()]
+  return {
+    left: first.left,
+    right: first.right,
+    strength,
+    candidateIds: uniqueSortedStrings(relations.flatMap((r) => r.candidateIds)),
+    keys: uniqueSorted(
+      relations.flatMap((r) => r.keys),
+      relationKeyId,
+    ),
+    evidence: uniqueSorted(
+      relations.flatMap((r) => r.evidence),
+      evidenceId,
+    ),
+    gaps: uniqueSorted(
+      relations.flatMap((r) => r.gaps),
+      gapId,
+    ),
+  };
+}
+
+/** Reduces observations to one relation per ordered pair, taking the weakest label. */
+function reduceByPair(observations: readonly Relation[]): Relation[] {
+  const byPair = new Map<string, Relation[]>();
+  for (const observation of observations) {
+    const key =
+      observation.right === null
+        ? keyOf(observation.left, "-")
+        : keyOf(observation.left, "+", observation.right);
+    const group = byPair.get(key);
+    if (group === undefined) byPair.set(key, [observation]);
+    else group.push(observation);
+  }
+  return [...byPair.entries()]
     .sort(([a], [b]) => compareStrings(a, b))
-    .map(([, relation]) => ({
-      ...relation,
-      candidateIds: [...relation.candidateIds].sort(),
-      keys: uniqueSorted(relation.keys, keyId),
-      evidence: uniqueSorted(relation.evidence, rowId),
-    }));
+    .map(([, group]) => combine(group));
+}
+
+function memberSet(relation: Relation): string[] {
+  return uniqueSortedStrings([
+    relation.left,
+    ...(relation.right === null ? [] : [relation.right]),
+    ...relation.candidateIds,
+  ]);
 }
 
 class DisjointSet {
@@ -315,16 +360,22 @@ function derivedTitle(
   return head === "" ? itemLabel(best) : `${itemLabel(best)} · ${head}`;
 }
 
+/** Covers ALL members, resolved or not: a finding must account for the whole chain. */
 function coveringFindingTitle(
-  memberIds: readonly string[],
+  allMemberIds: readonly string[],
   findings: readonly ChainFindingCoverage[],
 ): string | null {
+  const classRank = (finding: ChainFindingCoverage) =>
+    finding.findingClass === "confirmedFailure" ? 0 : 1;
   const covering = findings
     .filter((finding) => {
       const covered = new Set(finding.originIds);
-      return memberIds.every((id) => covered.has(id));
+      return allMemberIds.every((id) => covered.has(id));
     })
-    .sort((a, b) => compareStrings(a.findingId, b.findingId));
+    .sort(
+      (a, b) =>
+        classRank(a) - classRank(b) || compareStrings(a.findingId, b.findingId),
+    );
   return covering[0]?.title ?? null;
 }
 
@@ -343,28 +394,26 @@ function span(
   return { startMs, endMs };
 }
 
-function sortMembers(
-  ids: Iterable<string>,
-  itemsById: ReadonlyMap<string, TimelineItem>,
-): string[] {
-  return [...new Set(ids)].sort(
-    (a, b) =>
-      compareNullableNumber(
-        itemsById.get(a)?.timestampMs ?? null,
-        itemsById.get(b)?.timestampMs ?? null,
-      ) || compareStrings(a, b),
-  );
+/**
+ * Keeps one item per origin id, independent of input order: earliest timestamp, then the
+ * higher severity, then the message, then the serialized origin. The id is equal by construction,
+ * so the lexicographic tie-break runs over the remaining content.
+ */
+function preferItem(a: TimelineItem, b: TimelineItem): TimelineItem {
+  if (a.timestampMs !== b.timestampMs) {
+    return a.timestampMs < b.timestampMs ? a : b;
+  }
+  const rank =
+    TIMELINE_SEVERITY_RANK[a.severity] - TIMELINE_SEVERITY_RANK[b.severity];
+  if (rank !== 0) return rank > 0 ? a : b;
+  const byMessage = compareStrings(a.message, b.message);
+  if (byMessage !== 0) return byMessage < 0 ? a : b;
+  return compareStrings(JSON.stringify(a.origin), JSON.stringify(b.origin)) <= 0
+    ? a
+    : b;
 }
 
-function weakest(
-  relations: readonly Relation[],
-): Extract<CorrelationChainStrength, "exact" | "candidate"> {
-  return relations.some((relation) => relation.strength === "candidate")
-    ? "candidate"
-    : "exact";
-}
-
-function toChain(
+function toRow(
   id: string,
   strength: CorrelationChainStrength,
   relations: readonly Relation[],
@@ -372,12 +421,23 @@ function toChain(
   itemsById: ReadonlyMap<string, TimelineItem>,
   findings: readonly ChainFindingCoverage[],
 ): CorrelationChain {
-  const members = sortMembers(memberIds, itemsById);
-  const isChain = strength === "exact" || strength === "candidate";
+  const all = uniqueSortedStrings(memberIds);
+  const resolved = all
+    .filter((member) => itemsById.has(member))
+    .sort(
+      (a, b) =>
+        compareNullableNumber(
+          itemsById.get(a)?.timestampMs ?? null,
+          itemsById.get(b)?.timestampMs ?? null,
+        ) || compareStrings(a, b),
+    );
+  const unresolved = all.filter((member) => !itemsById.has(member));
   return {
     id,
     strength,
-    memberIds: members,
+    memberIds: resolved,
+    unresolvedMemberIds: unresolved,
+    memberCount: all.length,
     edges: relations.map((relation) => ({
       left: relation.left,
       right: relation.right,
@@ -386,17 +446,23 @@ function toChain(
     })),
     keys: uniqueSorted(
       relations.flatMap((relation) => relation.keys),
-      keyId,
+      relationKeyId,
     ),
     evidence: uniqueSorted(
       relations.flatMap((relation) => relation.evidence),
-      rowId,
+      evidenceId,
     ),
-    ...span(members, itemsById),
+    coverageGaps: uniqueSorted(
+      relations.flatMap((relation) => relation.gaps),
+      gapId,
+    ),
+    ...span(resolved, itemsById),
     // Only a chain may borrow a finding's title; an ambiguous or blocked item is not a conclusion.
     title:
-      (isChain ? coveringFindingTitle(members, findings) : null) ??
-      derivedTitle(members, itemsById),
+      resolved.length === 0
+        ? null
+        : (isLinking(strength) ? coveringFindingTitle(all, findings) : null) ??
+          derivedTitle(resolved, itemsById),
   };
 }
 
@@ -407,47 +473,33 @@ export function buildCorrelationChains(
   for (const item of input.items) {
     const id = timelineOriginId(item.origin);
     const existing = itemsById.get(id);
-    if (existing === undefined || item.timestampMs < existing.timestampMs) {
-      itemsById.set(id, item);
-    }
+    itemsById.set(id, existing === undefined ? item : preferItem(existing, item));
   }
 
-  const classified = [
-    ...input.timelineEdges.map(classifyTimelineEdge),
-    ...input.diagnosisEdges.map(classifyDiagnosisEdge),
-  ];
-
-  const nearby = mergeRelations(
-    classified.filter((c) => c.kind === "nearby").map((c) => c.relation),
-    (relation) =>
-      [
-        relation.left,
-        relation.right ?? "",
-        [...relation.candidateIds].sort().join("\u0000"),
-      ].join("\u0001"),
-  ).map(({ left, right, evidence }) => ({ left, right, evidence }));
-
-  const relations = mergeRelations(
-    classified.filter((c) => c.kind === "relation").map((c) => c.relation),
-    relationKey,
-  );
+  const reduced = reduceByPair(input.timelineEdges.map(classifyTimelineEdge));
 
   const links: Relation[] = [];
-  const standalone: Relation[] = [];
+  const nonLinking = new Map<string, Relation[]>();
   let ignoredRelationCount = 0;
-  for (const relation of relations) {
-    if (relation.strength === "exact" || relation.strength === "candidate") {
-      if (relation.right === null || relation.right === relation.left) {
-        ignoredRelationCount += 1;
-      } else {
-        links.push(relation);
-      }
+  for (const relation of reduced) {
+    const members = memberSet(relation);
+    const cannotLink =
+      isLinking(relation.strength) &&
+      (relation.right === null || relation.right === relation.left);
+    if (members.length < 2 || cannotLink) {
+      ignoredRelationCount += 1;
+    } else if (isLinking(relation.strength)) {
+      links.push(relation);
     } else {
-      standalone.push(relation);
+      // Collapse by the exact key (label, sorted member set). Unequal sets are never merged.
+      const key = keyOf(relation.strength, ...members);
+      const group = nonLinking.get(key);
+      if (group === undefined) nonLinking.set(key, [relation]);
+      else group.push(relation);
     }
   }
 
-  // Only exact and candidate relations are ever unioned. This is the Q-4 invariant.
+  // Only exact and candidate pairs are ever unioned. This is the Q-4 invariant.
   const sets = new DisjointSet();
   for (const relation of links) {
     sets.union(relation.left, relation.right as string);
@@ -455,7 +507,9 @@ export function buildCorrelationChains(
   const components = new Map<string, Relation[]>();
   for (const relation of links) {
     const root = sets.find(relation.left);
-    components.set(root, [...(components.get(root) ?? []), relation]);
+    const group = components.get(root);
+    if (group === undefined) components.set(root, [relation]);
+    else group.push(relation);
   }
 
   const rows: CorrelationChain[] = [];
@@ -464,11 +518,16 @@ export function buildCorrelationChains(
       relation.left,
       relation.right as string,
     ]);
-    const smallest = [...new Set(members)].sort(compareStrings)[0] as string;
+    const smallest = uniqueSortedStrings(members)[0] as string;
+    const strength = componentRelations.reduce<"exact" | "candidate">(
+      (weakest, relation) =>
+        relation.strength === "candidate" ? "candidate" : weakest,
+      "exact",
+    );
     rows.push(
-      toChain(
-        `chain\u0001${smallest}`,
-        weakest(componentRelations),
+      toRow(
+        keyOf("chain", smallest),
+        strength,
         componentRelations,
         members,
         itemsById,
@@ -476,17 +535,14 @@ export function buildCorrelationChains(
       ),
     );
   }
-  for (const relation of standalone) {
+  for (const [key, group] of nonLinking) {
+    const first = group[0] as Relation;
     rows.push(
-      toChain(
-        relationKey(relation),
-        relation.strength,
-        [relation],
-        [
-          relation.left,
-          ...(relation.right === null ? [] : [relation.right]),
-          ...relation.candidateIds,
-        ],
+      toRow(
+        key,
+        first.strength,
+        group,
+        group.flatMap(memberSet),
         itemsById,
         input.findings,
       ),
@@ -495,8 +551,8 @@ export function buildCorrelationChains(
 
   rows.sort(
     (a, b) =>
-      STRENGTH_ORDER.indexOf(a.strength) - STRENGTH_ORDER.indexOf(b.strength) ||
-      b.memberIds.length - a.memberIds.length ||
+      strengthIndex(a.strength) - strengthIndex(b.strength) ||
+      b.memberCount - a.memberCount ||
       compareNullableNumber(a.startMs, b.startMs) ||
       compareStrings(a.id, b.id),
   );
@@ -515,7 +571,6 @@ export function buildCorrelationChains(
     totalCount: rows.length,
     omittedCount: rows.length - chains.length,
     counts,
-    nearby,
     ignoredRelationCount,
   };
 }

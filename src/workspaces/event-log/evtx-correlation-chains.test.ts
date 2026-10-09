@@ -2,21 +2,21 @@ import { describe, expect, it } from "vitest";
 import {
   CORRELATION_CHAIN_RENDER_LIMIT,
   buildCorrelationChains,
+  type CorrelationChain,
   type CorrelationChainInput,
   type CorrelationChainModel,
 } from "./evtx-correlation-chains";
 import type {
-  DiagnosisCorrelationBasis,
-  DiagnosisCorrelationEdge,
-  DiagnosisCorrelationStatus,
-} from "./types";
-import type {
   TimelineCorrelationEdge,
   TimelineCorrelationStrength,
+  TimelineCoverageGap,
   TimelineItem,
   TimelineSeverity,
 } from "./unified-timeline";
-import { timelineOriginId } from "./unified-timeline";
+import {
+  assertUnifiedTimelineShape,
+  timelineOriginId,
+} from "./unified-timeline";
 
 function eventItem(
   id: string,
@@ -88,28 +88,62 @@ function tEdge(
   };
 }
 
-function dEdge(
-  left: string,
-  right: string | null,
-  basis: DiagnosisCorrelationBasis,
-  status: DiagnosisCorrelationStatus,
-  candidateIds: string[] = [],
-): DiagnosisCorrelationEdge {
-  return { left, right, basis, status, candidateIds, evidence: [] };
+function gapOf(reason: string, source = "Live"): TimelineCoverageGap {
+  return { source, reason };
+}
+
+/** An exact pair that the backend marked as having a coverage gap. */
+function gappedExact(
+  id: string,
+  fromId: string,
+  toId: string,
+  reason = "channel not collected",
+): TimelineCorrelationEdge {
+  return tEdge(id, fromId, toId, "exact", {
+    coverage: { state: "gap", gap: gapOf(reason) },
+  });
+}
+
+/**
+ * Backend shape of an ambiguous group: N ids, one edge per unordered pair (N(N-1)/2 edges), each
+ * carrying the group's multiple-candidates gap, `candidateIds` equal to the group minus `fromId`,
+ * and `toId` always set.
+ */
+function ambiguousGroup(
+  prefix: string,
+  group: readonly string[],
+): TimelineCorrelationEdge[] {
+  const edges: TimelineCorrelationEdge[] = [];
+  for (let i = 0; i < group.length; i += 1) {
+    for (let j = i + 1; j < group.length; j += 1) {
+      const fromId = group[i] as string;
+      edges.push(
+        tEdge(`${prefix}-${i}-${j}`, fromId, group[j] as string, "ambiguous", {
+          candidateIds: group.filter((id) => id !== fromId),
+          coverage: {
+            state: "gap",
+            gap: gapOf(
+              `multiple exact identity candidates remain: ${group.join(", ")}`,
+            ),
+          },
+        }),
+      );
+    }
+  }
+  return edges;
 }
 
 function build(input: Partial<CorrelationChainInput>): CorrelationChainModel {
   return buildCorrelationChains({
     items: [],
     timelineEdges: [],
-    diagnosisEdges: [],
     findings: [],
     ...input,
   });
 }
 
-function chainMemberSets(model: CorrelationChainModel): string[][] {
-  return model.chains.map((chain) => [...chain.memberIds].sort());
+function allMembers(chain: CorrelationChain): string[] {
+  return [...chain.memberIds, ...chain.unresolvedMemberIds].sort();
 }
 
 describe("chain formation", () => {
@@ -121,7 +155,7 @@ describe("chain formation", () => {
         tEdge("e3", "x", "y", "exact"),
       ],
     });
-    expect(chainMemberSets(model)).toEqual([["a", "b", "c"], ["x", "y"]]);
+    expect(model.chains.map(allMembers)).toEqual([["a", "b", "c"], ["x", "y"]]);
     expect(model.counts.exact).toBe(2);
     expect(model.totalCount).toBe(2);
   });
@@ -138,40 +172,23 @@ describe("chain formation", () => {
     expect(model.counts).toMatchObject({ exact: 0, candidate: 1 });
   });
 
-  it("downgrades an exact edge that rests on a candidate identifier basis", () => {
+  it("caps an exact edge on a secondary key at candidate", () => {
     const model = build({
-      diagnosisEdges: [dEdge("a", "b", "candidateIdentifier", "exact")],
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact", {
+          key: { kind: "secondary", value: "s" },
+        }),
+      ],
     });
     expect(model.chains[0]?.strength).toBe("candidate");
   });
 
-  it("merges components across the timeline and diagnosis inputs", () => {
-    const model = build({
-      timelineEdges: [tEdge("e1", "a", "b", "exact")],
-      diagnosisEdges: [dEdge("b", "c", "exactIdentifier", "exact")],
-    });
-    expect(chainMemberSets(model)).toEqual([["a", "b", "c"]]);
-  });
-
-  it("does not double count a relation present in both inputs", () => {
-    const model = build({
-      timelineEdges: [tEdge("e1", "a", "b", "exact")],
-      diagnosisEdges: [dEdge("a", "b", "exactIdentifier", "exact")],
-    });
-    expect(model.counts.exact).toBe(1);
-    expect(model.chains[0]?.edges).toHaveLength(1);
-  });
-
-  it("treats a timeline edge with a coverage gap as coverage blocked, not a link", () => {
-    const model = build({
-      timelineEdges: [
-        tEdge("e1", "a", "b", "exact", {
-          coverage: { state: "gap", gap: { source: "s", reason: "r" } },
-        }),
-      ],
-    });
+  it("classifies a covered exact edge with a gap as coverage blocked and carries the gap", () => {
+    const model = build({ timelineEdges: [gappedExact("e1", "a", "b", "why")] });
     expect(model.counts).toMatchObject({ exact: 0, coverageBlocked: 1 });
+    expect(model.chains).toHaveLength(1);
     expect(model.chains[0]?.strength).toBe("coverageBlocked");
+    expect(model.chains[0]?.coverageGaps).toEqual([gapOf("why")]);
   });
 
   it("counts exact or candidate edges that cannot link two entries as ignored", () => {
@@ -184,108 +201,266 @@ describe("chain formation", () => {
     expect(model.totalCount).toBe(0);
     expect(model.ignoredRelationCount).toBe(2);
   });
-});
 
-describe("Q-4: ambiguous edges never merge components", () => {
-  it("keeps two exact chains separate when an ambiguous edge bridges them", () => {
+  it("counts a degenerate non-linking relation as ignored too, once per reduced pair", () => {
+    const degenerate = (id: string) =>
+      tEdge(id, "a", "a", "ambiguous", {
+        coverage: { state: "gap", gap: gapOf("g") },
+      });
+    const model = build({
+      timelineEdges: [degenerate("d1"), degenerate("d2"), gappedExact("d3", "b", "b")],
+    });
+    expect(model.totalCount).toBe(0);
+    expect(model.ignoredRelationCount).toBe(2);
+  });
+
+  it("makes one link one edge, however many observations back it", () => {
     const model = build({
       timelineEdges: [
         tEdge("e1", "a", "b", "exact"),
-        tEdge("e2", "c", "d", "exact"),
-        tEdge("amb", "b", "c", "ambiguous"),
+        tEdge("e2", "b", "a", "exact"),
+        tEdge("e3", "a", "b", "exact"),
       ],
     });
-    const chains = model.chains.filter((c) => c.strength === "exact");
-    expect(chains.map((c) => [...c.memberIds].sort())).toEqual([
-      ["a", "b"],
-      ["c", "d"],
-    ]);
-    expect(model.counts).toMatchObject({ exact: 2, ambiguous: 1 });
-  });
-
-  it("lists an ambiguous relation as one item with its candidates as members", () => {
-    const model = build({
-      timelineEdges: [
-        tEdge("amb", "a", null, "ambiguous", { candidateIds: ["b", "c"] }),
-      ],
-    });
-    expect(model.chains).toHaveLength(1);
-    const item = model.chains[0];
-    expect(item?.strength).toBe("ambiguous");
-    expect([...(item?.memberIds ?? [])].sort()).toEqual(["a", "b", "c"]);
-  });
-
-  it("does not create a chain from ambiguous edges alone", () => {
-    const model = build({
-      timelineEdges: [
-        tEdge("amb1", "a", "b", "ambiguous"),
-        tEdge("amb2", "b", "c", "ambiguous"),
-      ],
-    });
-    expect(model.counts).toMatchObject({ exact: 0, candidate: 0, ambiguous: 2 });
-    expect(model.chains.every((c) => c.strength === "ambiguous")).toBe(true);
-  });
-
-  it("applies the same rule to diagnosis ambiguous and coverageBlocked relations", () => {
-    const model = build({
-      diagnosisEdges: [
-        dEdge("a", "b", "exactIdentifier", "exact"),
-        dEdge("c", "d", "exactIdentifier", "exact"),
-        dEdge("b", "c", "exactIdentifier", "ambiguous"),
-        dEdge("d", "e", "exactIdentifier", "coverageBlocked"),
-      ],
-    });
-    expect(model.counts).toEqual({
-      exact: 2,
-      candidate: 0,
-      ambiguous: 1,
-      coverageBlocked: 1,
-    });
+    expect(model.counts.exact).toBe(1);
+    expect(model.chains[0]?.edges).toHaveLength(1);
   });
 });
 
-describe("D7: nearby, not linked", () => {
-  it("routes timestampOnly basis and notCausal status to nearby only", () => {
-    const model = build({
-      diagnosisEdges: [
-        dEdge("a", "b", "timestampOnly", "ambiguous"),
-        dEdge("c", "d", "timestampOnly", "exact"),
-        dEdge("e", "f", "exactIdentifier", "notCausal"),
-        dEdge("g", "h", "timestampOnly", "coverageBlocked"),
-      ],
-    });
-    expect(model.totalCount).toBe(0);
-    expect(model.chains).toEqual([]);
+describe("ambiguous groups in the backend shape", () => {
+  it("shows a 4-id group as exactly one ambiguous row", () => {
+    const group = ["a", "b", "c", "d"];
+    const edges = ambiguousGroup("g", group);
+    expect(edges).toHaveLength(6);
+    const model = build({ timelineEdges: edges });
+    expect(model.totalCount).toBe(1);
     expect(model.counts).toEqual({
       exact: 0,
       candidate: 0,
-      ambiguous: 0,
+      ambiguous: 1,
       coverageBlocked: 0,
     });
-    expect(model.nearby).toHaveLength(4);
+    const row = model.chains[0];
+    expect(row?.strength).toBe("ambiguous");
+    expect(row?.memberCount).toBe(4);
+    expect(row ? allMembers(row) : []).toEqual(group);
+    expect(row?.coverageGaps).toHaveLength(1);
+    expect(row?.coverageGaps[0]?.reason).toMatch(
+      /^multiple exact identity candidates remain/,
+    );
   });
 
-  it("never lets a nearby relation connect two chains", () => {
+  it("keeps two ambiguous groups that overlap in one member as two rows", () => {
+    const model = build({
+      timelineEdges: [
+        ...ambiguousGroup("g1", ["a", "b", "c"]),
+        ...ambiguousGroup("g2", ["c", "d", "e"]),
+      ],
+    });
+    expect(model.counts.ambiguous).toBe(2);
+    expect(model.totalCount).toBe(2);
+    expect(model.chains.map(allMembers).sort()).toEqual([
+      ["a", "b", "c"],
+      ["c", "d", "e"],
+    ]);
+  });
+
+  // Documents a consequence of the ruling: a pair shared by two groups is reduced to one relation
+  // whose candidateIds are the union, so its member set equals neither group and it is its own row.
+  it("gives a pair shared by two groups its own row with the combined member set", () => {
+    const model = build({
+      timelineEdges: [
+        ...ambiguousGroup("g1", ["a", "b", "c"]),
+        ...ambiguousGroup("g2", ["b", "c", "d"]),
+      ],
+    });
+    expect(model.counts.ambiguous).toBe(3);
+    expect(model.chains.map(allMembers).sort()).toEqual([
+      ["a", "b", "c"],
+      ["a", "b", "c", "d"],
+      ["b", "c", "d"],
+    ]);
+  });
+
+  it("does not merge ambiguous groups that only share members through a chain", () => {
     const model = build({
       timelineEdges: [
         tEdge("e1", "a", "b", "exact"),
         tEdge("e2", "c", "d", "exact"),
+        ...ambiguousGroup("g", ["b", "c", "z"]),
       ],
-      diagnosisEdges: [dEdge("b", "c", "timestampOnly", "exact")],
     });
-    expect(chainMemberSets(model)).toEqual([["a", "b"], ["c", "d"]]);
-    expect(model.nearby).toHaveLength(1);
+    expect(model.chains.filter((c) => c.strength === "exact").map(allMembers))
+      .toEqual([["a", "b"], ["c", "d"]]);
+    expect(model.counts).toMatchObject({ exact: 2, ambiguous: 1 });
+  });
+});
+
+describe("contradicting observations on one pair", () => {
+  it("lets an ambiguous observation veto an exact one", () => {
+    const model = build({
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact"),
+        ...ambiguousGroup("g", ["a", "b"]),
+      ],
+    });
+    expect(model.counts).toEqual({
+      exact: 0,
+      candidate: 0,
+      ambiguous: 1,
+      coverageBlocked: 0,
+    });
+    expect(model.chains).toHaveLength(1);
+    expect(model.chains[0]?.strength).toBe("ambiguous");
+  });
+
+  it("takes candidate when exact and candidate disagree", () => {
+    const model = build({
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact"),
+        tEdge("e2", "a", "b", "candidate"),
+      ],
+    });
+    expect(model.chains).toHaveLength(1);
+    expect(model.chains[0]?.strength).toBe("candidate");
+    expect(model.counts).toMatchObject({ exact: 0, candidate: 1 });
+  });
+
+  it("takes coverage blocked when exact meets exact with a gap", () => {
+    const model = build({
+      timelineEdges: [tEdge("e1", "a", "b", "exact"), gappedExact("e2", "a", "b")],
+    });
+    expect(model.chains).toHaveLength(1);
+    expect(model.chains[0]?.strength).toBe("coverageBlocked");
+  });
+
+  it("takes coverage blocked when ambiguous meets exact with a gap", () => {
+    const model = build({
+      timelineEdges: [
+        ...ambiguousGroup("g", ["a", "b"]),
+        gappedExact("e2", "b", "a", "other gap"),
+      ],
+    });
+    expect(model.chains).toHaveLength(1);
+    expect(model.chains[0]?.strength).toBe("coverageBlocked");
+    expect(model.chains[0]?.coverageGaps.map((gap) => gap.reason)).toEqual([
+      "multiple exact identity candidates remain: a, b",
+      "other gap",
+    ]);
+  });
+
+  it("does not let a vetoed pair connect its endpoints through the chain edges", () => {
+    const model = build({
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact"),
+        ...ambiguousGroup("g", ["a", "b"]),
+        tEdge("e2", "b", "c", "exact"),
+      ],
+    });
+    const chain = model.chains.find((row) => row.strength === "exact");
+    expect(chain && allMembers(chain)).toEqual(["b", "c"]);
+  });
+});
+
+describe("partial members", () => {
+  it("separates resolved from unresolved members", () => {
+    const model = build({
+      items: [eventItem("a", 1000, "error", "boom", 7), eventItem("b", 2000)],
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact"),
+        tEdge("e2", "b", "z", "exact"),
+      ],
+    });
+    const chain = model.chains[0];
+    expect(chain?.memberIds).toEqual(["a", "b"]);
+    expect(chain?.unresolvedMemberIds).toEqual(["z"]);
+    expect(chain?.memberCount).toBe(3);
+    expect(chain?.startMs).toBe(1000);
+    expect(chain?.endMs).toBe(2000);
+    expect(chain?.title).toBe("7 · boom");
+  });
+
+  it("gives null span and title when every member is unresolved", () => {
+    const model = build({
+      timelineEdges: [tEdge("e1", "a", "b", "exact")],
+    });
+    const chain = model.chains[0];
+    expect(chain?.memberIds).toEqual([]);
+    expect(chain?.unresolvedMemberIds).toEqual(["a", "b"]);
+    expect(chain?.memberCount).toBe(2);
+    expect(chain?.startMs).toBeNull();
+    expect(chain?.endMs).toBeNull();
+    expect(chain?.title).toBeNull();
+  });
+
+  it("orders members by timestamp, ties by id, and unresolved by id", () => {
+    const model = build({
+      items: [eventItem("m", 1000), eventItem("b", 1000), eventItem("a", 2000)],
+      timelineEdges: [
+        tEdge("e1", "m", "b", "exact"),
+        tEdge("e2", "a", "z", "exact"),
+        tEdge("e3", "a", "y", "exact"),
+        tEdge("e4", "b", "a", "exact"),
+      ],
+    });
+    const chain = model.chains[0];
+    expect(chain?.memberIds).toEqual(["b", "m", "a"]);
+    expect(chain?.unresolvedMemberIds).toEqual(["y", "z"]);
+  });
+
+  it("applies the same split to an ambiguous row", () => {
+    const model = build({
+      items: [eventItem("a", 1000), eventItem("b", 2000)],
+      timelineEdges: ambiguousGroup("g", ["a", "b", "z"]),
+    });
+    const row = model.chains[0];
+    expect(row?.memberIds).toEqual(["a", "b"]);
+    expect(row?.unresolvedMemberIds).toEqual(["z"]);
+    expect(row?.memberCount).toBe(3);
+  });
+
+  it("orders rows by total member count, not resolved count", () => {
+    const model = build({
+      items: [eventItem("p", 1000), eventItem("q", 1100)],
+      timelineEdges: [
+        tEdge("e1", "p", "q", "exact"),
+        tEdge("e2", "u1", "u2", "exact"),
+        tEdge("e3", "u2", "u3", "exact"),
+      ],
+    });
+    expect(model.chains.map((c) => c.memberCount)).toEqual([3, 2]);
+  });
+});
+
+describe("duplicate origins", () => {
+  it("keeps the earliest timestamp regardless of input order", () => {
+    const early = eventItem("a", 1000, "info", "same");
+    const late = eventItem("a", 5000, "info", "same");
+    const edges = [tEdge("e1", "a", "b", "exact")];
+    const one = build({ items: [early, late], timelineEdges: edges });
+    const two = build({ items: [late, early], timelineEdges: edges });
+    expect(one).toEqual(two);
+    expect(one.chains[0]?.startMs).toBe(1000);
+  });
+
+  it("breaks an equal-timestamp tie without depending on input order", () => {
+    const x = eventItem("a", 1000, "info", "alpha", 1);
+    const y = eventItem("a", 1000, "error", "beta", 2);
+    const edges = [tEdge("e1", "a", "b", "exact")];
+    expect(build({ items: [x, y], timelineEdges: edges })).toEqual(
+      build({ items: [y, x], timelineEdges: edges }),
+    );
   });
 });
 
 describe("ordering", () => {
   it("orders exact, candidate, ambiguous, then coverage blocked", () => {
     const model = build({
-      diagnosisEdges: [
-        dEdge("p", "q", "exactIdentifier", "coverageBlocked"),
-        dEdge("m", "n", "exactIdentifier", "ambiguous"),
-        dEdge("j", "k", "exactIdentifier", "candidate"),
-        dEdge("a", "b", "exactIdentifier", "exact"),
+      timelineEdges: [
+        gappedExact("p", "p", "q"),
+        ...ambiguousGroup("g", ["m", "n"]),
+        tEdge("c", "j", "k", "candidate"),
+        tEdge("e", "a", "b", "exact"),
       ],
     });
     expect(model.chains.map((c) => c.strength)).toEqual([
@@ -318,31 +493,11 @@ describe("ordering", () => {
       ],
     });
     expect(model.chains.map((c) => c.memberIds[0])).toEqual([
-      "c1", // 3 members
-      "b1", // 2 members, 1000, id b1 before d1
-      "d1", // 2 members, 1000
-      "a1", // 2 members, 3000
+      "c1",
+      "b1",
+      "d1",
+      "a1",
     ]);
-  });
-
-  it("sorts members and spans by timestamp, with unknown timestamps last", () => {
-    const model = build({
-      items: [eventItem("b", 2000), eventItem("a", 1000)],
-      timelineEdges: [
-        tEdge("e1", "a", "b", "exact"),
-        tEdge("e2", "b", "z", "exact"),
-      ],
-    });
-    const chain = model.chains[0];
-    expect(chain?.memberIds).toEqual(["a", "b", "z"]);
-    expect(chain?.startMs).toBe(1000);
-    expect(chain?.endMs).toBe(2000);
-  });
-
-  it("leaves the span null when no member has a timeline item", () => {
-    const model = build({ timelineEdges: [tEdge("e1", "a", "b", "exact")] });
-    expect(model.chains[0]?.startMs).toBeNull();
-    expect(model.chains[0]?.endMs).toBeNull();
   });
 });
 
@@ -414,7 +569,7 @@ describe("D19 titles", () => {
       items: [item, eventItem("evt", 2000, "info")],
       timelineEdges: [tEdge("e1", timelineOriginId(item.origin), "evt", "exact")],
     });
-    expect(model.chains[0]?.title).toBe("ime \u00b7 line 42 \u00b7 log line 42");
+    expect(model.chains[0]?.title).toBe("ime · line 42 · log line 42");
   });
 
   it("uses a finding title only when its evidence covers the whole chain", () => {
@@ -423,7 +578,9 @@ describe("D19 titles", () => {
     const covering = build({
       items,
       timelineEdges,
-      findings: [{ findingId: "f1", title: "Enrollment failed", originIds: ["a", "b", "z"] }],
+      findings: [
+        { findingId: "f1", title: "Enrollment failed", originIds: ["a", "b", "z"] },
+      ],
     });
     expect(covering.chains[0]?.title).toBe("Enrollment failed");
 
@@ -435,8 +592,18 @@ describe("D19 titles", () => {
     expect(partial.chains[0]?.title).toBe("7 · boom");
   });
 
+  it("requires a finding to cover unresolved members too", () => {
+    const model = build({
+      items: [eventItem("a", 1000, "error", "boom", 7)],
+      timelineEdges: [tEdge("e1", "a", "z", "exact")],
+      findings: [{ findingId: "f1", title: "Finding", originIds: ["a"] }],
+    });
+    expect(model.chains[0]?.title).toBe("7 · boom");
+  });
+
   it("picks the covering finding with the lowest findingId", () => {
     const model = build({
+      items: [eventItem("a", 1000)],
       timelineEdges: [tEdge("e1", "a", "b", "exact")],
       findings: [
         { findingId: "f2", title: "Second", originIds: ["a", "b"] },
@@ -446,18 +613,27 @@ describe("D19 titles", () => {
     expect(model.chains[0]?.title).toBe("First");
   });
 
+  it("prefers a confirmed failure over other classes, then the lowest findingId", () => {
+    const model = build({
+      items: [eventItem("a", 1000)],
+      timelineEdges: [tEdge("e1", "a", "b", "exact")],
+      findings: [
+        { findingId: "f1", title: "Symptom", originIds: ["a", "b"], findingClass: "symptom" },
+        { findingId: "f9", title: "Confirmed late", originIds: ["a", "b"], findingClass: "confirmedFailure" },
+        { findingId: "f5", title: "Confirmed early", originIds: ["a", "b"], findingClass: "confirmedFailure" },
+        { findingId: "f0", title: "Unclassed", originIds: ["a", "b"] },
+      ],
+    });
+    expect(model.chains[0]?.title).toBe("Confirmed early");
+  });
+
   it("does not apply a finding title to ambiguous or coverage blocked items", () => {
     const model = build({
       items: [eventItem("a", 1000, "error", "boom", 7)],
-      timelineEdges: [tEdge("amb", "a", "b", "ambiguous")],
+      timelineEdges: ambiguousGroup("g", ["a", "b"]),
       findings: [{ findingId: "f1", title: "Finding", originIds: ["a", "b"] }],
     });
     expect(model.chains[0]?.title).toBe("7 · boom");
-  });
-
-  it("returns a null title when no member has a timeline item", () => {
-    const model = build({ timelineEdges: [tEdge("e1", "a", "b", "exact")] });
-    expect(model.chains[0]?.title).toBeNull();
   });
 
   it("truncates a long message head", () => {
@@ -490,6 +666,67 @@ describe("evidence", () => {
   });
 });
 
+describe("input contract", () => {
+  it("no longer accepts diagnosisEdges", () => {
+    const input: CorrelationChainInput = {
+      items: [],
+      timelineEdges: [],
+      findings: [],
+      // @ts-expect-error diagnosis edges are a redacted projection and are not an input
+      diagnosisEdges: [],
+    };
+    expect(buildCorrelationChains(input).totalCount).toBe(0);
+    expect("nearby" in buildCorrelationChains(input)).toBe(false);
+  });
+
+  it("supplying the same edges twice yields a deep-equal model", () => {
+    const edges = [
+      tEdge("e1", "a", "b", "exact"),
+      tEdge("e2", "b", "c", "candidate"),
+      gappedExact("e3", "x", "y"),
+      ...ambiguousGroup("g", ["m", "n", "o"]),
+    ];
+    const items = [eventItem("a", 1000), eventItem("m", 2000)];
+    expect(build({ items, timelineEdges: [...edges, ...edges] })).toEqual(
+      build({ items, timelineEdges: edges }),
+    );
+  });
+});
+
+describe("D7 at the decoder", () => {
+  function timelineWith(strength: string): unknown {
+    return {
+      items: [],
+      unplaced: [],
+      coverageGaps: [],
+      edges: [
+        {
+          id: "e1",
+          fromId: "a",
+          toId: "b",
+          key: { kind: "activityId", value: "k" },
+          strength,
+          confidence: "high",
+          candidateIds: [],
+          evidence: [],
+          coverage: { state: "covered" },
+        },
+      ],
+    };
+  }
+
+  it("accepts the strengths the backend produces", () => {
+    for (const strength of ["exact", "candidate", "ambiguous"]) {
+      expect(() => assertUnifiedTimelineShape(timelineWith(strength))).not.toThrow();
+    }
+  });
+
+  it("rejects timestampOnly and notCausal edges", () => {
+    expect(() => assertUnifiedTimelineShape(timelineWith("timestampOnly"))).toThrow();
+    expect(() => assertUnifiedTimelineShape(timelineWith("notCausal"))).toThrow();
+  });
+});
+
 // ---- property tests -------------------------------------------------------
 
 function mulberry32(seed: number): () => number {
@@ -505,27 +742,8 @@ function mulberry32(seed: number): () => number {
 
 interface RandomGraph {
   timelineEdges: TimelineCorrelationEdge[];
-  diagnosisEdges: DiagnosisCorrelationEdge[];
   items: TimelineItem[];
 }
-
-const BASES: DiagnosisCorrelationBasis[] = [
-  "exactIdentifier",
-  "candidateIdentifier",
-  "timestampOnly",
-];
-const STATUSES: DiagnosisCorrelationStatus[] = [
-  "exact",
-  "candidate",
-  "ambiguous",
-  "coverageBlocked",
-  "notCausal",
-];
-const STRENGTHS: TimelineCorrelationStrength[] = [
-  "exact",
-  "candidate",
-  "ambiguous",
-];
 
 function pick<T>(random: () => number, values: readonly T[]): T {
   return values[Math.floor(random() * values.length)] as T;
@@ -535,44 +753,50 @@ function randomGraph(seed: number): RandomGraph {
   const random = mulberry32(seed);
   const nodeCount = 2 + Math.floor(random() * 14);
   const node = () => `n${Math.floor(random() * nodeCount)}`;
-  const items = Array.from({ length: nodeCount }, (_, i) =>
-    eventItem(
-      `n${i}`,
-      Math.floor(random() * 5) * 1000,
-      pick(random, ["verbose", "info", "warning", "error", "critical"] as const),
-      `m${Math.floor(random() * 3)}`,
-      Math.floor(random() * 4),
-    ),
-  );
-  const timelineEdges = Array.from(
-    { length: Math.floor(random() * 12) },
-    (_, i) =>
-      tEdge(
-        `t${i}`,
-        node(),
-        random() < 0.1 ? null : node(),
-        pick(random, STRENGTHS),
-        {
-          candidateIds: random() < 0.3 ? [node(), node()] : [],
-          coverage:
-            random() < 0.15
-              ? { state: "gap", gap: { source: "s", reason: "r" } }
-              : { state: "covered" },
-        },
-      ),
-  );
-  const diagnosisEdges = Array.from(
-    { length: Math.floor(random() * 12) },
-    () =>
-      dEdge(
-        node(),
-        random() < 0.1 ? null : node(),
-        pick(random, BASES),
-        pick(random, STATUSES),
-        random() < 0.3 ? [node()] : [],
-      ),
-  );
-  return { items, timelineEdges, diagnosisEdges };
+  const items: TimelineItem[] = [];
+  for (let i = 0; i < nodeCount; i += 1) {
+    // About one node in four is deliberately left unloaded.
+    if (random() < 0.25) continue;
+    const copies = random() < 0.2 ? 2 : 1;
+    for (let c = 0; c < copies; c += 1) {
+      items.push(
+        eventItem(
+          `n${i}`,
+          Math.floor(random() * 5) * 1000,
+          pick(random, ["verbose", "info", "warning", "error", "critical"] as const),
+          `m${Math.floor(random() * 3)}`,
+          Math.floor(random() * 4),
+        ),
+      );
+    }
+  }
+  const timelineEdges: TimelineCorrelationEdge[] = [];
+  const edgeCount = Math.floor(random() * 12);
+  for (let i = 0; i < edgeCount; i += 1) {
+    const roll = random();
+    if (roll < 0.3) {
+      const size = 2 + Math.floor(random() * 3);
+      const group = [...new Set(Array.from({ length: size }, node))];
+      if (group.length >= 2) {
+        timelineEdges.push(...ambiguousGroup(`g${i}`, group));
+      }
+    } else if (roll < 0.45) {
+      timelineEdges.push(gappedExact(`x${i}`, node(), node(), `gap${i % 2}`));
+    } else {
+      timelineEdges.push(
+        tEdge(
+          `t${i}`,
+          node(),
+          node(),
+          pick(random, ["exact", "candidate"] as const),
+          random() < 0.2 ? { key: { kind: "secondary", value: `s${i}` } } : {},
+        ),
+      );
+    }
+  }
+  // Duplicate some observations so contradictions and repeats both occur.
+  const duplicates = timelineEdges.filter(() => random() < 0.25);
+  return { items, timelineEdges: [...timelineEdges, ...duplicates] };
 }
 
 function shuffled<T>(random: () => number, values: readonly T[]): T[] {
@@ -584,60 +808,39 @@ function shuffled<T>(random: () => number, values: readonly T[]): T[] {
   return copy;
 }
 
-function swapped(edge: DiagnosisCorrelationEdge): DiagnosisCorrelationEdge {
-  return edge.right === null
-    ? edge
-    : { ...edge, left: edge.right, right: edge.left };
+/** Swaps the endpoints, keeping the backend invariant candidateIds = group minus fromId. */
+function swapped(edge: TimelineCorrelationEdge): TimelineCorrelationEdge {
+  if (edge.toId === null) return edge;
+  const group = new Set([edge.fromId, ...edge.candidateIds]);
+  const candidateIds =
+    edge.candidateIds.length === 0
+      ? []
+      : [...group].filter((id) => id !== edge.toId);
+  return { ...edge, fromId: edge.toId, toId: edge.fromId, candidateIds };
+}
+
+function isLinkingObservation(edge: TimelineCorrelationEdge): boolean {
+  return (
+    edge.coverage.state === "covered" &&
+    (edge.strength === "exact" || edge.strength === "candidate")
+  );
+}
+
+function pairKey(a: string, b: string): string {
+  return a < b ? `${a}\n${b}` : `${b}\n${a}`;
 }
 
 const GRAPH_COUNT = 600;
 
-describe("properties over seeded random graphs", () => {
-  it("never lets a timestampOnly or notCausal relation contribute to a chain or count", () => {
-    for (let seed = 1; seed <= GRAPH_COUNT; seed += 1) {
-      const graph = randomGraph(seed);
-      const withNearby = build({ ...graph });
-      const nearbyOnly = graph.diagnosisEdges.filter(
-        (e) => e.basis === "timestampOnly" || e.status === "notCausal",
-      );
-      const withoutNearby = build({
-        ...graph,
-        diagnosisEdges: graph.diagnosisEdges.filter(
-          (e) => !nearbyOnly.includes(e),
-        ),
-      });
-      // Removing the nearby relations must not change anything but the nearby list.
-      expect(withNearby.chains).toEqual(withoutNearby.chains);
-      expect(withNearby.counts).toEqual(withoutNearby.counts);
-      expect(withNearby.totalCount).toBe(withoutNearby.totalCount);
-      expect(withNearby.nearby.length).toBeGreaterThanOrEqual(
-        new Set(nearbyOnly.map((e) => `${e.left}|${e.right}`)).size > 0 ? 1 : 0,
-      );
-      // A graph made only of nearby relations yields no chain rows at all.
-      const onlyNearby = build({
-        items: graph.items,
-        diagnosisEdges: nearbyOnly,
-      });
-      expect(onlyNearby.totalCount).toBe(0);
-      expect(onlyNearby.chains).toEqual([]);
-      expect(onlyNearby.counts).toEqual({
-        exact: 0,
-        candidate: 0,
-        ambiguous: 0,
-        coverageBlocked: 0,
-      });
-    }
-  });
-
-  it("is identical across permutations of the input", () => {
+describe("properties over seeded random backend-shaped graphs", () => {
+  it("is identical across permutations of the input, duplicates and contradictions included", () => {
     for (let seed = 1; seed <= GRAPH_COUNT; seed += 1) {
       const graph = randomGraph(seed);
       const random = mulberry32(seed * 7919);
       const baseline = build({ ...graph });
       const permuted = build({
         items: shuffled(random, graph.items),
-        timelineEdges: shuffled(random, graph.timelineEdges),
-        diagnosisEdges: shuffled(random, graph.diagnosisEdges).map((e) =>
+        timelineEdges: shuffled(random, graph.timelineEdges).map((e) =>
           random() < 0.5 ? swapped(e) : e,
         ),
       });
@@ -645,63 +848,104 @@ describe("properties over seeded random graphs", () => {
     }
   });
 
-  it("never connects chains through an ambiguous, coverage blocked or nearby relation", () => {
+  it("never puts a pair with a non-linking observation inside an exact or candidate row", () => {
     for (let seed = 1; seed <= GRAPH_COUNT; seed += 1) {
       const graph = randomGraph(seed);
       const model = build({ ...graph });
-      // Rebuild expected components with a reference union-find that only sees
-      // exact and candidate relations.
+      expect(model.omittedCount).toBe(0);
+
+      const vetoed = new Set<string>();
+      const linkable = new Set<string>();
+      for (const edge of graph.timelineEdges) {
+        if (edge.toId === null || edge.toId === edge.fromId) continue;
+        const key = pairKey(edge.fromId, edge.toId);
+        if (isLinkingObservation(edge)) linkable.add(key);
+        else vetoed.add(key);
+      }
+      const expectedLinks = [...linkable].filter((key) => !vetoed.has(key));
+
+      // Reference components over the non-vetoed linking pairs only.
       const parent = new Map<string, string>();
       const find = (x: string): string => {
-        let root = parent.get(x) ?? x;
+        let root = x;
         while ((parent.get(root) ?? root) !== root) root = parent.get(root) as string;
-        parent.set(x, root);
         return root;
       };
-      const union = (a: string, b: string) => parent.set(find(a), find(b));
-      const linkable: Array<[string, string]> = [];
-      for (const e of graph.timelineEdges) {
-        if (
-          e.coverage.state === "covered" &&
-          (e.strength === "exact" || e.strength === "candidate") &&
-          e.toId !== null &&
-          e.toId !== e.fromId
-        ) {
-          linkable.push([e.fromId, e.toId]);
-        }
+      for (const key of expectedLinks) {
+        const [a, b] = key.split("\n") as [string, string];
+        parent.set(find(a), find(b));
       }
-      for (const e of graph.diagnosisEdges) {
-        if (
-          e.basis !== "timestampOnly" &&
-          (e.status === "exact" || e.status === "candidate") &&
-          e.right !== null &&
-          e.right !== e.left
-        ) {
-          linkable.push([e.left, e.right]);
-        }
-      }
-      for (const [a, b] of linkable) union(a, b);
-      const expected = new Map<string, string[]>();
-      for (const [a, b] of linkable) {
-        for (const id of [a, b]) {
+      const components = new Map<string, Set<string>>();
+      for (const key of expectedLinks) {
+        for (const id of key.split("\n")) {
           const root = find(id);
-          expected.set(root, [...(expected.get(root) ?? []), id]);
+          const set = components.get(root) ?? new Set<string>();
+          set.add(id);
+          components.set(root, set);
         }
       }
-      const expectedSets = [...expected.values()]
-        .map((ids) => [...new Set(ids)].sort())
+      const expectedSets = [...components.values()]
+        .map((set) => [...set].sort())
         .sort((a, b) => a.join().localeCompare(b.join()));
-      const actualSets = model.chains
-        .filter((c) => c.strength === "exact" || c.strength === "candidate")
-        .map((c) => [...c.memberIds].sort())
+
+      const chainRows = model.chains.filter(
+        (row) => row.strength === "exact" || row.strength === "candidate",
+      );
+      for (const row of chainRows) {
+        for (const edge of row.edges) {
+          expect(edge.right).not.toBeNull();
+          const key = pairKey(edge.left, edge.right as string);
+          expect(vetoed.has(key)).toBe(false);
+          expect(linkable.has(key)).toBe(true);
+        }
+      }
+      const actualSets = chainRows
+        .map(allMembers)
         .sort((a, b) => a.join().localeCompare(b.join()));
-      // The cap is not reached by these small graphs.
-      expect(model.omittedCount).toBe(0);
       expect(actualSets).toEqual(expectedSets);
     }
   });
 
-  it("keeps counts consistent with the rows", () => {
+  it("splits members consistently and cites only ids present in the input edges", () => {
+    for (let seed = 1; seed <= GRAPH_COUNT; seed += 1) {
+      const graph = randomGraph(seed);
+      const model = build({ ...graph });
+      const loaded = new Set(graph.items.map((i) => timelineOriginId(i.origin)));
+      const cited = new Set<string>();
+      for (const edge of graph.timelineEdges) {
+        cited.add(edge.fromId);
+        if (edge.toId !== null) cited.add(edge.toId);
+        for (const id of edge.candidateIds) cited.add(id);
+        for (const row of edge.evidence) cited.add(row.originId);
+      }
+      for (const row of model.chains) {
+        expect(row.memberCount).toBe(
+          row.memberIds.length + row.unresolvedMemberIds.length,
+        );
+        expect(row.memberIds.every((id) => loaded.has(id))).toBe(true);
+        expect(row.unresolvedMemberIds.every((id) => !loaded.has(id))).toBe(true);
+        expect([...row.unresolvedMemberIds].sort()).toEqual(row.unresolvedMemberIds);
+        for (const id of [...row.memberIds, ...row.unresolvedMemberIds]) {
+          expect(cited.has(id)).toBe(true);
+        }
+        for (const edge of row.edges) {
+          expect(cited.has(edge.left)).toBe(true);
+          if (edge.right !== null) expect(cited.has(edge.right)).toBe(true);
+        }
+        for (const ev of row.evidence) expect(cited.has(ev.originId)).toBe(true);
+        if (row.memberIds.length === 0) {
+          expect(row.startMs).toBeNull();
+          expect(row.endMs).toBeNull();
+          expect(row.title).toBeNull();
+        } else {
+          expect(row.startMs).not.toBeNull();
+          expect(row.title).not.toBeNull();
+        }
+      }
+    }
+  });
+
+  it("keeps counts consistent with the rows and the cap", () => {
     for (let seed = 1; seed <= GRAPH_COUNT; seed += 1) {
       const model = build({ ...randomGraph(seed) });
       const sum =
@@ -711,6 +955,33 @@ describe("properties over seeded random graphs", () => {
         model.counts.coverageBlocked;
       expect(model.totalCount).toBe(sum);
       expect(model.chains.length + model.omittedCount).toBe(sum);
+      expect(model.chains.length).toBeLessThanOrEqual(CORRELATION_CHAIN_RENDER_LIMIT);
+    }
+  });
+
+  it("applies the cap of 100 with omittedCount on large random graphs", () => {
+    for (let seed = 1; seed <= 20; seed += 1) {
+      const random = mulberry32(seed);
+      const pairs = 101 + Math.floor(random() * 60);
+      const edges = Array.from({ length: pairs }, (_, i) =>
+        tEdge(`e${i}`, `l${i}`, `r${i}`, pick(random, ["exact", "candidate"] as const)),
+      );
+      const model = build({ timelineEdges: shuffled(random, edges) });
+      expect(model.chains).toHaveLength(CORRELATION_CHAIN_RENDER_LIMIT);
+      expect(model.totalCount).toBe(pairs);
+      expect(model.omittedCount).toBe(pairs - CORRELATION_CHAIN_RENDER_LIMIT);
+    }
+  });
+
+  it("yields a deep-equal model when every edge is supplied twice", () => {
+    for (let seed = 1; seed <= GRAPH_COUNT; seed += 1) {
+      const graph = randomGraph(seed);
+      expect(
+        build({
+          items: graph.items,
+          timelineEdges: [...graph.timelineEdges, ...graph.timelineEdges],
+        }),
+      ).toEqual(build({ ...graph }));
     }
   });
 });
