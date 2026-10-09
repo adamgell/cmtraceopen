@@ -1,5 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FluentProvider, webLightTheme } from "@fluentui/react-components";
+import { WorkspaceToolbarAction } from "../../components/layout/Toolbar";
 import { DsregcmdToolbarAction } from "./DsregcmdToolbarAction";
 import { DsregcmdWorkspace } from "./DsregcmdWorkspace";
 import { dsregcmdWorkspace } from "./index";
@@ -31,8 +33,11 @@ afterEach(() => {
 });
 
 describe("DsregcmdToolbarAction", () => {
-  it("is registered as the dsregcmd workspace toolbar action", () => {
-    expect(dsregcmdWorkspace.toolbarAction).toBeDefined();
+  it("is registered as the dsregcmd workspace toolbar action", async () => {
+    render(<WorkspaceToolbarAction workspace={dsregcmdWorkspace} />);
+    expect(
+      await screen.findByRole("button", { name: "Capture now" }),
+    ).toBeInTheDocument();
   });
 
   it("runs a live capture from the primary 'Capture now' button", () => {
@@ -63,9 +68,9 @@ describe("DsregcmdToolbarAction", () => {
 
   it("routes the inline links to the same handlers", () => {
     render(<DsregcmdToolbarAction />);
-    fireEvent.click(screen.getByRole("button", { name: "Paste from clipboard" }));
-    fireEvent.click(screen.getByRole("button", { name: "Open file" }));
-    fireEvent.click(screen.getByRole("button", { name: "Open folder" }));
+    fireEvent.click(screen.getByRole("button", { name: "Paste" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open file..." }));
+    fireEvent.click(screen.getByRole("button", { name: "Open folder..." }));
     expect(actions.pasteDsregcmdSource).toHaveBeenCalledTimes(1);
     expect(actions.openSourceFileDialog).toHaveBeenCalledTimes(1);
     expect(actions.openSourceFolderDialog).toHaveBeenCalledTimes(1);
@@ -77,14 +82,26 @@ describe("DsregcmdToolbarAction", () => {
     for (const name of [
       "Capture now",
       "More capture options",
-      "Paste from clipboard",
-      "Open file",
-      "Open folder",
+      "Paste",
+      "Open file...",
+      "Open folder...",
     ]) {
       expect(screen.getByRole("button", { name })).toBeDisabled();
     }
     fireEvent.click(screen.getByRole("button", { name: "Capture now" }));
     expect(actions.captureDsregcmdSource).not.toHaveBeenCalled();
+  });
+
+  it("does not force an enabled-looking color on disabled links", () => {
+    useDsregcmdStore.setState({ isAnalyzing: true });
+    render(
+      <FluentProvider theme={webLightTheme}>
+        <DsregcmdToolbarAction />
+      </FluentProvider>,
+    );
+    const link = screen.getByRole("button", { name: "Open file..." });
+    expect(link).toBeDisabled();
+    expect(link.style.color).not.toBe("var(--colorNeutralForeground3)");
   });
 });
 

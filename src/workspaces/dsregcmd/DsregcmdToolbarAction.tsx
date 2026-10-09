@@ -10,6 +10,7 @@ import {
 } from "@fluentui/react-components";
 import {
   Camera16Regular,
+  ChevronDown12Regular,
   ClipboardPaste16Regular,
   DocumentText16Regular,
   FolderOpen16Regular,
@@ -46,7 +47,6 @@ export function DsregcmdToolbarAction() {
     getLogListMetrics(logListFontSize).fontSize - 2,
   );
   const linkStyle = {
-    color: tokens.colorNeutralForeground3,
     fontSize: linkFontSize,
     minWidth: 0,
   };
@@ -66,6 +66,7 @@ export function DsregcmdToolbarAction() {
               }}
               primaryActionButton={{ onClick: capture }}
               icon={<Camera16Regular />}
+              menuIcon={<ChevronDown12Regular />}
             >
               Capture now
             </SplitButton>
@@ -96,10 +97,9 @@ export function DsregcmdToolbarAction() {
       >
         <span aria-hidden="true">or</span>
         <Button
-          appearance="transparent"
+          appearance="subtle"
           size="small"
           disabled={isAnalyzing}
-          aria-label="Paste from clipboard"
           style={linkStyle}
           onClick={paste}
         >
@@ -107,23 +107,23 @@ export function DsregcmdToolbarAction() {
         </Button>
         <span aria-hidden="true">&middot;</span>
         <Button
-          appearance="transparent"
+          appearance="subtle"
           size="small"
           disabled={isAnalyzing}
           style={linkStyle}
           onClick={openFile}
         >
-          Open file
+          Open file...
         </Button>
         <span aria-hidden="true">&middot;</span>
         <Button
-          appearance="transparent"
+          appearance="subtle"
           size="small"
           disabled={isAnalyzing}
           style={linkStyle}
           onClick={openFolder}
         >
-          Open folder
+          Open folder...
         </Button>
       </span>
     </div>

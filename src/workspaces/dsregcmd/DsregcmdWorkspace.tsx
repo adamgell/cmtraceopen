@@ -268,19 +268,10 @@ export function DsregcmdWorkspace() {
 
   if (!result) {
     return (
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          height: "100%",
-          backgroundColor: tokens.colorNeutralBackground2,
-        }}
-      >
-        <EmptyWorkspace
-          title="No dsregcmd source loaded"
-          body="Use the toolbar actions to analyze dsregcmd /status output. Open a bundle root, its evidence folder, or its command-output folder, or run a live capture that stages dsregcmd and registry evidence together."
-        />
-      </div>
+      <EmptyWorkspace
+        title="No dsregcmd source loaded"
+        body="Use the toolbar actions to analyze dsregcmd /status output. Open a bundle root, its evidence folder, or its command-output folder, or run a live capture that stages dsregcmd and registry evidence together."
+      />
     );
   }
 
