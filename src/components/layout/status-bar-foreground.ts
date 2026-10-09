@@ -52,7 +52,7 @@ export function contrastRatio(foreground: string, background: string): number {
  *
  * The theme's own on-brand foreground wins when it already meets AA. Some
  * themes do not (solarized-dark, nord, classic-cmtrace) or set it equal to the
- * brand color (hotdog-stand), so those fall back to whichever of black and
+ * brand color, so those fall back to whichever of black and
  * white contrasts more.
  */
 export function pickStatusBarForeground(

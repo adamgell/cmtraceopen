@@ -116,8 +116,10 @@ export function EspStatusBarContent() {
             height: 7,
             flexShrink: 0,
             borderRadius: "50%",
-            // Live is shape (filled vs hollow), not palette color, so it
-            // survives forced-color and high-contrast themes.
+            // Live is shape (filled vs hollow), not palette color, so the
+            // in-app high-contrast theme is covered. Under OS forced-colors
+            // mode the background is forced and the box-shadow dropped, so
+            // both states vanish and the phase label carries the state.
             backgroundColor: isLive ? foreground : "transparent",
             boxShadow: `0 0 0 1px ${foreground}`,
           }}

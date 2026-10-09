@@ -125,6 +125,9 @@ const EXPECTED_FOREGROUND = [
   ["dark", "#ffffff"],
   ["high-contrast", "#000000"],
   ["solarized-dark", "#000000"],
+  ["classic-cmtrace", "#000000"],
+  ["nord", "#000000"],
+  ["dracula", "#ffffff"],
 ] as const;
 
 /// Phase 0b (#826): the global bar is 24px on the brand background in every
@@ -188,8 +191,12 @@ describe("status bar chrome", () => {
 
   it("never renders a success check for a ready Graph phase", () => {
     useEspDiagnosticsStore.setState({ graphPhase: "ready" });
-    render(<EspStatusBarContent />);
+    const { container } = render(<EspStatusBarContent />);
 
+    // An unlabelled Fluent icon is aria-hidden and has no img role, so check
+    // the DOM for any icon instead of querying by role.
+    expect(container.querySelector("svg")).toBeNull();
+    expect(container.querySelector("[data-fui-icon]")).toBeNull();
     expect(screen.queryAllByRole("img")).toHaveLength(0);
   });
 
