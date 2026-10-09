@@ -126,7 +126,7 @@ All mockup data is fictional. This includes the Contoso machine names, the IDs, 
 | D19 | Chain titles written by hand ("Enrollment attempt 1 failed") | Derived from data: `{eventId} · {message head}` of the highest-severity member, with ties broken by earliest timestamp. A diagnosis finding title is used when the finding's evidence covers the whole chain. | No fabricated interpretation |
 | D20 | v2 scenario layouts with the ESP phase Gantt, tracked-app table and IME detection details | Event-derived summaries plus "Open in ESP Diagnostics" / "Open in Intune Diagnostics" deep-links (§15.1) | Q-13 decision |
 | D21 | Pill shapes (radius 12–14, circular toggles) on the live pill, panel toggles and filter chips | Radius 8 (`--cmt-radius-xl`) or the Fluent default rounded shape. Level and marker dots stay circular. | DS anti-pattern: "the app maxes at 8px" (Q-16) |
-| D22 | Level and channel colors from Fluent palette tokens (§6.3) | Per-theme semantic tokens `severityPalette.eventLog` (critical, error, warning, information, verbose, and six channel colors), tuned in all seven themes and tested on resolved colors | Q-17; DS: a new color need is a semantic token in all seven themes |
+| D22 | Level and channel colors from Fluent palette tokens (§6.3) | Per-theme semantic tokens `severityPalette.eventLog` (critical, error, warning, information, verbose, and six channel colors, cool hues only), tuned in all seven themes and tested on resolved colors. Critical and Error share the red family; Error text is a true red in light themes (red-orange only in dark themes). | Q-17; DS: a new color need is a semantic token in all seven themes |
 
 ## 5. Layout anatomy and measurements
 
@@ -204,6 +204,7 @@ The light-theme hexes below are informative only. They were checked against `src
 | Warning (icon, text) | `#bc4b09` / `#78350f` | `severityPalette.status.warning.foreground` (`#bc4b09`); secondary text `severityPalette.warning.text` (`#78350F`) |
 | Information (bars) | `#c8d3de` | `colorNeutralStroke1` |
 | Information (dots, icon) | `#9aa9b8` / `#0c3b5e` | `colorNeutralForeground4` (dots); `colorNeutralForeground3` (icon) |
+| Verbose (bars, dots, icon) | none | Its own neutral, lighter and de-emphasized relative to Information (dimmer on dark themes), still gray, with a distance floor from Information so the §8.13 level-mix bar separates the two by color. Owner ruling (Adam, 2026-10-09); implemented as `severityPalette.eventLog` per Q-17. |
 | Success / installed / running OK | `#107c10`, `#0e700e`, `#f1faf1` | `colorPaletteGreenBackground3`, `severityPalette.status.success.foreground`, `colorPaletteGreenBackground1` |
 | Row tint, Critical / Error | `#fde7e9` / `#fff5f5` | `severityPalette.error.background` (`#FEE2E2`) / `.text` (`#7F1D1D`) |
 | Row tint, Warning | none | `severityPalette.warning.background` (`#FEF3C7`) / `.text` (`#78350F`) |
@@ -211,13 +212,17 @@ The light-theme hexes below are informative only. They were checked against `src
 | Ambiguous badge (`#fffef0` / `#78350f` / `#e8d44d`) | — | `severityPalette.warning.background` / `.text`, border `colorPaletteMarigoldBorder2` |
 | Candidate badge, connector | `#f0f0f0` / `#424242` | bg `colorNeutralBackground3`, text and dashed line `colorNeutralForeground2` |
 | Not-linked marker | `#8a8f98` dotted | `colorNeutralForeground3`, 1 px dotted outline, no connector |
-| Running bar / Retrying (v2) | `#2a78d6` | `colorPaletteBlueBorderActive` |
-| Sleep (v2) | `#b7d3f6` | `colorPaletteBlueBackground2` |
-| Not started (v2 hatch) | `#e0e0e0` / `#f5f5f5` | `colorNeutralStroke2` / `colorNeutralBackground3` |
-| Channel categorical | see D10 | `mergeColors[i]`, with `i` taken from the sequence **0, 4, 5, 3, 6, 7** in channel display order, cycling. Light values: blue `#2563eb`, orange `#ea580c`, cyan `#0891b2`, purple `#9333ea`, fuchsia `#c026d3`, brown `#854d0e`. |
+| Running bar / Retrying (v2) | `#2a78d6` | Designed in the v2 phases (#855), not Phase 1 (owner decision 2026-10-09). Intent: `colorPaletteBlueBorderActive`. |
+| Sleep (v2) | `#b7d3f6` | Designed in the v2 phases (#855), not Phase 1 (owner decision 2026-10-09). Intent: `colorPaletteBlueBackground2`. |
+| Not started (v2 hatch) | `#e0e0e0` / `#f5f5f5` | Designed in the v2 phases (#855), not Phase 1 (owner decision 2026-10-09). Intent: `colorNeutralStroke2` / `colorNeutralBackground3`. |
+| Channel categorical | see D10 | Per-theme semantic tokens in `severityPalette.eventLog`, cool hues only, per Q-17 and D22. The earlier `mergeColors` index sequence (0, 4, 5, 3, 6, 7) is superseded and is not the implementation. |
 | Single-series bars (top IDs, crashes per day) | `#2a78d6` | `mergeColors[0]` |
 
-`severityPalette` comes from `getThemeById(themeId).severityPalette`, as `LogListView.tsx` already does **[Verified]**. Phase 1 centralizes all of the mappings above in `evtx-visual-tokens.ts`. Per Q-17, the level rows (Critical, Error, Warning, Information bars, dots and icons) and the channel row are superseded by `severityPalette.eventLog`; the tokens named above are the light-theme intent, not the implementation. Components never index palettes directly.
+`severityPalette` comes from `getThemeById(themeId).severityPalette`, as `LogListView.tsx` already does **[Verified]**. Phase 1 centralizes the v1 mappings above in `evtx-visual-tokens.ts`; the v2 scenario state colors (Running/Retrying, Sleep, Not started) are designed in the v2 phases (#855), not Phase 1 (owner decision 2026-10-09). Per Q-17, the level rows (Critical, Error, Warning, Information bars, dots and icons) and the channel row are superseded by `severityPalette.eventLog`; the tokens named above are the light-theme intent, not the implementation. Components never index palettes directly.
+
+Error text follows the red family shared with Critical. In the light and classic themes the Error text is a true red; a red-orange Error is accepted in dark themes only. Critical/Error pairs use one red-family distance floor, and all other level pairs use the standard floor.
+
+*Errata, 2026-10-09 (Phase 1 token review, #827 and #876):* scenario state colors moved to #855, channels follow D22 rather than `mergeColors`, Verbose has its own neutral, and the live source pill is a v1 token (§8.1).
 
 Canvas and SVG rendering (for example the swimlanes) needs resolved color strings rather than `var(--…)` references. Resolve them once per theme change through `getComputedStyle`, following the approach in `getCanvasFont` (`src/lib/log-accessibility.ts`) **[Verified pattern]**.
 
@@ -288,7 +293,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
 - **Visual:**
   - pill, radius 8 (the design-system maximum, D21), padding `3px 10px`, *f* − 2, 600 weight;
   - 7 px status dot;
-  - live: bg `colorPaletteGreenBackground1`, border `colorPaletteGreenBackground3`, text and dot `severityPalette.status.success.foreground`;
+  - live: a v1 token owned by Phase 1's token map (`liveSource`): bg `colorPaletteGreenBackground1`, border `colorPaletteGreenBackground3` as decoration, text and dot `severityPalette.status.success.foreground`; text 4.5:1 and dot 3:1 on the pill background;
   - files: neutral bg3 / stroke1 / fg2, with the copy "Files · {n} sources".
 - **Data:**
   - `sourceMode`, `tailMode`, `remoteMachine`;
@@ -1261,11 +1266,10 @@ Spec: §6, §7.3
 ### Scope (2 files)
 - `evtx-visual-tokens.ts` (new): level → {barColor, dotColor, iconColor, icon, rowBackground, rowText};
   strength → badge triplet; selection triplet (Q-1: colorPaletteBlueBackground2 / BorderActive / Foreground2);
-  channel color assignment (`mergeColors` index sequence 0,4,5,3,6,7, cycling); heat-map steps (Q-3 interim
-  color-mix); data colors for v2 states.
+  channel colors as per-theme semantic tokens (Q-17, D22); heat-map steps (Q-3 interim color-mix).
+  v2 scenario state colors are out of scope (#855).
   Inputs: Fluent `tokens` + `getThemeById(themeId).severityPalette`.
-- `evtx-visual-tokens.test.ts` (new): deterministic channel assignment; red/green merge indices never used
-  for channels; every level and strength mapped; no hex literals in the module.
+- `evtx-visual-tokens.test.ts` (new): deterministic channel assignment; every level and strength mapped; no hex literals in the module.
 
 ### Acceptance
 - No component in later phases references a palette or hex directly.
