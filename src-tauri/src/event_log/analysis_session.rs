@@ -2054,3 +2054,84 @@ mod tests {
         );
     }
 }
+
+/// Captures the real engine's replies for the Event Logs screenshot harness.
+///
+/// Not a regression test: it only runs when `CMTRACE_EVENT_LOG_REPLIES_INPUT` and
+/// `CMTRACE_EVENT_LOG_REPLIES_OUTPUT` are both set, which `e2e/fixtures/capture-event-log-replies.mjs`
+/// does. It builds the session directly (no Tauri runtime) and replays the UI's call sequence:
+/// create, append in chunks, finalize, every timeline page, diagnose.
+#[cfg(test)]
+mod screenshot_replies {
+    use super::*;
+
+    #[test]
+    #[ignore = "run by e2e/fixtures/capture-event-log-replies.mjs"]
+    fn capture_event_log_replies() {
+        let (Some(input_path), Some(output_path)) = (
+            std::env::var_os("CMTRACE_EVENT_LOG_REPLIES_INPUT"),
+            std::env::var_os("CMTRACE_EVENT_LOG_REPLIES_OUTPUT"),
+        ) else {
+            println!(
+                "skipping: set CMTRACE_EVENT_LOG_REPLIES_INPUT and CMTRACE_EVENT_LOG_REPLIES_OUTPUT to capture"
+            );
+            return;
+        };
+        let input: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(input_path).unwrap()).unwrap();
+        let records: Vec<EvtxRecord> = serde_json::from_value(input["records"].clone()).unwrap();
+        let gaps: Vec<EvtxCoverageGap> =
+            serde_json::from_value(input["coverageGaps"].clone()).unwrap();
+        let chunk_limit = input["chunkRecordLimit"].as_u64().unwrap() as usize;
+        let page_size = input["pageSize"].as_u64().unwrap() as u32;
+        let session_id = input["sessionId"].as_str().unwrap().to_string();
+
+        // The validation evtx_diagnose_analysis_session runs before it touches the session.
+        validate_diagnosis_coverage_gaps(&gaps).unwrap();
+
+        let mut session = EventLogAnalysisSession::new(session_id.clone());
+        let create = session.status();
+        let mut append = Vec::new();
+        let mut chunk_counts = Vec::new();
+        for chunk in records.chunks(chunk_limit) {
+            let inputs = chunk
+                .iter()
+                .cloned()
+                .map(|record| EventLogAnalysisRecordInput {
+                    record,
+                    original_serialized_bytes: None,
+                })
+                .collect();
+            append.push(session.append_inputs(inputs, Vec::new()).unwrap());
+            chunk_counts.push(chunk.len());
+        }
+        let finalize = session.finalize().unwrap();
+        let mut pages = Vec::new();
+        let mut offset = 0u64;
+        loop {
+            let page = session.page(offset, page_size).unwrap();
+            let next = page.next_offset;
+            pages.push(serde_json::json!({ "offset": offset, "limit": page_size, "page": page }));
+            match next {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        let diagnosis = session
+            .diagnosis_snapshot()
+            .unwrap()
+            .summarize(gaps.clone());
+
+        let output = serde_json::json!({
+            "sessionId": session_id,
+            "appendChunkRecordCounts": chunk_counts,
+            "diagnoseCoverageGaps": gaps,
+            "create": create,
+            "append": append,
+            "finalize": finalize,
+            "timelinePages": pages,
+            "diagnosis": diagnosis,
+        });
+        std::fs::write(output_path, serde_json::to_string(&output).unwrap()).unwrap();
+    }
+}
