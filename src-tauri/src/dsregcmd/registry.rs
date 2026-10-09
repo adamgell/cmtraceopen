@@ -337,11 +337,12 @@ fn registry_file_path(bundle_path: &Path, file_name: &str) -> PathBuf {
 /// Read and parse one `.reg` export.
 ///
 /// `None` means the artifact was not collected: the file is absent, cannot be
-/// read, or parses to no registry keys at all (empty or not a registry
-/// export). A coverage gap is not evidence of an empty registry (#883), so
-/// callers must not turn `None` into a zero count. `Some` always holds at
-/// least one key, which makes "parsed, nothing relevant inside" distinct from
-/// "not parsed".
+/// read, or its decoded content holds no `[...]` key header at all (empty or
+/// not a registry export). A coverage gap is not evidence of an empty registry
+/// (#883), so callers must not turn `None` into a zero count. `Some` means the
+/// content was a registry export; the map may still be empty when the exported
+/// keys carry no named values, which keeps "exported, nothing relevant inside"
+/// distinct from "not collected".
 fn load_registry_map(path: &Path) -> Option<RegistryKeyMap> {
     if !path.is_file() {
         return None;
@@ -353,8 +354,14 @@ fn load_registry_map(path: &Path) -> Option<RegistryKeyMap> {
             .and_then(|bytes| decode_reg_content(&bytes))
     })?;
 
-    let registry = parse_reg_snapshot(&content);
-    (!registry.is_empty()).then_some(registry)
+    has_key_header(&content).then(|| parse_reg_snapshot(&content))
+}
+
+fn has_key_header(content: &str) -> bool {
+    content.lines().any(|line| {
+        let line = line.trim();
+        line.starts_with('[') && line.ends_with(']')
+    })
 }
 
 /// Like [`load_registry_map`] for the WHFB policy lookups, which merge several
@@ -717,15 +724,26 @@ mod tests {
         assert_eq!(load_enrollment_evidence(bundle.path()), None);
     }
 
-    /// A valid export with no enrollment subkeys is real registry evidence.
+    /// A registry export with no enrollment subkeys is real registry evidence,
+    /// whatever shape a key without enrollments takes.
     #[test]
     fn a_valid_enrollments_export_without_subkeys_is_zero_enrollments() {
-        let bundle = bundle_with_enrollments_export(
-            b"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n\"Placeholder\"=\"x\"\r\n",
+        let header_only = "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n";
+        let container_subkeys = format!(
+            "{header_only}\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\Context]\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\Status]\r\n"
         );
-        let evidence = load_enrollment_evidence(bundle.path()).expect("export was collected");
-        assert_eq!(evidence.enrollment_count, 0);
-        assert!(evidence.enrollments.is_empty());
+        let default_value_only = format!("{header_only}@=\"\"\r\n");
+
+        for export in [
+            header_only.to_string(),
+            container_subkeys,
+            default_value_only,
+        ] {
+            let bundle = bundle_with_enrollments_export(export.as_bytes());
+            let evidence = load_enrollment_evidence(bundle.path()).expect("export was collected");
+            assert_eq!(evidence.enrollment_count, 0);
+            assert!(evidence.enrollments.is_empty());
+        }
     }
 
     #[test]

@@ -1591,6 +1591,9 @@ mod tests {
     /// surface as "zero enrollments" and trigger `enrollment-missing-on-joined`.
     #[test]
     fn an_unreadable_enrollments_export_does_not_raise_enrollment_missing_on_joined() {
+        let _env_guard = dsregcmd_test_env_lock()
+            .lock()
+            .expect("lock dsregcmd env guard");
         let status = "\n AzureAdJoined : YES\n DomainJoined : NO\n TenantId : 11111111-2222-3333-4444-555555555555\n DeviceId : abcdefab-1111-2222-3333-abcdefabcdef\n";
         let analyze = |export: &[u8]| {
             let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -1613,9 +1616,17 @@ mod tests {
         assert!(unreadable.enrollment_evidence.is_none());
         assert!(!missing(&unreadable));
 
-        // A genuine export with no enrollment subkeys is still negative evidence.
+        // A genuine header-only export with no enrollment subkeys is still
+        // negative evidence.
         let genuine = analyze(
-            b"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n\"Placeholder\"=\"x\"\r\n",
+            b"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n",
+        );
+        assert_eq!(
+            genuine
+                .enrollment_evidence
+                .as_ref()
+                .map(|e| e.enrollment_count),
+            Some(0)
         );
         assert!(missing(&genuine));
     }
