@@ -126,6 +126,7 @@ All mockup data is fictional. This includes the Contoso machine names, the IDs, 
 | D19 | Chain titles written by hand ("Enrollment attempt 1 failed") | Derived from data: `{eventId} · {message head}` of the highest-severity member, with ties broken by earliest timestamp. A diagnosis finding title is used when the finding's evidence covers the whole chain. | No fabricated interpretation |
 | D20 | v2 scenario layouts with the ESP phase Gantt, tracked-app table and IME detection details | Event-derived summaries plus "Open in ESP Diagnostics" / "Open in Intune Diagnostics" deep-links (§15.1) | Q-13 decision |
 | D21 | Pill shapes (radius 12–14, circular toggles) on the live pill, panel toggles and filter chips | Radius 8 (`--cmt-radius-xl`) or the Fluent default rounded shape. Level and marker dots stay circular. | DS anti-pattern: "the app maxes at 8px" (Q-16) |
+| D22 | Level and channel colors from Fluent palette tokens (§6.3) | Per-theme semantic tokens `severityPalette.eventLog` (critical, error, warning, information, verbose, and six channel colors), tuned in all eight themes and tested on resolved colors | Q-17; DS: a new color need is a semantic token in all eight themes |
 
 ## 5. Layout anatomy and measurements
 
@@ -187,7 +188,7 @@ The light-theme hexes below are informative only. They were checked against `src
 
 | Mockup | Token(s) | Notes |
 |---|---|---|
-| `#cfe4fa` selected row + 3 px `#007768` inset | Background `colorPaletteBlueBackground2` (`#a9d3f2`), inset `box-shadow: inset 3px 0 0` `colorPaletteBlueBorderActive` (`#0078d4`), text `colorNeutralForeground1` | Precedent: `secureboot/DiagnosticsTab.tsx` **[Verified]**. Also applies to the selected chain row, the selected app row (v2), the active view card in the view strip and the active "Time: brushed" chip. Decided in Q-1. |
+| `#cfe4fa` selected row + 3 px `#007768` inset | Background `colorPaletteBlueBackground2` (`#a9d3f2`), inset `box-shadow: inset 3px 0 0` `colorPaletteBlueBorderActive` (`#0078d4`), text `colorPaletteBlueForeground2` (Q-18) | Precedent: `secureboot/DiagnosticsTab.tsx` **[Verified]**. Also applies to the selected chain row, the selected app row (v2), the active view card in the view strip and the active "Time: brushed" chip. Decided in Q-1. |
 | `#cfe4fa` active panel toggle, level toggle, scenario card | `colorNeutralBackground1Selected` + `colorBrandForeground1` text, 600 weight | DS toolbar active state |
 | Active layout button (`#007768` fill, white text) | `colorNeutralBackground1Selected` + `colorBrandForeground1`, 600 weight | D6 |
 | Exact-strength badge (`#cfe4fa` / `#0c3b5e` / `#007768`) | bg `colorPaletteBlueBackground2`, text `colorPaletteBlueForeground2` (`#004377`), border `colorPaletteBlueBorderActive` | Same triplet as selection |
@@ -216,7 +217,7 @@ The light-theme hexes below are informative only. They were checked against `src
 | Channel categorical | see D10 | `mergeColors[i]`, with `i` taken from the sequence **0, 4, 5, 3, 6, 7** in channel display order, cycling. Light values: blue `#2563eb`, orange `#ea580c`, cyan `#0891b2`, purple `#9333ea`, fuchsia `#c026d3`, brown `#854d0e`. |
 | Single-series bars (top IDs, crashes per day) | `#2a78d6` | `mergeColors[0]` |
 
-`severityPalette` comes from `getThemeById(themeId).severityPalette`, as `LogListView.tsx` already does **[Verified]**. Phase 1 centralizes all of the mappings above in `evtx-visual-tokens.ts`. Components never index palettes directly.
+`severityPalette` comes from `getThemeById(themeId).severityPalette`, as `LogListView.tsx` already does **[Verified]**. Phase 1 centralizes all of the mappings above in `evtx-visual-tokens.ts`. Per Q-17, the level rows (Critical, Error, Warning, Information bars, dots and icons) and the channel row are superseded by `severityPalette.eventLog`; the tokens named above are the light-theme intent, not the implementation. Components never index palettes directly.
 
 Canvas and SVG rendering (for example the swimlanes) needs resolved color strings rather than `var(--…)` references. Resolve them once per theme change through `getComputedStyle`, following the approach in `getCanvasFont` (`src/lib/log-accessibility.ts`) **[Verified pattern]**.
 
@@ -829,7 +830,7 @@ This applies to all workspaces (Q-7).
 - **Target (DS rules 3 and 5):**
   - height 24 px, padding `0 10px`, font 12 px;
   - background `colorBrandBackground`;
-  - all text and icons in `colorNeutralForegroundOnBrand`;
+  - all text and icons in `colorNeutralForegroundOnBrand` when it reaches 4.5:1 against the brand background, otherwise black or white, whichever contrasts more. The theme token misses 4.5:1 in classic-cmtrace, nord, solarized-dark and hotdog-stand (decided by Adam, Phase 0b);
   - no top border.
 - **Tone handling:**
   - colored text on a brand background fails contrast, so status tone is conveyed by a 12 px Fluent icon plus the label (for example `ErrorCircle12Regular`, `Warning12Regular`, `CheckmarkCircle12Regular`), all in the on-brand foreground;
@@ -937,6 +938,8 @@ This applies to all workspaces (Q-7).
 | Q-14 | How are the DSRegCmd redesign mockups handled? | Option A ("Verdict first"), specified in a separate handoff spec with its own umbrella issue. Option B is kept for reference only. | §3.3, Appendix B.3 |
 | Q-15 | Which earlier Event Logs exploration elements are carried into the spec? | All four offered: the Context ±5 min list, the Correlation overview with zoom band, the review of unplaced lines, and chains in the rail | §8.11, §8.11a, §8.13, Appendix B.2 |
 | Q-16 | Do pill shapes follow the mockups (12–14 px) or the design system's 8 px maximum? | 8 px maximum, with no design-system exception. This applies to this spec and the DSRegCmd spec. | D21, §8.1, §8.2, §8.4 |
+| Q-17 | The §6.3 level and channel tokens collapse in some themes: in high contrast, Info, Warning and Error bars all resolve to white and Critical matches the selection cyan; in the dark themes Critical and Error are indistinguishable; in four themes a channel color equals Warning. How are they sourced? | Per-theme semantic tokens (`severityPalette.eventLog`) in all eight themes, enforced by tests on resolved colors (decided 2026-10-08, found by the Phase 1 charter review) | D22, §6.3, Phase 1 |
+| Q-18 | §6.2 said selected-row text is `colorNeutralForeground1`, but Q-1 names `colorPaletteBlueForeground2` as the triplet's text. Which wins? | The Q-1 triplet. `colorNeutralForeground1` on the selection background measured 3.21:1 in solarized-dark and 1.47:1 in hotdog-stand. | §6.2 |
 
 ### 13.2 Items still to verify inside phases
 
