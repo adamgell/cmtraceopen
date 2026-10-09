@@ -320,30 +320,45 @@ describe("getVerdictHeadline", () => {
     );
   });
 
-  it("never says 'not managed' or 'managed by Intune' across the full cross-product", () => {
+  it("holds the headline and tone invariants across the full join x MDM x severity matrix", () => {
     const severities: Array<Array<{ id: string; severity: DsregcmdSeverity }>> = [
       [],
       [{ id: "i", severity: "Info" }],
       [{ id: "w", severity: "Warning" }],
       [{ id: "e", severity: "Error" }],
     ];
+    // Independent of the module: spec rule for the tone.
+    const expectedTone = (result: DsregcmdAnalysisResult) => {
+      if (result.diagnostics.some((d) => d.severity === "Error")) return "error";
+      if (result.diagnostics.some((d) => d.severity === "Warning")) return "warning";
+      return result.derived.joinType === "EntraIdJoined" ||
+        result.derived.joinType === "HybridEntraIdJoined"
+        ? "healthy"
+        : "neutral";
+    };
     let checked = 0;
     for (const joinType of JOIN_TYPES) {
-      for (const [, mdm] of MDM_FIXTURES) {
+      for (const [, mdm, clause] of MDM_FIXTURES) {
         for (const extra of severities) {
           const result = makeResult({
             ...mdm,
             joinType,
             diagnostics: [...(mdm.diagnostics ?? []), ...extra],
           });
-          const headline = getVerdictHeadline(result).toLowerCase();
-          expect(headline).not.toContain("not managed");
-          expect(headline).not.toContain("managed by intune");
+          const headline = getVerdictHeadline(result);
+          const joined = joinType === "EntraIdJoined" || joinType === "HybridEntraIdJoined";
+          expect(headline).toBe(
+            joined ? `${JOIN_CLAUSES[joinType]} \u00b7 ${clause}` : JOIN_CLAUSES[joinType],
+          );
+          expect(headline).not.toMatch(/manag/i);
+          expect(headline.toLowerCase()).not.toContain("not managed");
+          expect(headline.toLowerCase()).not.toContain("managed by intune");
+          expect(getVerdictTone(result)).toBe(expectedTone(result));
           checked += 1;
         }
       }
     }
-    expect(checked).toBe(JOIN_TYPES.length * MDM_FIXTURES.length * severities.length);
+    expect(checked).toBe(80);
   });
 
   it("does not put the top issue into the headline", () => {
