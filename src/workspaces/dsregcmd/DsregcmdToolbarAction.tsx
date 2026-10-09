@@ -46,10 +46,14 @@ export function DsregcmdToolbarAction() {
     10,
     getLogListMetrics(logListFontSize).fontSize - 2,
   );
-  const linkStyle = {
+  const baseLinkStyle = {
     fontSize: linkFontSize,
     minWidth: 0,
   };
+  // Only color while enabled so Fluent's disabled color still wins.
+  const linkStyle = isAnalyzing
+    ? baseLinkStyle
+    : { ...baseLinkStyle, color: tokens.colorNeutralForeground3 };
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

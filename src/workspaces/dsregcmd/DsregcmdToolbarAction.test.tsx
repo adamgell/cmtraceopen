@@ -1,6 +1,10 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FluentProvider, webLightTheme } from "@fluentui/react-components";
+import {
+  FluentProvider,
+  tokens,
+  webLightTheme,
+} from "@fluentui/react-components";
 import { WorkspaceToolbarAction } from "../../components/layout/Toolbar";
 import { DsregcmdToolbarAction } from "./DsregcmdToolbarAction";
 import { DsregcmdWorkspace } from "./DsregcmdWorkspace";
@@ -92,16 +96,37 @@ describe("DsregcmdToolbarAction", () => {
     expect(actions.captureDsregcmdSource).not.toHaveBeenCalled();
   });
 
-  it("does not force an enabled-looking color on disabled links", () => {
+  const linkNames = ["Paste", "Open file...", "Open folder..."];
+
+  it("renders disabled inline links in the Fluent disabled color", () => {
     useDsregcmdStore.setState({ isAnalyzing: true });
     render(
       <FluentProvider theme={webLightTheme}>
         <DsregcmdToolbarAction />
       </FluentProvider>,
     );
-    const link = screen.getByRole("button", { name: "Open file..." });
-    expect(link).toBeDisabled();
-    expect(link.style.color).not.toBe("var(--colorNeutralForeground3)");
+    for (const name of linkNames) {
+      const link = screen.getByRole("button", { name });
+      expect(link).toBeDisabled();
+      expect(getComputedStyle(link).color).toBe(
+        tokens.colorNeutralForegroundDisabled,
+      );
+    }
+  });
+
+  it("renders enabled inline links in the fg3 color", () => {
+    render(
+      <FluentProvider theme={webLightTheme}>
+        <DsregcmdToolbarAction />
+      </FluentProvider>,
+    );
+    for (const name of linkNames) {
+      const link = screen.getByRole("button", { name });
+      expect(link).toBeEnabled();
+      expect(getComputedStyle(link).color).toBe(
+        tokens.colorNeutralForeground3,
+      );
+    }
   });
 });
 
