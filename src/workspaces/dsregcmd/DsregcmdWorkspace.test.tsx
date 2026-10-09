@@ -362,6 +362,11 @@ describe("DsregcmdWorkspace fixtures", () => {
     expect(screen.getAllByText("Capture Confidence").length).toBeGreaterThan(0);
     expect(screen.getByText("PRT State")).toBeInTheDocument();
     expect(screen.getByText("MDM Signals")).toBeInTheDocument();
+    // Sidebar and facts panel must render the same MDM visibility label.
+    const sidebarRow = screen.getByText("MDM visibility:").parentElement;
+    expect(sidebarRow).toHaveTextContent("MDM visibility: Present");
+    const factsCard = screen.getByText("MDM Signals").parentElement;
+    expect(factsCard).toHaveTextContent("Present");
     expect(screen.getByText("NGC")).toBeInTheDocument();
     expect(screen.getAllByText("Certificate").length).toBeGreaterThan(0);
     expect(screen.getByText("90 days")).toBeInTheDocument();

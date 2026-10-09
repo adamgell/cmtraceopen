@@ -596,8 +596,8 @@ const DSREGCMD_RESULT = {
     captureConfidence: "high",
     captureConfidenceReason:
       "Capture ran in the signed-in user context with a full SSO State section present.",
-    mdmEnrolled: null,
-    missingMdm: true,
+    mdmEnrolled: true,
+    missingMdm: false,
     complianceUrlPresent: true,
     missingComplianceUrl: false,
     azureAdPrtPresent: true,
@@ -615,26 +615,6 @@ const DSREGCMD_RESULT = {
     remoteSessionSystem: false,
   },
   diagnostics: [
-    {
-      id: "mdm-not-enrolled",
-      severity: "Warning",
-      category: "Management",
-      title: "MDM enrollment could not be confirmed",
-      summary:
-        "The capture does not show an active MDM enrollment, so Intune compliance and policy may not apply. Enrollment state is unknown, not confirmed absent.",
-      evidence: [
-        "MdmUrl present but enrollment state not detected",
-        "DeviceManagementSrvUrl is empty",
-      ],
-      nextChecks: [
-        "Confirm the auto-enrollment GPO / CSP is scoped to this device",
-        "Check the DeviceManagement section on the endpoint",
-      ],
-      suggestedFixes: [
-        "Trigger enrollment via Settings > Access work or school",
-        "Verify the user has an Intune license assigned",
-      ],
-    },
     {
       id: "on-prem-sso-missing",
       severity: "Info",
