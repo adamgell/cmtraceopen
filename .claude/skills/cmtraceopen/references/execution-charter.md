@@ -39,8 +39,12 @@ tracking, and safe integration. Reverify all remote state before acting on it.
 - **Review independently.** Before a pull request is reported ready, dispatch
   `cmtrace-code-review` (Opus) on the exact head and act on its findings. The author
   never reviews its own work.
-- If these agents are missing from a session, the session started from a stale
-  checkout. Restart it from a worktree cut from current `origin/main`.
+- If these agents are missing from a session, find out why before acting. Compare
+  the session's checkout with `origin/main` (`git merge-base --is-ancestor HEAD
+  origin/main`) and check that `.claude/agents/` exists there with valid
+  frontmatter (`node --test scripts/agent-context.test.mjs`). A stale checkout is
+  fixed by restarting from a worktree cut from current `origin/main`; a malformed
+  agent file is fixed in that file.
 
 ## Autonomy and hard stops
 
