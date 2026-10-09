@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 - **Windows Firewall logs (#814)**: Recognize firewall records separately from IIS, preserve all fields and Local wall-clock timestamps, report skipped NUL padding and warn about lost events, and retain encoding and source identity through live tailing and timeline queries.
 
 - **DsRegCmd live capture reports evidence-write failures (#760)**: Connectivity, event-log, and scheduled-task evidence now report directory creation, serialization, and file-write errors instead of returning a successful capture with missing evidence.
+- **DsRegCmd short-identity exports (#646)**: Scrub classified identifiers from four bytes in exported narrative, including raw text that resembles a replacement token, while preserving tokens generated during that export. Tenant display names retain the six-byte floor.
 
 ## [1.6.2]
 

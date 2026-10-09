@@ -82,7 +82,7 @@
 
 use crate::intune::apps::windows::common::{
     caseless_equal, find_ignore_case, fold_with_offsets, redact_field_value, redact_text,
-    FoldedChar,
+    redact_text_with_spans, FoldedChar,
 };
 use crate::intune::apps::windows::ime::models::{
     EventLogAnalysis, EventLogChannelSummary, EventLogCorrelationLink, EventLogEntry,
@@ -110,15 +110,32 @@ const KIND_THUMBPRINT: &str = "thumbprint";
 const KIND_UPN: &str = "upn";
 const KIND_HOST: &str = "host";
 
-/// Shortest classified value scrubbed out of free text.
+/// Shortest *display name* scrubbed out of free text.
 ///
 /// A tenant display name can be a short ordinary word, and a value that short
 /// cannot be told apart from prose once it sits unlabelled in a sentence.
 /// Scrubbing it would mangle readable evidence without protecting anything the
-/// typed field does not already cover. The floor stays below the shortest real
-/// domain, device id and thumbprint, so every shaped identifier is still
-/// covered.
+/// typed field does not already cover.
+///
 const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
+
+/// Shortest *identifier* scrubbed out of free text.
+///
+/// Identifiers are held to the same rule with a lower bar, because a field
+/// holding a domain, tenant id, device id, thumbprint, UPN or host name holds a
+/// value whose shape *is* the identity: a short one is short because the identity
+/// is short, not because it might be prose. Applying the display-name floor to
+/// those left the typed field masked while the narrative naming the same value
+/// kept it verbatim -- one export contradicting itself.
+///
+/// The bar is four bytes because two independent anchors put the boundary between
+/// four and two: a live capture whose on-premises NetBIOS domain is four bytes
+/// published that domain in its status text while its typed field was masked,
+/// and [`tests::a_short_identifier_below_the_identifier_floor_keeps_the_floor`]
+/// requires a two-character value in any field to stay out of the scrub. Values
+/// shorter than this still escape, and that remainder is stated rather than
+/// hidden: nothing here can tell a three-byte domain from a three-letter word.
+const MIN_SCRUBBED_IDENTIFIER_BYTES: usize = 4;
 
 /// Every identity value this lane classified, paired with the token that
 /// replaces it.
@@ -145,11 +162,35 @@ struct IdentityLiterals {
 }
 
 impl IdentityLiterals {
-    /// Classify one identity value. Values too short to be told apart from
-    /// prose are skipped rather than scrubbed out of narrative over-eagerly.
-    fn push(&mut self, value: &str, kind: &str) {
+    /// Classify one identifier: a domain, tenant id, device id, thumbprint,
+    /// UPN or host name.
+    ///
+    /// Held to [`MIN_SCRUBBED_IDENTIFIER_BYTES`] rather than the display-name
+    /// floor: the field states that the value is an identity, so a short value is
+    /// a short identity, but the bar still exists so a two-character value cannot
+    /// rewrite every occurrence of those two characters in the capture.
+    fn push_identifier(&mut self, value: &str, kind: &str) {
+        if value.trim().len() < MIN_SCRUBBED_IDENTIFIER_BYTES {
+            return;
+        }
+        self.insert(value, kind);
+    }
+
+    /// Classify one display name, which may be a short ordinary word.
+    ///
+    /// Keeps the floor ([`MIN_SCRUBBED_LITERAL_BYTES`]): the field says a value is
+    /// an identity but not that its shape is one.
+    fn push_display_name(&mut self, value: &str, kind: &str) {
+        if value.trim().len() < MIN_SCRUBBED_LITERAL_BYTES {
+            return;
+        }
+        self.insert(value, kind);
+    }
+
+    /// Record one classified value, unless the table already represents it.
+    fn insert(&mut self, value: &str, kind: &str) {
         let literal = value.trim();
-        if literal.len() < MIN_SCRUBBED_LITERAL_BYTES {
+        if literal.is_empty() {
             return;
         }
 
@@ -188,7 +229,8 @@ impl IdentityLiterals {
 
     /// Replace every occurrence of a classified literal, whatever its case.
     ///
-    /// Runs after the shared grammar in every free-text pipeline: the shaped
+    /// Runs on source gaps after the shared grammar in each free-text pipeline:
+    /// generated spans are copied by the projection. The shaped
     /// rules must see the original text, or scrubbing a tenant domain on its
     /// own would break the mail-address match on a principal name that contains
     /// it and leak the local part.
@@ -285,7 +327,7 @@ impl Projection {
     /// A free-text field: the shared grammar first, then this lane's literal
     /// scrub.
     fn text(&self, value: &str) -> String {
-        self.literals.scrub(&redact_text(value))
+        redact_text_with_spans(value).map_source_text(|source| self.literals.scrub(source))
     }
 
     fn text_opt(&self, value: &Option<String>) -> Option<String> {
@@ -807,7 +849,7 @@ fn collect_identity_literals(result: &DsregcmdAnalysisResult) -> IdentityLiteral
     if let Some(enrollment) = &result.enrollment_evidence {
         for entry in &enrollment.enrollments {
             if let Some(upn) = entry.upn.as_deref() {
-                literals.push(upn, KIND_UPN);
+                literals.push_identifier(upn, KIND_UPN);
             }
         }
     }
@@ -836,16 +878,22 @@ fn capture_literals(capture_output: &str) -> IdentityLiterals {
 }
 
 fn collect_fact_literals(facts: &DsregcmdFacts, literals: &mut IdentityLiterals) {
+    // The tenant name is a display name -- a label someone chose, which may be a
+    // short ordinary word -- and is the one field here whose shape says nothing
+    // about whether the text is an identity.
+    if let Some(value) = facts.tenant_details.tenant_name.as_deref() {
+        literals.push_display_name(value, KIND_TENANT);
+    }
+
     for (value, kind) in [
         (facts.tenant_details.tenant_id.as_deref(), KIND_TENANT),
-        (facts.tenant_details.tenant_name.as_deref(), KIND_TENANT),
         (facts.tenant_details.domain_name.as_deref(), KIND_TENANT),
         (facts.device_details.device_id.as_deref(), KIND_DEVICE),
         (facts.device_details.thumbprint.as_deref(), KIND_THUMBPRINT),
         (facts.diagnostics.user_identity.as_deref(), KIND_UPN),
     ] {
         if let Some(value) = value {
-            literals.push(value, kind);
+            literals.push_identifier(value, kind);
         }
     }
 }
@@ -856,10 +904,10 @@ fn collect_active_evidence_into(
 ) {
     if let Some(scp) = &evidence.scp_query {
         if let Some(domain) = scp.tenant_domain.as_deref() {
-            literals.push(domain, KIND_TENANT);
+            literals.push_identifier(domain, KIND_TENANT);
         }
         if let Some(azuread_id) = scp.azuread_id.as_deref() {
-            literals.push(azuread_id, KIND_TENANT);
+            literals.push_identifier(azuread_id, KIND_TENANT);
         }
     }
 }
@@ -867,7 +915,7 @@ fn collect_active_evidence_into(
 fn collect_event_log_into(analysis: &EventLogAnalysis, literals: &mut IdentityLiterals) {
     for entry in &analysis.entries {
         if let Some(computer) = entry.computer.as_deref() {
-            literals.push(computer, KIND_HOST);
+            literals.push_identifier(computer, KIND_HOST);
         }
     }
 }
@@ -1081,6 +1129,140 @@ mod tests {
     /// One text reaches one token even when two fields classify it under two
     /// kinds.
     ///
+    /// A four-byte domain is still a domain.
+    ///
+    /// The field said so. Before this, `corp` was masked in its typed field while
+    /// a sentence naming it kept the value verbatim, so one export carried two
+    /// contradictory statements about the same identity.
+    #[test]
+    fn an_identifier_below_the_display_floor_is_scrubbed() {
+        let mut literals = IdentityLiterals::default();
+        literals.push_identifier("corp", KIND_TENANT);
+
+        let token = literals
+            .token_for("corp")
+            .expect("the domain was classified");
+        assert!(token.starts_with("[tenant:"), "the field names it: {token}");
+        assert_eq!(
+            literals.scrub("The device is joined to corp."),
+            format!("The device is joined to {token}."),
+        );
+    }
+
+    /// Two characters are still too few, whatever the field says.
+    ///
+    /// The floor that protects prose from `ad` is the reason the display-name
+    /// rule exists at all, and an identifier field does not lift it far enough to
+    /// lose that: every occurrence of those two characters in a capture would be
+    /// rewritten otherwise.
+    #[test]
+    fn a_short_identifier_below_the_identifier_floor_keeps_the_floor() {
+        let mut literals = IdentityLiterals::default();
+        literals.push_identifier("ad", KIND_TENANT);
+
+        assert_eq!(literals.values.len(), 0, "nothing was classified");
+        assert_eq!(literals.token_for("ad"), None);
+    }
+
+    /// Token-shaped input is source, including uppercase hash spellings.
+    #[test]
+    fn a_span_with_uppercase_hex_is_not_a_token() {
+        let mut literals = IdentityLiterals::default();
+        literals.push_identifier("dead", KIND_HOST);
+
+        let scrubbed = literals.scrub("seen at [host:DEADBEEFDEADBEEF] here");
+
+        // A case-sensitive `contains("dead")` passed on "DEADBEEF" without the
+        // span ever being scrubbed: the assertion has to look for what would
+        // survive, in the spelling it would survive in.
+        assert!(
+            !scrubbed.to_ascii_lowercase().contains("deadbeefdeadbeef"),
+            "a span the grammar would not mint must not shield its contents: {scrubbed}"
+        );
+    }
+
+    /// Malformed token-shaped source has no exemption either.
+    #[test]
+    fn a_span_the_grammar_would_not_mint_is_scrubbed() {
+        let mut literals = IdentityLiterals::default();
+        literals.push_identifier("dead", KIND_HOST);
+
+        let scrubbed = literals.scrub("seen at [_:deadbeefdeadbeef] here");
+
+        assert!(
+            !scrubbed.contains("dead"),
+            "a spelling the grammar would not mint is not a token: {scrubbed}"
+        );
+    }
+
+    #[test]
+    fn raw_token_spelling_never_grants_an_exemption() {
+        let mut literals = IdentityLiterals::default();
+        literals.push_identifier("deadbeef", KIND_HOST);
+        let token = literals.token_for("deadbeef").unwrap();
+        for kind in ["host", "unknown", "", "_", "HOST"] {
+            for body in ["deadbeefdeadbeef", "DEADBEEFDEADBEEF"] {
+                assert_eq!(
+                    literals.scrub(&format!("é [{kind}:{body}] deadbeef τέλος")),
+                    format!("é [{kind}:{token}{token}] {token} τέλος"),
+                );
+            }
+        }
+    }
+
+    /// A token-kind word is scrubbed in raw source, while an actual emission
+    /// from the shared grammar survives the same invocation.
+    #[test]
+    fn a_short_identifier_does_not_rewrite_a_replacement_token() {
+        let mut literals = IdentityLiterals::default();
+        literals.push_identifier("host", KIND_HOST);
+        let token = literals.token_for("host").unwrap().to_owned();
+        let generated = super::redact_text("DeviceName=fixture-device");
+        let raw = generated.strip_prefix("DeviceName=").unwrap();
+        let text = format!(
+            "{}host {raw}; DeviceName=fixture-device; host",
+            "[".repeat(64)
+        );
+        let expected = format!(
+            "{}{token} {}; {generated}; {token}",
+            "[".repeat(64),
+            raw.replacen("host", &token, 1),
+        );
+        assert_eq!(super::Projection { literals }.text(&text), expected);
+    }
+
+    #[test]
+    fn raw_token_lookalike_reaches_the_parser_before_projection() {
+        let capture = format!(
+            "{}\n Server Message : seen at [host:deadbeefdeadbeef] here\n",
+            IDENTITY_CAPTURE.replace("corp.contoso.com", "deadbeef"),
+        );
+        let raw =
+            analyze_text_preserving_local_values(&capture, Utc::now()).expect("capture parses");
+        assert_eq!(
+            raw.facts.tenant_details.domain_name.as_deref(),
+            Some("deadbeef")
+        );
+        assert_eq!(
+            raw.facts.registration.server_message.as_deref(),
+            Some("seen at [host:deadbeefdeadbeef] here")
+        );
+    }
+
+    /// A display name shorter than the floor is still left alone in prose.
+    ///
+    /// `Acme` is as likely to be an ordinary word as a tenant name, so the floor
+    /// stays: the field is masked because the classification is sound, and the
+    /// narrative is not mangled for a value the floor cannot tell from prose.
+    #[test]
+    fn a_display_name_shorter_than_the_floor_keeps_the_floor() {
+        let mut literals = IdentityLiterals::default();
+        literals.push_display_name("Acme", KIND_TENANT);
+
+        assert_eq!(literals.values.len(), 0, "nothing was classified");
+        assert_eq!(literals.token_for("Acme"), None);
+    }
+
     /// The kind is a property of the *field*; the token is a property of the
     /// *value*, and a narrative mention carries no field at all. Keying the table
     /// by kind would leave a mention of `contoso.example` in prose choosing
@@ -1091,8 +1273,8 @@ mod tests {
     #[test]
     fn one_text_reaches_one_token_when_two_kinds_classify_it() {
         let mut literals = IdentityLiterals::default();
-        literals.push("contoso.example", KIND_TENANT);
-        literals.push("contoso.example", KIND_HOST);
+        literals.push_identifier("contoso.example", KIND_TENANT);
+        literals.push_identifier("contoso.example", KIND_HOST);
 
         let token = literals
             .token_for("contoso.example")
