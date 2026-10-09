@@ -218,45 +218,52 @@ theme) which serves the same semantic purpose.
 
 **Status:** OPEN (awaiting human decision)
 **Filed:** 2026-10-09
-**Surfaces:** `src/workspaces/event-log/evtx-visual-tokens.ts` (`heatSteps`), `src/lib/constants.ts` (`LogSeverityPalette`), `src/lib/themes/palettes.ts`, `docs/design-system/tokens.css`
+**Surfaces:** `src/workspaces/event-log/evtx-visual-tokens.ts` (`heatSteps`, introduced by PR #876), `src/lib/constants.ts` (`LogSeverityPalette`), `src/lib/themes/palettes.ts`, `docs/design-system/tokens.css`
 **Tracking:** #858, part of #823. Spec: `docs/superpowers/specs/2026-10-08-event-logs-workbench-ui-handoff-design.md` (D11, Q-3, section 15.2)
 
 ### Decision
 
-None yet. The recommendation below is a proposal for the owner, not a decision.
+None yet. Everything below, including the step count and the recommendation,
+is a proposal for the owner to confirm or change.
 
 ### Context
 
 The design system has categorical colors (`mergeColors`), severity colors and
 status colors, but no sequential ramp: an ordered, low to high scale for
-quantity. The Event Logs Charts heat map needs one. The spec's interim answer
-(D11, Q-3) builds six fixed steps in `evtx-visual-tokens.ts` by mixing
-`severityPalette.mergeColors[0]` into `colorNeutralBackground1` with
-`color-mix(in srgb, ...)` at 15, 30, 45, 60, 75 and 90 percent. Q-3 and
-section 15.2 require this open question so the interim can be replaced rather
-than copied into other workspaces.
+quantity. The Event Logs Charts heat map needs one.
 
-Problems with the interim:
+The design (spec D11) shows a 7-step blue ramp. With no ramp token available,
+D11 and Q-3 prescribe an interim of 6 fixed steps. PR #876 introduces it in
+`evtx-visual-tokens.ts` (`heatSteps`, `HEAT_STEP_PERCENTAGES`): it mixes
+`severityPalette.mergeColors[0]` into `colorNeutralBackground1` with
+`color-mix(in srgb, ...)` at 15, 30, 45, 60, 75 and 90 percent. These symbols
+do not exist on main until #876 merges. The step count (7 in the design, 6 in
+the interim) is itself undecided.
+
+Open problems with the interim:
 
 - `mergeColors[0]` was tuned for tab identification, not for a ramp. Nothing
-  guarantees monotonic lightness or distinguishable adjacent steps in every
-  registered theme.
-- Label legibility on each step is not guaranteed, because the step fills
-  vary with the theme background.
-- High-contrast behavior is not defined (a mix of two system colors is not a
-  ramp).
+  guarantees distinguishable adjacent steps or a useful lightness range in
+  every registered theme.
+- Label legibility on each step is not checked, because the step fills vary
+  with the theme background. In the high-contrast theme the mix is
+  `color-mix(in srgb, #00BFFF p%, #000000)`, a monotonic single-hue ramp, but
+  the bright steps may not carry dark or light labels equally well.
+- OS forced-colors mode is not handled by the app today, so it is an open
+  question whether a ramp token needs to handle it.
 - Any other density view (timeline density, sparkline fills) would have to
   copy the mix, spreading an unvetted derivation.
 
-Requirements for any resolution:
+### Proposed acceptance criteria (for the owner to confirm)
 
-1. A fixed number of steps (the interim uses 6), ordered low to high, defined
-   for every registered theme.
+1. A fixed number of steps, ordered low to high, defined for every registered
+   theme. The count is a decision point (6 in the interim, 7 in the design).
 2. Monotonic lightness across the steps in each theme.
 3. Adjacent steps distinguishable from each other.
 4. Text drawn on a step (counts, labels) meets the contrast floor the system
    already applies to other tokens.
-5. A defined high-contrast behavior (system colors, not a mix).
+5. Defined behavior for the high-contrast theme, and a decision on whether OS
+   forced-colors mode is in scope.
 6. Safe for common color vision deficiencies; lightness carries the order, not
    hue alone.
 7. Must not read as severity: avoid the severity red, amber and green hues for
@@ -266,19 +273,18 @@ Requirements for any resolution:
 
 | Option | Pro | Con |
 |--------|-----|-----|
-| **A. Single-hue ramp per theme** (`severityPalette.sequential`, a fixed-length tuple, hand-tuned in `palettes.ts`) | Monotonic lightness is easy to guarantee and test, colorblind safe, matches how `mergeColors` is defined and tested | N steps x every registered theme to maintain; one hue may not suit every theme background |
+| **A. Single-hue ramp per theme** (`severityPalette.sequential`, a fixed-length tuple, hand-tuned in `palettes.ts`) | Monotonic lightness is easy to guarantee and test, colorblind safe, follows the existing `mergeColors` pattern (its channel tests arrive with #876) | N steps x every registered theme to maintain; one hue may not suit every theme background |
 | **B. Perceptually uniform multi-hue ramp** (generated or pinned per theme) | Best step separation across a wide range; familiar from common data-vis scales | Hue shifts can read as severity or categories; harder to keep legible on every theme background; more review per theme |
-| **C. Keep `color-mix()` with guardrails** (shared helper, plus tests for monotonic lightness and label contrast) | No new per-theme palette values, zero extra maintenance, smallest change | Quality depends on `mergeColors[0]` and the background in each theme; some themes may fail the guardrails and need exceptions; high-contrast still needs a special case |
+| **C. Keep `color-mix()` with guardrails** (shared helper, plus tests for monotonic lightness and label contrast) | No new per-theme palette values, zero extra maintenance, smallest change | Quality depends on `mergeColors[0]` and the background in each theme; some themes may fail the guardrails and need exceptions |
 
 ### Proposal (for the owner)
 
-Option A: add `sequential` to `LogSeverityPalette` as a 6-tuple, faintest
-first, defined in `src/lib/themes/palettes.ts` for every registered theme, with
-a documented `--cmt-seq-1` to `--cmt-seq-6` mirror in `tokens.css`. The
-high-contrast theme should map the steps to system colors with a stepped
-pattern or outline cue rather than lightness alone. Keeping the interim until
-a decision is made costs nothing, so Option C is the fallback if the owner
-prefers not to add per-theme values.
+Option A: add `sequential` to `LogSeverityPalette` as a fixed-length tuple,
+faintest first, defined in `src/lib/themes/palettes.ts` for every registered
+theme, with a documented `--cmt-seq-*` mirror in `tokens.css`. The step count
+(6 or 7) and the forced-colors scope are left for the owner to decide. Keeping
+the interim until a decision is made costs nothing, so Option C is the
+fallback if the owner prefers not to add per-theme values.
 
 ### When resolved
 
@@ -287,7 +293,7 @@ prefers not to add per-theme values.
    `evtx-visual-tokens.ts` with the new token, and remove `HEAT_STEP_PERCENTAGES`.
 3. Add token suite tests: step count, monotonic lightness per theme,
    adjacent-step distinctness, label contrast on every step, and the
-   high-contrast mapping.
+   high-contrast behavior.
 4. Update the D11 and Q-3 notes in the Event Logs spec, mark the entry
    **RESOLVED** with the PR link, and close #858.
 
