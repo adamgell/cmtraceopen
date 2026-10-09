@@ -126,7 +126,7 @@ All mockup data is fictional. This includes the Contoso machine names, the IDs, 
 | D19 | Chain titles written by hand ("Enrollment attempt 1 failed") | Derived from data: `{eventId} · {message head}` of the highest-severity member, with ties broken by earliest timestamp. A diagnosis finding title is used when the finding's evidence covers the whole chain. | No fabricated interpretation |
 | D20 | v2 scenario layouts with the ESP phase Gantt, tracked-app table and IME detection details | Event-derived summaries plus "Open in ESP Diagnostics" / "Open in Intune Diagnostics" deep-links (§15.1) | Q-13 decision |
 | D21 | Pill shapes (radius 12–14, circular toggles) on the live pill, panel toggles and filter chips | Radius 8 (`--cmt-radius-xl`) or the Fluent default rounded shape. Level and marker dots stay circular. | DS anti-pattern: "the app maxes at 8px" (Q-16) |
-| D22 | Level and channel colors from Fluent palette tokens (§6.3) | Per-theme semantic tokens `severityPalette.eventLog` (critical, error, warning, information, verbose, and six channel colors), tuned in all eight themes and tested on resolved colors | Q-17; DS: a new color need is a semantic token in all eight themes |
+| D22 | Level and channel colors from Fluent palette tokens (§6.3) | Per-theme semantic tokens `severityPalette.eventLog` (critical, error, warning, information, verbose, and six channel colors), tuned in all seven themes and tested on resolved colors | Q-17; DS: a new color need is a semantic token in all seven themes |
 
 ## 5. Layout anatomy and measurements
 
@@ -165,7 +165,7 @@ These are reference measurements at 1440×900 with `logListFontSize` = 13 (call 
 
 ## 6. Color mapping
 
-The light-theme hexes below are informative only. They were checked against `src/lib/themes/theme-light.ts`, `palettes.ts` and `@fluentui/tokens` 9.x. Components reference the tokens, never the hexes. Palette tokens exist in all eight themes, because the non-light themes take Fluent defaults through `createLightTheme` / `createDarkTheme` **[Verified]**.
+The light-theme hexes below are informative only. They were checked against `src/lib/themes/theme-light.ts`, `palettes.ts` and `@fluentui/tokens` 9.x. Components reference the tokens, never the hexes. Palette tokens exist in all seven themes, because the non-light themes take Fluent defaults through `createLightTheme` / `createDarkTheme` **[Verified]**.
 
 ### 6.1 Neutrals and brand
 
@@ -830,7 +830,7 @@ This applies to all workspaces (Q-7).
 - **Target (DS rules 3 and 5):**
   - height 24 px, padding `0 10px`, font 12 px;
   - background `colorBrandBackground`;
-  - all text and icons in `colorNeutralForegroundOnBrand` when it reaches 4.5:1 against the brand background, otherwise black or white, whichever contrasts more. The theme token misses 4.5:1 in classic-cmtrace, nord, solarized-dark and hotdog-stand (decided by Adam, Phase 0b);
+  - all text and icons in `colorNeutralForegroundOnBrand` when it reaches 4.5:1 against the brand background, otherwise black or white, whichever contrasts more. The theme token misses 4.5:1 in classic-cmtrace, nord and solarized-dark (decided by Adam, Phase 0b; hotdog-stand, which also failed, was removed in #878);
   - no top border.
 - **Tone handling:**
   - colored text on a brand background fails contrast, so status tone is conveyed by a 12 px Fluent icon plus the label (for example `ErrorCircle12Regular`, `Warning12Regular`, `CheckmarkCircle12Regular`), all in the on-brand foreground;
@@ -938,7 +938,7 @@ This applies to all workspaces (Q-7).
 | Q-14 | How are the DSRegCmd redesign mockups handled? | Option A ("Verdict first"), specified in a separate handoff spec with its own umbrella issue. Option B is kept for reference only. | §3.3, Appendix B.3 |
 | Q-15 | Which earlier Event Logs exploration elements are carried into the spec? | All four offered: the Context ±5 min list, the Correlation overview with zoom band, the review of unplaced lines, and chains in the rail | §8.11, §8.11a, §8.13, Appendix B.2 |
 | Q-16 | Do pill shapes follow the mockups (12–14 px) or the design system's 8 px maximum? | 8 px maximum, with no design-system exception. This applies to this spec and the DSRegCmd spec. | D21, §8.1, §8.2, §8.4 |
-| Q-17 | The §6.3 level and channel tokens collapse in some themes: in high contrast, Info, Warning and Error bars all resolve to white and Critical matches the selection cyan; in the dark themes Critical and Error are indistinguishable; in four themes a channel color equals Warning. How are they sourced? | Per-theme semantic tokens (`severityPalette.eventLog`) in all eight themes, enforced by tests on resolved colors (decided 2026-10-08, found by the Phase 1 charter review) | D22, §6.3, Phase 1 |
+| Q-17 | The §6.3 level and channel tokens collapse in some themes: in high contrast, Info, Warning and Error bars all resolve to white and Critical matches the selection cyan; in the dark themes Critical and Error are indistinguishable; in four themes a channel color equals Warning. How are they sourced? | Per-theme semantic tokens (`severityPalette.eventLog`) in all seven themes, enforced by tests on resolved colors (decided 2026-10-08, found by the Phase 1 charter review) | D22, §6.3, Phase 1 |
 | Q-18 | §6.2 said selected-row text is `colorNeutralForeground1`, but Q-1 names `colorPaletteBlueForeground2` as the triplet's text. Which wins? | The Q-1 triplet. `colorNeutralForeground1` on the selection background measured 3.21:1 in solarized-dark and 1.47:1 in hotdog-stand. | §6.2 |
 
 ### 13.2 Items still to verify inside phases
@@ -1118,7 +1118,7 @@ MsiInstaller events 11707 (installation succeeded), 11708 (installation failed) 
 |---|---|---|
 | Rust correlation key kinds for `EventData` identifiers such as `EnrollmentId` | Q-9 | Child of #539. Requires cargo gates, the wasm32 parser check and Windows-lab evidence. Once it lands, such links can be Exact rather than Candidate. |
 | Windowed analysis-timeline query (`startMs`, `endMs`, `limit`) and full edge paging | Q-10 | Child of #539. Once it lands, Phase 11's client-side locator calls it instead. |
-| Design-system open question: a semantic sequential data-ramp token in all eight themes | Q-3 | Add an `OQ-n` entry to `docs/design-system/OPEN-QUESTIONS.md`. Once it lands, D11's interim `color-mix()` is replaced. |
+| Design-system open question: a semantic sequential data-ramp token in all seven themes | Q-3 | Add an `OQ-n` entry to `docs/design-system/OPEN-QUESTIONS.md`. Once it lands, D11's interim `color-mix()` is replaced. |
 
 ## 16. Corrections to earlier notes
 
@@ -1841,7 +1841,7 @@ and chain model no longer depend on client-side page search and `edgesPreview`.
 Spec: D11, §15.2, Q-3
 
 Add an OQ entry to docs/design-system/OPEN-QUESTIONS.md proposing a semantic sequential ramp
-(for heat maps and density) defined in all eight themes. When resolved, replace the Charts heat-map
+(for heat maps and density) defined in all seven themes. When resolved, replace the Charts heat-map
 color-mix interim in `evtx-visual-tokens.ts`.
 ```
 
