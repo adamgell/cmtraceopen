@@ -1410,6 +1410,77 @@ describe("evtx visual tokens", () => {
     });
   });
 
+  describe.each(surfaceThemes)(
+    "readableOn outputs in the %s theme",
+    (id, theme) => {
+      const visual = buildEvtxVisualTokens(theme);
+      const palette = theme.severityPalette;
+      const r = (value: string) => resolveToken(value, theme);
+      // Every readableOn call in the module: three row-tint icons, the
+      // Ambiguous label and the pressed mark outline.
+      const table = [
+        {
+          output: "Critical iconColor",
+          actual: visual.levels.Critical.iconColor,
+          background: palette.error.background,
+          preferred: palette.eventLog.critical,
+          floor: 3,
+        },
+        {
+          output: "Error iconColor",
+          actual: visual.levels.Error.iconColor,
+          background: palette.error.background,
+          preferred: palette.eventLog.error,
+          floor: 3,
+        },
+        {
+          output: "Warning iconColor",
+          actual: visual.levels.Warning.iconColor,
+          background: palette.warning.background,
+          preferred: palette.eventLog.warning,
+          floor: 3,
+        },
+        {
+          output: "Ambiguous label",
+          actual: visual.strengths.ambiguous.foreground,
+          background: palette.warning.background,
+          preferred: palette.warning.text,
+          floor: 4.5,
+        },
+        {
+          output: 'markOutline("pressed")',
+          actual: visual.markOutline("pressed"),
+          background: tokens.colorNeutralBackground1Selected,
+          preferred: tokens.colorBrandForeground1,
+          floor: 3,
+        },
+      ];
+
+      it("keeps the preferred color at the floor, else black or white", () => {
+        const failures: string[] = [];
+        for (const row of table) {
+          const background = r(row.background);
+          const preferred = r(row.preferred);
+          let expected = preferred;
+          if (contrastRatio(preferred, background) < row.floor) {
+            expected =
+              contrastRatio("#000000", background) >=
+              contrastRatio("#ffffff", background)
+                ? "#000000"
+                : "#ffffff";
+          }
+          const actual = r(row.actual);
+          if (actual.toLowerCase() !== expected.toLowerCase()) {
+            failures.push(
+              `${id}: ${row.output} is ${actual}, expected ${expected} (preferred ${preferred} on ${background}, floor ${row.floor})`,
+            );
+          }
+        }
+        expect(failures, failures.join("; ")).toEqual([]);
+      });
+    },
+  );
+
   it.each(themes)(
     "pins the finding callout triplet in the %s theme",
     (_id, theme) => {
