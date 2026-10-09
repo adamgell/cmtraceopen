@@ -199,9 +199,9 @@ The light-theme hexes below are informative only. They were checked against `src
 |---|---|---|
 | Critical (bars, dots, icons) | `#8b0a14` | `colorPaletteDarkRedBorderActive` (`#750b1c`) |
 | Error (bars, dots) | `#d13438` | `colorPaletteRedBackground3` (`#d13438`), an exact match |
-| Error (icon, text) | `#c50f1f` / `#b10e1c` | Text: `severityPalette.eventLog.text.error` (`severityPalette.status.error.foreground` measured 2.19:1 on the solarized-dark selection and 2.46:1 on the nord rail). Icon: the mark `eventLog.error` (grid icon through the token map's `iconColor`, black or white below 3:1 on the row tint; rail icon the mark; selected row `colorPaletteBlueForeground2`) |
+| Error (icon, text) | `#c50f1f` / `#b10e1c` | Icon and text follow the level rules below (`levels.Error.iconColor`, `railIconColor`, `selectedIconColor`, `textColor`). `severityPalette.status.error.foreground` measured 2.19:1 on the solarized-dark selection and 2.46:1 on the nord rail, which is why text is `eventLog.text.error`. |
 | Warning (bars, dots) | `#eda100` | `colorPaletteMarigoldBackground3` (`#eaa300`) |
-| Warning (icon, text) | `#bc4b09` / `#78350f` | Text: `severityPalette.eventLog.text.warning` (same reason as Error). Icon: the mark `eventLog.warning` (grid icon through `iconColor`, black or white below 3:1 on the row tint; rail icon the mark; selected row `colorPaletteBlueForeground2`). Text on the Warning row tint stays `severityPalette.warning.text` (`#78350F`) |
+| Warning (icon, text) | `#bc4b09` / `#78350f` | Icon and text follow the level rules below (`levels.Warning.iconColor`, `railIconColor`, `selectedIconColor`, `textColor`), for the same reason as Error. Text on the Warning row tint stays `severityPalette.warning.text` (`#78350F`). |
 | Information (bars) | `#c8d3de` | `colorNeutralStroke1` |
 | Information (dots, icon) | `#9aa9b8` / `#0c3b5e` | `colorNeutralForeground4` (dots); `colorNeutralForeground3` (icon) |
 | Verbose (bars, dots, icon) | none | Its own neutral, lighter and de-emphasized relative to Information (dimmer on dark themes), still gray, with a distance floor from Information so the §8.13 level-mix bar separates the two by color. Owner ruling (Adam, 2026-10-09); implemented as `severityPalette.eventLog` per Q-17. |
@@ -220,9 +220,18 @@ The light-theme hexes below are informative only. They were checked against `src
 
 `severityPalette` comes from `getThemeById(themeId).severityPalette`, as `LogListView.tsx` already does **[Verified]**. Phase 1 centralizes the v1 mappings above in `evtx-visual-tokens.ts`; the v2 scenario state colors (Running/Retrying, Sleep, Not started) are designed in the v2 phases (#855), not Phase 1 (owner decision 2026-10-09). Per Q-17, the level rows (Critical, Error, Warning, Information bars, dots and icons) and the channel row are superseded by `severityPalette.eventLog`; the tokens named above are the light-theme intent, not the implementation. Components never index palettes directly.
 
-Error text follows the red family shared with Critical. Level text (Critical, Error, Warning) is the token `severityPalette.eventLog.text.*`. In the light and classic themes the Error text is a true red; a red-orange Error is accepted in dark themes only. Tinted-row text keeps D3's pairing, `severityPalette.<kind>.text` on its row background; classic Error rows stay yellow on red, because their red identity is the background.
+The level rules below are stated once and apply to all five levels. Components read the token map fields named here, never a palette or a phrase such as "the level color".
 
-Distance floors, in CIEDE2000: level marks and Critical, Error and Warning text are 20 apart, except Critical/Error pairs (red family), which are 15 apart. The Verbose mark is at least 10 from the Information mark. Channels are 15 from each other and from every non-mark family, and 20 from level marks. The live label and dot are 20 from level marks and 15 from other families.
+- **Level marks (bars, dots):** `levels.<L>.barColor` / `dotColor`, which are `severityPalette.eventLog.<level>`.
+- **Level icons:** the grid icon is `levels.<L>.iconColor` (the mark, black or white below 3:1 on the row tint). Rail and §8.8 group-row icons are `levels.<L>.railIconColor` (the mark). The selected row uses `levels.<L>.selectedIconColor` (`colorPaletteBlueForeground2`).
+- **Level text, all five levels:** `levels.<L>.textColor`, which is `severityPalette.eventLog.text.*`. Information and Verbose text are neutral grays, Verbose the dimmer.
+- **Text on a level's own row tint:** keeps D3's pairing, `severityPalette.<kind>.text` on `severityPalette.<kind>.background`. Classic Error rows stay yellow on red, because their red identity is the background.
+- **Error text:** Critical and Error share the red family. In the light and classic themes the Error text is a true red; a red-orange Error is accepted in dark themes only.
+
+Distance floors, in CIEDE2000:
+- Across families (level marks, level text, channels, live, single series, selection, brand): 20 when either color is a level mark, otherwise 15. Critical and Error pairs, mark or text, are 15. Exempt: a level's text and its own mark; Information and Verbose across mark and text; the theme-owned selection, brand and single-series pairs.
+- Within families: level marks are 20 apart, with the Verbose mark at least 10 from the Information mark. Critical, Error and Warning text are 20 apart. Channels are 15 apart.
+- The live label and dot follow the cross-family rule: 20 from level marks and 15 from other families.
 
 *Errata, 2026-10-09 (Phase 1 token review, #827 and #876):* scenario state colors moved to #855, channels follow D22 rather than `mergeColors`, Verbose has its own neutral, and the live source pill is a v1 token (§8.1).
 
@@ -351,7 +360,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
   - **Compatibility:** older builds' `sanitizeQuickFilter` falls back to the default mode for the unknown mode value **[Verified fallback behavior]**, so saved filters remain loadable.
 - **Level toggles:**
   - `role="group"`, `aria-label="Level"`, 26 px buttons, padding `0 9px`, *f* − 2;
-  - each button: an 8 px dot in the level bar color, the label (Critical, Error, Warning, Info, Verbose), then the count (numeric font, fg3, 400 weight);
+  - each button: an 8 px dot in `levels.<L>.dotColor`, the label (Critical, Error, Warning, Info, Verbose), then the count (numeric font, fg3, 400 weight);
   - pressed style per §6.2;
   - drive `toggleFilterLevel`;
   - counts come from the loaded `records` before level filtering, computed by `countByLevel` in `evtx-filter.ts` *(new function)*.
@@ -442,7 +451,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
 - **Row:**
   - height per D1; bottom border `colorNeutralStroke3`; background per D3; selection per §6.2;
   - the current 4 px level-colored left border is removed (the icon and row tint carry severity). The marker color keeps the left 4 px slot when a marker is present, so the epic's tagging and bookmark behavior is preserved;
-  - Level cell: centered icon (§7.3) in the level icon color;
+  - Level cell: centered icon (§7.3) in `levels.<L>.iconColor`, or `selectedIconColor` on the selected row;
   - Time: numeric font at *f* − 1, fg2, `white-space: nowrap`;
   - ID: numeric font, 700 weight;
   - Channel: a 7 px swatch (radius 2) plus the short name, ellipsis, with the full name in a tooltip;
@@ -460,12 +469,12 @@ Each subsection gives the mockup reference, the structure, the data source and t
 - **Mockup:** `WB-Grouped`.
 - **Component:** `EvtxGroupedView.tsx` *(new)*. Summaries come from `buildGroupSummaries` in `evtx-filter.ts` *(new function)*.
 - **Grouping key:** the first Group by field, defaulting to `eventId` when Group by is None. Rows are sorted by severity rank (Critical, Error, Warning, Information, Verbose), then count descending.
-- **Header row:** sticky, bg3, *f* − 2, 600 weight. Columns: chevron 16 · level icon 20 · ID 52 · Provider 170 · Typical message flex · Count 56 (right-aligned) · "{window} trend" 168 · Last seen 120.
+- **Header row:** sticky, bg3, *f* − 2, 600 weight. Columns: chevron 16 · level icon 20 (`railIconColor`) · ID 52 · Provider 170 · Typical message flex · Count 56 (right-aligned) · "{window} trend" 168 · Last seen 120.
 - **Group row:**
   - padding `6px 12px`, *f* − 1, bottom `colorNeutralStroke2`;
   - when expanded: bg3 and 600 weight;
   - Typical message is the most frequent message for the key, with ties going to the latest;
-  - Trend is a 24-bin sparkline, 18 px tall, in the level bar color;
+  - Trend is a 24-bin sparkline, 18 px tall, in `levels.<L>.barColor`;
   - Last seen uses the numeric font at *f* − 3.
 - **Expanded items:**
   - container bg2, padding `4px 0 6px 56px`;
@@ -578,7 +587,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
   - one lane per source: event channels plus text-log files;
   - lane label 184 px at *f* − 2, fg2;
   - the window is the chain span padded by 25% on each side, with a minimum of 10 s;
-  - markers are 14 px. Events are circles and log lines are 3 px rounded squares, filled with the level color, with a 2 px `colorNeutralBackground1` ring and a 1 px level-color outer ring. Labels sit at *f* − 3 on bg1;
+  - markers are 14 px. Events are circles and log lines are 3 px rounded squares, filled with `levels.<L>.dotColor`, with a 2 px `colorNeutralBackground1` ring and a 1 px `dotColor` outer ring. Labels sit at *f* − 3 on bg1;
   - members outside the window are pinned at the edge at 55% opacity, with labels "← {id} · {Δ} earlier" or "{id} · {Δ} later →";
   - connectors: SVG `vector-effect: non-scaling-stroke`. Exact edges are 2.5 px solid `colorPaletteBlueBorderActive`. Candidate edges are 1.5 px dashed (`5 4`) `colorNeutralForeground2`. Not-linked items get no connector.
 - **Cards below** (wrap, `flex: 1 1 300px`, border stroke2, radius 6):
@@ -649,8 +658,8 @@ Each subsection gives the mockup reference, the structure, the data source and t
 
 1. **Finding cards**, one per actionable `DiagnosisFinding`:
    - which findings: `class !== "coverageGap"`, consistent with `actionableFindingCount`. Sorted by severity (`critical` > `error` > `warning` > `info`), then confidence (`high` > `medium` > `low` > `unknown`) **[Verified enums]**;
-   - card: bg1, border stroke2, a 3 px top border in the severity color, radius 6, padding `10px 12px`, gap 6;
-   - eyebrow: the severity word uppercased (*f* − 3, 700 weight, letter-spacing .08em, severity color);
+   - card: bg1, border stroke2, a 3 px top border in `levels.<L>.barColor`, radius 6, padding `10px 12px`, gap 6;
+   - eyebrow: the severity word uppercased (*f* − 3, 700 weight, letter-spacing .08em, `levels.<L>.textColor`);
    - the eyebrow's right side shows the confidence ("{confidence} confidence", mono, *f* − 3, fg3), as in `Main`;
    - title (*f*, 600 weight);
    - `summary` (*f* − 2, line-height 1.5, fg2);
@@ -670,7 +679,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
    - a stacked bar, 12 px, radius 3, gap 2. Each segment has a minimum flex of 0.6% so rare levels stay visible;
    - legend at *f* − 3: "{label} {n}".
 5. **Top event IDs** card, captioned "click to filter":
-   - top 7 rows, each an ID (40 px numeric bold), a bar (10 px, level bar color) and a count (30 px);
+   - top 7 rows, each an ID (40 px numeric bold), a bar (10 px, `levels.<L>.barColor`) and a count (30 px);
    - clicking a row applies an event-ID chip through the quick filter's `eventIds` mode, an on-load criterion that does not re-query **[Recommendation]**.
 6. **Correlation summary** card:
    - "{e} exact · {c} candidate · {a} ambiguous";
@@ -686,7 +695,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
    - row 1: strength badge, spacer, and the span (numeric, *f* − 3, fg3);
    - title (*f*, 600 weight, D19);
    - `key: {kind} {value}` (mono, *f* − 3, fg2);
-   - steps (an ordered list of up to 6): a level dot (8 px), the time (numeric, *f* − 3, 52 px), a kind chip (`EVT` or `LOG`, mono *f* − 4, 700 weight; `EVT` on the blue triplet background, `LOG` on bg4), then the message. Further steps collapse into "+{n} more";
+   - steps (an ordered list of up to 6): a level dot (8 px, `levels.<L>.dotColor`), the time (numeric, *f* − 3, 52 px), a kind chip (`EVT` or `LOG`, mono *f* − 4, 700 weight; `EVT` on the blue triplet background, `LOG` on bg4), then the message. Further steps collapse into "+{n} more";
    - actions: "Show in table" (applies the record-scope chip and switches to Table) and "Open in correlation view".
 3. **Ambiguous and Coverage blocked** items follow as compact rows (badge, title, span), with no steps.
 4. **"Nearby, not linked ({n})"**: a collapsed disclosure listing time-adjacent items with the reason "time only, not linked". It has no strength badge and no connector vocabulary (D7).
@@ -696,9 +705,9 @@ Each subsection gives the mockup reference, the structure, the data source and t
 **Details tab** (the selected record)
 
 1. **Header:**
-   - the level icon at 16 px;
+   - the level icon at 16 px (`levels.<L>.iconColor`, or `selectedIconColor` when the row is selected);
    - "Event {eventId}" (*f* + 1, 600 weight);
-   - the level word (*f* − 2, 600 weight, level text color);
+   - the level word (*f* − 2, 600 weight, `levels.<L>.textColor`);
    - spacer;
    - previous / next buttons, 24 px, `ArrowUp16Regular` / `ArrowDown16Regular`, labelled "Previous event" / "Next event", moving through `visibleRecords`;
    - a close button (`Dismiss12Regular`, `aria-label="Close details"`) that clears the selection and returns to the Insights tab, as in `Selected`.
@@ -1272,7 +1281,7 @@ Spec: §6, §7.3
   live source pill triplet (`liveSource`, §8.1). v2 scenario state colors are out of scope (#855).
   Inputs: Fluent `tokens` + `getThemeById(themeId).severityPalette`.
 - `src/lib/constants.ts`, `src/lib/themes/palettes.ts`, `src/lib/color-contrast.ts` (new): the per-theme `severityPalette.eventLog` tokens (D22) and the contrast helpers behind the floors in §6.3.
-- `evtx-visual-tokens.test.ts` (new): deterministic channel assignment; every level and strength mapped; no hex literals in the module; semantic hue bands and the CIEDE2000 floors of §6.3 per placement.
+- `evtx-visual-tokens.test.ts` (new): deterministic channel assignment; every level and strength mapped; no hex literals in the module; semantic hue bands (Critical and Error red family, Warning amber, channels cool); WCAG floors per placement (3:1 marks, 4.5:1 text); the CIEDE2000 floors of §6.3 per family pair.
 
 ### Acceptance
 - No component in later phases references a palette or hex directly.
