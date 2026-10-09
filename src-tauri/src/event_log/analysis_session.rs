@@ -2077,8 +2077,10 @@ mod screenshot_replies {
             );
             return;
         };
-        let input: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(input_path).unwrap()).unwrap();
+        let input_text = std::fs::read_to_string(&input_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", input_path.to_string_lossy()));
+        let input: serde_json::Value = serde_json::from_str(&input_text)
+            .unwrap_or_else(|error| panic!("parse {}: {error}", input_path.to_string_lossy()));
         let records: Vec<EvtxRecord> = serde_json::from_value(input["records"].clone()).unwrap();
         let gaps: Vec<EvtxCoverageGap> =
             serde_json::from_value(input["coverageGaps"].clone()).unwrap();
@@ -2097,10 +2099,7 @@ mod screenshot_replies {
             let inputs = chunk
                 .iter()
                 .cloned()
-                .map(|record| EventLogAnalysisRecordInput {
-                    record,
-                    original_serialized_bytes: None,
-                })
+                .map(EventLogAnalysisRecordInput::complete)
                 .collect();
             append.push(session.append_inputs(inputs, Vec::new()).unwrap());
             chunk_counts.push(chunk.len());
@@ -2132,6 +2131,7 @@ mod screenshot_replies {
             "timelinePages": pages,
             "diagnosis": diagnosis,
         });
-        std::fs::write(output_path, serde_json::to_string(&output).unwrap()).unwrap();
+        std::fs::write(&output_path, serde_json::to_string(&output).unwrap())
+            .unwrap_or_else(|error| panic!("write {}: {error}", output_path.to_string_lossy()));
     }
 }
