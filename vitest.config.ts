@@ -17,7 +17,7 @@ export default defineConfig({
       },
     },
     setupFiles: ["src/test-setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.{ts,tsx}", "e2e/**/*.vitest.ts"],
     globals: true,
   },
 });
