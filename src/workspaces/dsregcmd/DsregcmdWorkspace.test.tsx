@@ -405,6 +405,21 @@ describe("DsregcmdWorkspace fixtures", () => {
     expect(screen.getByText("PRT refresh failed")).toBeInTheDocument();
   });
 
+  it("D2 renders no workspace header row", () => {
+    seedReady();
+    render(<DsregcmdWorkspace />);
+
+    expect(screen.queryByText("dsregcmd Workspace")).toBeNull();
+    for (const name of [
+      "Capture",
+      "Paste",
+      "Open Text File",
+      "Open Evidence Folder",
+    ]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+  });
+
   it("DSREG-006 shows export controls for JSON, status, summary, and raw input", () => {
     seedReady();
     render(<DsregcmdWorkspace />);

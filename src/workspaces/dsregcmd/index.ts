@@ -17,6 +17,11 @@ export const dsregcmdWorkspace: WorkspaceDefinition = {
       default: m.DsregcmdSidebar,
     }))
   ),
+  toolbarAction: lazy(() =>
+    import("./DsregcmdToolbarAction").then((m) => ({
+      default: m.DsregcmdToolbarAction,
+    }))
+  ),
   capabilities: {
     knownSources: false,
   },

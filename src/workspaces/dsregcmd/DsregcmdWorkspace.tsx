@@ -10,7 +10,6 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useDsregcmdStore } from "./dsregcmd-store";
 import { DsregcmdEventLogSurface } from "./DsregcmdEventLogSurface";
-import { useAppActions } from "../../hooks/use-app-actions";
 import { redactDsregcmdStatusText, writeTextOutputFile } from "../../lib/commands";
 import {
   formatBool,
@@ -52,12 +51,6 @@ export function DsregcmdWorkspace() {
   const sourceContext = useDsregcmdStore((s) => s.sourceContext);
   const analysisState = useDsregcmdStore((s) => s.analysisState);
   const isAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
-  const {
-    openSourceFileDialog,
-    openSourceFolderDialog,
-    pasteDsregcmdSource,
-    captureDsregcmdSource,
-  } = useAppActions();
   const [exportStatus, setExportStatus] = useState<{
     tone: "success" | "error";
     message: string;
@@ -283,61 +276,9 @@ export function DsregcmdWorkspace() {
           backgroundColor: tokens.colorNeutralBackground2,
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "10px",
-            padding: "8px 12px",
-            backgroundColor: tokens.colorNeutralBackground3,
-            borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-          }}
-        >
-          <div>
-            <div
-              style={{ fontSize: "14px", fontWeight: 700, color: tokens.colorNeutralForeground1 }}
-            >
-              dsregcmd Workspace
-            </div>
-            <div
-              style={{ marginTop: "4px", fontSize: "12px", color: tokens.colorNeutralForeground3 }}
-            >
-              Capture a live snapshot, paste clipboard text, open a text file,
-              or select an evidence bundle folder.
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            <Button
-              appearance="primary"
-              onClick={() => void captureDsregcmdSource()}
-            >
-              Capture
-            </Button>
-            <Button
-              appearance="secondary"
-              onClick={() => void pasteDsregcmdSource()}
-            >
-              Paste
-            </Button>
-            <Button
-              appearance="secondary"
-              onClick={() => void openSourceFileDialog()}
-            >
-              Open text file...
-            </Button>
-            <Button
-              appearance="secondary"
-              onClick={() => void openSourceFolderDialog()}
-            >
-              Open evidence folder...
-            </Button>
-          </div>
-        </div>
-
         <EmptyWorkspace
           title="No dsregcmd source loaded"
-          body="Use the workspace actions above to analyze dsregcmd /status output. Open a bundle root, its evidence folder, or its command-output folder, or run a live capture that stages dsregcmd and registry evidence together."
+          body="Use the toolbar actions to analyze dsregcmd /status output. Open a bundle root, its evidence folder, or its command-output folder, or run a live capture that stages dsregcmd and registry evidence together."
         />
       </div>
     );
@@ -366,70 +307,6 @@ export function DsregcmdWorkspace() {
         backgroundColor: tokens.colorNeutralBackground2,
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: "10px",
-          padding: "8px 12px",
-          backgroundColor: tokens.colorNeutralBackground3,
-          borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-          flexWrap: "wrap",
-        }}
-      >
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: "14px", fontWeight: 700, color: tokens.colorNeutralForeground1 }}>
-            dsregcmd Workspace
-          </div>
-          <div
-            style={{
-              marginTop: "4px",
-              fontSize: "12px",
-              color: tokens.colorNeutralForeground3,
-              lineHeight: 1.4,
-            }}
-          >
-            {sourceContext.displayLabel}
-            {sourceContext.resolvedPath && ` • ${sourceContext.resolvedPath}`}
-            {sourceContext.evidenceFilePath &&
-            sourceContext.evidenceFilePath !== sourceContext.resolvedPath
-              ? ` • evidence ${sourceContext.evidenceFilePath}`
-              : ""}
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          <Button
-            appearance="primary"
-            onClick={() => void captureDsregcmdSource()}
-            disabled={isAnalyzing}
-          >
-            Capture
-          </Button>
-          <Button
-            appearance="secondary"
-            onClick={() => void pasteDsregcmdSource()}
-            disabled={isAnalyzing}
-          >
-            Paste
-          </Button>
-          <Button
-            appearance="secondary"
-            onClick={() => void openSourceFileDialog()}
-            disabled={isAnalyzing}
-          >
-            Open Text File
-          </Button>
-          <Button
-            appearance="secondary"
-            onClick={() => void openSourceFolderDialog()}
-            disabled={isAnalyzing}
-          >
-            Open Evidence Folder
-          </Button>
-        </div>
-      </div>
-
       {/* Tab strip */}
       <div
         style={{
