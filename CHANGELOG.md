@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- **Reference screenshots**: Remove outdated reference screenshots and replace the 0.3.0 workspace screenshot with a text caption.
+- **Reference screenshots**: Remove outdated reference screenshots that showed identifying environment details, and replace the 0.3.0 workspace screenshot with a text caption.
 - **Parser source compatibility (#814)**: Advance `cmtraceopen-parser` to `0.4.0` for breaking source API changes from new Windows Firewall enum variants and public struct fields. Update affected exhaustive matches and struct literals; see the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
 
 ### Fixed
