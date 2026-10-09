@@ -360,7 +360,26 @@ function derivedTitle(
   return head === "" ? itemLabel(best) : `${itemLabel(best)} · ${head}`;
 }
 
-/** Covers ALL members, resolved or not: a finding must account for the whole chain. */
+/**
+ * Classes that describe the absence or contradiction of a conclusion, not a conclusion. A chain
+ * title is a claim about the chain, so these never lend their title.
+ */
+const NON_CONCLUSION_CLASSES: ReadonlySet<DiagnosisFindingClass> = new Set([
+  "coverageGap",
+  "contradictoryEvidence",
+  "unknown",
+]);
+
+/**
+ * Picks the title of the finding that covers the whole chain.
+ *
+ * Covers ALL members, resolved or not: a finding must account for the whole chain.
+ *
+ * Only conclusion classes may title a chain: never `coverageGap`, `contradictoryEvidence` or
+ * `unknown`. Callers pass `originIds: []` today, so this never fires in the app. When the owner
+ * restores the finding join (decision B on #838), keep this restriction: a finding that says "we
+ * could not see" or "the evidence conflicts" must not be shown as the name of a correlated chain.
+ */
 function coveringFindingTitle(
   allMemberIds: readonly string[],
   findings: readonly ChainFindingCoverage[],
@@ -369,6 +388,12 @@ function coveringFindingTitle(
     finding.findingClass === "confirmedFailure" ? 0 : 1;
   const covering = findings
     .filter((finding) => {
+      if (
+        finding.findingClass !== undefined &&
+        NON_CONCLUSION_CLASSES.has(finding.findingClass)
+      ) {
+        return false;
+      }
       const covered = new Set(finding.originIds);
       return allMemberIds.every((id) => covered.has(id));
     })
