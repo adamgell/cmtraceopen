@@ -836,10 +836,23 @@ describe("edge input completeness", () => {
     expect(model.omittedCount).toBe(0);
   });
 
-  it("never reports a negative count when the total is below the loaded edges", () => {
+  it("reports a total below the loaded edges as incomplete, never negative", () => {
     const model = build({ timelineEdges: edges, totalTimelineEdges: 1 });
-    expect(model.edgeInputComplete).toBe(true);
+    expect(model.edgeInputComplete).toBe(false);
     expect(model.unloadedEdgeCount).toBe(0);
+  });
+
+  it("reports an invalid total as incomplete with no unloaded count", () => {
+    for (const totalTimelineEdges of [
+      Number.NaN,
+      -1,
+      Number.POSITIVE_INFINITY,
+      2.5,
+    ]) {
+      const model = build({ timelineEdges: edges, totalTimelineEdges });
+      expect(model.edgeInputComplete).toBe(false);
+      expect(model.unloadedEdgeCount).toBe(0);
+    }
   });
 
   it("requires the total edge count", () => {

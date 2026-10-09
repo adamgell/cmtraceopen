@@ -136,11 +136,17 @@ export interface CorrelationChainModel {
   /** Rows dropped by the 100-row render cap only. See `unloadedEdgeCount` for unloaded edges. */
   omittedCount: number;
   /**
-   * False when the loaded edges are fewer than `totalTimelineEdges`: the chains above were built
-   * from a bounded preview and more may exist. Drives the spec 8.11 "paged and bounded" copy.
+   * True only when `totalTimelineEdges` is a non-negative safe integer equal to the number of
+   * loaded edges. False when edges are missing (the chains were built from a bounded preview and
+   * more may exist) and also when the total is contradictory (below the loaded count) or invalid
+   * (NaN, infinite, negative, fractional): coverage states are not success evidence. Drives the
+   * spec 8.11 "paged and bounded" copy.
    */
   edgeInputComplete: boolean;
-  /** Timeline edges the session holds that were not loaded into this model (never negative). */
+  /**
+   * Timeline edges the session holds that were not loaded into this model: never negative, and 0
+   * when the total is contradictory or invalid (see `edgeInputComplete`, which is false then).
+   */
   unloadedEdgeCount: number;
   /** Rows per strength before the cap, after collapsing. */
   counts: Record<CorrelationChainStrength, number>;
@@ -631,15 +637,18 @@ export function buildCorrelationChains(
   for (const row of rows) counts[row.strength] += 1;
 
   const chains = rows.slice(0, CORRELATION_CHAIN_RENDER_LIMIT);
+  const totalIsValid =
+    Number.isSafeInteger(input.totalTimelineEdges) &&
+    input.totalTimelineEdges >= 0;
   return {
     chains,
     totalCount: rows.length,
     omittedCount: rows.length - chains.length,
-    edgeInputComplete: input.timelineEdges.length >= input.totalTimelineEdges,
-    unloadedEdgeCount: Math.max(
-      0,
-      input.totalTimelineEdges - input.timelineEdges.length,
-    ),
+    edgeInputComplete:
+      totalIsValid && input.timelineEdges.length === input.totalTimelineEdges,
+    unloadedEdgeCount: totalIsValid
+      ? Math.max(0, input.totalTimelineEdges - input.timelineEdges.length)
+      : 0,
     counts,
     ignoredRelationCount,
   };
