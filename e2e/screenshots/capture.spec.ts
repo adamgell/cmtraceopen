@@ -26,7 +26,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, expect } from "../fixtures";
 import {
-  DEMO_LOG_ABS_PATH,
+  DEMO_LOG_DISPLAY_PATH,
   MOCK_LOG_PARSE_RESULT,
   MOCK_INTUNE,
   MOCK_DSREGCMD,
@@ -37,6 +37,7 @@ import {
   buildElevatedEspSnapshot,
 } from "../fixtures/esp-diagnostics-data";
 import type { EspDiagnosticsSnapshot } from "../../src/workspaces/esp-diagnostics/types";
+import { assertNoHostPaths } from "../fixtures/host-path-guard";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.resolve(HERE, "..", "..", "screenshots");
@@ -160,6 +161,7 @@ async function captureStatusBar(
   if (state.expectText) {
     await expect(bar.getByText(state.expectText)).toBeVisible();
   }
+  await assertNoHostPaths(page, "status bar");
   return bar.screenshot({ animations: "disabled" });
 }
 
@@ -192,6 +194,7 @@ async function writeStatusBarComposite(
         ${rows}
       </body>
     </html>`);
+  await assertNoHostPaths(sheet, fileName);
   await sheet.screenshot({ path: outPath(fileName), fullPage: true });
   await sheet.close();
 }
@@ -221,7 +224,7 @@ test.describe("repo screenshots", () => {
         }
       },
       {
-        demoPath: DEMO_LOG_ABS_PATH,
+        demoPath: DEMO_LOG_DISPLAY_PATH,
         mockResult: MOCK_LOG_PARSE_RESULT,
         useMock: !live,
       },
@@ -244,6 +247,7 @@ test.describe("repo screenshots", () => {
     }
 
     await settle(page);
+    await assertNoHostPaths(page);
     await page.screenshot({ path: outPath("log-viewer.png") });
   });
 
@@ -276,6 +280,7 @@ test.describe("repo screenshots", () => {
     });
 
     await settle(page);
+    await assertNoHostPaths(page);
     await page.screenshot({ path: outPath("intune-diagnostics.png") });
   });
 
@@ -298,6 +303,7 @@ test.describe("repo screenshots", () => {
     });
 
     await settle(page);
+    await assertNoHostPaths(page);
     await page.screenshot({ path: outPath("dsregcmd.png") });
   });
 
@@ -322,6 +328,7 @@ test.describe("repo screenshots", () => {
           name: "Administrator coverage recommendation",
         }),
       ).toHaveCount(0);
+      await assertNoHostPaths(page);
       await page.screenshot({
         path: outPath(
           `esp-diagnostics-${viewport.width}x${viewport.height}-collapsed.png`,
@@ -330,6 +337,7 @@ test.describe("repo screenshots", () => {
       });
 
       await showEspCapture(page, elevated, "docked");
+      await assertNoHostPaths(page);
       await page.screenshot({
         path: outPath(
           `esp-diagnostics-${viewport.width}x${viewport.height}-docked.png`,
@@ -338,6 +346,7 @@ test.describe("repo screenshots", () => {
       });
 
       await showEspCapture(page, elevated, "full");
+      await assertNoHostPaths(page);
       await page.screenshot({
         path: outPath(
           `esp-diagnostics-${viewport.width}x${viewport.height}-full-logs.png`,
@@ -355,6 +364,7 @@ test.describe("repo screenshots", () => {
       await expect(recommendation).not.toContainText(
         "MDM diagnostic event logs",
       );
+      await assertNoHostPaths(page);
       await page.screenshot({
         path: outPath(
           `esp-diagnostics-${viewport.width}x${viewport.height}-non-elevated.png`,
@@ -386,6 +396,7 @@ test.describe("repo screenshots", () => {
         ),
       ).toBe(true);
       await showEspCapture(page, devicePreparation, "collapsed");
+      await assertNoHostPaths(page);
       await page.screenshot({
         path: outPath(
           `esp-diagnostics-${viewport.width}x${viewport.height}-device-preparation.png`,

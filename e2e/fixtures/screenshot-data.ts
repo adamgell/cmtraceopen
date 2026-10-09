@@ -34,6 +34,14 @@ export const DEMO_LOG_ABS_PATH = path.resolve(
   "ConfigMgr_AppEnforce_demo.log",
 );
 
+/**
+ * Synthetic path the UI DISPLAYS for the demo log. The IPC shim only echoes it
+ * back, so screenshots never show the host's real checkout path. Real file
+ * reads must use DEMO_LOG_ABS_PATH.
+ */
+export const DEMO_LOG_DISPLAY_PATH =
+  "C:\\Fixture\\Logs\\ConfigMgr_AppEnforce_demo.log";
+
 /** Sanitized ESP cockpit, Graph, and scenario fixtures for actual-chrome captures. */
 export const MOCK_ESP_DIAGNOSTICS = {
   baseSnapshot:
@@ -191,7 +199,7 @@ function buildLogEntries(): LogEntry[] {
       threadDisplay: String(THREAD),
       sourceFile: "appexcnlib.cpp",
       format: "Ccm",
-      filePath: DEMO_LOG_ABS_PATH,
+      filePath: DEMO_LOG_DISPLAY_PATH,
       timezoneOffset: 0,
     };
 
@@ -231,7 +239,7 @@ export const MOCK_LOG_PARSE_RESULT: ParseResult = {
   },
   totalLines: LOG_ENTRIES.length,
   parseErrors: 0,
-  filePath: DEMO_LOG_ABS_PATH,
+  filePath: DEMO_LOG_DISPLAY_PATH,
   fileSize: 6144,
   byteOffset: 6144,
 };
