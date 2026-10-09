@@ -22,10 +22,10 @@
  *
  * How it works
  * ------------
- * 1. Writes the fixture's records and gaps to a temp JSON file.
+ * 1. Writes the fixture's records and gaps to e2e/fixtures/event-log-engine-input.json (committed).
  * 2. Runs the committed, ignored, env-gated test `event_log::analysis_session::screenshot_replies::
  *    capture_event_log_replies` (src-tauri/src/event_log/analysis_session.rs) with
- *    CMTRACE_EVENT_LOG_REPLIES_INPUT / _OUTPUT pointing at temp files. This script never edits a
+ *    CMTRACE_EVENT_LOG_REPLIES_INPUT / _OUTPUT pointing at that file and a temp file. This script never edits a
  *    source file.
  * 3. Writes the engine output plus provenance (git commit, dirty flag) to the JSON fixture.
  *
@@ -44,6 +44,11 @@
  * `--check` can compare the second, because spec code must not shell out. Run `--check` after any
  * change under src-tauri/src/event_log or crates/cmtraceopen-parser/src.
  *
+ * Beyond this script, `cargo test event_log::analysis_session` (CI: Check & Test (Rust)) runs the
+ * non-ignored test `screenshot_replies::committed_engine_replies_match_the_engine`, which replays
+ * the committed input through the engine and requires the result to equal the committed replies
+ * (ignoring only `about` and `provenance`). A hand edit of the replies fails there.
+ *
  * Re-run the capture whenever the dataset (event-log-data.ts), the frontend's analysis call
  * sequence, or the engine's session/diagnosis logic changes. The spec fails loudly if the UI's
  * requests no longer match what was captured, so a stale file cannot be replayed silently.
@@ -60,6 +65,7 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import {
   buildParseResult,
+  ENGINE_INPUT_PATH,
   ENGINE_REPLIES_PATH,
   engineInput,
   engineInputSha256,
@@ -93,7 +99,10 @@ function engineSourceSha256() {
   for (const file of files) {
     let content = Buffer.alloc(0);
     try {
-      content = readFileSync(path.join(REPO, file));
+      // Strip CR so a Windows checkout with core.autocrlf=true hashes the same as the LF original.
+      content = Buffer.from(
+        readFileSync(path.join(REPO, file)).filter((byte) => byte !== 0x0d),
+      );
     } catch {
       // Tracked but deleted in the working tree: the hash still changes via the missing content.
     }
@@ -110,12 +119,27 @@ if (process.argv.includes("--check")) {
   if (provenance.inputSha256 !== engineInputSha256(parseResult)) {
     problems.push("the dataset (event-log-data.ts) changed since capture");
   }
+  let committedInput = null;
+  try {
+    committedInput = readFileSync(ENGINE_INPUT_PATH, "utf8");
+  } catch {
+    // Reported below.
+  }
+  if (committedInput !== JSON.stringify(engineInput(parseResult))) {
+    problems.push(
+      "event-log-engine-input.json is missing or differs from the dataset (event-log-data.ts)",
+    );
+  }
   if (provenance.engineSourceSha256 !== engineSourceSha256()) {
     problems.push("the engine changed since capture (src-tauri/src/event_log, parser crate, Cargo)");
   }
   if (problems.length > 0) {
     console.error(`event-log-engine-replies.json is stale: ${problems.join("; ")}.`);
     console.error("Regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`.");
+    console.error(
+      "(The cargo test event_log::analysis_session::screenshot_replies replays the committed " +
+        "input against the committed replies on every run.)",
+    );
     process.exit(1);
   }
   console.log("event-log-engine-replies.json matches the dataset and the engine sources.");
@@ -123,8 +147,9 @@ if (process.argv.includes("--check")) {
 }
 
 const tempDir = mkdtempSync(path.join(os.tmpdir(), "cmtrace-event-log-capture-"));
-const inputPath = path.join(tempDir, "input.json");
+const inputPath = ENGINE_INPUT_PATH;
 const outputPath = path.join(tempDir, "output.json");
+// The input is committed next to the replies so the always-on Rust test can replay it.
 writeFileSync(inputPath, JSON.stringify(engineInput(parseResult)));
 
 const engineCommit = git("rev-parse", "HEAD");

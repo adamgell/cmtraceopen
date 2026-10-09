@@ -2055,32 +2055,21 @@ mod tests {
     }
 }
 
-/// Captures the real engine's replies for the Event Logs screenshot harness.
+/// The Event Logs screenshot harness replies, and the always-on test that keeps them honest.
 ///
-/// Not a regression test: it only runs when `CMTRACE_EVENT_LOG_REPLIES_INPUT` and
-/// `CMTRACE_EVENT_LOG_REPLIES_OUTPUT` are both set, which `e2e/fixtures/capture-event-log-replies.mjs`
-/// does. It builds the session directly (no Tauri runtime) and replays the UI's call sequence:
-/// create, append in chunks, finalize, every timeline page, diagnose.
+/// `e2e/fixtures/event-log-engine-input.json` is the synthetic engine input and
+/// `e2e/fixtures/event-log-engine-replies.json` is what the engine answered for it. Both are
+/// committed. `engine_replies_for_input` is the one place that turns the former into the latter, so
+/// the env-gated capture test and the regular drift test cannot diverge.
 #[cfg(test)]
 mod screenshot_replies {
     use super::*;
 
-    #[test]
-    #[ignore = "run by e2e/fixtures/capture-event-log-replies.mjs"]
-    fn capture_event_log_replies() {
-        let (Some(input_path), Some(output_path)) = (
-            std::env::var_os("CMTRACE_EVENT_LOG_REPLIES_INPUT"),
-            std::env::var_os("CMTRACE_EVENT_LOG_REPLIES_OUTPUT"),
-        ) else {
-            println!(
-                "skipping: set CMTRACE_EVENT_LOG_REPLIES_INPUT and CMTRACE_EVENT_LOG_REPLIES_OUTPUT to capture"
-            );
-            return;
-        };
-        let input_text = std::fs::read_to_string(&input_path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", input_path.to_string_lossy()));
-        let input: serde_json::Value = serde_json::from_str(&input_text)
-            .unwrap_or_else(|error| panic!("parse {}: {error}", input_path.to_string_lossy()));
+    const REGENERATE: &str = "regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`";
+
+    /// Replays the UI's call sequence over `input`: create, append in chunks, finalize, every
+    /// timeline page, diagnose. Builds the session directly (no Tauri runtime).
+    fn engine_replies_for_input(input: &serde_json::Value) -> serde_json::Value {
         let records: Vec<EvtxRecord> = serde_json::from_value(input["records"].clone()).unwrap();
         let gaps: Vec<EvtxCoverageGap> =
             serde_json::from_value(input["coverageGaps"].clone()).unwrap();
@@ -2121,7 +2110,7 @@ mod screenshot_replies {
             .unwrap()
             .summarize(gaps.clone());
 
-        let output = serde_json::json!({
+        serde_json::json!({
             "sessionId": session_id,
             "appendChunkRecordCounts": chunk_counts,
             "diagnoseCoverageGaps": gaps,
@@ -2130,8 +2119,71 @@ mod screenshot_replies {
             "finalize": finalize,
             "timelinePages": pages,
             "diagnosis": diagnosis,
-        });
+        })
+    }
+
+    /// Captures the real engine's replies. Not a regression test: it only runs when
+    /// `CMTRACE_EVENT_LOG_REPLIES_INPUT` and `CMTRACE_EVENT_LOG_REPLIES_OUTPUT` are both set, which
+    /// `e2e/fixtures/capture-event-log-replies.mjs` does.
+    #[test]
+    #[ignore = "run by e2e/fixtures/capture-event-log-replies.mjs"]
+    fn capture_event_log_replies() {
+        let (Some(input_path), Some(output_path)) = (
+            std::env::var_os("CMTRACE_EVENT_LOG_REPLIES_INPUT"),
+            std::env::var_os("CMTRACE_EVENT_LOG_REPLIES_OUTPUT"),
+        ) else {
+            println!(
+                "skipping: set CMTRACE_EVENT_LOG_REPLIES_INPUT and CMTRACE_EVENT_LOG_REPLIES_OUTPUT to capture"
+            );
+            return;
+        };
+        let input_text = std::fs::read_to_string(&input_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", input_path.to_string_lossy()));
+        let input: serde_json::Value = serde_json::from_str(&input_text)
+            .unwrap_or_else(|error| panic!("parse {}: {error}", input_path.to_string_lossy()));
+        let output = engine_replies_for_input(&input);
         std::fs::write(&output_path, serde_json::to_string(&output).unwrap())
             .unwrap_or_else(|error| panic!("write {}: {error}", output_path.to_string_lossy()));
+    }
+
+    fn read_fixture(name: &str) -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("e2e")
+            .join("fixtures")
+            .join(name);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}; {REGENERATE}", path.display()));
+        serde_json::from_str(&text)
+            .unwrap_or_else(|error| panic!("parse {}: {error}; {REGENERATE}", path.display()))
+    }
+
+    /// Always on: the committed replies must be exactly what the engine answers for the committed
+    /// input. A hand edit of the replies, or an engine change that alters them, fails here.
+    ///
+    /// Only `about` and `provenance` are not compared: they describe the capture (commit, dirty
+    /// flag, source hashes) and legitimately differ between checkouts.
+    #[test]
+    fn committed_engine_replies_match_the_engine() {
+        let input = read_fixture("event-log-engine-input.json");
+        let mut committed = read_fixture("event-log-engine-replies.json");
+        let committed = committed.as_object_mut().expect("replies are an object");
+        committed.remove("about");
+        committed.remove("provenance");
+
+        let actual = engine_replies_for_input(&input);
+        let actual = actual.as_object().expect("engine replies are an object");
+
+        let mut keys: Vec<&String> = committed.keys().chain(actual.keys()).collect();
+        keys.sort();
+        keys.dedup();
+        for key in keys {
+            assert!(
+                committed.get(key) == actual.get(key),
+                "e2e/fixtures/event-log-engine-replies.json field `{key}` no longer matches what the \
+                 engine answers for e2e/fixtures/event-log-engine-input.json; {REGENERATE} \
+                 (do not hand-edit the replies)"
+            );
+        }
     }
 }

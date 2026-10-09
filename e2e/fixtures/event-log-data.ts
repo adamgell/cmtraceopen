@@ -356,6 +356,11 @@ export interface EngineReplies {
   diagnosis: DiagnosisSummary;
 }
 
+/** The exact engine input, committed so `cargo test` can replay it (see the capture script). */
+export const ENGINE_INPUT_PATH = fileURLToPath(
+  new URL("./event-log-engine-input.json", import.meta.url),
+);
+
 export const ENGINE_REPLIES_PATH = fileURLToPath(
   new URL("./event-log-engine-replies.json", import.meta.url),
 );
