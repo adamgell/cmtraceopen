@@ -4,9 +4,9 @@
  * These objects are injected into the running frontend so each workspace renders
  * a realistic, populated state without a real backend or real device data:
  *
- *  - `MOCK_LOG_PARSE_RESULT` — a `ParseResult` mirroring `demo/ConfigMgr_AppEnforce_demo.log`.
- *    Used only as the fallback when the real Rust IPC bridge (`:1422`) is NOT running;
- *    when it is, the real parser parses the demo log on disk instead.
+ *  - `MOCK_LOG_PARSE_RESULT`: a `ParseResult` mirroring `demo/ConfigMgr_AppEnforce_demo.log`.
+ *    Always returned by the mocked `open_log_file`. The screenshot specs block the IPC
+ *    bridge (`:1422`), so the real parser is never used for captures.
  *  - `MOCK_INTUNE` — arguments for the Intune store's `setResults(...)`.
  *  - `MOCK_DSREGCMD` — arguments for the DSRegCmd store's `setResults(...)`. Always synthetic:
  *    a real `dsregcmd /status` capture would leak the host's device/tenant identifiers into a
@@ -27,7 +27,7 @@ import espDiagnosticsFixture from "./demo/esp-diagnostics.json" with { type: "js
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-/** Absolute path to the committed demo CCM log parsed in live (bridge) mode. */
+/** Absolute path to the committed demo CCM log, for tests that read real file bytes. Never displayed in screenshots. */
 export const DEMO_LOG_ABS_PATH = path.resolve(
   HERE,
   "demo",
@@ -35,9 +35,9 @@ export const DEMO_LOG_ABS_PATH = path.resolve(
 );
 
 /**
- * Synthetic path the UI DISPLAYS for the demo log. The IPC shim only echoes it
- * back, so screenshots never show the host's real checkout path. Real file
- * reads must use DEMO_LOG_ABS_PATH.
+ * Synthetic path the UI DISPLAYS for the demo log. Screenshot captures mock
+ * \`open_log_file\`, so this path is never opened and screenshots never show the
+ * host's real checkout path. Real file reads must use DEMO_LOG_ABS_PATH.
  */
 export const DEMO_LOG_DISPLAY_PATH =
   "C:\\Fixture\\Logs\\ConfigMgr_AppEnforce_demo.log";

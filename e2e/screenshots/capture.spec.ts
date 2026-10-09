@@ -7,20 +7,23 @@
  * How data gets in
  * ----------------
  * The app runs in a plain browser at :1420 with the Tauri IPC shim
- * (e2e/fixtures/tauri-shim.ts). Two population strategies are used:
+ * (e2e/fixtures/tauri-shim.ts). Every capture is fully mocked, never live:
+ * requests to the IPC bridge (127.0.0.1:1422) are blocked, so a bridge started
+ * by `npm run app:dev` anywhere on the machine cannot change what is captured.
  *
- *  - Log Viewer  → the real open-file flow. We override `get_initial_file_paths`
- *    to point at the committed demo CCM log. When the real Rust IPC bridge
- *    (:1422, started by `npm run app:dev`) is reachable, the genuine parser
- *    parses that file — otherwise we also override `open_log_file` with a mock
- *    ParseResult so the shot still works with no Rust build / in CI.
+ *  - Log Viewer  -> the real open-file flow. `get_initial_file_paths` returns a
+ *    synthetic Windows path and `open_log_file` returns a mock ParseResult, so
+ *    the sidebar shows the synthetic path and the grid shows parsed rows. The
+ *    readiness wait requires a parsed grid row, so an error state (for example
+ *    "Source path is missing or inaccessible") can never be captured.
  *
- *  - Intune / DSRegCmd → curated synthetic data injected straight into the live
+ *  - Intune / DSRegCmd -> curated synthetic data injected straight into the live
  *    Vite store singletons (`await import("/src/...")` resolves to the same
- *    module instances the app uses). Always mock: driving the real backend for
- *    these needs real IME logs / a real device capture, and a real dsregcmd
- *    capture would bake the host's device + tenant identifiers into a committed
- *    public screenshot.
+ *    module instances the app uses). A real dsregcmd capture would bake the
+ *    host's device + tenant identifiers into a committed public screenshot.
+ *
+ * Before every capture, `assertNoHostPaths` fails the run if the page text
+ * shows the home directory, user name, host name or repo path.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,18 +45,6 @@ import { assertNoHostPaths } from "../fixtures/host-path-guard";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.resolve(HERE, "..", "..", "screenshots");
 const outPath = (name: string) => path.join(OUT_DIR, name);
-
-/** Probe the real Rust IPC bridge started by `npm run app:dev`. */
-async function bridgeIsUp(): Promise<boolean> {
-  try {
-    const res = await fetch("http://127.0.0.1:1422/", {
-      signal: AbortSignal.timeout(700),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
 
 async function dismissSplash(
   page: import("@playwright/test").Page,
@@ -200,43 +191,34 @@ async function writeStatusBarComposite(
 }
 
 test.describe("repo screenshots", () => {
-  test("log-viewer", async ({ page }) => {
-    const live = await bridgeIsUp();
-    if (!live) {
-      console.log(
-        "[screenshots] IPC bridge (:1422) not detected — log view uses mock ParseResult.",
-      );
-    } else {
-      console.log(
-        "[screenshots] IPC bridge detected — log view parses the demo log via the real backend.",
-      );
-    }
+  test.beforeEach(async ({ page }) => {
+    await page.route("http://127.0.0.1:1422/**", (route) => route.abort());
+  });
 
+  test("log-viewer", async ({ page }) => {
     // Applied before the app boots; useFileAssociation() reads get_initial_file_paths
     // on mount and auto-opens the returned path through the real load pipeline.
     await page.addInitScript(
-      ({ demoPath, mockResult, useMock }) => {
+      ({ displayPath, mockResult }) => {
         const overrides =
           window.__e2e_ipc_overrides__ ?? (window.__e2e_ipc_overrides__ = {});
-        overrides["get_initial_file_paths"] = () => [demoPath];
-        if (useMock) {
-          overrides["open_log_file"] = () => mockResult;
-        }
+        overrides["get_initial_file_paths"] = () => [displayPath];
+        overrides["open_log_file"] = () => mockResult;
       },
       {
-        demoPath: DEMO_LOG_DISPLAY_PATH,
+        displayPath: DEMO_LOG_DISPLAY_PATH,
         mockResult: MOCK_LOG_PARSE_RESULT,
-        useMock: !live,
       },
     );
 
     await page.goto("/");
     await dismissSplash(page);
 
-    // Wait for parsed rows to render (component cell is present in both modes).
-    await expect(page.getByText("AppEnforce").first()).toBeVisible({
-      timeout: 15_000,
-    });
+    // Readiness is a parsed grid row. The sidebar file name or an error notice
+    // that mentions the file must not satisfy it.
+    await expect(
+      page.getByRole("option").filter({ hasText: "AppEnforce" }).first(),
+    ).toBeVisible({ timeout: 15_000 });
 
     // Select the error row so the info pane shows entry details + the recognized
     // Windows error code. Best-effort — never fail the capture over selection.
