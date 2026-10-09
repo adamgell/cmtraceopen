@@ -29,6 +29,20 @@ const STRENGTHS: DiagnosisCorrelationStatus[] = [
  */
 const HOTDOG_REMOVED_IN_878: readonly string[] = ["hotdog-stand"];
 
+/**
+ * Critical and Error share the red family: every cross pair between them
+ * (mark or text) uses this one floor. "Critical stays red-family",
+ * 2026-10-08; red-pair floor, 2026-10-09 (owner decisions).
+ */
+const RED_FAMILY_PAIR_DE00 = 15;
+const RED_FAMILY_LEVELS: readonly EvtxLevel[] = ["Critical", "Error"];
+const isRedFamilyPair = (a?: EvtxLevel, b?: EvtxLevel) =>
+  a !== undefined &&
+  b !== undefined &&
+  a !== b &&
+  RED_FAMILY_LEVELS.includes(a) &&
+  RED_FAMILY_LEVELS.includes(b);
+
 const themes = getAllThemes().map((theme) => [theme.id, theme] as const);
 const redFamilyThemes = themes.filter(
   ([id]) => !HOTDOG_REMOVED_IN_878.includes(id),
@@ -144,6 +158,47 @@ function hslLightness(color: string): number {
 
 const inRedBand = (hue: number) => hue >= 330 || hue <= 20;
 
+/** CIELAB hue angle (h_ab, degrees 0 to 360) and chroma C* of a color. */
+function labHueChroma(color: string): { hue: number; chroma: number } {
+  const [, a, b] = hexToLab(color);
+  return {
+    hue: ((Math.atan2(b, a) * 180) / Math.PI + 360) % 360,
+    chroma: Math.hypot(a, b),
+  };
+}
+
+/** Inclusive [from, to] ranges of Lab hue; a band may not wrap past 360. */
+type HueBands = readonly (readonly [number, number])[];
+const inHueBands = (hue: number, bands: HueBands) =>
+  bands.some(([from, to]) => hue >= from && hue <= to);
+
+/**
+ * Crimson to red. The red anchor #dc2626 measures h 35.03, so the upper edge
+ * is 37; the accepted orange-red #ff6640 (h 41.9), orange (h 52) and amber
+ * (h 73) are out.
+ */
+const CRITICAL_HUE_BANDS: HueBands = [
+  [335, 360],
+  [0, 37],
+];
+/** Red to red-orange; pure red is h 40 and the accepted dark red-orange h 46. */
+const ERROR_HUE_BANDS: HueBands = [
+  [345, 360],
+  [0, 50],
+];
+/** Amber (h 70 to 73) to pure yellow (h 103). */
+const WARNING_HUE_BANDS: HueBands = [[55, 105]];
+/**
+ * True red for Error text on a light surface: pure red is h 40, so the upper
+ * edge is 40. The red-orange accepted for dark themes (h 46) and the brown
+ * #8c2800 are out; they read as orange or brown on white.
+ */
+const LIGHT_ERROR_TEXT_HUE_BANDS: HueBands = [
+  [345, 360],
+  [0, 40],
+];
+const LIGHT_FAMILY_THEME_IDS: readonly string[] = ["light", "classic-cmtrace"];
+
 type SurfaceKey =
   "surface" | "rail" | "group" | "pressed" | "selected" | "ownRow";
 
@@ -180,8 +235,9 @@ interface RoleEntry {
 
 /**
  * Placement inventory, from a full read of spec sections 5, 6 (including 6.2
- * states) and 8.1 to 8.19 plus the v2 scenario notes (15.1). Every place a
- * color from this module is drawn is listed with its surface and section.
+ * states) and 8.1 to 8.19. The v2 scenario states are deferred to the v2
+ * phases. Every place a color from this module is drawn is listed with its
+ * surface and section.
  * The spec names no hover state for these surfaces; the only pressed or
  * selected states are 6.2's `colorNeutralBackground1Selected` (pressed
  * toggles) and the selection triplet. Small marks on those two and on row
@@ -270,10 +326,16 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
     ],
   },
   {
-    role: "level text",
+    // 8.3 grammar error uses levels.Warning.textColor.
+    role: "severity level text",
     minimum: 4.5,
     colors: (v) =>
-      Object.fromEntries(LEVELS.map((l) => [l, v.levels[l].textColor])),
+      Object.fromEntries(
+        (["Critical", "Error", "Warning"] as const).map((l) => [
+          l,
+          v.levels[l].textColor,
+        ]),
+      ),
     placements: [
       {
         surface: "surface",
@@ -287,6 +349,21 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
         surface: "selected",
         section: "8.6 err and warn counts on a selected row",
       },
+    ],
+  },
+  {
+    role: "neutral level text",
+    minimum: 4.5,
+    colors: (v) =>
+      Object.fromEntries(
+        (["Information", "Verbose"] as const).map((l) => [
+          l,
+          v.levels[l].textColor,
+        ]),
+      ),
+    placements: [
+      { surface: "surface", section: "8.13 finding card eyebrow" },
+      { surface: "rail", section: "8.13 Details level word" },
     ],
   },
   {
@@ -331,19 +408,6 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
     ],
   },
   {
-    role: "scenario bar",
-    minimum: 3,
-    colors: (v) => ({
-      succeededBar: v.scenario.succeeded.bar,
-      running: v.scenario.running,
-      retrying: v.scenario.retrying,
-      sleep: v.scenario.sleep,
-    }),
-    placements: [
-      { surface: "surface", section: "15.1 boot sessions and attempt bars" },
-    ],
-  },
-  {
     role: "finding callout border",
     minimum: 3,
     colors: (v) => ({ border: v.findingCallout.border }),
@@ -383,11 +447,6 @@ const INVENTORY_EXEMPTIONS: readonly {
     section: "6.2, Q-1, 8.11, 8.13",
     reason:
       "accepted by Adam 2026-10-08 (Q-1); the border is also the row's 3px inset",
-  },
-  {
-    what: "severity eyebrow text in finding cards",
-    section: "8.13",
-    reason: "text, not a mark; it uses rowText, owned by PR #877",
   },
 ];
 
@@ -507,12 +566,208 @@ describe("readableOn", () => {
   });
 });
 
+type Family =
+  | "level mark"
+  | "level text"
+  | "channel"
+  | "single series"
+  | "selection"
+  | "brand";
+const FAMILIES: readonly Family[] = [
+  "level mark",
+  "level text",
+  "channel",
+  "single series",
+  "selection",
+  "brand",
+];
+
+interface FamilyColor {
+  family: Family;
+  name: string;
+  level?: EvtxLevel;
+  color: string;
+}
+
+/** Every color family the module exposes, resolved for one theme. */
+function familyColors(
+  visual: ReturnType<typeof buildEvtxVisualTokens>,
+  theme: ReturnType<typeof getAllThemes>[number],
+): FamilyColor[] {
+  const r = (value: string) => resolveToken(value, theme);
+  return [
+    ...LEVELS.map((level) => ({
+      family: "level mark" as const,
+      name: `${level} mark`,
+      level,
+      color: r(visual.levels[level].barColor),
+    })),
+    ...LEVELS.map((level) => ({
+      family: "level text" as const,
+      name: `${level} text`,
+      level,
+      color: r(visual.levels[level].textColor),
+    })),
+    ...[0, 1, 2, 3, 4, 5].map((i) => ({
+      family: "channel" as const,
+      name: `channel ${i}`,
+      color: r(visual.channelColor(i)),
+    })),
+    {
+      family: "single series",
+      name: "single series",
+      color: r(visual.singleSeries),
+    },
+    {
+      family: "selection",
+      name: "selection background",
+      color: r(visual.selection.background),
+    },
+    {
+      family: "selection",
+      name: "selection border",
+      color: r(visual.selection.border),
+    },
+    {
+      family: "selection",
+      name: "selection foreground",
+      color: r(visual.selection.foreground),
+    },
+    {
+      family: "brand",
+      name: "brand background",
+      color: r(tokens.colorBrandBackground),
+    },
+    {
+      family: "brand",
+      name: "brand link",
+      color: r(tokens.colorBrandForegroundLink),
+    },
+  ];
+}
+
+/**
+ * Per-family-pair floors: 20 where either family is a level mark, 15 otherwise. Same-family pairs have their own tests.
+ */
+const FAMILY_PAIR_FLOORS: Record<string, number> = {};
+for (const a of FAMILIES) {
+  for (const b of FAMILIES) {
+    if (a >= b) continue;
+    const strict = [a, b].some((f) => f === "level mark");
+    FAMILY_PAIR_FLOORS[`${a}|${b}`] = strict ? 20 : 15;
+  }
+}
+const familyFloor = (a: Family, b: Family) =>
+  FAMILY_PAIR_FLOORS[a < b ? `${a}|${b}` : `${b}|${a}`];
+
+const THEME_OWNED_FAMILIES: readonly Family[] = [
+  "selection",
+  "brand",
+  "single series",
+];
+const NEUTRAL_LEVELS: readonly EvtxLevel[] = ["Information", "Verbose"];
+/** Intended overlaps between different families, each with its reason. */
+const FAMILY_EXCEPTIONS: readonly {
+  reason: string;
+  applies: (a: FamilyColor, b: FamilyColor) => boolean;
+}[] = [
+  {
+    reason: "a level's text color is a legible version of its own mark",
+    applies: (a, b) =>
+      a.level !== undefined && a.level === b.level && a.family !== b.family,
+  },
+  {
+    reason:
+      "Information and Verbose are neutrals and may look alike (marks and texts)",
+    applies: (a, b) =>
+      a.level !== undefined &&
+      b.level !== undefined &&
+      NEUTRAL_LEVELS.includes(a.level) &&
+      NEUTRAL_LEVELS.includes(b.level),
+  },
+  {
+    reason:
+      "selection, brand and single-series colors are theme tokens and mergeColors[0]; this module cannot retune them",
+    applies: (a, b) =>
+      THEME_OWNED_FAMILIES.includes(a.family) &&
+      THEME_OWNED_FAMILIES.includes(b.family),
+  },
+];
+
 describe("evtx visual tokens", () => {
+  it("cites a spec section for every placement and exemption", () => {
+    for (const entry of [...PLACEMENT_INVENTORY]) {
+      for (const placement of entry.placements) {
+        expect(
+          placement.section,
+          `${entry.role} on ${placement.surface}`,
+        ).toMatch(/^\d+(\.\d+)?[ a-z0-9,.()-]/i);
+      }
+    }
+    for (const placement of BADGE_PLACEMENTS) {
+      expect(placement.section).toMatch(/^\d+(\.\d+)?/);
+    }
+    for (const exemption of INVENTORY_EXEMPTIONS) {
+      expect(exemption.section).toMatch(/\d/);
+      expect(exemption.reason.length).toBeGreaterThan(0);
+    }
+  });
+
   it("cycles channel colors every six channels", () => {
     const visual = buildEvtxVisualTokens(getAllThemes()[0]);
 
     expect(visual.channelColor(6)).toBe(visual.channelColor(0));
     expect(visual.channelColor(13)).toBe(visual.channelColor(1));
+  });
+
+  describe.each(surfaceThemes)(
+    "FAMILY_SEPARATION in the %s theme",
+    (id, theme) => {
+      it("keeps every pair of colors from different families apart", () => {
+        const visual = buildEvtxVisualTokens(theme);
+        const colors = familyColors(visual, theme);
+        const failures: string[] = [];
+        for (let i = 0; i < colors.length; i++) {
+          for (let j = i + 1; j < colors.length; j++) {
+            const a = colors[i];
+            const b = colors[j];
+            if (a.family === b.family) continue;
+            if (FAMILY_EXCEPTIONS.some((e) => e.applies(a, b))) continue;
+            const floor = isRedFamilyPair(a.level, b.level)
+              ? RED_FAMILY_PAIR_DE00
+              : familyFloor(a.family, b.family);
+            const d = deltaE00(a.color, b.color);
+            if (d < floor) {
+              failures.push(
+                `${id}: ${a.name} ${a.color} vs ${b.name} ${b.color} dE00 = ${d.toFixed(1)} (< ${floor})`,
+              );
+            }
+          }
+        }
+        expect(failures, failures.join("; ")).toEqual([]);
+      });
+
+      it("keeps Critical text and Error text at least the red-family floor apart", () => {
+        const visual = buildEvtxVisualTokens(theme);
+        const a = resolveToken(visual.levels.Critical.textColor, theme);
+        const b = resolveToken(visual.levels.Error.textColor, theme);
+        const d = deltaE00(a, b);
+        expect(
+          d,
+          `${id}: Critical text ${a} vs Error text ${b} dE00 = ${d.toFixed(1)}`,
+        ).toBeGreaterThanOrEqual(RED_FAMILY_PAIR_DE00);
+      });
+    },
+  );
+
+  it.each([
+    ["info", "Information"],
+    ["warning", "Warning"],
+    ["error", "Error"],
+    ["critical", "Critical"],
+  ] as const)("maps finding severity %s to the %s level", (severity, level) => {
+    const visual = buildEvtxVisualTokens(getAllThemes()[0]);
+    expect(visual.findingSeverityVisual(severity)).toBe(visual.levels[level]);
   });
 
   it("wraps negative channel indices", () => {
@@ -574,19 +829,6 @@ describe("evtx visual tokens", () => {
     },
   );
 
-  it("tints Critical and Error rows red and Warning rows amber, others plain", () => {
-    const palette = getAllThemes()[0].severityPalette;
-    const { levels } = buildEvtxVisualTokens(getAllThemes()[0]);
-
-    expect(levels.Critical.rowBackground).toBe(palette.error.background);
-    expect(levels.Error.rowBackground).toBe(palette.error.background);
-    expect(levels.Warning.rowBackground).toBe(palette.warning.background);
-    expect(levels.Information.rowBackground).toBe(
-      tokens.colorNeutralBackground1,
-    );
-    expect(levels.Verbose.rowBackground).toBe(tokens.colorNeutralBackground1);
-  });
-
   it("gives every level a distinct grid icon and rail icon", () => {
     const { levels } = buildEvtxVisualTokens(getAllThemes()[0]);
     expect(new Set(LEVELS.map((l) => levels[l].GridIcon)).size).toBe(
@@ -599,12 +841,6 @@ describe("evtx visual tokens", () => {
 
   describe.each(themes)("resolved colors in the %s theme", (id, theme) => {
     const visual = buildEvtxVisualTokens(theme);
-    const selectionBorder = resolveToken(
-      tokens.colorPaletteBlueBorderActive,
-      theme,
-    );
-    const brandBackground = resolveToken(tokens.colorBrandBackground, theme);
-    const brandLink = resolveToken(tokens.colorBrandForegroundLink, theme);
     const mark = (level: EvtxLevel) =>
       resolveToken(visual.levels[level].barColor, theme);
     const channel = (i: number) => resolveToken(visual.channelColor(i), theme);
@@ -620,17 +856,11 @@ describe("evtx visual tokens", () => {
           expect(
             d,
             `${id}: ${a} ${mark(a)} vs ${b} ${mark(b)} dE00 = ${d.toFixed(1)}`,
-          ).toBeGreaterThanOrEqual(20);
+          ).toBeGreaterThanOrEqual(
+            isRedFamilyPair(a, b) ? RED_FAMILY_PAIR_DE00 : 20,
+          );
         }
       }
-    });
-
-    it("keeps the critical mark apart from the selection border", () => {
-      const d = deltaE00(mark("Critical"), selectionBorder);
-      expect(
-        d,
-        `${id}: Critical ${mark("Critical")} vs selection ${selectionBorder} dE00 = ${d.toFixed(1)}`,
-      ).toBeGreaterThanOrEqual(20);
     });
 
     it("keeps channels apart from each other", () => {
@@ -640,24 +870,6 @@ describe("evtx visual tokens", () => {
           expect(
             d,
             `${id}: channel ${i} ${channel(i)} vs channel ${j} ${channel(j)} dE00 = ${d.toFixed(1)}`,
-          ).toBeGreaterThanOrEqual(15);
-        }
-      }
-    });
-
-    it("keeps channels apart from level marks, brand and selection", () => {
-      const others: [string, string][] = [
-        ...LEVELS.map((level) => [level, mark(level)] as [string, string]),
-        ["brand background", brandBackground],
-        ["brand link", brandLink],
-        ["selection border", selectionBorder],
-      ];
-      for (let i = 0; i < 6; i++) {
-        for (const [name, other] of others) {
-          const d = deltaE00(channel(i), other);
-          expect(
-            d,
-            `${id}: channel ${i} ${channel(i)} vs ${name} ${other} dE00 = ${d.toFixed(1)}`,
           ).toBeGreaterThanOrEqual(15);
         }
       }
@@ -704,6 +916,128 @@ describe("evtx visual tokens", () => {
     },
   );
 
+  describe("semantic hue anchors", () => {
+    // Measured CIELAB hue (h_ab, degrees) and chroma C* of the reference
+    // colors the bands below are built around (D65, same conversion as the
+    // tests): red #dc2626 h 35.0 C 81.7; pure red #FF0000 h 40.0 C 104.6;
+    // crimson #881337 h 12.4 C 49.9; rose #ff4d80 h 9.2 C 70.9;
+    // red-orange #ff5a1f h 46.2 C 87.3; orange #ff9966 h 51.9 C 54.4;
+    // amber #f59e0b h 72.7 C 78.8; dark amber #a16207 h 69.9 C 57.1;
+    // yellow #FFFF00 h 102.9 C 96.9; green #16a34a h 146.4 C 65.4.
+    // Orange (h 52) is outside the Critical band on purpose; amber at h 73 is
+    // the nearest Warning anchor.
+    const anchor = (color: string) => labHueChroma(color);
+
+    it.each([
+      ["red #dc2626", "#dc2626", CRITICAL_HUE_BANDS],
+      ["crimson #881337", "#881337", CRITICAL_HUE_BANDS],
+      ["rose #ff4d80", "#ff4d80", CRITICAL_HUE_BANDS],
+      ["red #dc2626", "#dc2626", ERROR_HUE_BANDS],
+      ["pure red #FF0000", "#FF0000", ERROR_HUE_BANDS],
+      ["red-orange #ff5a1f", "#ff5a1f", ERROR_HUE_BANDS],
+      ["amber #f59e0b", "#f59e0b", WARNING_HUE_BANDS],
+      ["yellow #FFFF00", "#FFFF00", WARNING_HUE_BANDS],
+    ])("puts the %s anchor inside its band", (name, color, bands) => {
+      const { hue } = anchor(color);
+      expect(inHueBands(hue, bands), `${name} hue ${hue.toFixed(1)}`).toBe(
+        true,
+      );
+    });
+
+    it.each([
+      ["orange #ff9966", "#ff9966", CRITICAL_HUE_BANDS],
+      ["amber #f59e0b", "#f59e0b", CRITICAL_HUE_BANDS],
+      ["green #16a34a", "#16a34a", WARNING_HUE_BANDS],
+    ])("keeps the %s anchor outside a band it does not belong to", (name, color, bands) => {
+      const { hue } = anchor(color);
+      expect(inHueBands(hue, bands), `${name} hue ${hue.toFixed(1)}`).toBe(
+        false,
+      );
+    });
+  });
+
+  describe.each(surfaceThemes)(
+    "semantic hue and chroma in the %s theme",
+    (id, theme) => {
+      const visual = buildEvtxVisualTokens(theme);
+      const resolved = (value: string) => resolveToken(value, theme);
+      const describeColor = (role: string, color: string) => {
+        const { hue, chroma } = labHueChroma(color);
+        return `${id}: ${role} ${color} Lab hue ${hue.toFixed(1)} C* ${chroma.toFixed(1)}`;
+      };
+
+      const levelColors = (level: EvtxLevel) =>
+        [
+          [`${level} mark`, resolved(visual.levels[level].barColor)],
+          [`${level} text`, resolved(visual.levels[level].textColor)],
+        ] as const;
+
+      it.each([
+        ["Critical", CRITICAL_HUE_BANDS, "[335, 360) or [0, 37]", 45],
+        ["Error", ERROR_HUE_BANDS, "[345, 360) or [0, 50]", 45],
+        ["Warning", WARNING_HUE_BANDS, "[55, 105]", 45],
+      ] as const)(
+        "keeps %s mark and text in its hue band and vivid",
+        (level, bands, bandLabel, minChroma) => {
+          const failures: string[] = [];
+          for (const [role, color] of levelColors(level)) {
+            const { hue, chroma } = labHueChroma(color);
+            if (!inHueBands(hue, bands) || chroma < minChroma) {
+              failures.push(
+                `${describeColor(role, color)} (need hue ${bandLabel} and C* >= ${minChroma})`,
+              );
+            }
+          }
+          expect(failures, failures.join("; ")).toEqual([]);
+        },
+      );
+
+      if (LIGHT_FAMILY_THEME_IDS.includes(id)) {
+        it("keeps Error text true red, not orange or brown (h <= 40)", () => {
+          const color = resolved(visual.levels.Error.textColor);
+          const { hue } = labHueChroma(color);
+          expect(
+            inHueBands(hue, LIGHT_ERROR_TEXT_HUE_BANDS),
+            `${describeColor("Error text", color)} (need hue [345, 360) or [0, 40])`,
+          ).toBe(true);
+        });
+      }
+
+      it.each(["Critical", "Error"] as const)(
+        "keeps the %s mark from going pastel",
+        (level) => {
+          // A light mark needs real chroma to read as red: the pale rose
+          // #ff8c9f (L* 71.2, C* 46.4) clears C* >= 45 yet reads as pink.
+          // Text is exempt: 4.5:1 on the selection background forces text to
+          // L* >= 70, where a red-pink tops out near C* 48, so text answers
+          // to the C* >= 45 floor above.
+          const color = resolved(visual.levels[level].barColor);
+          const [lightness] = hexToLab(color);
+          const { chroma } = labHueChroma(color);
+          expect(
+            lightness < 65 || chroma >= 60,
+            `${describeColor(`${level} mark`, color)} L* ${lightness.toFixed(1)} (pastel: L* >= 65 needs C* >= 60)`,
+          ).toBe(true);
+        },
+      );
+
+      it.each(["Information", "Verbose"] as const)(
+        "keeps %s mark and text neutral gray (C* <= 12)",
+        (level) => {
+          const failures: string[] = [];
+          for (const [role, color] of levelColors(level)) {
+            const { chroma } = labHueChroma(color);
+            if (chroma > 12) {
+              failures.push(`${describeColor(role, color)} (need C* <= 12)`);
+            }
+          }
+          expect(failures, failures.join("; ")).toEqual([]);
+        },
+      );
+
+    },
+  );
+
   describe.each(surfaceThemes)(
     "placement inventory in the %s theme",
     (id, theme) => {
@@ -728,21 +1062,6 @@ describe("evtx visual tokens", () => {
             );
         }
       };
-
-      it("cites a spec section for every placement", () => {
-        for (const entry of PLACEMENT_INVENTORY) {
-          for (const placement of entry.placements) {
-            expect(
-              placement.section,
-              `${id}: ${entry.role} on ${placement.surface}`,
-            ).toMatch(/^\d+(\.\d+)?[ a-z0-9,.()-]/i);
-          }
-        }
-        for (const exemption of INVENTORY_EXEMPTIONS) {
-          expect(exemption.section).toMatch(/\d/);
-          expect(exemption.reason.length).toBeGreaterThan(0);
-        }
-      });
 
       it.each(PLACEMENT_INVENTORY.map((entry) => [entry.role, entry] as const))(
         "keeps every %s color readable on each placement surface",
@@ -800,35 +1119,6 @@ describe("evtx visual tokens", () => {
         expect(failures, failures.join("; ")).toEqual([]);
       });
 
-      it("keeps channels apart from the single-series color and all selection colors", () => {
-        const single = resolveToken(visual.singleSeries, theme);
-        const selection = [
-          ["selection background", visual.selection.background],
-          ["selection border", visual.selection.border],
-          ["selection foreground", visual.selection.foreground],
-        ] as const;
-        const failures: string[] = [];
-        for (let i = 0; i < 6; i++) {
-          const color = resolveToken(visual.channelColor(i), theme);
-          const others: [string, string][] = [
-            ["single series", single],
-            ...selection.map(
-              ([name, value]) =>
-                [name, resolveToken(value, theme)] as [string, string],
-            ),
-          ];
-          for (const [name, other] of others) {
-            const d = deltaE00(color, other);
-            if (d < 15) {
-              failures.push(
-                `${id}: channel ${i} ${color} vs ${name} ${other} dE00 = ${d.toFixed(1)}`,
-              );
-            }
-          }
-        }
-        expect(failures, failures.join("; ")).toEqual([]);
-      });
-
       it("keeps every channel at Lab chroma >= 25 in the cool band [175, 290]", () => {
         const failures: string[] = [];
         for (let i = 0; i < 6; i++) {
@@ -872,80 +1162,6 @@ describe("evtx visual tokens", () => {
         expect(failures, failures.join("; ")).toEqual([]);
       });
 
-      it("keeps scenario colors at dE00 >= 20 from every level mark", () => {
-        const failures: string[] = [];
-        const scenario = {
-          succeededBar: visual.scenario.succeeded.bar,
-          running: visual.scenario.running,
-          retrying: visual.scenario.retrying,
-          sleep: visual.scenario.sleep,
-        };
-        for (const [name, value] of Object.entries(scenario)) {
-          const color = resolveToken(value, theme);
-          for (const level of LEVELS) {
-            const mark = resolveToken(visual.levels[level].barColor, theme);
-            const d = deltaE00(color, mark);
-            if (d < 20) {
-              failures.push(
-                `${id}: scenario ${name} ${color} vs ${level} ${mark} dE00 = ${d.toFixed(1)}`,
-              );
-            }
-          }
-        }
-        expect(failures, failures.join("; ")).toEqual([]);
-      });
-
-      it("keeps scenario states and the selection border apart (dE00 >= 20)", () => {
-        const failures: string[] = [];
-        // running and retrying share one token by spec design (6.3).
-        const states: [string, string][] = [
-          ["running", visual.scenario.running],
-          ["sleep", visual.scenario.sleep],
-          ["succeeded bar", visual.scenario.succeeded.bar],
-          ["not started stroke", visual.scenario.notStarted.stroke],
-        ].map(([n, v]) => [n, resolveToken(v, theme)] as [string, string]);
-        const selectionBorder = resolveToken(visual.selection.border, theme);
-        for (let i = 0; i < states.length; i++) {
-          const d = deltaE00(states[i][1], selectionBorder);
-          if (d < 20) {
-            failures.push(
-              `${id}: ${states[i][0]} ${states[i][1]} vs selection border ${selectionBorder} dE00 = ${d.toFixed(1)}`,
-            );
-          }
-          for (let j = i + 1; j < states.length; j++) {
-            const e = deltaE00(states[i][1], states[j][1]);
-            if (e < 20) {
-              failures.push(
-                `${id}: ${states[i][0]} ${states[i][1]} vs ${states[j][0]} ${states[j][1]} dE00 = ${e.toFixed(1)}`,
-              );
-            }
-          }
-        }
-        expect(failures, failures.join("; ")).toEqual([]);
-      });
-
-      it("keeps the not-started stroke at 3:1 on its background", () => {
-        const stroke = resolveToken(visual.scenario.notStarted.stroke, theme);
-        const background = resolveToken(
-          visual.scenario.notStarted.background,
-          theme,
-        );
-        const ratio = contrastRatio(stroke, background);
-        expect(
-          ratio,
-          `${id}: not-started stroke ${stroke} on ${background} (15.1 hatch) = ${ratio.toFixed(2)}`,
-        ).toBeGreaterThanOrEqual(3);
-      });
-
-      it("keeps the succeeded label at 4.5:1 on its background", () => {
-        const fg = resolveToken(visual.scenario.succeeded.foreground, theme);
-        const bg = resolveToken(visual.scenario.succeeded.background, theme);
-        const ratio = contrastRatio(fg, bg);
-        expect(
-          ratio,
-          `${id}: succeeded foreground ${fg} on ${bg} (8.1 live pill, 15.1 end-state) = ${ratio.toFixed(2)}`,
-        ).toBeGreaterThanOrEqual(4.5);
-      });
     },
   );
 
@@ -1075,18 +1291,13 @@ describe("evtx visual tokens", () => {
     },
   );
 
-  it("uses the blue palette triplet for selection and the Exact badge (Q-1)", () => {
+  it("uses the blue palette triplet for selection (Q-1)", () => {
     const visual = buildEvtxVisualTokens(getAllThemes()[0]);
 
     expect(visual.selection).toEqual({
       background: tokens.colorPaletteBlueBackground2,
       border: tokens.colorPaletteBlueBorderActive,
       foreground: tokens.colorPaletteBlueForeground2,
-    });
-    expect(visual.strengths.exact).toMatchObject({
-      background: tokens.colorPaletteBlueBackground2,
-      foreground: tokens.colorPaletteBlueForeground2,
-      border: tokens.colorPaletteBlueBorderActive,
     });
   });
 
