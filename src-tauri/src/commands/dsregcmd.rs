@@ -1587,6 +1587,39 @@ mod tests {
         assert_eq!(super::simulated_bundle_io_stages_entered(), 1);
     }
 
+    /// #883: an unreadable Enrollments export is a coverage gap. It must not
+    /// surface as "zero enrollments" and trigger `enrollment-missing-on-joined`.
+    #[test]
+    fn an_unreadable_enrollments_export_does_not_raise_enrollment_missing_on_joined() {
+        let status = "\n AzureAdJoined : YES\n DomainJoined : NO\n TenantId : 11111111-2222-3333-4444-555555555555\n DeviceId : abcdefab-1111-2222-3333-abcdefabcdef\n";
+        let analyze = |export: &[u8]| {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let registry_dir = temp_dir.path().join("evidence").join("registry");
+            std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+            std::fs::write(registry_dir.join("enrollments.reg"), export).expect("write export");
+            let evidence =
+                super::load_bundle_evidence(temp_dir.path().to_str().expect("utf8 path"));
+            crate::dsregcmd::analyze_text_with_evidence(status, evidence, chrono::Utc::now())
+                .expect("analysis succeeds")
+        };
+        let missing = |result: &crate::dsregcmd::DsregcmdAnalysisResult| {
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "enrollment-missing-on-joined")
+        };
+
+        let unreadable = analyze(b"");
+        assert!(unreadable.enrollment_evidence.is_none());
+        assert!(!missing(&unreadable));
+
+        // A genuine export with no enrollment subkeys is still negative evidence.
+        let genuine = analyze(
+            b"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n\"Placeholder\"=\"x\"\r\n",
+        );
+        assert!(missing(&genuine));
+    }
+
     #[test]
     fn simulated_stage_wait_fails_when_worker_exits_or_panics_before_entry() {
         for panics in [false, true] {
