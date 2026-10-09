@@ -754,7 +754,7 @@ Major UX overhaul and parser expansion. The log viewer now has dynamic columns d
 
 CMTrace Open 0.3.0 expands the app from a log viewer with Intune diagnostics into a broader troubleshooting tool for Windows management and identity issues. This release adds a dedicated DSRegCmd troubleshooting workspace, supports startup file handling through Windows file association flows, and prepares signed Windows release artifacts for easier distribution in managed environments.
 
-![main workspace of the dsregcmd space](references/dsregcmd1.png)
+The DSRegCmd workspace main view.
 
 ### Added
 
