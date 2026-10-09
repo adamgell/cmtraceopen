@@ -9,9 +9,9 @@ import { defineConfig, devices } from "@playwright/test";
  * committed PNGs into `screenshots/` and must not run as part of `npm run test:e2e`.
  * The main e2e config ignores this directory (see `testIgnore` there).
  *
- * Reuses an already-running dev server on :1420 when present, so running
- * `npm run app:dev` alongside this makes the shim forward to the real Rust
- * backend (IPC bridge on :1422) for full-fidelity captures.
+ * Reuses an already-running dev server on :1420 when present. Captures that
+ * need deterministic data (the Event Logs spec) block the IPC bridge on :1422
+ * themselves, so a running `npm run app:dev` does not change their output.
  */
 export default defineConfig({
   testDir: "./e2e/screenshots",

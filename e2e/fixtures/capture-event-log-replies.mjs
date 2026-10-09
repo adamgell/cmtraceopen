@@ -29,58 +29,107 @@
  *    source file.
  * 3. Writes the engine output plus provenance (git commit, dirty flag) to the JSON fixture.
  *
- * Regenerate (from the repo root; needs a Rust toolchain and Node 22.6+ for type stripping):
+ * Regenerate (from the repo root; needs a Rust toolchain and Node 22.18+ or 23.6+, where TypeScript
+ * type stripping is on by default; Node 22.6 to 22.17 need `--experimental-strip-types`):
  *
  *   node e2e/fixtures/capture-event-log-replies.mjs
  *
- * Re-run it whenever the dataset (event-log-data.ts), the frontend's analysis call sequence, or
- * the engine's session/diagnosis logic changes. The spec fails loudly if the UI's requests no
- * longer match what was captured, so a stale file cannot be replayed silently.
+ * Check, read-only, that the committed replies still match the dataset and the engine source
+ * (no cargo, no writes; exits 1 with a reason when they do not):
  *
- * Determinism: the session id is a fixed placeholder, so a re-run changes the JSON only when the
- * engine's answer changes.
+ *   node e2e/fixtures/capture-event-log-replies.mjs --check
+ *
+ * The replies record `inputSha256` (the exact engine input) and `engineSourceSha256` (the engine
+ * sources). The spec compares the first at test time and fails if the dataset changed; only
+ * `--check` can compare the second, because spec code must not shell out. Run `--check` after any
+ * change under src-tauri/src/event_log or crates/cmtraceopen-parser/src.
+ *
+ * Re-run the capture whenever the dataset (event-log-data.ts), the frontend's analysis call
+ * sequence, or the engine's session/diagnosis logic changes. The spec fails loudly if the UI's
+ * requests no longer match what was captured, so a stale file cannot be replayed silently.
+ *
+ * Determinism: the session id is a fixed placeholder, so for the same input and engine source a
+ * re-run reproduces the engine's replies exactly. Only `provenance.engineCommit` and
+ * `engineTreeDirty` track the checkout and so change with it.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildParseResult, ENGINE_REPLIES_PATH } from "./event-log-data.ts";
+import { createHash } from "node:crypto";
+import {
+  buildParseResult,
+  ENGINE_REPLIES_PATH,
+  engineInput,
+  engineInputSha256,
+} from "./event-log-data.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
 const TAURI = path.join(REPO, "src-tauri");
 const TEST_NAME = "event_log::analysis_session::screenshot_replies::capture_event_log_replies";
 
-/** Mirrors EVENT_LOG_ANALYSIS_CHUNK_RECORD_LIMIT and _PAGE_SIZE in event-analysis-session.ts. */
-const CHUNK_RECORD_LIMIT = 1_000;
-const PAGE_SIZE = 1_000;
-const SESSION_ID = "00000000-0000-4000-8000-000000000828";
+/** Sources whose behavior decides the replies. Whole directories: a false alarm costs 12 s. */
+const ENGINE_SOURCES = [
+  "src-tauri/src/event_log",
+  "crates/cmtraceopen-parser/src",
+  "src-tauri/Cargo.toml",
+  "Cargo.lock",
+];
+const DIRTY_PATHS = [...ENGINE_SOURCES, "e2e/fixtures/event-log-data.ts"];
 
 function git(...args) {
   return execFileSync("git", args, { cwd: REPO, encoding: "utf8" }).trim();
 }
 
+/** Content hash of the working-tree engine sources, so it is right on a dirty or clean tree. */
+function engineSourceSha256() {
+  const files = git("ls-files", "--cached", "--others", "--exclude-standard", "--", ...ENGINE_SOURCES)
+    .split("\n")
+    .filter(Boolean)
+    .sort();
+  const hash = createHash("sha256");
+  for (const file of files) {
+    let content = Buffer.alloc(0);
+    try {
+      content = readFileSync(path.join(REPO, file));
+    } catch {
+      // Tracked but deleted in the working tree: the hash still changes via the missing content.
+    }
+    hash.update(file).update("\0").update(content).update("\0");
+  }
+  return hash.digest("hex");
+}
+
 const parseResult = buildParseResult();
+
+if (process.argv.includes("--check")) {
+  const { provenance } = JSON.parse(readFileSync(ENGINE_REPLIES_PATH, "utf8"));
+  const problems = [];
+  if (provenance.inputSha256 !== engineInputSha256(parseResult)) {
+    problems.push("the dataset (event-log-data.ts) changed since capture");
+  }
+  if (provenance.engineSourceSha256 !== engineSourceSha256()) {
+    problems.push("the engine changed since capture (src-tauri/src/event_log, parser crate, Cargo)");
+  }
+  if (problems.length > 0) {
+    console.error(`event-log-engine-replies.json is stale: ${problems.join("; ")}.`);
+    console.error("Regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`.");
+    process.exit(1);
+  }
+  console.log("event-log-engine-replies.json matches the dataset and the engine sources.");
+  process.exit(0);
+}
+
 const tempDir = mkdtempSync(path.join(os.tmpdir(), "cmtrace-event-log-capture-"));
 const inputPath = path.join(tempDir, "input.json");
 const outputPath = path.join(tempDir, "output.json");
-writeFileSync(
-  inputPath,
-  JSON.stringify({
-    records: parseResult.records,
-    // The gaps the UI sends to diagnose: the parse result's coverage gaps, merged by
-    // mergeDiagnosisCoverageGaps (EventLogWorkspace.tsx). The spec asserts this equality.
-    coverageGaps: parseResult.coverageGaps,
-    chunkRecordLimit: CHUNK_RECORD_LIMIT,
-    pageSize: PAGE_SIZE,
-    sessionId: SESSION_ID,
-  }),
-);
+writeFileSync(inputPath, JSON.stringify(engineInput(parseResult)));
 
 const engineCommit = git("rev-parse", "HEAD");
 const engineTreeDirty =
-  git("status", "--porcelain", "--", "src-tauri/src", "crates", "Cargo.toml", "Cargo.lock") !== "";
+  git("status", "--porcelain", "--", ...DIRTY_PATHS) !== "";
 
 execFileSync(
   "cargo",
@@ -110,6 +159,8 @@ const replies = {
     engineCommit,
     engineTreeDirty,
     capturedBy: "e2e/fixtures/capture-event-log-replies.mjs",
+    inputSha256: engineInputSha256(parseResult),
+    engineSourceSha256: engineSourceSha256(),
   },
   ...engine,
 };

@@ -27,10 +27,13 @@
  *    are committed in `event-log-engine-replies.json`. Regenerate with
  *    `node e2e/fixtures/capture-event-log-replies.mjs` (see that script's header).
  */
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type {
   DiagnosisSummary,
+  EventLogSourceManifest,
+  EventLogSourceSelection,
   EvtxChannelInfo,
   EvtxCoverageGap,
   EvtxLevel,
@@ -68,6 +71,12 @@ const channelPath = (key: ChannelKey): string =>
 const SECURITY_PATH = `${EVENT_LOG_FIXTURE_DIR}\\Security.evtx`;
 /** Every path the UI requests, in request order. Security is requested and unreadable. */
 export const EVENT_LOG_FIXTURE_PATHS = [...CHANNEL_ORDER.map(channelPath), SECURITY_PATH];
+
+/** Mirrors EVENT_LOG_ANALYSIS_CHUNK_RECORD_LIMIT and _PAGE_SIZE in event-analysis-session.ts. */
+export const ENGINE_CHUNK_RECORD_LIMIT = 1_000;
+export const ENGINE_PAGE_SIZE = 1_000;
+/** Fixed placeholder so a regeneration only changes the JSON when the engine's answer changes. */
+export const ENGINE_SESSION_ID = "00000000-0000-4000-8000-000000000828";
 
 const DM_PROVIDER = "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider";
 
@@ -179,13 +188,13 @@ function xmlEscape(value: string): string {
 }
 
 /**
- * Builds the record `parse_evtx_file` would emit, minus the optional System fields the dataset
- * does not model (task, opcode, process, thread, keywords, SID). Those serialize as absent here
- * rather than as invented values.
+ * Builds the record `parse_evtx_file` would emit. The optional System fields the dataset does
+ * not model (task, opcode, process, thread, SID, keywords) are `null`, and `mapped` is `[]`:
+ * the backend serializes `None` as `null` with no skip attribute (models.rs:148-185).
  *
  * - `eventRecordIdText`: `system.event_record_id.map(|v| v.to_string())` (parser.rs:2413).
  * - `sourceLabel`: the manifest entry's path, written by `append_parsed_file`
- *   (`record.source_label = source_path`, parser.rs:1795-1798).
+ *   (`record.source_label = source_path`, parser.rs:1784-1787).
  */
 function toRecord(e: GeneratedEvent): EvtxRecord {
   const channel = CHANNELS[e.chKey].name;
@@ -211,29 +220,65 @@ function toRecord(e: GeneratedEvent): EvtxRecord {
       `<EventData><Data>${xmlEscape(e.msg)}</Data></EventData></Event>`,
     sourceLabel: channelPath(e.chKey),
     originKind: "event",
+    task: null,
+    opcode: null,
+    processId: null,
+    threadId: null,
+    userSid: null,
+    keywords: null,
+    mapped: [],
   };
 }
 
+/** The sources the picker sends to `evtx_expand_sources`: every path as a `file` selection. */
+export function buildSourceSelections(): EventLogSourceSelection[] {
+  return EVENT_LOG_FIXTURE_PATHS.map((path) => ({ path, kind: "file" }));
+}
+
 /**
- * Reply for `evtx_parse_files` with every path in `EVENT_LOG_FIXTURE_PATHS` requested.
+ * Reply for `evtx_expand_sources` (`build_source_manifest_for_selections`, parser.rs:125-200).
  *
- * Mirrors `evtx_parse_files` -> `build_source_manifest` -> `parse_evtx_manifest`
- * (src-tauri/src/event_log/commands.rs:174-188, parser.rs:107-123 and 1593-1700):
+ * - Each readable file becomes one entry, in request order: `source_id` is `source_identity(path)`
+ *   (lower-cased on Windows, parser.rs:1227-1236), `path` the normalized path, and `kind` the
+ *   requested `file` (the push is at parser.rs:911-917).
+ * - Security.evtx is not readable: `symlink_metadata` is denied, so expansion records
+ *   `SourceCoverage::AccessDenied { path, reason: "source metadata access was denied" }`
+ *   (parser.rs:715-724) and creates no entry.
+ */
+export function buildSourceManifest(): EventLogSourceManifest {
+  return {
+    entries: CHANNEL_ORDER.map((key) => ({
+      sourceId: channelPath(key).toLowerCase(),
+      path: channelPath(key),
+      kind: "file",
+    })),
+    coverage: [{ kind: "accessDenied", path: SECURITY_PATH, reason: ACCESS_DENIED_REASON }],
+  };
+}
+
+const ACCESS_DENIED_REASON = "source metadata access was denied";
+
+/**
+ * Reply for `evtx_parse_manifest` over `buildSourceManifest()`.
+ *
+ * Mirrors `evtx_parse_manifest` -> `parse_evtx_manifest`
+ * (src-tauri/src/event_log/commands.rs:190-199;
+ * `parse_evtx_manifest` parser.rs:1548-1564; its batch body `parse_evtx_manifest_with_batches`
+ * parser.rs:1584-1770):
  *
  * - Records: within a file the EVTX reader yields ascending record order; across files they are
  *   gathered in manifest order and then stably sorted by `timestamp_epoch`, and `id` is the index
- *   in that order starting from 0 (parser.rs:1558-1561).
+ *   in that order starting from 0 (parser.rs:1557-1560).
  * - Channels: one entry per file with records, `ChannelSourceType::File { path }` and
- *   `Enabled`, in manifest order (parser.rs:1851-1877).
- * - Security.evtx: `symlink_metadata` is denied, so expansion records
- *   `SourceCoverage::AccessDenied { path, reason: "source metadata access was denied" }`
- *   (parser.rs:715-722) and no manifest entry is created. That one coverage row is then
- *   mirrored three ways: `coverage` (the manifest rows as-is), `coverageGaps` via
- *   `coverage_gap_from_source_coverage` (parser.rs:1370-1388, kind `accessDenied`), and
+ *   `Enabled`, in manifest order (`append_parsed_file`, parser.rs:1842-1868).
+ * - Security.evtx: the manifest carries one `SourceCoverage::AccessDenied` row and no entry for it
+ *   (parser.rs:715-724). That one coverage row is mirrored three ways: `coverage` (the manifest
+ *   rows as-is), `coverageGaps` via `coverage_gap_from_source_coverage` (parser.rs:1370-1388, kind `accessDenied`), and
  *   `errorMessages` via `format_coverage_gap` (`"<source>: <reason>"`, parser.rs:1461-1468), with
- *   `parseErrors = manifest.coverage.len()` (parser.rs:1595-1601). No record or channel is
+ *   `parseErrors = manifest.coverage.len()` (parser.rs:1595-1600). No record or channel is
  *   emitted for the unreadable file.
- * - `totalRecords` is the record count; `archiveMembers` is empty (parser.rs:1683-1691).
+ * - `totalRecords` is the record count (overwritten with `records.len()` at parser.rs:1562);
+ *   `archiveMembers` is empty. The result is assembled at parser.rs:1757-1767.
  */
 export function buildParseResult(): EvtxParseResult {
   const order = (key: ChannelKey): number => CHANNEL_ORDER.indexOf(key);
@@ -252,7 +297,7 @@ export function buildParseResult(): EvtxParseResult {
     enabledState: "enabled",
   }));
 
-  const reason = "source metadata access was denied";
+  const reason = ACCESS_DENIED_REASON;
   return {
     records,
     channels,
@@ -265,6 +310,25 @@ export function buildParseResult(): EvtxParseResult {
   };
 }
 
+/**
+ * Exactly what the capture feeds the engine, and what the spec expects the UI to send: the records
+ * as appended, the diagnose coverage gaps, and the chunk and page sizes.
+ */
+export function engineInput(parseResult: EvtxParseResult) {
+  return {
+    records: parseResult.records,
+    coverageGaps: parseResult.coverageGaps ?? [],
+    chunkRecordLimit: ENGINE_CHUNK_RECORD_LIMIT,
+    pageSize: ENGINE_PAGE_SIZE,
+    sessionId: ENGINE_SESSION_ID,
+  };
+}
+
+/** SHA-256 of the canonical (`JSON.stringify`, fixed key order) engine input. */
+export function engineInputSha256(parseResult: EvtxParseResult): string {
+  return createHash("sha256").update(JSON.stringify(engineInput(parseResult))).digest("hex");
+}
+
 /** What the engine saw and answered for one capture; the file is written by the capture script. */
 export interface EngineReplies {
   /** Human-readable note repeated at the top of the JSON file. */
@@ -275,6 +339,10 @@ export interface EngineReplies {
     /** Workspace dirty state when captured, so a reply from unreviewed code is visible. */
     engineTreeDirty: boolean;
     capturedBy: string;
+    /** Hash of `engineInput()`: the replies are only valid for exactly this input. */
+    inputSha256: string;
+    /** Hash of the engine source files at capture; `capture-event-log-replies.mjs --check`. */
+    engineSourceSha256: string;
   };
   sessionId: string;
   /** Number of records in each `evtx_append_analysis_chunk` call, in call order. */
