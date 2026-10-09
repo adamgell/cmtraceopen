@@ -351,8 +351,6 @@ describe("getVerdictHeadline", () => {
             joined ? `${JOIN_CLAUSES[joinType]} \u00b7 ${clause}` : JOIN_CLAUSES[joinType],
           );
           expect(headline).not.toMatch(/manag/i);
-          expect(headline.toLowerCase()).not.toContain("not managed");
-          expect(headline.toLowerCase()).not.toContain("managed by intune");
           expect(getVerdictTone(result)).toBe(expectedTone(result));
           checked += 1;
         }
