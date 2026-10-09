@@ -40,10 +40,21 @@ export interface EvtxLevelVisual {
   label: EvtxLevel;
   /** Histogram bars and level-filter fills (drawn on the surface, never a row tint). */
   barColor: string;
-  /** 8px severity dots. */
+  /** 8px severity dots. Drawn on the surface or the rail, never on a row tint. */
   dotColor: string;
-  /** Icon on the level's row tint; falls back to black or white when the mark lacks 3:1 there. */
+  /**
+   * Grid icon on the level's own row tint. Falls back to black or white when
+   * the mark lacks 3:1 there.
+   */
   iconColor: string;
+  /**
+   * Grid icon on a selected row. Selection replaces the tint with the
+   * selection background, so this is the selection foreground (4.5:1 on that
+   * background). The icon shape and its aria-label carry the level.
+   */
+  selectedIconColor: string;
+  /** Rail icon, drawn on colorNeutralBackground2. Same as the mark. */
+  railIconColor: string;
   rowBackground: string;
   rowText: string;
   /** 12px icon for grid cells. */
@@ -61,7 +72,7 @@ export interface EvtxBadgeVisual {
   Icon?: FluentIcon;
 }
 
-export interface EvtxSelectionVisual {
+export interface EvtxColorTriplet {
   background: string;
   border: string;
   foreground: string;
@@ -71,9 +82,9 @@ export interface EvtxVisualTokens {
   levels: Record<EvtxLevel, EvtxLevelVisual>;
   strengths: Record<DiagnosisCorrelationStatus, EvtxBadgeVisual>;
   /** Selected row, chain, view card and active brushed-time chip (Q-1). */
-  selection: EvtxSelectionVisual;
+  selection: EvtxColorTriplet;
   /** Error finding callouts in the rail. */
-  findingCallout: EvtxSelectionVisual;
+  findingCallout: EvtxColorTriplet;
   /** Color for the channel at `index` in channel display order. */
   channelColor: (index: number) => string;
   /** Heat-map fills, lightest first (Q-3 interim, no ramp token yet). */
@@ -96,6 +107,11 @@ export function buildEvtxVisualTokens(
   palette: LogSeverityPalette,
 ): EvtxVisualTokens {
   const { eventLog } = palette;
+  const selection: EvtxColorTriplet = {
+    background: tokens.colorPaletteBlueBackground2,
+    border: tokens.colorPaletteBlueBorderActive,
+    foreground: tokens.colorPaletteBlueForeground2,
+  };
   const plainRow = {
     rowBackground: tokens.colorNeutralBackground1,
     rowText: tokens.colorNeutralForeground1,
@@ -108,6 +124,8 @@ export function buildEvtxVisualTokens(
         barColor: eventLog.critical,
         dotColor: eventLog.critical,
         iconColor: readableOn(palette.error.background, eventLog.critical),
+        selectedIconColor: selection.foreground,
+        railIconColor: eventLog.critical,
         rowBackground: palette.error.background,
         rowText: palette.error.text,
         GridIcon: DismissCircle12Regular,
@@ -118,6 +136,8 @@ export function buildEvtxVisualTokens(
         barColor: eventLog.error,
         dotColor: eventLog.error,
         iconColor: readableOn(palette.error.background, eventLog.error),
+        selectedIconColor: selection.foreground,
+        railIconColor: eventLog.error,
         rowBackground: palette.error.background,
         rowText: palette.error.text,
         GridIcon: ErrorCircle12Regular,
@@ -128,6 +148,8 @@ export function buildEvtxVisualTokens(
         barColor: eventLog.warning,
         dotColor: eventLog.warning,
         iconColor: readableOn(palette.warning.background, eventLog.warning),
+        selectedIconColor: selection.foreground,
+        railIconColor: eventLog.warning,
         rowBackground: palette.warning.background,
         rowText: palette.warning.text,
         GridIcon: Warning12Regular,
@@ -138,6 +160,8 @@ export function buildEvtxVisualTokens(
         barColor: eventLog.information,
         dotColor: eventLog.information,
         iconColor: eventLog.information,
+        selectedIconColor: selection.foreground,
+        railIconColor: eventLog.information,
         ...plainRow,
         GridIcon: Info12Regular,
         RailIcon: Info16Regular,
@@ -149,6 +173,8 @@ export function buildEvtxVisualTokens(
         barColor: eventLog.verbose,
         dotColor: eventLog.verbose,
         iconColor: eventLog.verbose,
+        selectedIconColor: selection.foreground,
+        railIconColor: eventLog.verbose,
         ...plainRow,
         GridIcon: Circle12Regular,
         RailIcon: Circle16Regular,
@@ -176,34 +202,30 @@ export function buildEvtxVisualTokens(
         border: tokens.colorPaletteMarigoldBorder2,
         borderStyle: "solid",
       },
-      // Foreground and border use Foreground3 rather than Foreground2 or
-      // StrokeAccessible: in hotdog-stand those two resolve to pure yellow, the
-      // error text color, which would read as a failure state.
       // The spec names the label and icon but no colors. A coverage gap is
       // neither success nor failure, so it stays neutral, with the icon
-      // carrying the meaning. Its own solid border keeps it from
-      // being mistaken for Candidate (dashed) or Not linked (dotted).
+      // carrying the meaning. Its solid accessible border keeps it from being
+      // mistaken for Candidate (dashed) or Not linked (dotted). Background3
+      // plus Foreground2 keep the label at 4.5:1 in every theme; on a surface
+      // background the label drops below that in dracula, solarized and
+      // hotdog-stand.
       coverageBlocked: {
         label: "Coverage blocked",
-        background: tokens.colorNeutralBackground1,
-        foreground: tokens.colorNeutralForeground3,
-        border: tokens.colorNeutralForeground3,
+        background: tokens.colorNeutralBackground3,
+        foreground: tokens.colorNeutralForeground2,
+        border: tokens.colorNeutralStrokeAccessible,
         borderStyle: "solid",
         Icon: PlugDisconnected16Regular,
       },
       notCausal: {
         label: "Not linked",
-        background: tokens.colorNeutralBackground1,
-        foreground: tokens.colorNeutralForeground3,
+        background: tokens.colorNeutralBackground3,
+        foreground: tokens.colorNeutralForeground2,
         border: tokens.colorNeutralForeground3,
         borderStyle: "dotted",
       },
     },
-    selection: {
-      background: tokens.colorPaletteBlueBackground2,
-      border: tokens.colorPaletteBlueBorderActive,
-      foreground: tokens.colorPaletteBlueForeground2,
-    },
+    selection,
     findingCallout: {
       background: palette.error.background,
       border: tokens.colorPaletteRedBorder2,

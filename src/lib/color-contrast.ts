@@ -1,6 +1,7 @@
 /** Pure color contrast helpers (WCAG 2.x). No React or DOM. */
 
-function parseHex(color: string): [number, number, number] {
+/** Parses `#rgb` or `#rrggbb` (leading `#` required) into 0-255 channels. */
+export function parseHex(color: string): [number, number, number] {
   const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
   if (!match) {
     throw new Error(`Expected a #rgb or #rrggbb color, got ${color}`);
