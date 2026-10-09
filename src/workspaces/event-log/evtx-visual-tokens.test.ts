@@ -54,6 +54,13 @@ const isRedFamilyPair = (a?: EvtxLevel, b?: EvtxLevel) =>
   RED_FAMILY_LEVELS.includes(a) &&
   RED_FAMILY_LEVELS.includes(b);
 
+/** Looks a theme up by id and fails loudly (getThemeById falls back silently). */
+function themeById(id: string) {
+  const theme = getAllThemes().find((t) => t.id === id);
+  if (!theme) throw new Error(`Unknown theme ${id}`);
+  return theme;
+}
+
 const themes = getAllThemes().map((theme) => [theme.id, theme] as const);
 const redFamilyThemes = themes.filter(
   ([id]) => !HOTDOG_REMOVED_IN_878.includes(id),
@@ -837,7 +844,7 @@ describe("evtx visual tokens", () => {
   it.each(["light", "high-contrast"])(
     "maps every level to concrete tokens in the %s theme",
     (id) => {
-      const theme = getAllThemes().find((t) => t.id === id)!;
+      const theme = themeById(id);
       const palette = theme.severityPalette;
       const { levels } = buildEvtxVisualTokens(theme);
       const selectedIcon = tokens.colorPaletteBlueForeground2;
@@ -1363,7 +1370,7 @@ describe("evtx visual tokens", () => {
   it.each(["light", "high-contrast"])(
     "maps strengths to concrete tokens in the %s theme",
     (id) => {
-      const theme = getAllThemes().find((t) => t.id === id)!;
+      const theme = themeById(id);
       const palette = theme.severityPalette;
       const { strengths } = buildEvtxVisualTokens(theme);
 
