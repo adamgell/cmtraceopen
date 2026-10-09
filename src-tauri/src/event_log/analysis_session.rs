@@ -2169,9 +2169,9 @@ mod screenshot_replies {
     /// Also pins `provenance.inputSha256` (the link the screenshot spec uses between the dataset
     /// and the replies) to the SHA-256 of the committed input file's bytes.
     ///
-    /// Not compared: `about`, and within `provenance` the capture-time fields `engineCommit` and
-    /// `engineTreeDirty`, which differ per checkout. The rest of `provenance` is checked here
-    /// (`inputSha256`) or by `capture-event-log-replies.mjs --check` (`engineSourceSha256`).
+    /// Not compared: `about`, `provenance.engineCommit`, `provenance.engineTreeDirty` and
+    /// `provenance.capturedBy`. `provenance.inputSha256` is pinned here to the input bytes, and
+    /// `capture-event-log-replies.mjs --check` verifies `provenance.engineSourceSha256`.
     #[test]
     fn committed_engine_replies_match_the_engine() {
         let input_text = read_fixture_text("event-log-engine-input.json");

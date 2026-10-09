@@ -47,7 +47,9 @@
  * Beyond this script, `cargo test event_log::analysis_session` (CI: Check & Test (Rust)) runs the
  * non-ignored test `screenshot_replies::committed_engine_replies_match_the_engine`, which replays
  * the committed input through the engine and requires the result to equal the committed replies
- * (ignoring only `about` and `provenance`). A hand edit of the replies fails there.
+ * (ignoring `about`, `provenance.engineCommit`, `provenance.engineTreeDirty` and
+ * `provenance.capturedBy`). It also pins `provenance.inputSha256` to the SHA-256 of the committed
+ * input bytes; `--check` verifies `engineSourceSha256`. A hand edit of the replies fails there.
  *
  * Re-run the capture whenever the dataset (event-log-data.ts), the frontend's analysis call
  * sequence, or the engine's session/diagnosis logic changes. The spec fails loudly if the UI's
