@@ -34,7 +34,7 @@ Read it from GitHub and `git ls-remote` at the moment you act.
 - Project history, decisions, or architecture trade-offs
 - Creating fixtures, tests, or benchmarks
 
-## Hard rules (rules 1 to 7 in full in `soul.md`, rule 8 in the execution charter)
+## Hard rules (these summarize `soul.md`'s operating rules, which holds them in full; rule 8 is in the execution charter)
 
 1. **No backward-compatibility layers.** Remove obsolete paths.
 2. **Simplest implementation wins.** No speculative abstractions.

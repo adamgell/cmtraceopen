@@ -225,7 +225,9 @@ A new `scripts/agent-context.test.mjs`, added to the existing
 
 Status: in use by Adam's decision of 2026-10-08, ahead of the separate design this
 section anticipated. The execution charter's "Advisor and subagents" section is the
-operating contract, including the `validate_agent_output.py` checks below.
+operating contract, including the `validate_agent_output.py` checks below. Only the
+validator (and through it the command policy, which it applies itself) is adopted.
+`lane_state.py` and `run_repo_check.py` are not part of the adopted contract yet.
 
 Claude as Main for `cmtraceopen-dev`: dispatch the `cmtrace-*` subagents with the
 Agent tool, keep `lane_state.py`, `run_repo_check.py`, `check_command_policy.py`,
