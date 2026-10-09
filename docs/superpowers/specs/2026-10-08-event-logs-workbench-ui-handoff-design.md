@@ -114,7 +114,7 @@ All mockup data is fictional. This includes the Contoso machine names, the IDs, 
 | D7 | A "Time only" chain in the chain list, a dotted connector, and "1 time-only" in the summary | `timestampOnly` / `notCausal` relations are never chains, never drawn as connectors, and never counted as correlations. They appear only in a collapsed **"Nearby, not linked"** group and as unconnected context markers, labelled "Not linked". | Epic non-goal |
 | D8 | Rail finding "DNS 1014 … precedes token broker failures" | Finding cards render only `DiagnosisFinding` output from the engine. The UI never synthesizes findings or wording that implies a temporal relationship. Mockup finding copy is illustrative. | Epic non-goal; diagnosis output spec |
 | D9 | Strength labels Explicit / Secondary / Unresolved / Time only | Exact / Candidate / Ambiguous / Coverage blocked / Not linked. This aligns with `TimelineCorrelationStrength`, `DiagnosisCorrelationStatus` and the existing `UnifiedTimelineView` copy. | Consistency with the shipped vocabulary |
-| D10 | Channel hues: System blue, Application orange, AAD green, DeviceManagement amber, Security pink | Assigned from `severityPalette.mergeColors`, skipping the red (1) and green (2) indices, so channel color never reads as severity (§6.3). AAD becomes cyan and DeviceManagement becomes purple. | DS: no invented colors; design-system OQ-2 (resolved) |
+| D10 | Channel hues: System blue, Application orange, AAD green, DeviceManagement amber, Security pink | Per-theme cool-hue channel tokens in `severityPalette.eventLog` (see D22), so a channel color never reads as a severity (§6.3). | DS: no invented colors; design-system OQ-2 (resolved) |
 | D11 | Heat-map 7-step blue ramp | No sequential ramp token exists. Per Q-3, use `color-mix()` of `mergeColors[0]` into `colorNeutralBackground1` at 6 fixed steps (15, 30, 45, 60, 75 and 90%), and file a design-system open question for a semantic ramp token. | DS: no invented colors |
 | D12 | Dark EventData code block (`#121417` / `#e6e6e6`) | The existing `EvtxDetailPane` XML styling: `colorNeutralBackground3`, `colorNeutralForeground1`, `LOG_MONOSPACE_FONT_FAMILY` | DS: no invented colors |
 | D13 | Level column glyph SVGs | Fluent icons with `aria-label` = level name (§7.3). These replace the current "ERR / WARN" text badges. | DS: Fluent icons only |
@@ -126,7 +126,7 @@ All mockup data is fictional. This includes the Contoso machine names, the IDs, 
 | D19 | Chain titles written by hand ("Enrollment attempt 1 failed") | Derived from data: `{eventId} · {message head}` of the highest-severity member, with ties broken by earliest timestamp. A diagnosis finding title is used when the finding's evidence covers the whole chain. | No fabricated interpretation |
 | D20 | v2 scenario layouts with the ESP phase Gantt, tracked-app table and IME detection details | Event-derived summaries plus "Open in ESP Diagnostics" / "Open in Intune Diagnostics" deep-links (§15.1) | Q-13 decision |
 | D21 | Pill shapes (radius 12–14, circular toggles) on the live pill, panel toggles and filter chips | Radius 8 (`--cmt-radius-xl`) or the Fluent default rounded shape. Level and marker dots stay circular. | DS anti-pattern: "the app maxes at 8px" (Q-16) |
-| D22 | Level and channel colors from Fluent palette tokens (§6.3) | Per-theme semantic tokens `severityPalette.eventLog` (critical, error, warning, information, verbose, and six channel colors, cool hues only), tuned in all seven themes and tested on resolved colors. Critical and Error share the red family; Error text is a true red in light themes (red-orange only in dark themes). | Q-17; DS: a new color need is a semantic token in all seven themes |
+| D22 | Level and channel colors from Fluent palette tokens (§6.3) | Per-theme semantic tokens `severityPalette.eventLog` (critical, error, warning, information, verbose, and six channel colors, cool hues only), tuned in all seven themes and tested on resolved colors. Critical and Error share the red family; Level text uses `severityPalette.eventLog.text.*`; Error text is a true red in light themes (red-orange only in dark themes). Tinted-row text keeps D3's pairing (see §6.3). | Q-17; DS: a new color need is a semantic token in all seven themes |
 
 ## 5. Layout anatomy and measurements
 
@@ -199,9 +199,9 @@ The light-theme hexes below are informative only. They were checked against `src
 |---|---|---|
 | Critical (bars, dots, icons) | `#8b0a14` | `colorPaletteDarkRedBorderActive` (`#750b1c`) |
 | Error (bars, dots) | `#d13438` | `colorPaletteRedBackground3` (`#d13438`), an exact match |
-| Error (icon, text) | `#c50f1f` / `#b10e1c` | `severityPalette.status.error.foreground` (`#b10e1c`) |
+| Error (icon, text) | `#c50f1f` / `#b10e1c` | `severityPalette.eventLog.text.error` for text (the Fluent status foregrounds measured 2.19:1 on the solarized-dark selection and 2.46:1 on the nord rail); icon follows the same token |
 | Warning (bars, dots) | `#eda100` | `colorPaletteMarigoldBackground3` (`#eaa300`) |
-| Warning (icon, text) | `#bc4b09` / `#78350f` | `severityPalette.status.warning.foreground` (`#bc4b09`); secondary text `severityPalette.warning.text` (`#78350F`) |
+| Warning (icon, text) | `#bc4b09` / `#78350f` | `severityPalette.eventLog.text.warning` for text (same reason as Error); secondary tinted-row text stays `severityPalette.warning.text` (`#78350F`) |
 | Information (bars) | `#c8d3de` | `colorNeutralStroke1` |
 | Information (dots, icon) | `#9aa9b8` / `#0c3b5e` | `colorNeutralForeground4` (dots); `colorNeutralForeground3` (icon) |
 | Verbose (bars, dots, icon) | none | Its own neutral, lighter and de-emphasized relative to Information (dimmer on dark themes), still gray, with a distance floor from Information so the §8.13 level-mix bar separates the two by color. Owner ruling (Adam, 2026-10-09); implemented as `severityPalette.eventLog` per Q-17. |
@@ -220,7 +220,9 @@ The light-theme hexes below are informative only. They were checked against `src
 
 `severityPalette` comes from `getThemeById(themeId).severityPalette`, as `LogListView.tsx` already does **[Verified]**. Phase 1 centralizes the v1 mappings above in `evtx-visual-tokens.ts`; the v2 scenario state colors (Running/Retrying, Sleep, Not started) are designed in the v2 phases (#855), not Phase 1 (owner decision 2026-10-09). Per Q-17, the level rows (Critical, Error, Warning, Information bars, dots and icons) and the channel row are superseded by `severityPalette.eventLog`; the tokens named above are the light-theme intent, not the implementation. Components never index palettes directly.
 
-Error text follows the red family shared with Critical. In the light and classic themes the Error text is a true red; a red-orange Error is accepted in dark themes only. Critical/Error pairs use one red-family distance floor, and all other level pairs use the standard floor.
+Error text follows the red family shared with Critical. Level text (Critical, Error, Warning) is the token `severityPalette.eventLog.text.*`. In the light and classic themes the Error text is a true red; a red-orange Error is accepted in dark themes only. Tinted-row text keeps D3's pairing, `severityPalette.<kind>.text` on its row background; classic Error rows stay yellow on red, because their red identity is the background.
+
+Distance floors, in CIEDE2000: level marks and Critical, Error and Warning text are 20 apart, except Critical/Error pairs (red family), which are 15 apart. The Verbose mark is at least 10 from the Information mark. Channels are 15 from each other and from the other families.
 
 *Errata, 2026-10-09 (Phase 1 token review, #827 and #876):* scenario state colors moved to #855, channels follow D22 rather than `mergeColors`, Verbose has its own neutral, and the live source pill is a v1 token (§8.1).
 
@@ -293,7 +295,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
 - **Visual:**
   - pill, radius 8 (the design-system maximum, D21), padding `3px 10px`, *f* − 2, 600 weight;
   - 7 px status dot;
-  - live: a v1 token owned by Phase 1's token map (`liveSource`): bg `colorPaletteGreenBackground1`, border `colorPaletteGreenBackground3` as decoration, text and dot `severityPalette.status.success.foreground`; text 4.5:1 and dot 3:1 on the pill background;
+  - live: a v1 token owned by Phase 1's token map (`liveSource`): bg `colorPaletteGreenBackground1`, border `colorPaletteGreenBackground3` as decoration, text and dot the per-theme token `severityPalette.eventLog.live` (each theme's success foreground by default, with solarized-dark differing so the pill stays clear of the Warning mark); text 4.5:1 and dot 3:1 on the pill background;
   - files: neutral bg3 / stroke1 / fg2, with the copy "Files · {n} sources".
 - **Data:**
   - `sourceMode`, `tailMode`, `remoteMachine`;
@@ -410,7 +412,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
 - **Row** (padding `7px 12px`, gap 3, bottom border `colorNeutralStroke3`):
   1. A 10 px swatch (radius 2, channel color §6.3), the name (ellipsis), and the total right-aligned (numeric, *f* − 3).
   2. A sparkline, 18 px tall, 24 bins, indented 16 px. Bars use the channel color; empty bins draw as 1 px `colorNeutralStroke2`.
-  3. "{e} err" (`severityPalette.status.error.foreground`), "{w} warn" (`severityPalette.warning.text`), and a status: "· live", "not read", "needs elevation", and so on.
+  3. "{e} err" (`severityPalette.eventLog.text.error`), "{w} warn" (`severityPalette.eventLog.text.warning`), and a status: "· live", "not read", "needs elevation", and so on.
 - **Selection:** the existing checkbox and channel selection behavior stays. The selected row uses the selection triplet.
 - **Unavailable channels:** a channel with a coverage gap of kind `accessDenied` renders the name in fg3 with "needs elevation", total "—" and a flat sparkline. `EvtxCoverageGapKind` includes `accessDenied`, `unsupported`, `missing`, `empty` and others **[Verified]**.
 - **"ALSO CORRELATING" section:** lists the text-log sources in the analysis session with line counts, from `EventLogAnalysisSessionStatus.logItems` and the source labels. It ends with the "Add log source…" link (§8.19).
@@ -1008,7 +1010,7 @@ These checks run before the epic closes. Each is a real-machine run whose screen
 |---|---|---|---|
 | 0a | DSRegCmd MDM visibility consistency | `dsregcmd/dsregcmd-formatters.ts`, `dsregcmd/dsregcmd-formatters.test.ts`, `dsregcmd/DsregcmdSidebar.tsx`, `e2e/fixtures/screenshot-data.ts` | — |
 | 0b | Global status bar aligned to the design system (all workspaces) | `src/components/layout/StatusBar.tsx`, `src/components/layout/StatusBar.workspace-label.test.tsx`, `esp-diagnostics/EspStatusBarContent.tsx`, `e2e/screenshots/capture.spec.ts` (status-bar captures in three themes) | — |
-| 1 | Event Logs visual token map | `evtx-visual-tokens.ts`*, `evtx-visual-tokens.test.ts`* | — |
+| 1 | Event Logs visual token map | `evtx-visual-tokens.ts`*, `evtx-visual-tokens.test.ts`*, `constants.ts`, `palettes.ts`, `color-contrast.ts` | none |
 | 2 | Event Logs screenshot harness | `e2e/fixtures/event-log-data.ts`*, `e2e/screenshots/capture.spec.ts` | — |
 | 3 | Layout state, view bar, three-column shell | `evtx-layout-store.ts`*, `evtx-layout-store.test.ts`*, `EvtxViewBar.tsx`*, `EvtxViewBar.test.tsx`*, `EventLogWorkspace.tsx` | 1, 2 |
 | 4 | Insights rail (Insights / Details) | `EvtxInsightsRail.tsx`*, `EvtxInsightsRail.test.tsx`*, `EventDiagnosisPanel.tsx`, `EvtxDetailPane.tsx`, `EventLogWorkspace.tsx` | 3 |
@@ -1076,8 +1078,8 @@ Event 1001 also exists under Windows Error Reporting in the Application log (APP
 | KPI tile: App crashes | Count of Application Error 1000 | Sublabel names the top faulting application |
 | KPI tile: Bugchecks | Count of WER-SystemErrorReporting 1001 | "no BugCheck" copy when 0 |
 | KPI tile: Failed resumes | 41 whose preceding power event is a sleep (42) with no resume (Power-Troubleshooter 1) | **[Unverified heuristic]**. Shipped only after Windows-lab confirmation; otherwise the tile is omitted. |
-| Boot sessions bar (running, sleep, crash ticks, unclean markers) | As above. Crash ticks come from 1000; unclean markers use `Flash16Regular` | Running uses `colorPaletteBlueBorderActive`; sleep uses `colorPaletteBlueBackground2` |
-| Session cards (span, end state, uptime, crashes, errors, sleep/resume) | Session model in `evtx-boot-sessions.ts` | End-state badge: Running (success palette), Clean · {reason} (neutral), Unclean · Kernel-Power 41 (error palette) |
+| Boot sessions bar (running, sleep, crash ticks, unclean markers) | As above. Crash ticks come from 1000; unclean markers use `Flash16Regular` | Intent only, designed in the v2 phases (#855, owner decision 2026-10-09; matches §6.3): running uses `colorPaletteBlueBorderActive`; sleep uses `colorPaletteBlueBackground2` |
+| Session cards (span, end state, uptime, crashes, errors, sleep/resume) | Session model in `evtx-boot-sessions.ts` | Intent only, designed in #855 (owner decision 2026-10-09): End-state badge: Running (success palette), Clean · {reason} (neutral), Unclean · Kernel-Power 41 (error palette) |
 | "Last events before the unclean shutdown" list | The N records before the session end, plus an explicit "No clean-shutdown events (1074 / 6006) before power loss" row when none exist | **Context only, with no causal wording** (D8) |
 | Top crashing apps (count, module, exception code) | Event 1000 data fields: faulting application, module and exception code | Event-data field names are confirmed against real 1000 records in Phase S2 |
 | App crashes per day | Event 1000 bucketed by local day | Single-series bars use `mergeColors[0]` |
@@ -1263,12 +1265,13 @@ system for every workspace.
 ```markdown
 Spec: §6, §7.3
 
-### Scope (2 files)
-- `evtx-visual-tokens.ts` (new): level → {barColor, dotColor, iconColor, icon, rowBackground, rowText};
+### Scope (5 files)
+- `evtx-visual-tokens.ts` (new): level → {barColor, dotColor, iconColor, textColor, icon, rowBackground, rowText};
   strength → badge triplet; selection triplet (Q-1: colorPaletteBlueBackground2 / BorderActive / Foreground2);
   channel colors as per-theme semantic tokens (Q-17, D22); heat-map steps (Q-3 interim color-mix).
-  v2 scenario state colors are out of scope (#855).
+  live source pill triplet (`liveSource`, §8.1). v2 scenario state colors are out of scope (#855).
   Inputs: Fluent `tokens` + `getThemeById(themeId).severityPalette`.
+- `constants.ts`, `palettes.ts`, `color-contrast.ts`: the per-theme `severityPalette.eventLog` tokens (D22) and the contrast helpers behind the floors in §6.3.
 - `evtx-visual-tokens.test.ts` (new): deterministic channel assignment; every level and strength mapped; no hex literals in the module.
 
 ### Acceptance
