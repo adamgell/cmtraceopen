@@ -26,7 +26,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       information: "#616161",
       verbose: "#707070",
       channels: [
-        "#a855f7", "#4338ca", "#1a1a4d", "#0891b2", "#055261", "#8c8cd9",
+        "#a855f7", "#1a1a4d", "#0891b2", "#3e25d0", "#7e89c8", "#00647a",
       ],
     },
   },
@@ -54,7 +54,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       information: "#adadad",
       verbose: "#999999",
       channels: [
-        "#c084fc", "#93ecec", "#cfc6ec", "#1f7ead", "#bb26d9", "#6666cc",
+        "#c084fc", "#93ecec", "#1f7ead", "#bb26d9", "#6666cc", "#cbc6fa",
       ],
     },
   },
@@ -82,7 +82,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       information: "#FFFFFF",
       verbose: "#FFFFFF",
       channels: [
-        "#0d9488", "#c084fc", "#60a5fa", "#55f6db", "#ddd6fe", "#6366f1",
+        "#c084fc", "#6366f1", "#0083a3", "#f3d0fb", "#3d98ff", "#c300eb",
       ],
     },
   },
@@ -110,7 +110,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       information: "#616161",
       verbose: "#707070",
       channels: [
-        "#0d9488", "#a855f7", "#1a1a4d", "#1a4d4d", "#0d0df2", "#772d86",
+        "#a855f7", "#1a1a4d", "#0d0df2", "#772d86", "#0a717b", "#0f9dbd",
       ],
     },
   },
@@ -138,7 +138,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       information: "#839496",
       verbose: "#839496",
       channels: [
-        "#c084fc", "#2273c3", "#c6e6ec", "#ddd6fe", "#bb26d9", "#1b8398",
+        "#a9acda", "#cc00ff", "#526cff", "#f5ccff", "#de85ff", "#9470c2",
       ],
     },
   },
@@ -160,13 +160,13 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       error: { foreground: "#BF616A", background: "rgba(191, 97, 106, 0.15)" },
     },
     eventLog: {
-      critical: "#ff4d80",
-      error: "#ff5a1f",
+      critical: "#ff618f",
+      error: "#ff6933",
       warning: "#d4a72c",
       information: "#A6A6A6",
-      verbose: "#919191",
+      verbose: "#999999",
       channels: [
-        "#0d9488", "#cfc6ec", "#9966cc", "#9efaeb", "#dd93ec", "#9e9efa",
+        "#9e9efa", "#00ada5", "#f3d0fb", "#d152ff", "#00ffee", "#c38dce",
       ],
     },
   },
@@ -188,13 +188,13 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       error: { foreground: "#FF5555", background: "rgba(255, 85, 85, 0.15)" },
     },
     eventLog: {
-      critical: "#ff4d80",
-      error: "#ff5a1f",
+      critical: "#ff5787",
+      error: "#ff6229",
       warning: "#F1FA8C",
       information: "#9A9A9A",
-      verbose: "#858585",
+      verbose: "#949494",
       channels: [
-        "#0d9488", "#93ecec", "#d125f4", "#b6cdfb", "#098faa", "#256af4",
+        "#de5cff", "#7a88ff", "#11d0c6", "#2c968f", "#2378c7", "#0c7e97",
       ],
     },
   },

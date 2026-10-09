@@ -87,6 +87,14 @@ export interface EvtxVisualTokens {
   findingCallout: EvtxColorTriplet;
   /** Color for the channel at `index` in channel display order. */
   channelColor: (index: number) => string;
+  /**
+   * 1px outline color for a channel swatch drawn on a level's row tint (grid
+   * Channel cell, 8.7) or on the selection background (selected pane row,
+   * 8.6). Swatch fills are not guaranteed 3:1 on every tint, so grid and
+   * selected-row swatches must draw this border. A level context returns that
+   * level's `iconColor`; "selected" returns `selectedIconColor`.
+   */
+  channelSwatchBorder: (context: EvtxLevel | "selected") => string;
   /** Heat-map fills, lightest first (Q-3 interim, no ramp token yet). */
   heatSteps: readonly string[];
   /** Bars of single-series charts (top IDs, crashes per day). */
@@ -117,69 +125,71 @@ export function buildEvtxVisualTokens(
     rowText: tokens.colorNeutralForeground1,
   };
 
-  return {
-    levels: {
-      Critical: {
-        label: "Critical",
-        barColor: eventLog.critical,
-        dotColor: eventLog.critical,
-        iconColor: readableOn(palette.error.background, eventLog.critical),
-        selectedIconColor: selection.foreground,
-        railIconColor: eventLog.critical,
-        rowBackground: palette.error.background,
-        rowText: palette.error.text,
-        GridIcon: DismissCircle12Regular,
-        RailIcon: DismissCircle16Regular,
-      },
-      Error: {
-        label: "Error",
-        barColor: eventLog.error,
-        dotColor: eventLog.error,
-        iconColor: readableOn(palette.error.background, eventLog.error),
-        selectedIconColor: selection.foreground,
-        railIconColor: eventLog.error,
-        rowBackground: palette.error.background,
-        rowText: palette.error.text,
-        GridIcon: ErrorCircle12Regular,
-        RailIcon: ErrorCircle16Regular,
-      },
-      Warning: {
-        label: "Warning",
-        barColor: eventLog.warning,
-        dotColor: eventLog.warning,
-        iconColor: readableOn(palette.warning.background, eventLog.warning),
-        selectedIconColor: selection.foreground,
-        railIconColor: eventLog.warning,
-        rowBackground: palette.warning.background,
-        rowText: palette.warning.text,
-        GridIcon: Warning12Regular,
-        RailIcon: Warning16Regular,
-      },
-      Information: {
-        label: "Information",
-        barColor: eventLog.information,
-        dotColor: eventLog.information,
-        iconColor: eventLog.information,
-        selectedIconColor: selection.foreground,
-        railIconColor: eventLog.information,
-        ...plainRow,
-        GridIcon: Info12Regular,
-        RailIcon: Info16Regular,
-      },
-      // The spec gives Verbose an icon but no colors. Its mark comes from the
-      // theme's eventLog.verbose neutral; like Information it is untinted (D3).
-      Verbose: {
-        label: "Verbose",
-        barColor: eventLog.verbose,
-        dotColor: eventLog.verbose,
-        iconColor: eventLog.verbose,
-        selectedIconColor: selection.foreground,
-        railIconColor: eventLog.verbose,
-        ...plainRow,
-        GridIcon: Circle12Regular,
-        RailIcon: Circle16Regular,
-      },
+  const levels: Record<EvtxLevel, EvtxLevelVisual> = {
+    Critical: {
+      label: "Critical",
+      barColor: eventLog.critical,
+      dotColor: eventLog.critical,
+      iconColor: readableOn(palette.error.background, eventLog.critical),
+      selectedIconColor: selection.foreground,
+      railIconColor: eventLog.critical,
+      rowBackground: palette.error.background,
+      rowText: palette.error.text,
+      GridIcon: DismissCircle12Regular,
+      RailIcon: DismissCircle16Regular,
     },
+    Error: {
+      label: "Error",
+      barColor: eventLog.error,
+      dotColor: eventLog.error,
+      iconColor: readableOn(palette.error.background, eventLog.error),
+      selectedIconColor: selection.foreground,
+      railIconColor: eventLog.error,
+      rowBackground: palette.error.background,
+      rowText: palette.error.text,
+      GridIcon: ErrorCircle12Regular,
+      RailIcon: ErrorCircle16Regular,
+    },
+    Warning: {
+      label: "Warning",
+      barColor: eventLog.warning,
+      dotColor: eventLog.warning,
+      iconColor: readableOn(palette.warning.background, eventLog.warning),
+      selectedIconColor: selection.foreground,
+      railIconColor: eventLog.warning,
+      rowBackground: palette.warning.background,
+      rowText: palette.warning.text,
+      GridIcon: Warning12Regular,
+      RailIcon: Warning16Regular,
+    },
+    Information: {
+      label: "Information",
+      barColor: eventLog.information,
+      dotColor: eventLog.information,
+      iconColor: eventLog.information,
+      selectedIconColor: selection.foreground,
+      railIconColor: eventLog.information,
+      ...plainRow,
+      GridIcon: Info12Regular,
+      RailIcon: Info16Regular,
+    },
+    // The spec gives Verbose an icon but no colors. Its mark comes from the
+    // theme's eventLog.verbose neutral; like Information it is untinted (D3).
+    Verbose: {
+      label: "Verbose",
+      barColor: eventLog.verbose,
+      dotColor: eventLog.verbose,
+      iconColor: eventLog.verbose,
+      selectedIconColor: selection.foreground,
+      railIconColor: eventLog.verbose,
+      ...plainRow,
+      GridIcon: Circle12Regular,
+      RailIcon: Circle16Regular,
+    },
+  };
+
+  return {
+    levels,
     strengths: {
       exact: {
         label: "Exact",
@@ -199,7 +209,9 @@ export function buildEvtxVisualTokens(
         label: "Ambiguous",
         background: palette.warning.background,
         foreground: palette.warning.text,
-        border: tokens.colorPaletteMarigoldBorder2,
+        // Deviates from spec 6.4 (colorPaletteMarigoldBorder2): that token is
+        // 2.16:1 on the light surface; the warning text color reaches 3:1.
+        border: palette.warning.text,
         borderStyle: "solid",
       },
       // The spec names the label and icon but no colors. A coverage gap is
@@ -231,8 +243,12 @@ export function buildEvtxVisualTokens(
       border: tokens.colorPaletteRedBorder2,
       foreground: palette.error.text,
     },
-    channelColor: (index) =>
-      eventLog.channels[index % eventLog.channels.length],
+    channelColor: (index) => {
+      const count = eventLog.channels.length;
+      return eventLog.channels[((index % count) + count) % count];
+    },
+    channelSwatchBorder: (context) =>
+      context === "selected" ? selection.foreground : levels[context].iconColor,
     heatSteps: HEAT_STEP_PERCENTAGES.map(
       (percent) =>
         `color-mix(in srgb, ${palette.mergeColors[0]} ${percent}%, ${tokens.colorNeutralBackground1})`,
@@ -240,13 +256,19 @@ export function buildEvtxVisualTokens(
     singleSeries: palette.mergeColors[0],
     scenario: {
       succeeded: {
-        bar: tokens.colorPaletteGreenBackground3,
+        // Deviates from the spec's colorPaletteGreenBackground3, which is
+        // 2.33 to 2.80:1 on the dark-family surfaces; the success status
+        // foreground reaches 3:1 in every theme.
+        bar: palette.status.success.foreground,
         foreground: palette.status.success.foreground,
         background: tokens.colorPaletteGreenBackground1,
       },
       running: tokens.colorPaletteBlueBorderActive,
       retrying: tokens.colorPaletteBlueBorderActive,
-      sleep: tokens.colorPaletteBlueBackground2,
+      // Deviates from the spec's colorPaletteBlueBackground2, a pale tint
+      // (1.2 to 1.6:1 on the surface); a neutral foreground reaches 3:1 and
+      // stays distinct from the blue running and retrying states.
+      sleep: tokens.colorNeutralForeground3,
       notStarted: {
         stroke: tokens.colorNeutralStroke2,
         background: tokens.colorNeutralBackground3,

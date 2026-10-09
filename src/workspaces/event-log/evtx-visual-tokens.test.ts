@@ -1,10 +1,6 @@
 import { tokens } from "@fluentui/react-components";
 import { describe, expect, it } from "vitest";
-import {
-  contrastRatio,
-  parseHex,
-  readableOn,
-} from "../../lib/color-contrast";
+import { contrastRatio, parseHex, readableOn } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
 import type { CMTraceTheme } from "../../lib/themes";
 import type { DiagnosisCorrelationStatus, EvtxLevel } from "./types";
@@ -38,12 +34,19 @@ const NEUTRAL_OUTCOME_EXEMPT_THEMES: readonly string[] = ["hotdog-stand"];
 /** hotdog-stand sits on a red surface, so the red-family rule cannot apply. */
 const RED_FAMILY_EXEMPT_THEMES: readonly string[] = ["hotdog-stand"];
 
+/** removed in #878 */
+const HOTDOG_REMOVED_IN_878: readonly string[] = ["hotdog-stand"];
+
 const themes = getAllThemes().map((theme) => [theme.id, theme] as const);
 const redFamilyThemes = themes.filter(
   ([id]) => !RED_FAMILY_EXEMPT_THEMES.includes(id),
 );
 const outcomeCheckedThemes = themes.filter(
   ([id]) => !NEUTRAL_OUTCOME_EXEMPT_THEMES.includes(id),
+);
+/** Themes covered by the placement and round-6 rules (hotdog-stand: removed in #878). */
+const surfaceThemes = themes.filter(
+  ([id]) => !HOTDOG_REMOVED_IN_878.includes(id),
 );
 const classicTheme = themes.filter(([id]) => id === "classic-cmtrace");
 
@@ -72,7 +75,7 @@ function hexToLab(color: string): Lab {
   const y = 0.2126729 * r + 0.7151522 * g + 0.072175 * b;
   const z = 0.0193339 * r + 0.119192 * g + 0.9503041 * b;
   const f = (t: number) =>
-    t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116;
+    t > 216 / 24389 ? Math.cbrt(t) : ((24389 / 27) * t + 16) / 116;
   const fx = f(x / 0.95047);
   const fy = f(y);
   const fz = f(z / 1.08883);
@@ -163,13 +166,103 @@ function hslLightness(color: string): number {
 
 const inRedBand = (hue: number) => hue >= 330 || hue <= 20;
 
+type SurfaceToken =
+  | "colorNeutralBackground1"
+  | "colorNeutralBackground2"
+  | "colorNeutralBackground3";
+
+/**
+ * Placement matrix: every color role and every surface the spec draws it on.
+ * No surface may appear without a cited spec section.
+ */
+interface Placement {
+  token: SurfaceToken;
+  /** Spec section that places the role on this surface. */
+  spec: string;
+}
+const ON_SURFACE: Placement = {
+  token: "colorNeutralBackground1",
+  spec: "8.3, 8.5, 8.9 and 8.10, level buttons, histogram, charts, timeline and swimlanes on the surface",
+};
+const ON_RAIL: Placement = {
+  token: "colorNeutralBackground2",
+  spec: "5.2 and 8.6, rail and channel pane",
+};
+const ON_GROUP_ROW: Placement = {
+  token: "colorNeutralBackground3",
+  spec: "8.8, expanded group rows with level-colored sparklines",
+};
+// Level marks are drawn on all three surfaces. Channels are never drawn on
+// Background3: 8.4 shows channel counts as text only, and 8.8 sparklines use
+// level colors. Channel swatches on row tints and the selection background
+// are covered by channelSwatchBorder instead.
+const LEVEL_MARK_PLACEMENTS: readonly Placement[] = [
+  ON_SURFACE,
+  ON_RAIL,
+  ON_GROUP_ROW,
+];
+const CHANNEL_PLACEMENTS: readonly Placement[] = [ON_SURFACE, ON_RAIL];
+const PLACEMENT_MATRIX: readonly {
+  role: string;
+  placements: readonly Placement[];
+  colors: (
+    visual: ReturnType<typeof buildEvtxVisualTokens>,
+  ) => Record<string, string>;
+}[] = [
+  {
+    role: "level bar",
+    placements: LEVEL_MARK_PLACEMENTS,
+    colors: (v) =>
+      Object.fromEntries(LEVELS.map((l) => [l, v.levels[l].barColor])),
+  },
+  {
+    role: "level dot",
+    placements: LEVEL_MARK_PLACEMENTS,
+    colors: (v) =>
+      Object.fromEntries(LEVELS.map((l) => [l, v.levels[l].dotColor])),
+  },
+  {
+    role: "level rail icon",
+    placements: LEVEL_MARK_PLACEMENTS,
+    colors: (v) =>
+      Object.fromEntries(LEVELS.map((l) => [l, v.levels[l].railIconColor])),
+  },
+  {
+    role: "channel",
+    placements: CHANNEL_PLACEMENTS,
+    colors: (v) =>
+      Object.fromEntries(
+        [0, 1, 2, 3, 4, 5].map((i) => [`ch${i}`, v.channelColor(i)]),
+      ),
+  },
+];
+
+const SHARMA_PAIRS: [Lab, Lab, number][] = [
+  [[50, 2.6772, -79.7751], [50, 0, -82.7485], 2.0425],
+  [[50, 3.1571, -77.2803], [50, 0, -82.7485], 2.8615],
+  [[50, 2.8361, -74.02], [50, 0, -82.7485], 3.4412],
+  [[50, -1.3802, -84.2814], [50, 0, -82.7485], 1.0],
+  [[50, -1.1848, -84.8006], [50, 0, -82.7485], 1.0],
+  [[50, -0.9009, -85.5211], [50, 0, -82.7485], 1.0],
+  [[50, 0, 0], [50, -1, 2], 2.3669],
+  [[50, -1, 2], [50, 0, 0], 2.3669],
+  [[50, 2.49, -0.001], [50, -2.49, 0.0009], 7.1792],
+  [[50, 2.49, -0.001], [50, -2.49, 0.001], 7.1792],
+  [[50, 2.49, -0.001], [50, -2.49, 0.0011], 7.2195],
+  [[50, 2.49, -0.001], [50, -2.49, 0.0012], 7.2195],
+  [[50, -0.001, 2.49], [50, 0.0009, -2.49], 4.8045],
+  [[50, -0.001, 2.49], [50, 0.001, -2.49], 4.8045],
+  [[50, -0.001, 2.49], [50, 0.0011, -2.49], 4.7461],
+  [[50, 2.5, 0], [50, 0, -2.5], 4.3065],
+];
+
 describe("deltaE00", () => {
-  it("matches the Sharma 2005 reference pair", () => {
-    expect(deltaE00Lab([50, 2.6772, -79.7751], [50, 0, -82.7485])).toBeCloseTo(
-      2.0425,
-      3,
-    );
-  });
+  it.each(SHARMA_PAIRS)(
+    "matches Sharma 2005 reference pair %j vs %j",
+    (lab1, lab2, expected) => {
+      expect(deltaE00Lab(lab1, lab2)).toBeCloseTo(expected, 3);
+    },
+  );
 
   it("is zero for identical colors", () => {
     expect(deltaE00("#336699", "#336699")).toBeCloseTo(0, 6);
@@ -212,6 +305,13 @@ describe("evtx visual tokens", () => {
 
     expect(visual.channelColor(6)).toBe(visual.channelColor(0));
     expect(visual.channelColor(13)).toBe(visual.channelColor(1));
+  });
+
+  it("wraps negative channel indices", () => {
+    const visual = buildEvtxVisualTokens(getAllThemes()[0].severityPalette);
+
+    expect(visual.channelColor(-1)).toBe(visual.channelColor(5));
+    expect(visual.channelColor(-7)).toBe(visual.channelColor(5));
   });
 
   it.each(["light", "high-contrast"])(
@@ -418,6 +518,8 @@ describe("evtx visual tokens", () => {
     });
 
     it("keeps every channel in the cool hue band", () => {
+      // Non-hotdog themes are held to the stricter Lab chroma rule in the
+      // placement matrix block; hotdog-stand (removed in #878) keeps this one.
       for (let i = 0; i < 6; i++) {
         const color = channel(i);
         const { hue, saturation } = hueSaturation(color);
@@ -478,22 +580,161 @@ describe("evtx visual tokens", () => {
     });
   });
 
-  describe.each(redFamilyThemes)("severity vividness in the %s theme", (id, theme) => {
-    const visual = buildEvtxVisualTokens(theme.severityPalette);
+  describe.each(redFamilyThemes)(
+    "severity vividness in the %s theme",
+    (id, theme) => {
+      const visual = buildEvtxVisualTokens(theme.severityPalette);
 
-    it.each(["Critical", "Error"] as const)(
-      "keeps the %s mark vivid (Lab chroma >= 40)",
-      (level) => {
-        const color = resolve(visual.levels[level].barColor, theme);
-        const [, a, b] = hexToLab(color);
-        const chroma = Math.hypot(a, b);
-        expect(
-          chroma,
-          `${id}: ${level} ${color} chroma C* = ${chroma.toFixed(1)}`,
-        ).toBeGreaterThanOrEqual(40);
-      },
-    );
-  });
+      it.each(["Critical", "Error"] as const)(
+        "keeps the %s mark vivid (Lab chroma >= 40)",
+        (level) => {
+          const color = resolve(visual.levels[level].barColor, theme);
+          const [, a, b] = hexToLab(color);
+          const chroma = Math.hypot(a, b);
+          expect(
+            chroma,
+            `${id}: ${level} ${color} chroma C* = ${chroma.toFixed(1)}`,
+          ).toBeGreaterThanOrEqual(40);
+        },
+      );
+    },
+  );
+
+  describe.each(surfaceThemes)(
+    "placement matrix in the %s theme",
+    (id, theme) => {
+      const visual = buildEvtxVisualTokens(theme.severityPalette);
+
+      it.each(PLACEMENT_MATRIX.map((entry) => [entry.role, entry] as const))(
+        "keeps every %s color at 3:1 on each spec surface",
+        (role, entry) => {
+          const failures: string[] = [];
+          for (const [name, value] of Object.entries(entry.colors(visual))) {
+            const color = resolve(value, theme);
+            for (const { token: surfaceToken, spec } of entry.placements) {
+              const surface = resolve(tokens[surfaceToken], theme);
+              const floor =
+                role === "channel" && id === "high-contrast" ? 4.5 : 3;
+              const ratio = contrastRatio(color, surface);
+              if (ratio < floor) {
+                failures.push(
+                  `${id}: ${role} ${name} ${color} on ${surfaceToken} ${surface} (${spec}) = ${ratio.toFixed(2)} (< ${floor})`,
+                );
+              }
+            }
+          }
+          expect(failures, failures.join("; ")).toEqual([]);
+        },
+      );
+
+      it("gives every swatch context a border at 3:1 on its own background", () => {
+        const failures: string[] = [];
+        const contexts: [string, string][] = [
+          ...LEVELS.map(
+            (l) =>
+              [l, resolve(visual.levels[l].rowBackground, theme)] as [
+                string,
+                string,
+              ],
+          ),
+          ["selected", resolve(visual.selection.background, theme)],
+        ];
+        for (const [context, background] of contexts) {
+          const border = resolve(
+            visual.channelSwatchBorder(context as EvtxLevel | "selected"),
+            theme,
+          );
+          const ratio = contrastRatio(border, background);
+          if (ratio < 3) {
+            failures.push(
+              `${id}: swatch border for ${context} ${border} on ${background} = ${ratio.toFixed(2)}`,
+            );
+          }
+        }
+        expect(failures, failures.join("; ")).toEqual([]);
+      });
+
+      it("keeps channels apart from the single-series color and all selection colors", () => {
+        const single = resolve(visual.singleSeries, theme);
+        const selection = [
+          ["selection background", visual.selection.background],
+          ["selection border", visual.selection.border],
+          ["selection foreground", visual.selection.foreground],
+        ] as const;
+        const failures: string[] = [];
+        for (let i = 0; i < 6; i++) {
+          const color = resolve(visual.channelColor(i), theme);
+          const others: [string, string][] = [
+            ["single series", single],
+            ...selection.map(
+              ([name, value]) =>
+                [name, resolve(value, theme)] as [string, string],
+            ),
+          ];
+          for (const [name, other] of others) {
+            const d = deltaE00(color, other);
+            if (d < 15) {
+              failures.push(
+                `${id}: channel ${i} ${color} vs ${name} ${other} dE00 = ${d.toFixed(1)}`,
+              );
+            }
+          }
+        }
+        expect(failures, failures.join("; ")).toEqual([]);
+      });
+
+      it("keeps every channel at Lab chroma >= 25 in the cool band", () => {
+        const failures: string[] = [];
+        for (let i = 0; i < 6; i++) {
+          const color = resolve(visual.channelColor(i), theme);
+          const [, a, b] = hexToLab(color);
+          const chroma = Math.hypot(a, b);
+          const { hue } = hueSaturation(color);
+          if (chroma < 25 || hue < 175 || hue > 290) {
+            failures.push(
+              `${id}: channel ${i} ${color} hue ${hue.toFixed(0)} chroma ${chroma.toFixed(1)}`,
+            );
+          }
+        }
+        expect(failures, failures.join("; ")).toEqual([]);
+      });
+
+      it("keeps every badge border at 3:1 on the surface", () => {
+        const surface = resolve(tokens.colorNeutralBackground1, theme);
+        const failures: string[] = [];
+        for (const strength of STRENGTHS) {
+          const border = resolve(visual.strengths[strength].border, theme);
+          const ratio = contrastRatio(border, surface);
+          if (ratio < 3) {
+            failures.push(
+              `${id}: ${strength} border ${border} on surface ${surface} = ${ratio.toFixed(2)}`,
+            );
+          }
+        }
+        expect(failures, failures.join("; ")).toEqual([]);
+      });
+
+      it("keeps every scenario bar color at 3:1 on the surface", () => {
+        const surface = resolve(tokens.colorNeutralBackground1, theme);
+        const failures: string[] = [];
+        for (const [name, value] of [
+          ["succeeded bar", visual.scenario.succeeded.bar],
+          ["running", visual.scenario.running],
+          ["retrying", visual.scenario.retrying],
+          ["sleep", visual.scenario.sleep],
+        ] as const) {
+          const color = resolve(value, theme);
+          const ratio = contrastRatio(color, surface);
+          if (ratio < 3) {
+            failures.push(
+              `${id}: scenario ${name} ${color} on surface ${surface} = ${ratio.toFixed(2)}`,
+            );
+          }
+        }
+        expect(failures, failures.join("; ")).toEqual([]);
+      });
+    },
+  );
 
   describe.each(classicTheme)("%s error bar", (id, theme) => {
     it("is a visible red, not near-black", () => {
@@ -602,7 +843,7 @@ describe("evtx visual tokens", () => {
       expect(strengths.ambiguous).toMatchObject({
         background: palette.warning.background,
         foreground: palette.warning.text,
-        border: tokens.colorPaletteMarigoldBorder2,
+        border: palette.warning.text,
         borderStyle: "solid",
       });
       expect(strengths.coverageBlocked).toMatchObject({
