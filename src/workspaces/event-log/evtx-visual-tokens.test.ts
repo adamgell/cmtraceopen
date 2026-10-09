@@ -212,6 +212,13 @@ const LIGHT_ERROR_TEXT_HUE_BANDS: HueBands = [
 const LIVE_GREEN_HUE_BANDS: HueBands = [[115, 165]];
 /** Verbose text must differ from Information text by at least this much L*. */
 const NEUTRAL_TEXT_MIN_DELTA_L = 2;
+/**
+ * Verbose marks must differ from Information marks by at least this much L*
+ * in the de-emphasized direction. Marks are the primary separator in the
+ * level-mix bar and legend, so the margin is larger than the text margin; the
+ * NEUTRAL_PAIR_DE00 floor of 10 already implies about 10 L* between grays.
+ */
+const NEUTRAL_MARK_MIN_DELTA_L = 10;
 const LIGHT_FAMILY_THEME_IDS: readonly string[] = ["light", "classic-cmtrace"];
 
 type SurfaceKey =
@@ -1085,6 +1092,29 @@ describe("evtx visual tokens", () => {
         ).toBe(true);
       });
 
+      it("keeps every Verbose mark de-emphasized relative to Information", () => {
+        const lightSurface = LIGHT_FAMILY_THEME_IDS.includes(id);
+        const failures: string[] = [];
+        for (const key of [
+          "barColor",
+          "dotColor",
+          "iconColor",
+          "railIconColor",
+        ] as const) {
+          const info = resolved(visual.levels.Information[key]);
+          const verbose = resolved(visual.levels.Verbose[key]);
+          const [infoL] = hexToLab(info);
+          const [verboseL] = hexToLab(verbose);
+          const deemphasis = lightSurface ? verboseL - infoL : infoL - verboseL;
+          if (deemphasis < NEUTRAL_MARK_MIN_DELTA_L) {
+            failures.push(
+              `${id}: Verbose ${key} ${verbose} L* ${verboseL.toFixed(1)} vs Information ${info} L* ${infoL.toFixed(1)} (need ${lightSurface ? "lighter" : "dimmer"} by L* >= ${NEUTRAL_MARK_MIN_DELTA_L})`,
+            );
+          }
+        }
+        expect(failures, failures.join("; ")).toEqual([]);
+      });
+
       it("keeps Verbose text de-emphasized relative to Information text", () => {
         const info = resolved(visual.levels.Information.textColor);
         const verbose = resolved(visual.levels.Verbose.textColor);
@@ -1379,6 +1409,28 @@ describe("evtx visual tokens", () => {
       foreground: theme.severityPalette.eventLog.live,
     });
   });
+
+  it.each(themes)(
+    "pins the finding callout triplet in the %s theme",
+    (_id, theme) => {
+      const { findingCallout } = buildEvtxVisualTokens(theme);
+
+      expect(findingCallout).toEqual({
+        background: theme.severityPalette.error.background,
+        border: tokens.colorPaletteRedBorder2,
+        foreground: theme.severityPalette.error.text,
+      });
+    },
+  );
+
+  it.each(themes)(
+    "pins the single series color in the %s theme",
+    (_id, theme) => {
+      expect(buildEvtxVisualTokens(theme).singleSeries).toBe(
+        theme.severityPalette.mergeColors[0],
+      );
+    },
+  );
 
   it("uses the blue palette triplet for selection (Q-1)", () => {
     const visual = buildEvtxVisualTokens(getAllThemes()[0]);
