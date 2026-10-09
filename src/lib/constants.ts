@@ -36,6 +36,8 @@ export interface LogSeverityPalette {
       information: string;
       verbose: string;
     };
+    /** 8.1 live source pill label and dot (green; global status.success is unchanged). */
+    live: string;
     channels: readonly [string, string, string, string, string, string];
   };
 

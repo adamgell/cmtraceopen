@@ -208,6 +208,10 @@ const LIGHT_ERROR_TEXT_HUE_BANDS: HueBands = [
   [345, 360],
   [0, 40],
 ];
+/** Green, h 120 (solarized live label) to 150 (dark #4ade80); C* >= 25. */
+const LIVE_GREEN_HUE_BANDS: HueBands = [[115, 165]];
+/** Verbose text must differ from Information text by at least this much L*. */
+const NEUTRAL_TEXT_MIN_DELTA_L = 2;
 const LIGHT_FAMILY_THEME_IDS: readonly string[] = ["light", "classic-cmtrace"];
 
 type SurfaceKey =
@@ -472,6 +476,11 @@ const INVENTORY_EXEMPTIONS: readonly {
     reason:
       "accepted by Adam 2026-10-08 (Q-1); the border is also the row's 3px inset",
   },
+  {
+    what: "live source pill border (colorPaletteGreenBackground3) on the toolbar and the pill fill",
+    section: "8.1",
+    reason: "decorative; the label identifies the pill",
+  },
 ];
 
 const BADGE_PLACEMENTS: readonly Placement[] = [
@@ -595,6 +604,7 @@ type Family =
   | "level text"
   | "channel"
   | "single series"
+  | "live source"
   | "selection"
   | "brand";
 const FAMILIES: readonly Family[] = [
@@ -602,6 +612,7 @@ const FAMILIES: readonly Family[] = [
   "level text",
   "channel",
   "single series",
+  "live source",
   "selection",
   "brand",
 ];
@@ -641,6 +652,11 @@ function familyColors(
       family: "single series",
       name: "single series",
       color: r(visual.singleSeries),
+    },
+    {
+      family: "live source",
+      name: "live source foreground",
+      color: r(visual.liveSource.foreground),
     },
     {
       family: "selection",
@@ -1060,15 +1076,25 @@ describe("evtx visual tokens", () => {
         },
       );
 
+      it("keeps the live source label green", () => {
+        const color = resolved(visual.liveSource.foreground);
+        const { hue, chroma } = labHueChroma(color);
+        expect(
+          inHueBands(hue, LIVE_GREEN_HUE_BANDS) && chroma >= 25,
+          `${describeColor("live source label", color)} (need hue [115, 165] and C* >= 25)`,
+        ).toBe(true);
+      });
+
       it("keeps Verbose text de-emphasized relative to Information text", () => {
         const info = resolved(visual.levels.Information.textColor);
         const verbose = resolved(visual.levels.Verbose.textColor);
         const [infoL] = hexToLab(info);
         const [verboseL] = hexToLab(verbose);
         const lightSurface = LIGHT_FAMILY_THEME_IDS.includes(id);
+        const deemphasis = lightSurface ? verboseL - infoL : infoL - verboseL;
         expect(
-          lightSurface ? verboseL > infoL : verboseL < infoL,
-          `${id}: Verbose text ${verbose} L* ${verboseL.toFixed(1)} vs Information text ${info} L* ${infoL.toFixed(1)} dE00 ${deltaE00(info, verbose).toFixed(1)} (need ${lightSurface ? "lighter" : "dimmer"})`,
+          deemphasis >= NEUTRAL_TEXT_MIN_DELTA_L,
+          `${id}: Verbose text ${verbose} L* ${verboseL.toFixed(1)} vs Information text ${info} L* ${infoL.toFixed(1)} dE00 ${deltaE00(info, verbose).toFixed(1)} (need ${lightSurface ? "lighter" : "dimmer"} by L* >= ${NEUTRAL_TEXT_MIN_DELTA_L})`,
         ).toBe(true);
       });
 
@@ -1343,6 +1369,16 @@ describe("evtx visual tokens", () => {
       });
     },
   );
+
+  it.each(themes)("pins the live source pill tokens in the %s theme", (_id, theme) => {
+    const { liveSource } = buildEvtxVisualTokens(theme);
+
+    expect(liveSource).toEqual({
+      background: tokens.colorPaletteGreenBackground1,
+      border: tokens.colorPaletteGreenBackground3,
+      foreground: theme.severityPalette.eventLog.live,
+    });
+  });
 
   it("uses the blue palette triplet for selection (Q-1)", () => {
     const visual = buildEvtxVisualTokens(getAllThemes()[0]);

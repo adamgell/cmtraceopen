@@ -136,10 +136,15 @@ export interface EvtxVisualTokens {
   singleSeries: string;
   /**
    * The 8.1 live source pill (v1, not a v2 scenario state). `foreground`
-   * colors the label and the 7px dot. `border` is decorative: the label
-   * identifies the pill, so it carries no contrast floor (spec 8.1 names
-   * colorPaletteGreenBackground3, which measures 2.33 to 2.80:1 on the dark
-   * surfaces).
+   * colors the label and the 7px dot and is the theme's `eventLog.live`.
+   * `border` is decorative: the label identifies the pill, so it carries no
+   * contrast floor (INVENTORY_EXEMPTIONS). Spec 8.1 names
+   * colorPaletteGreenBackground3 for it. Measured (hotdog-stand excluded):
+   * against the pill fill it is 3.07 to 21.00:1 (3.07 in every theme but
+   * light and classic 5.03 and high-contrast 21.00); against the toolbar
+   * that hosts the pill (colorNeutralBackground2, Toolbar.tsx) it is 1.87
+   * (nord) to 21.00:1, with solarized-dark 2.42, dracula 2.94, dark 3.07,
+   * light 5.14 and classic 5.05.
    */
   liveSource: EvtxColorTriplet;
 }
@@ -343,7 +348,7 @@ export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
     liveSource: {
       background: tokens.colorPaletteGreenBackground1,
       border: tokens.colorPaletteGreenBackground3,
-      foreground: palette.status.success.foreground,
+      foreground: eventLog.live,
     },
   };
 }

@@ -32,6 +32,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
         information: "#616161",
         verbose: "#6f6f6f",
       },
+      live: "#0e700e",
       channels: [
         "#a400c5", "#1a1a4d", "#0891b2", "#611871", "#6d5b9e", "#2d2cdc",
       ],
@@ -67,6 +68,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
         information: "#adadad",
         verbose: "#999999",
       },
+      live: "#4ade80",
       channels: [
         "#e188f4", "#93ecec", "#007c99", "#c539e2", "#a29bf6", "#dcd0ff",
       ],
@@ -102,6 +104,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
         information: "#bbbbbb",
         verbose: "#a0a0a0",
       },
+      live: "#00FF00",
       channels: [
         "#cc9afb", "#8e71f4", "#0083a3", "#f3d0fb", "#3d98ff", "#c300eb",
       ],
@@ -137,6 +140,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
         information: "#61615e",
         verbose: "#706e6c",
       },
+      live: "#0e700e",
       channels: [
         "#c261fc", "#006261", "#aa0dcb", "#6a5185", "#0a8e87", "#0f9dbd",
       ],
@@ -172,6 +176,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
         information: "#adadad",
         verbose: "#9a9a9a",
       },
+      live: "#709c18",
       channels: [
         "#a9acda", "#ad56bf", "#526cff", "#f5ccff", "#de85ff", "#7476a1",
       ],
@@ -204,9 +209,10 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
         critical: "#ff90ae",
         error: "#fb987f",
         warning: "#f2cd7c",
-        information: "#b2aea8",
+        information: "#bab7b2",
         verbose: "#aeaeae",
       },
+      live: "#A3BE8C",
       channels: [
         "#9e9efa", "#00ada5", "#f3d0fb", "#d152ff", "#00ffee", "#b094bd",
       ],
@@ -242,6 +248,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
         information: "#9c9c9c",
         verbose: "#939393",
       },
+      live: "#50FA7B",
       channels: [
         "#de5cff", "#7a88ff", "#11d0c6", "#2c968f", "#2378c7", "#0c7e97",
       ],
@@ -277,6 +284,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
         information: "#00FFFF",
         verbose: "#00FFFF",
       },
+      live: "#00FF00",
       channels: [
         "#00005a", "#003c3c", "#00ffc3", "#f7e0ff", "#b8edff", "#211226",
       ],
