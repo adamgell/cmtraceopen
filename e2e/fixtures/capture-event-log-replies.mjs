@@ -149,53 +149,72 @@ if (process.argv.includes("--check")) {
 }
 
 const tempDir = mkdtempSync(path.join(os.tmpdir(), "cmtrace-event-log-capture-"));
-const inputPath = ENGINE_INPUT_PATH;
-const outputPath = path.join(tempDir, "output.json");
-// The input is committed next to the replies so the always-on Rust test can replay it.
-writeFileSync(inputPath, JSON.stringify(engineInput(parseResult)));
+// Nothing under e2e/fixtures is touched until the capture has succeeded and its output has been
+// validated, so a failed run leaves the committed input and replies exactly as they were.
+try {
+  const inputPath = path.join(tempDir, "input.json");
+  const outputPath = path.join(tempDir, "output.json");
+  const inputText = JSON.stringify(engineInput(parseResult));
+  writeFileSync(inputPath, inputText);
 
-const engineCommit = git("rev-parse", "HEAD");
-const engineTreeDirty =
-  git("status", "--porcelain", "--", ...DIRTY_PATHS) !== "";
+  const engineCommit = git("rev-parse", "HEAD");
+  const engineTreeDirty = git("status", "--porcelain", "--", ...DIRTY_PATHS) !== "";
 
-execFileSync(
-  "cargo",
-  ["test", "--locked", "--lib", TEST_NAME, "--", "--ignored", "--exact", "--nocapture"],
-  {
-    cwd: TAURI,
-    stdio: "inherit",
-    env: {
-      ...process.env,
-      CMTRACE_EVENT_LOG_REPLIES_INPUT: inputPath,
-      CMTRACE_EVENT_LOG_REPLIES_OUTPUT: outputPath,
+  execFileSync(
+    "cargo",
+    ["test", "--locked", "--lib", TEST_NAME, "--", "--ignored", "--exact", "--nocapture"],
+    {
+      cwd: TAURI,
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        CMTRACE_EVENT_LOG_REPLIES_INPUT: inputPath,
+        CMTRACE_EVENT_LOG_REPLIES_OUTPUT: outputPath,
+      },
     },
-  },
-);
-if (!existsSync(outputPath)) {
-  throw new Error("the capture test ran but wrote no output (was the test name filtered out?)");
+  );
+  if (!existsSync(outputPath)) {
+    throw new Error("the capture test ran but wrote no output (was the test name filtered out?)");
+  }
+
+  const engine = JSON.parse(readFileSync(outputPath, "utf8"));
+  if (engine.sessionId !== engineInput(parseResult).sessionId || !engine.diagnosis?.overview) {
+    throw new Error("the capture output is not an engine reply set (missing sessionId or diagnosis)");
+  }
+  const replies = {
+    about:
+      "Replies captured from the real event-log analysis engine (EventLogAnalysisSession) over the " +
+      "records in event-log-data.ts. Do not edit by hand. Regenerate with " +
+      "`node e2e/fixtures/capture-event-log-replies.mjs`; engineCommit is the commit the engine " +
+      "was built from.",
+    provenance: {
+      engineCommit,
+      engineTreeDirty,
+      capturedBy: "e2e/fixtures/capture-event-log-replies.mjs",
+      inputSha256: engineInputSha256(parseResult),
+      engineSourceSha256: engineSourceSha256(),
+    },
+    ...engine,
+  };
+  const repliesText = JSON.stringify(replies, null, 2) + "\n";
+
+  // Publish both committed files together, input first. If the second write fails, put the
+  // first back so the pair never ends up out of sync.
+  const previousInput = existsSync(ENGINE_INPUT_PATH) ? readFileSync(ENGINE_INPUT_PATH) : null;
+  writeFileSync(ENGINE_INPUT_PATH, inputText);
+  try {
+    writeFileSync(ENGINE_REPLIES_PATH, repliesText);
+  } catch (error) {
+    if (previousInput === null) rmSync(ENGINE_INPUT_PATH, { force: true });
+    else writeFileSync(ENGINE_INPUT_PATH, previousInput);
+    throw error;
+  }
+
+  console.log(
+    `wrote ${path.relative(REPO, ENGINE_REPLIES_PATH)} ` +
+      `(outcome ${replies.diagnosis.overview.outcome}, ` +
+      `${replies.diagnosis.overview.findingCount} findings, commit ${engineCommit})`,
+  );
+} finally {
+  rmSync(tempDir, { recursive: true, force: true });
 }
-
-const engine = JSON.parse(readFileSync(outputPath, "utf8"));
-const replies = {
-  about:
-    "Replies captured from the real event-log analysis engine (EventLogAnalysisSession) over the " +
-    "records in event-log-data.ts. Do not edit by hand. Regenerate with " +
-    "`node e2e/fixtures/capture-event-log-replies.mjs`; engineCommit is the commit the engine " +
-    "was built from.",
-  provenance: {
-    engineCommit,
-    engineTreeDirty,
-    capturedBy: "e2e/fixtures/capture-event-log-replies.mjs",
-    inputSha256: engineInputSha256(parseResult),
-    engineSourceSha256: engineSourceSha256(),
-  },
-  ...engine,
-};
-writeFileSync(ENGINE_REPLIES_PATH, JSON.stringify(replies, null, 2) + "\n");
-rmSync(tempDir, { recursive: true, force: true });
-
-console.log(
-  `wrote ${path.relative(REPO, ENGINE_REPLIES_PATH)} ` +
-    `(outcome ${replies.diagnosis.overview.outcome}, ` +
-    `${replies.diagnosis.overview.findingCount} findings, commit ${engineCommit})`,
-);
