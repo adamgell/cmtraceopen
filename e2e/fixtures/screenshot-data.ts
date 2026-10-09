@@ -447,7 +447,8 @@ export const MOCK_INTUNE = {
 
 // ---------------------------------------------------------------------------
 // DSRegCmd — arguments for `useDsregcmdStore.getState().setResults(rawInput, result, context)`.
-// A fictional Microsoft Entra joined device with one Warning and one Info finding.
+// A fictional Microsoft Entra joined device, MDM enrolled, with exactly one Info
+// finding (on-prem-sso-missing) and no Warning or Error findings.
 // ---------------------------------------------------------------------------
 
 const DSREGCMD_RAW = [
