@@ -59,8 +59,12 @@ export function getVerdictTone(result: DsregcmdAnalysisResult): VerdictTone {
 /**
  * Mirrors `apply_enrollment_cross_reference`
  * (crates/cmtraceopen-parser/src/dsregcmd/extended.rs): an enrollment entry in
- * state 1 whose GUID equals, ASCII case-insensitively, an EnterpriseMgmt
+ * state 1 whose GUID equals, after `toLowerCase` folding, an EnterpriseMgmt
  * scheduled task GUID.
+ *
+ * Deliberately omits the Rust `mdm_enrolled` gate of that function
+ * (extended.rs:11-13): registry evidence must still confirm enrollment when
+ * MDM URLs are present, which is the most common enrolled device.
  */
 function hasRegistryEnrollmentMatch(result: DsregcmdAnalysisResult): boolean {
   const { enrollmentEvidence, scheduledTaskEvidence } = result;

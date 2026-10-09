@@ -25,6 +25,7 @@ interface FixtureOptions {
   joinType?: DsregcmdJoinType;
   mdmUrl?: string | null;
   mdmComplianceUrl?: string | null;
+  mdmEnrolled?: boolean;
   diagnostics?: Array<{ id: string; severity: DsregcmdSeverity; title?: string }>;
   enrollments?: Array<Partial<DsregcmdEnrollmentEntry>> | null;
   taskGuids?: string[] | null;
@@ -35,6 +36,7 @@ function makeResult(options: FixtureOptions = {}): DsregcmdAnalysisResult {
     joinType = "EntraIdJoined",
     mdmUrl = null,
     mdmComplianceUrl = null,
+    mdmEnrolled,
     diagnostics = [],
     enrollments = null,
     taskGuids = null,
@@ -42,7 +44,7 @@ function makeResult(options: FixtureOptions = {}): DsregcmdAnalysisResult {
 
   return {
     facts: { managementDetails: { mdmUrl, mdmComplianceUrl } },
-    derived: { joinType },
+    derived: { joinType, ...(mdmEnrolled === undefined ? {} : { mdmEnrolled }) },
     diagnostics: diagnostics.map(
       ({ id, severity, title }) =>
         ({ id, severity, title: title ?? `Title of ${id}` }) as DsregcmdDiagnosticInsight,
@@ -146,6 +148,28 @@ describe("getMdmState", () => {
     });
     expect(getMdmState(result).kind).toBe("enrolled-registry");
   });
+
+  it.each([
+    ["both MDM URLs", URL_A, URL_B],
+    ["only the MDM URL", URL_A, null],
+    ["only the compliance URL", null, URL_B],
+  ])(
+    "still reports Enrolled (registry) from the cross-reference with %s present",
+    (_name, mdmUrl, mdmComplianceUrl) => {
+      const result = makeResult({
+        mdmUrl,
+        mdmComplianceUrl,
+        mdmEnrolled: true,
+        enrollments: [{ guid: GUID, enrollmentState: 1 }],
+        taskGuids: [GUID],
+      });
+      expect(getMdmState(result)).toEqual({
+        kind: "enrolled-registry",
+        label: "Enrolled (registry)",
+        tone: "pass",
+      });
+    },
+  );
 
   it("matches GUIDs case-insensitively", () => {
     const result = makeResult({
@@ -277,6 +301,26 @@ describe("getMdmState", () => {
 });
 
 describe("getVerdictHeadline", () => {
+  it.each([
+    ["both MDM URLs", URL_A, URL_B],
+    ["only the MDM URL", URL_A, null],
+    ["only the compliance URL", null, URL_B],
+  ])(
+    "uses the registry-confirmed clause from the cross-reference with %s present",
+    (_name, mdmUrl, mdmComplianceUrl) => {
+      const result = makeResult({
+        mdmUrl,
+        mdmComplianceUrl,
+        mdmEnrolled: true,
+        enrollments: [{ guid: GUID, enrollmentState: 1 }],
+        taskGuids: [GUID],
+      });
+      expect(getVerdictHeadline(result)).toBe(
+        `${JOIN_CLAUSES.EntraIdJoined} \u00b7 MDM enrollment confirmed in registry`,
+      );
+    },
+  );
+
   const JOIN_CLAUSES: Record<DsregcmdJoinType, string> = {
     EntraIdJoined: "Entra joined",
     HybridEntraIdJoined: "Hybrid Entra joined",
