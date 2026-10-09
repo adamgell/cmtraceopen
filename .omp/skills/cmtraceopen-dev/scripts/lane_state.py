@@ -4,6 +4,7 @@ import argparse
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import errno
 import hashlib
 import importlib.util
 import json
@@ -3293,8 +3294,12 @@ def _lock_fd_nonblocking(lock_fd: int) -> None:
             os.lseek(lock_fd, 0, os.SEEK_SET)
             msvcrt.locking(lock_fd, msvcrt.LK_NBLCK, 1)
         except OSError as error:
-            # msvcrt reports contention as a generic OSError (EACCES/EDEADLOCK).
-            raise BlockingIOError(str(error)) from error
+            # msvcrt reports contention as EACCES or EDEADLK (EDEADLOCK on
+            # Windows); anything else is a real failure and must surface
+            # unchanged, as on POSIX.
+            if error.errno in (errno.EACCES, errno.EDEADLK):
+                raise BlockingIOError(str(error)) from error
+            raise
         return
     import fcntl
 

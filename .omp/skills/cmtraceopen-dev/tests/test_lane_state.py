@@ -5648,5 +5648,33 @@ class PosixLockHelperTests(unittest.TestCase):
                 os.close(second)
 
 
+class WindowsLockBranchTests(unittest.TestCase):
+    def _run_windows_branch(self, side_effect: BaseException) -> None:
+        fake_msvcrt = mock.Mock(LK_NBLCK=2, LK_UNLCK=0)
+        fake_msvcrt.locking.side_effect = side_effect
+        with (
+            mock.patch.object(lane_state.os, "name", "nt"),
+            mock.patch.object(lane_state.os, "lseek"),
+            mock.patch.dict(sys.modules, {"msvcrt": fake_msvcrt}),
+        ):
+            lane_state._lock_fd_nonblocking(7)
+
+    def test_contention_errnos_become_blocking_io_error(self) -> None:
+        import errno
+
+        for code in (errno.EACCES, errno.EDEADLK):
+            with self.subTest(code=code), self.assertRaises(BlockingIOError):
+                self._run_windows_branch(OSError(code, "locked"))
+
+    def test_other_oserror_is_reraised_unchanged(self) -> None:
+        import errno
+
+        error = OSError(errno.EBADF, "bad descriptor")
+        with self.assertRaises(OSError) as caught:
+            self._run_windows_branch(error)
+        self.assertIs(error, caught.exception)
+        self.assertNotIsInstance(caught.exception, BlockingIOError)
+
+
 if __name__ == "__main__":
     unittest.main()

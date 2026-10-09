@@ -1057,7 +1057,8 @@ class AgentOutputValidationTests(unittest.TestCase):
 
 class WindowsImportTests(unittest.TestCase):
     def test_validator_loads_and_validates_without_fcntl(self) -> None:
-        # Native Windows Python has no fcntl module (issue #893).
+        # Native Windows Python has no fcntl module (issue #893). Validation
+        # runs inside the patch so a lazy fcntl import is caught too.
         with mock.patch.dict(sys.modules, {"fcntl": None}):
             spec = importlib.util.spec_from_file_location(
                 "validate_agent_output_no_fcntl",
@@ -1066,19 +1067,21 @@ class WindowsImportTests(unittest.TestCase):
             assert spec is not None and spec.loader is not None
             fresh = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(fresh)
-        fresh.validate_output(
-            "coder",
-            {
-                "role": "coder",
-                "phase": "red_proposal",
-                "summary": "RED",
-                "implementation_proposals": [proposal()],
-                "proposed_red_checks": [command("python3", "-m", "unittest", "focused")],
-                "proposed_green_checks": [],
-                "proposed_verification_checks": [],
-                "blockers": [],
-            },
-        )
+            fresh.validate_output(
+                "coder",
+                {
+                    "role": "coder",
+                    "phase": "red_proposal",
+                    "summary": "RED",
+                    "implementation_proposals": [proposal()],
+                    "proposed_red_checks": [
+                        command("python3", "-m", "unittest", "focused")
+                    ],
+                    "proposed_green_checks": [],
+                    "proposed_verification_checks": [],
+                    "blockers": [],
+                },
+            )
 
 
 if __name__ == "__main__":
