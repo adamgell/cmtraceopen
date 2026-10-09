@@ -1,8 +1,8 @@
 {
   "about": "Replies captured from the real event-log analysis engine (EventLogAnalysisSession) over the records in event-log-data.ts. Do not edit by hand. Regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`; engineCommit is the commit the engine was built from.",
   "provenance": {
-    "engineCommit": "2e2c7c224c6ac82de4f8b8aff12acf15852b0fe0",
-    "engineTreeDirty": true,
+    "engineCommit": "be5fa5c5d49c9b79889fe256050a8505723709a2",
+    "engineTreeDirty": false,
     "capturedBy": "e2e/fixtures/capture-event-log-replies.mjs",
     "inputSha256": "da1e4812542fcd92895e8151f3cf130f8d5d7b396234afcdf9d1da5921182544",
     "engineSourceSha256": "71c9d5f4d6f108a7c77c621be36f8e3b591096fc39fa926875fcbe302bc57f2c"
