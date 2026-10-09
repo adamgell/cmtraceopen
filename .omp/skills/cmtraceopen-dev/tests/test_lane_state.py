@@ -4721,8 +4721,8 @@ class MutationRetryTests(unittest.TestCase):
             with (
                 mock.patch.object(lane_state, "LOCK_TIMEOUT_SECONDS", 0.0),
                 mock.patch.object(
-                    lane_state.fcntl,
-                    "flock",
+                    lane_state,
+                    "_lock_fd_nonblocking",
                     side_effect=BlockingIOError,
                 ),
                 self.assertRaises(lane_state.RetriableConflict),
@@ -5628,6 +5628,25 @@ class CliTests(unittest.TestCase):
             "terminal_rejection",
             json.loads(output.getvalue())["classification"],
         )
+
+@unittest.skipIf(os.name == "nt", "POSIX flock path")
+class PosixLockHelperTests(unittest.TestCase):
+    def test_lock_excludes_second_descriptor_until_unlocked(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "lock")
+            first = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+            second = os.open(path, os.O_RDWR)
+            try:
+                lane_state._lock_fd_nonblocking(first)
+                with self.assertRaises(BlockingIOError):
+                    lane_state._lock_fd_nonblocking(second)
+                lane_state._unlock_fd(first)
+                lane_state._lock_fd_nonblocking(second)
+                lane_state._unlock_fd(second)
+            finally:
+                os.close(first)
+                os.close(second)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,7 +4,6 @@ import argparse
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-import fcntl
 import hashlib
 import importlib.util
 import json
@@ -3285,6 +3284,35 @@ def _strictly_new_updated_at(previous: str) -> str:
     return current_time.isoformat()
 
 
+def _lock_fd_nonblocking(lock_fd: int) -> None:
+    """Take an exclusive non-blocking lock; raise BlockingIOError if held."""
+    if os.name == "nt":
+        import msvcrt
+
+        try:
+            os.lseek(lock_fd, 0, os.SEEK_SET)
+            msvcrt.locking(lock_fd, msvcrt.LK_NBLCK, 1)
+        except OSError as error:
+            # msvcrt reports contention as a generic OSError (EACCES/EDEADLOCK).
+            raise BlockingIOError(str(error)) from error
+        return
+    import fcntl
+
+    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_fd(lock_fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(lock_fd, 0, os.SEEK_SET)
+        msvcrt.locking(lock_fd, msvcrt.LK_UNLCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+
+
 def _acquire_lock(directory_fd: int, lock_name: str) -> int:
     try:
         lock_fd = os.open(
@@ -3298,7 +3326,7 @@ def _acquire_lock(directory_fd: int, lock_name: str) -> int:
     deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
     while True:
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_fd_nonblocking(lock_fd)
             return lock_fd
         except BlockingIOError as error:
             if time.monotonic() >= deadline:
@@ -3429,7 +3457,7 @@ def _mutate_manifest(
             except (OSError, ValueError) as error:
                 raise TerminalRejection(str(error)) from error
         finally:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            _unlock_fd(lock_fd)
             os.close(lock_fd)
 
 

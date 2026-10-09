@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT_PATH = Path(__file__).parents[1] / "scripts" / "validate_agent_output.py"
 SPEC = importlib.util.spec_from_file_location("validate_agent_output", SCRIPT_PATH)
@@ -1052,6 +1054,32 @@ class AgentOutputValidationTests(unittest.TestCase):
         for invalid in invalid_payloads:
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 validator.validate_output("reducer-integration", invalid)
+
+class WindowsImportTests(unittest.TestCase):
+    def test_validator_loads_and_validates_without_fcntl(self) -> None:
+        # Native Windows Python has no fcntl module (issue #893).
+        with mock.patch.dict(sys.modules, {"fcntl": None}):
+            spec = importlib.util.spec_from_file_location(
+                "validate_agent_output_no_fcntl",
+                SCRIPT_PATH,
+            )
+            assert spec is not None and spec.loader is not None
+            fresh = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(fresh)
+        fresh.validate_output(
+            "coder",
+            {
+                "role": "coder",
+                "phase": "red_proposal",
+                "summary": "RED",
+                "implementation_proposals": [proposal()],
+                "proposed_red_checks": [command("python3", "-m", "unittest", "focused")],
+                "proposed_green_checks": [],
+                "proposed_verification_checks": [],
+                "blockers": [],
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
