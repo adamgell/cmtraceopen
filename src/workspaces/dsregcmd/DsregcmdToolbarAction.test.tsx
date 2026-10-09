@@ -7,9 +7,10 @@ import {
 } from "@fluentui/react-components";
 import { WorkspaceToolbarAction } from "../../components/layout/Toolbar";
 import { DsregcmdToolbarAction } from "./DsregcmdToolbarAction";
-import { DsregcmdWorkspace } from "./DsregcmdWorkspace";
 import { dsregcmdWorkspace } from "./index";
 import { useDsregcmdStore } from "./dsregcmd-store";
+
+const commandState = vi.hoisted(() => ({ canOpenSources: true }));
 
 const actions = vi.hoisted(() => ({
   openSourceFileDialog: vi.fn().mockResolvedValue(undefined),
@@ -21,13 +22,14 @@ const actions = vi.hoisted(() => ({
 vi.mock("../../hooks/use-app-actions", () => ({
   useAppActions: () => ({
     ...actions,
-    commandState: { canRefresh: false },
+    commandState: { canRefresh: false, canOpenSources: commandState.canOpenSources },
     refreshActiveSource: vi.fn(),
   }),
 }));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  commandState.canOpenSources = true;
   useDsregcmdStore.getState().clear();
 });
 
@@ -80,8 +82,8 @@ describe("DsregcmdToolbarAction", () => {
     expect(actions.openSourceFolderDialog).toHaveBeenCalledTimes(1);
   });
 
-  it("disables every control while analyzing", () => {
-    useDsregcmdStore.setState({ isAnalyzing: true });
+  it("disables every control when the command state blocks sources", () => {
+    commandState.canOpenSources = false;
     render(<DsregcmdToolbarAction />);
     for (const name of [
       "Capture now",
@@ -99,7 +101,7 @@ describe("DsregcmdToolbarAction", () => {
   const linkNames = ["Paste", "Open file...", "Open folder..."];
 
   it("renders disabled inline links in the Fluent disabled color", () => {
-    useDsregcmdStore.setState({ isAnalyzing: true });
+    commandState.canOpenSources = false;
     render(
       <FluentProvider theme={webLightTheme}>
         <DsregcmdToolbarAction />
@@ -127,15 +129,5 @@ describe("DsregcmdToolbarAction", () => {
         tokens.colorNeutralForeground3,
       );
     }
-  });
-});
-
-describe("DsregcmdWorkspace without its own header", () => {
-  it("renders no header row in the empty state", () => {
-    render(<DsregcmdWorkspace />);
-    expect(screen.queryByText("dsregcmd Workspace")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Capture" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Paste" })).toBeNull();
-    expect(screen.getByText("No dsregcmd source loaded")).toBeInTheDocument();
   });
 });

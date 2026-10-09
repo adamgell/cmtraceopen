@@ -347,6 +347,9 @@ beforeEach(() => {
   useDsregcmdStore.getState().clear();
 });
 
+/** Matches any button the removed header row used to carry, including the old "Capture" label and the toolbar's "Capture now". */
+const NO_HEADER_BUTTONS = /^(Capture|Paste|Open (Text File|Evidence Folder))/;
+
 describe("DsregcmdWorkspace fixtures", () => {
   it("DSREG-003 shows health cards, issues overview, and sidebar findings", () => {
     seedReady();
@@ -405,19 +408,21 @@ describe("DsregcmdWorkspace fixtures", () => {
     expect(screen.getByText("PRT refresh failed")).toBeInTheDocument();
   });
 
-  it("D2 renders no workspace header row", () => {
+  it("renders no workspace header row when results are loaded", () => {
     seedReady();
     render(<DsregcmdWorkspace />);
 
     expect(screen.queryByText("dsregcmd Workspace")).toBeNull();
-    for (const name of [
-      "Capture",
-      "Paste",
-      "Open Text File",
-      "Open Evidence Folder",
-    ]) {
-      expect(screen.queryByRole("button", { name })).toBeNull();
-    }
+    expect(screen.queryByRole("button", { name: NO_HEADER_BUTTONS })).toBeNull();
+  });
+
+  it("renders no workspace header row in the empty state", () => {
+    useDsregcmdStore.getState().clear();
+    render(<DsregcmdWorkspace />);
+
+    expect(screen.queryByText("dsregcmd Workspace")).toBeNull();
+    expect(screen.queryByRole("button", { name: NO_HEADER_BUTTONS })).toBeNull();
+    expect(screen.getByText("No dsregcmd source loaded")).toBeInTheDocument();
   });
 
   it("DSREG-006 shows export controls for JSON, status, summary, and raw input", () => {

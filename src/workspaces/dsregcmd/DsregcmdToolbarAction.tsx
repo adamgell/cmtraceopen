@@ -18,7 +18,6 @@ import {
 import { useAppActions } from "../../hooks/use-app-actions";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
-import { useDsregcmdStore } from "./dsregcmd-store";
 
 /** Runs a load action, logging instead of leaving a rejected promise unhandled. */
 function run(label: string, action: () => Promise<void>) {
@@ -28,14 +27,16 @@ function run(label: string, action: () => Promise<void>) {
 }
 
 export function DsregcmdToolbarAction() {
-  const isAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const {
+    commandState,
     openSourceFileDialog,
     openSourceFolderDialog,
     pasteDsregcmdSource,
     captureDsregcmdSource,
   } = useAppActions();
+  // Same value the load handlers guard on, so controls and handlers agree.
+  const isBusy = !commandState.canOpenSources;
 
   const capture = () => run("capture", captureDsregcmdSource);
   const paste = () => run("paste", pasteDsregcmdSource);
@@ -51,7 +52,7 @@ export function DsregcmdToolbarAction() {
     minWidth: 0,
   };
   // Only color while enabled so Fluent's disabled color still wins.
-  const linkStyle = isAnalyzing
+  const linkStyle = isBusy
     ? baseLinkStyle
     : { ...baseLinkStyle, color: tokens.colorNeutralForeground3 };
 
@@ -63,7 +64,7 @@ export function DsregcmdToolbarAction() {
             <SplitButton
               appearance="primary"
               size="small"
-              disabled={isAnalyzing}
+              disabled={isBusy}
               menuButton={{
                 ...triggerProps,
                 "aria-label": "More capture options",
@@ -103,7 +104,7 @@ export function DsregcmdToolbarAction() {
         <Button
           appearance="subtle"
           size="small"
-          disabled={isAnalyzing}
+          disabled={isBusy}
           style={linkStyle}
           onClick={paste}
         >
@@ -113,7 +114,7 @@ export function DsregcmdToolbarAction() {
         <Button
           appearance="subtle"
           size="small"
-          disabled={isAnalyzing}
+          disabled={isBusy}
           style={linkStyle}
           onClick={openFile}
         >
@@ -123,7 +124,7 @@ export function DsregcmdToolbarAction() {
         <Button
           appearance="subtle"
           size="small"
-          disabled={isAnalyzing}
+          disabled={isBusy}
           style={linkStyle}
           onClick={openFolder}
         >
