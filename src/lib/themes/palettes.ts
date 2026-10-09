@@ -78,7 +78,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     error: { background: "#073642", text: "#E87B72" },
     warning: { background: "#073642", text: "#BD9519" },
     info: { background: "#002B36", text: "#839496" },
-    success: { background: "#073642", text: "#859900" },
+    success: { background: "#073642", text: "#90A115" },
     highlightDefault: "#586E75",
     mergeColors: [
       "#268BD2", "#DC322F", "#859900", "#6C71C4",
@@ -93,7 +93,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     },
   },
   nord: {
-    error: { background: "#3B4252", text: "#D4A4AB" },
+    error: { background: "#3B4252", text: "#FC9080" },
     warning: { background: "#3B4252", text: "#EBCB8B" },
     info: { background: "#2E3440", text: "#D8DEE9" },
     success: { background: "#3B4252", text: "#A3BE8C" },

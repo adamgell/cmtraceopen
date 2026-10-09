@@ -295,7 +295,7 @@
   --cmt-status-success-fg: #A3BE8C; --cmt-status-success-bg: #3B4252; --cmt-status-success-border: #4C566A;
   --cmt-status-warning-fg: #EBCB8B; --cmt-status-warning-bg: #3B4252; --cmt-status-warning-border: #4C566A;
   --cmt-status-danger-fg:  #BF616A; --cmt-status-danger-bg:  #3B4252; --cmt-status-danger-border:  #4C566A;
-  --cmt-sev-error-bg:   #3B4252;  --cmt-sev-error-fg:   #D4A4AB;
+  --cmt-sev-error-bg:   #3B4252;  --cmt-sev-error-fg:   #FC9080;
   --cmt-sev-warning-bg: #3B4252;  --cmt-sev-warning-fg: #EBCB8B;
   --cmt-sev-info-bg:    #2E3440;  --cmt-sev-info-fg:    #D8DEE9;
   --cmt-sev-highlight:  #4C566A;

@@ -21,12 +21,56 @@ function contrastRatio(foreground: string, background: string): number {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
-// hotdog-stand is excluded because its removal is in flight on a separate branch.
-const EXCLUDED_THEMES: ThemeId[] = ["hotdog-stand"];
+// CIE L*a*b* (D65) so "reads red" and "visibly different" are perceptual checks.
+function hexToLab(hex: string): { l: number; a: number; b: number } {
+  const match = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!match) throw new Error(`Expected #RRGGBB, got ${hex}`);
+  const [r, g, b] = [0, 2, 4].map((offset) => {
+    const value = parseInt(match[1].slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  const x = (0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047;
+  const y = 0.2126729 * r + 0.7151522 * g + 0.072175 * b;
+  const z = (0.0193339 * r + 0.119192 * g + 0.9503041 * b) / 1.08883;
+  const f = (t: number) => (t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116);
+  const [fx, fy, fz] = [f(x), f(y), f(z)];
+  return { l: 116 * fy - 16, a: 500 * (fx - fy), b: 200 * (fy - fz) };
+}
+
+function chroma(hex: string): number {
+  const { a, b } = hexToLab(hex);
+  return Math.hypot(a, b);
+}
+
+function hue(hex: string): number {
+  const { a, b } = hexToLab(hex);
+  return ((Math.atan2(b, a) * 180) / Math.PI + 360) % 360;
+}
+
+function deltaE76(first: string, second: string): number {
+  const x = hexToLab(first);
+  const y = hexToLab(second);
+  return Math.hypot(x.l - y.l, x.a - y.a, x.b - y.b);
+}
+
+/** Red family in Lab hue degrees: [345, 360] or [0, 50]. */
+function isRed(hex: string): boolean {
+  const h = hue(hex);
+  return (h >= 345 || h <= 50) && chroma(hex) >= MIN_RED_CHROMA;
+}
+
+const MIN_RED_CHROMA = 30;
+const MIN_ROW_DELTA_E = 10;
+
+// hotdog-stand is excluded because its removal is in flight in #878. Typed as
+// plain strings so this compiles both before and after that theme leaves the
+// ThemeId union. Remove this constant once #878 lands.
+const EXCLUDED_THEMES: readonly string[] = ["hotdog-stand"];
 const themeIds = (Object.keys(themeSeverityPalettes) as ThemeId[]).filter(
   (id) => !EXCLUDED_THEMES.includes(id),
 );
-const rowKinds = ["error", "warning", "info"] as const;
+// Every kind LogRow.tsx renders from the palette (rowStyle and the dot color).
+const rowKinds = ["error", "warning", "info", "success"] as const;
 
 describe("theme severity row palettes", () => {
   describe.each(themeIds)("%s", (themeId) => {
@@ -39,6 +83,16 @@ describe("theme severity row palettes", () => {
 
     it("error row is visually distinct from the info row", () => {
       expect(palette.error).not.toEqual(palette.info);
+      const errorLook = Math.max(
+        deltaE76(palette.error.text, palette.info.text),
+        deltaE76(palette.error.background, palette.info.background),
+      );
+      expect(errorLook).toBeGreaterThanOrEqual(MIN_ROW_DELTA_E);
+    });
+
+    it("error row reads red (text or background in the red family)", () => {
+      const { text, background } = palette.error;
+      expect(isRed(text) || isRed(background)).toBe(true);
     });
   });
 });
