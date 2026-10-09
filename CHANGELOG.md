@@ -4,11 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.6.3]
+
 ### Changed
 
 - **Parser source compatibility (#814)**: Advance `cmtraceopen-parser` to `0.4.0` for breaking source API changes from new Windows Firewall enum variants and public struct fields. Update affected exhaustive matches and struct literals; see the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
 
 ### Fixed
+
+- **Find accessibility**: Give the Find bar and its live result count named accessible regions so assistive technology can identify the controls and announce search results.
+
+- **Public Autopilot parser projection**: Mask short typed identities consistently in narrative while preserving generated redaction tokens. This addresses the parser-library projection contract; the desktop has no caller of this Autopilot leaf projection.
+
+- **Development tooling dependencies (#816, #817)**: Update `source-map-js` to `1.2.2` in the application and download-metrics lockfiles, addressing indexed source-map offset validation ([GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q)).
 
 - **Windows Firewall logs (#814)**: Recognize firewall records separately from IIS, preserve all fields and Local wall-clock timestamps, report skipped NUL padding and warn about lost events, and retain encoding and source identity through live tailing and timeline queries.
 
