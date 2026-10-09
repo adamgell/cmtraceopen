@@ -2,7 +2,7 @@
 // by vitest (CI's `npm run test`) but not by Playwright's default
 // *.spec/*.test matcher, so it does not run inside the e2e suite.
 import os from "node:os";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   describeHostLeak,
@@ -49,13 +49,43 @@ describe("host-path guard", () => {
     expect(message).not.toMatch(/corp\.example/i);
   });
 
-  it("includes the real home dir, host name and short host name", () => {
-    const ids = hostIdentifiers().map((id) => id.toLowerCase());
-    const host = os.hostname().toLowerCase();
-    if (host.length > 2) {
-      expect(ids).toContain(host);
-      expect(ids).toContain(host.split(".")[0]);
-    }
-    expect(ids).toContain(os.homedir().toLowerCase());
+  describe("hostIdentifiers length rules", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const lower = () => hostIdentifiers().map((id) => id.toLowerCase());
+
+    it("always includes the home dir and working directory", () => {
+      expect(lower()).toContain(os.homedir().toLowerCase());
+      expect(lower()).toContain(process.cwd().toLowerCase());
+    });
+
+    it("includes the user name only when longer than 2 characters", () => {
+      const user = os.userInfo().username.toLowerCase();
+      expect(lower().includes(user)).toBe(user.length > 2);
+    });
+
+    it.each([
+      ["my-host.corp.example", true, true],
+      ["workstation", true, true],
+      ["ci.example.com", true, false],
+      ["ab.example.com", true, false],
+      ["ab", false, false],
+    ])(
+      "host name %s: full included=%s, short label included=%s",
+      (host, fullIncluded, shortIncluded) => {
+        vi.spyOn(os, "hostname").mockReturnValue(host);
+        const ids = lower();
+        expect(ids.includes(host)).toBe(fullIncluded);
+        const short = host.split(".")[0];
+        // A short label that equals the whole host name is the same entry.
+        if (short !== host) {
+          expect(ids.includes(short)).toBe(shortIncluded);
+        } else {
+          expect(ids.includes(short)).toBe(fullIncluded);
+        }
+      },
+    );
   });
 });
