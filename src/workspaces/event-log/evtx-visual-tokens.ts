@@ -3,9 +3,15 @@
  * 6 and 7.3). Components read every color from here and never index a
  * palette or write a color literal themselves.
  *
- * Values are Fluent token references (`var(--…)`) or entries of the active
- * theme's severity palette, so they follow all eight themes. Canvas and SVG
- * drawing that needs resolved strings resolves them once per theme change.
+ * Values are CSS colors: Fluent token references (`var(--…)`), hex entries of
+ * the active theme's severity palette, or `color-mix()` expressions, so they
+ * follow all eight themes. Canvas and SVG consumers cannot read `var()` or
+ * `color-mix()` directly and must resolve these strings themselves.
+ *
+ * Level marks and channel colors come from the theme's `eventLog` semantic
+ * tokens, not from the Fluent palette tokens named in spec section 6.3
+ * (spec Q-17 and D22): those Fluent tokens collapse to the same color in
+ * high-contrast and nearly match in the dark themes.
  */
 import { useMemo } from "react";
 import { tokens } from "@fluentui/react-components";
@@ -23,6 +29,7 @@ import {
   Warning16Regular,
   type FluentIcon,
 } from "@fluentui/react-icons";
+import { readableOn } from "../../lib/color-contrast";
 import type { LogSeverityPalette } from "../../lib/constants";
 import { getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
@@ -31,10 +38,11 @@ import type { DiagnosisCorrelationStatus, EvtxLevel } from "./types";
 export interface EvtxLevelVisual {
   /** Level name, used as the icon's accessible label. */
   label: EvtxLevel;
-  /** Histogram bars and level-filter fills. */
+  /** Histogram bars and level-filter fills (drawn on the surface, never a row tint). */
   barColor: string;
   /** 8px severity dots. */
   dotColor: string;
+  /** Icon on the level's row tint; falls back to black or white when the mark lacks 3:1 there. */
   iconColor: string;
   rowBackground: string;
   rowText: string;
@@ -82,18 +90,12 @@ export interface EvtxVisualTokens {
   };
 }
 
-/**
- * Merge palette indices used for channels, in assignment order. Indices 1
- * (red) and 2 (green) are skipped so a channel never reads as a severity
- * (spec D10).
- */
-export const CHANNEL_MERGE_COLOR_INDICES = [0, 4, 5, 3, 6, 7] as const;
-
 const HEAT_STEP_PERCENTAGES = [15, 30, 45, 60, 75, 90] as const;
 
 export function buildEvtxVisualTokens(
   palette: LogSeverityPalette,
 ): EvtxVisualTokens {
+  const { eventLog } = palette;
   const plainRow = {
     rowBackground: tokens.colorNeutralBackground1,
     rowText: tokens.colorNeutralForeground1,
@@ -103,9 +105,9 @@ export function buildEvtxVisualTokens(
     levels: {
       Critical: {
         label: "Critical",
-        barColor: tokens.colorPaletteDarkRedBorderActive,
-        dotColor: tokens.colorPaletteDarkRedBorderActive,
-        iconColor: tokens.colorPaletteDarkRedBorderActive,
+        barColor: eventLog.critical,
+        dotColor: eventLog.critical,
+        iconColor: readableOn(palette.error.background, eventLog.critical),
         rowBackground: palette.error.background,
         rowText: palette.error.text,
         GridIcon: DismissCircle12Regular,
@@ -113,9 +115,9 @@ export function buildEvtxVisualTokens(
       },
       Error: {
         label: "Error",
-        barColor: tokens.colorPaletteRedBackground3,
-        dotColor: tokens.colorPaletteRedBackground3,
-        iconColor: palette.status.error.foreground,
+        barColor: eventLog.error,
+        dotColor: eventLog.error,
+        iconColor: readableOn(palette.error.background, eventLog.error),
         rowBackground: palette.error.background,
         rowText: palette.error.text,
         GridIcon: ErrorCircle12Regular,
@@ -123,9 +125,9 @@ export function buildEvtxVisualTokens(
       },
       Warning: {
         label: "Warning",
-        barColor: tokens.colorPaletteMarigoldBackground3,
-        dotColor: tokens.colorPaletteMarigoldBackground3,
-        iconColor: palette.status.warning.foreground,
+        barColor: eventLog.warning,
+        dotColor: eventLog.warning,
+        iconColor: readableOn(palette.warning.background, eventLog.warning),
         rowBackground: palette.warning.background,
         rowText: palette.warning.text,
         GridIcon: Warning12Regular,
@@ -133,20 +135,20 @@ export function buildEvtxVisualTokens(
       },
       Information: {
         label: "Information",
-        barColor: tokens.colorNeutralStroke1,
-        dotColor: tokens.colorNeutralForeground4,
-        iconColor: tokens.colorNeutralForeground3,
+        barColor: eventLog.information,
+        dotColor: eventLog.information,
+        iconColor: eventLog.information,
         ...plainRow,
         GridIcon: Info12Regular,
         RailIcon: Info16Regular,
       },
-      // The spec gives Verbose an icon but no colors. It shares Information's
-      // neutrals: it is the lowest rank and, like Information, untinted (D3).
+      // The spec gives Verbose an icon but no colors. Its mark comes from the
+      // theme's eventLog.verbose neutral; like Information it is untinted (D3).
       Verbose: {
         label: "Verbose",
-        barColor: tokens.colorNeutralStroke1,
-        dotColor: tokens.colorNeutralForeground4,
-        iconColor: tokens.colorNeutralForeground3,
+        barColor: eventLog.verbose,
+        dotColor: eventLog.verbose,
+        iconColor: eventLog.verbose,
         ...plainRow,
         GridIcon: Circle12Regular,
         RailIcon: Circle16Regular,
@@ -174,15 +176,19 @@ export function buildEvtxVisualTokens(
         border: tokens.colorPaletteMarigoldBorder2,
         borderStyle: "solid",
       },
+      // Foreground and border use Foreground3 rather than Foreground2 or
+      // StrokeAccessible: in hotdog-stand those two resolve to pure yellow, the
+      // error text color, which would read as a failure state.
       // The spec names the label and icon but no colors. A coverage gap is
-      // neither success nor failure, so it stays neutral and dashed, with
-      // the icon carrying the meaning.
+      // neither success nor failure, so it stays neutral, with the icon
+      // carrying the meaning. Its own solid border keeps it from
+      // being mistaken for Candidate (dashed) or Not linked (dotted).
       coverageBlocked: {
         label: "Coverage blocked",
         background: tokens.colorNeutralBackground1,
-        foreground: tokens.colorNeutralForeground2,
-        border: tokens.colorNeutralStroke1,
-        borderStyle: "dashed",
+        foreground: tokens.colorNeutralForeground3,
+        border: tokens.colorNeutralForeground3,
+        borderStyle: "solid",
         Icon: PlugDisconnected16Regular,
       },
       notCausal: {
@@ -204,9 +210,7 @@ export function buildEvtxVisualTokens(
       foreground: palette.error.text,
     },
     channelColor: (index) =>
-      palette.mergeColors[
-        CHANNEL_MERGE_COLOR_INDICES[index % CHANNEL_MERGE_COLOR_INDICES.length]
-      ],
+      eventLog.channels[index % eventLog.channels.length],
     heatSteps: HEAT_STEP_PERCENTAGES.map(
       (percent) =>
         `color-mix(in srgb, ${palette.mergeColors[0]} ${percent}%, ${tokens.colorNeutralBackground1})`,

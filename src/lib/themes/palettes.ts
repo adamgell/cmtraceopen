@@ -19,6 +19,16 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: { foreground: "#bc4b09", background: "rgba(188, 75, 9, 0.1)" },
       error: { foreground: "#b10e1c", background: "rgba(177, 14, 28, 0.1)" },
     },
+    eventLog: {
+      critical: "#7F1D1D",
+      error: "#dc2626",
+      warning: "#a16207",
+      information: "#616161",
+      verbose: "#707070",
+      channels: [
+        "#0d9488", "#a855f7", "#4338ca", "#6366f1", "#7e22ce", "#1a1a4d",
+      ],
+    },
   },
   dark: {
     error: { background: "#7F1D1D", text: "#FCA5A5" },
@@ -36,6 +46,16 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       success: { foreground: "#4ade80", background: "rgba(74, 222, 128, 0.15)" },
       warning: { foreground: "#fbbf24", background: "rgba(251, 191, 36, 0.15)" },
       error: { foreground: "#f87171", background: "rgba(248, 113, 113, 0.15)" },
+    },
+    eventLog: {
+      critical: "#fda4af",
+      error: "#f87171",
+      warning: "#fbbf24",
+      information: "#adadad",
+      verbose: "#999999",
+      channels: [
+        "#0d9488", "#c084fc", "#06b6d4", "#8b5cf6", "#93ecec", "#cfc6ec",
+      ],
     },
   },
   "high-contrast": {
@@ -55,6 +75,16 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: { foreground: "#FFFF00", background: "rgba(255, 255, 0, 0.15)" },
       error: { foreground: "#FF0000", background: "rgba(255, 0, 0, 0.15)" },
     },
+    eventLog: {
+      critical: "#FF4D6D",
+      error: "#FF0000",
+      warning: "#FFFF00",
+      information: "#FFFFFF",
+      verbose: "#FFFFFF",
+      channels: [
+        "#0d9488", "#c084fc", "#4f46e5", "#60a5fa", "#9333ea", "#0284c7",
+      ],
+    },
   },
   "classic-cmtrace": {
     error: { background: "#FF0000", text: "#FFFF00" },
@@ -72,6 +102,16 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       success: { foreground: "#0e700e", background: "rgba(14, 112, 14, 0.1)" },
       warning: { foreground: "#bc4b09", background: "rgba(188, 75, 9, 0.1)" },
       error: { foreground: "#b10e1c", background: "rgba(177, 14, 28, 0.1)" },
+    },
+    eventLog: {
+      critical: "#7F1D1D",
+      error: "#dc2626",
+      warning: "#a16207",
+      information: "#616161",
+      verbose: "#707070",
+      channels: [
+        "#0d9488", "#a855f7", "#4338ca", "#6366f1", "#7e22ce", "#1a1a4d",
+      ],
     },
   },
   "solarized-dark": {
@@ -91,6 +131,16 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: { foreground: "#B58900", background: "rgba(181, 137, 0, 0.15)" },
       error: { foreground: "#DC322F", background: "rgba(220, 50, 47, 0.15)" },
     },
+    eventLog: {
+      critical: "#fda4af",
+      error: "#f87171",
+      warning: "#B58900",
+      information: "#657B83",
+      verbose: "#657B83",
+      channels: [
+        "#0d9488", "#c084fc", "#06b6d4", "#8b5cf6", "#93ecec", "#2273c3",
+      ],
+    },
   },
   nord: {
     error: { background: "#3B4252", text: "#BF616A" },
@@ -108,6 +158,16 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       success: { foreground: "#A3BE8C", background: "rgba(163, 190, 140, 0.15)" },
       warning: { foreground: "#EBCB8B", background: "rgba(235, 203, 139, 0.15)" },
       error: { foreground: "#BF616A", background: "rgba(191, 97, 106, 0.15)" },
+    },
+    eventLog: {
+      critical: "#fda4af",
+      error: "#f87171",
+      warning: "#d4a72c",
+      information: "#ECEFF4",
+      verbose: "#D8DEE9",
+      channels: [
+        "#0d9488", "#c084fc", "#06b6d4", "#93ecec", "#cfc6ec", "#9966cc",
+      ],
     },
   },
   dracula: {
@@ -127,6 +187,16 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: { foreground: "#F1FA8C", background: "rgba(241, 250, 140, 0.15)" },
       error: { foreground: "#FF5555", background: "rgba(255, 85, 85, 0.15)" },
     },
+    eventLog: {
+      critical: "#fda4af",
+      error: "#f87171",
+      warning: "#F1FA8C",
+      information: "#6272A4",
+      verbose: "#6272A4",
+      channels: [
+        "#0d9488", "#c084fc", "#06b6d4", "#8b5cf6", "#93ecec", "#cfc6ec",
+      ],
+    },
   },
   "hotdog-stand": {
     error: { background: "#FF0000", text: "#FFFF00" },
@@ -144,6 +214,16 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       success: { foreground: "#00FF00", background: "rgba(0, 255, 0, 0.15)" },
       warning: { foreground: "#FFFF00", background: "rgba(255, 255, 0, 0.15)" },
       error: { foreground: "#FF0000", background: "rgba(255, 0, 0, 0.15)" },
+    },
+    eventLog: {
+      critical: "#FFFF00",
+      error: "#FFFFFF",
+      warning: "#000000",
+      information: "#00FFFF",
+      verbose: "#FFEE00",
+      channels: [
+        "#00005a", "#000096", "#003c3c", "#00ffc3", "#00ffff", "#1e2d78",
+      ],
     },
   },
 };

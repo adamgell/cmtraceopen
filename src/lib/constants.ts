@@ -21,6 +21,16 @@ export interface LogSeverityPalette {
   /** Fixed 8-color palette for merge tab / section identification (OQ-2). */
   mergeColors: [string, string, string, string, string, string, string, string];
 
+  /** Event Logs level marks (bars, dots, icons) and channel colors, tuned per theme. */
+  eventLog: {
+    critical: string;
+    error: string;
+    warning: string;
+    information: string;
+    verbose: string;
+    channels: readonly [string, string, string, string, string, string];
+  };
+
   /** Semi-transparent overlay color for WhatIf badge background (OQ-3). */
   whatifOverlay: string;
   /** Opaque text color for WhatIf badges (OQ-3). */
