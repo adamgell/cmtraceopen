@@ -2064,6 +2064,7 @@ mod tests {
 #[cfg(test)]
 mod screenshot_replies {
     use super::*;
+    use sha2::Digest;
 
     const REGENERATE: &str = "regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`";
 
@@ -2146,30 +2147,52 @@ mod screenshot_replies {
             .unwrap_or_else(|error| panic!("write {}: {error}", output_path.to_string_lossy()));
     }
 
-    fn read_fixture(name: &str) -> serde_json::Value {
+    fn read_fixture_text(name: &str) -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("e2e")
             .join("fixtures")
             .join(name);
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("read {}: {error}; {REGENERATE}", path.display()));
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}; {REGENERATE}", path.display()))
+    }
+
+    fn read_fixture(name: &str) -> serde_json::Value {
+        let text = read_fixture_text(name);
         serde_json::from_str(&text)
-            .unwrap_or_else(|error| panic!("parse {}: {error}; {REGENERATE}", path.display()))
+            .unwrap_or_else(|error| panic!("parse {name}: {error}; {REGENERATE}"))
     }
 
     /// Always on: the committed replies must be exactly what the engine answers for the committed
     /// input. A hand edit of the replies, or an engine change that alters them, fails here.
     ///
-    /// Only `about` and `provenance` are not compared: they describe the capture (commit, dirty
-    /// flag, source hashes) and legitimately differ between checkouts.
+    /// Also pins `provenance.inputSha256` (the link the screenshot spec uses between the dataset
+    /// and the replies) to the SHA-256 of the committed input file's bytes.
+    ///
+    /// Not compared: `about`, and within `provenance` the capture-time fields `engineCommit` and
+    /// `engineTreeDirty`, which differ per checkout. The rest of `provenance` is checked here
+    /// (`inputSha256`) or by `capture-event-log-replies.mjs --check` (`engineSourceSha256`).
     #[test]
     fn committed_engine_replies_match_the_engine() {
-        let input = read_fixture("event-log-engine-input.json");
+        let input_text = read_fixture_text("event-log-engine-input.json");
+        let input: serde_json::Value = serde_json::from_str(&input_text)
+            .unwrap_or_else(|error| panic!("parse event-log-engine-input.json: {error}"));
         let mut committed = read_fixture("event-log-engine-replies.json");
         let committed = committed.as_object_mut().expect("replies are an object");
         committed.remove("about");
-        committed.remove("provenance");
+        let provenance = committed
+            .remove("provenance")
+            .expect("replies have provenance");
+        let input_sha256: String = sha2::Sha256::digest(input_text.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            provenance["inputSha256"].as_str(),
+            Some(input_sha256.as_str()),
+            "e2e/fixtures/event-log-engine-replies.json provenance.inputSha256 is not the SHA-256 of \
+             e2e/fixtures/event-log-engine-input.json; {REGENERATE} (do not hand-edit the replies)"
+        );
 
         let actual = engine_replies_for_input(&input);
         let actual = actual.as_object().expect("engine replies are an object");
