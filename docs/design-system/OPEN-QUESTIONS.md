@@ -84,14 +84,14 @@ with appropriate contrast for that theme's background.
 ```
 
 These colors do not exist in the token system. They are Tailwind palette values
-used directly in component code. They need to work across all 7 themes with
+used directly in component code. They need to work across all 8 themes with
 sufficient contrast against each theme's background.
 
 ### Trade-offs
 
 | Option | Pro | Con |
 |--------|-----|-----|
-| **A. Semantic tokens per theme** | Each theme gets hand-tuned tab colors with guaranteed contrast | 8 tokens x 7 themes = 56 values to maintain |
+| **A. Semantic tokens per theme** | Each theme gets hand-tuned tab colors with guaranteed contrast | 8 tokens x 8 themes = 64 values to maintain |
 | **B. Fixed palette + contrast tests** | Single palette, automated verification, less maintenance | Some themes may need compromises; palette may not feel "native" to themed UIs |
 | **C. Hybrid: fixed palette with per-theme overrides** | Default palette works everywhere, themes can opt in to customization | More complex token resolution logic |
 
@@ -115,7 +115,7 @@ hardcoded `#9333ea33` / `#9333ea`.
 ### Context
 
 `LogRow.tsx` uses `#9333ea33` (semi-transparent purple, ~20% opacity) for whatif
-overlays. This overlay must be visible across all 7 themes, which range from
+overlays. This overlay must be visible across all 8 themes, which range from
 pure white (`#ffffff`) to pure black (`#000000`) backgrounds.
 
 A single semi-transparent color will have very different visual weight on light
@@ -127,7 +127,7 @@ vs. dark backgrounds.
 |--------|-----|-----|
 | **A. Semantic token per theme** | Tuned visibility on every background | 8 values to maintain; overlay is a niche feature |
 | **B. Fixed semi-transparent value** | Simple, one value | May be invisible on some dark themes or too strong on light themes |
-| **C. Two values (light/dark)** | Reasonable middle ground using `color-scheme` | Does not cover all 7 themes individually (e.g. solarized-dark vs. nord have different backgrounds) |
+| **C. Two values (light/dark)** | Reasonable middle ground using `color-scheme` | Does not cover all 8 themes individually (e.g. solarized-dark vs. nord have different backgrounds) |
 
 ---
 
@@ -174,7 +174,7 @@ These overlap with but are not identical to the existing severity palette:
 |--------|-----|-----|
 | **A. Map to existing `--cmt-status-*-fg` tokens** | No new tokens, consistent with system | Colors may be too dark for indicator dots/badges |
 | **B. Map to existing `--cmt-status-*-border` tokens** | Slightly lighter, still in system | Border tokens were not designed for this purpose |
-| **C. New `colorCollection*` tokens** | Purpose-built, correct brightness | Adds 3 tokens x 7 themes; risks palette sprawl |
+| **C. New `colorCollection*` tokens** | Purpose-built, correct brightness | Adds 3 tokens x 8 themes; risks palette sprawl |
 | **D. Add `--cmt-status-*-indicator` tokens** | Reusable beyond collection dialog | Still adds tokens, but with broader applicability |
 
 ---

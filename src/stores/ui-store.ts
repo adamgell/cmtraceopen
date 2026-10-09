@@ -7,7 +7,7 @@ import {
   DEFAULT_LOG_LIST_FONT_SIZE,
 } from "../lib/log-accessibility";
 import type { ThemeId } from "../lib/themes/types";
-import { DEFAULT_THEME_ID } from "../lib/themes";
+import { DEFAULT_THEME_ID, getAllThemes } from "../lib/themes";
 import { useLogStore } from "./log-store";
 import { clearAllTabSnapshots, clearCachedTabSnapshot } from "../lib/tab-snapshot-cache";
 import { useFilterStore } from "./filter-store";
@@ -394,12 +394,9 @@ const sanitizePersistedUiState = (
   }
 
   if (sanitized.themeId !== undefined) {
-    const validThemeIds: ThemeId[] = [
-      "light", "dark", "high-contrast", "classic-cmtrace",
-      "solarized-dark", "nord", "dracula",
-    ];
+    const validThemeIds: string[] = getAllThemes().map((theme) => theme.id);
 
-    if (!validThemeIds.includes(sanitized.themeId as ThemeId)) {
+    if (!validThemeIds.includes(sanitized.themeId as string)) {
       sanitized.themeId = DEFAULT_THEME_ID;
     }
   }

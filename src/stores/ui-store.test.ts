@@ -164,6 +164,20 @@ describe("ui-store", () => {
       expect(useUiStore.getState().themeId).toBe(DEFAULT_THEME_ID);
     });
 
+    it("keeps every registered theme id on rehydrate", async () => {
+      for (const theme of getAllThemes()) {
+        useUiStore.setState({ themeId: DEFAULT_THEME_ID });
+        localStorage.setItem(
+          "cmtraceopen-ui-preferences",
+          JSON.stringify({ state: { themeId: theme.id } }),
+        );
+
+        await useUiStore.persist.rehydrate();
+
+        expect(useUiStore.getState().themeId).toBe(theme.id);
+      }
+    });
+
     it("does not offer the removed hotdog-stand theme", () => {
       const ids: string[] = getAllThemes().map((t) => t.id);
       expect(ids).not.toContain("hotdog-stand");
