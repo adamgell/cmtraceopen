@@ -396,7 +396,7 @@ const sanitizePersistedUiState = (
   if (sanitized.themeId !== undefined) {
     const validThemeIds: ThemeId[] = [
       "light", "dark", "high-contrast", "classic-cmtrace",
-      "solarized-dark", "nord", "dracula", "hotdog-stand",
+      "solarized-dark", "nord", "dracula",
     ];
 
     if (!validThemeIds.includes(sanitized.themeId as ThemeId)) {

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { useUiStore, getAvailableWorkspaces, isIntuneWorkspace } from "./ui-store";
+import { DEFAULT_THEME_ID, getAllThemes } from "../lib/themes";
 
 describe("ui-store", () => {
   beforeEach(() => {
@@ -149,6 +150,23 @@ describe("ui-store", () => {
 
       useUiStore.getState().setThemeId("solarized-dark");
       expect(useUiStore.getState().themeId).toBe("solarized-dark");
+    });
+
+    it("sanitizes a persisted removed theme id to the default theme", async () => {
+      useUiStore.setState({ themeId: "dark" });
+      localStorage.setItem(
+        "cmtraceopen-ui-preferences",
+        JSON.stringify({ state: { themeId: "hotdog-stand" } }),
+      );
+
+      await useUiStore.persist.rehydrate();
+
+      expect(useUiStore.getState().themeId).toBe(DEFAULT_THEME_ID);
+    });
+
+    it("does not offer the removed hotdog-stand theme", () => {
+      const ids: string[] = getAllThemes().map((t) => t.id);
+      expect(ids).not.toContain("hotdog-stand");
     });
   });
 
