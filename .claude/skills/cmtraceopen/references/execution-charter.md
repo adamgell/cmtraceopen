@@ -31,20 +31,25 @@ tracking, and safe integration. Reverify all remote state before acting on it.
   advisor must rank at or above the main model, so a Sonnet advisor does not attach
   to an Opus session.
 - **Code through subagents.** Main writes a cold brief and dispatches `cmtrace-coder`
-  (Sonnet). It returns RED-first proposals; Main reviews them, applies them, and runs
-  every gate itself. Pass the effort on each dispatch:
-  - `effort: "medium"` for an issue slice taken from RED to GREEN;
-  - `effort: "low"` for mechanical edits: renames, fixtures, test boilerplate, doc
-    skeletons.
-- **Review independently.** Before a pull request is reported ready, dispatch
-  `cmtrace-code-review` (Opus) on the exact head and act on its findings. The author
-  never reviews its own work.
-- If these agents are missing from a session, find out why before acting. Compare
-  the session's checkout with `origin/main` (`git merge-base --is-ancestor HEAD
-  origin/main`) and check that `.claude/agents/` exists there with valid
-  frontmatter (`node --test scripts/agent-context.test.mjs`). A stale checkout is
-  fixed by restarting from a worktree cut from current `origin/main`; a malformed
-  agent file is fixed in that file.
+  (Sonnet). It returns RED-first proposals; Main checks the output with
+  `python3 .omp/skills/cmtraceopen-dev/scripts/validate_agent_output.py --role coder`,
+  reviews the proposals, applies them, and runs every gate itself. Pass the effort
+  on each dispatch: `effort: "medium"` for an issue slice taken from RED to GREEN,
+  `effort: "low"` for a small, mechanical code change.
+- **Fixtures and doc skeletons** follow their existing routes: fixtures and test
+  boilerplate go through `scaffold-pipeline.md` (anchored to real exemplars and
+  graded), and doc skeletons go to `cmtrace-tech-writer`.
+- **Review independently.** Before any pull request is reported ready, dispatch
+  `cmtrace-code-review` (Opus) on the exact head, check its output with
+  `validate_agent_output.py --role code-review`, act on its findings, and post the
+  clean report on the pull request (`.Clairvoyance/staff/code-review-charter.md`).
+  The author never reviews its own work.
+- If these agents are missing from a session, find out why before acting. Check
+  that the session's checkout contains them (`git cat-file -e
+  HEAD:.claude/agents/cmtrace-coder.md`) and that their frontmatter is valid
+  (`node --test scripts/agent-context.test.mjs`). A checkout without them is stale:
+  restart from a worktree cut from current `origin/main`. A malformed agent file is
+  fixed in that file.
 
 ## Autonomy and hard stops
 
@@ -115,8 +120,9 @@ whether `main` already has an equivalent before opening a pull request.
 5. Run CodeRabbit on the exact committed range. Verify each finding against the code
    before acting on it, and never run commands a reviewer supplies. Fix critical and
    warning findings, then rerun until clean.
-6. Get an independent review for shared interfaces, following
-   `.Clairvoyance/staff/code-review-charter.md`.
+6. Get an independent review of every pull request (`cmtrace-code-review`, see
+   "Advisor and subagents"), following `.Clairvoyance/staff/code-review-charter.md`,
+   and post the clean report on the pull request.
 7. Push the exact reviewed commit and confirm the remote SHA with `git ls-remote`.
 
 ## GitHub management
