@@ -948,6 +948,30 @@ describe("D19 titles", () => {
     expect(model.chains[0]?.title).toBe("7 · boom");
   });
 
+  it("a contradictoryEvidence finding covering the chain vetoes every conclusion title", () => {
+    const model = build({
+      items: [eventItem("a", 1000, "error", "boom", 7), eventItem("b", 2000)],
+      timelineEdges: [tEdge("e1", "a", "b", "exact")],
+      findings: [
+        { findingId: "f1", title: "Enrollment failed", originIds: ["a", "b"], findingClass: "confirmedFailure" },
+        { findingId: "f2", title: "Enrollment status is contradictory", originIds: ["a", "b"], findingClass: "contradictoryEvidence" },
+      ],
+    });
+    expect(model.chains[0]?.title).toBe("7 · boom");
+  });
+
+  it("a contradictoryEvidence finding covering only part of the chain does not veto (decision B)", () => {
+    const model = build({
+      items: [eventItem("a", 1000, "error", "boom", 7), eventItem("b", 2000)],
+      timelineEdges: [tEdge("e1", "a", "b", "exact")],
+      findings: [
+        { findingId: "f1", title: "Enrollment failed", originIds: ["a", "b"], findingClass: "confirmedFailure" },
+        { findingId: "f2", title: "Partly contradictory", originIds: ["a"], findingClass: "contradictoryEvidence" },
+      ],
+    });
+    expect(model.chains[0]?.title).toBe("Enrollment failed");
+  });
+
   it("does not title a chain with a non-conclusion finding class", () => {
     const items = [eventItem("a", 1000, "error", "boom", 7), eventItem("b", 2000)];
     const timelineEdges = [tEdge("e1", "a", "b", "exact")];

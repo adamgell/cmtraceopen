@@ -404,6 +404,7 @@ const TITLE_CONCLUSION_CLASSES: ReadonlySet<string> = new Set<DiagnosisFindingCl
  *
  * Only the allow-listed conclusion classes may title a chain: never `coverageGap`,
  * `contradictoryEvidence`, `unknown`, an unset class or a class this build does not know.
+ * A `contradictoryEvidence` finding that covers the whole chain vetoes every title.
  * Callers pass `originIds: []` today, so this never fires in the app. When the owner restores
  * the finding join (decision B on #838), keep this restriction: a finding that says "we
  * could not see" or "the evidence conflicts" must not be shown as the name of a correlated chain.
@@ -414,12 +415,28 @@ function coveringFindingTitle(
 ): string | null {
   const classRank = (finding: ChainFindingCoverage) =>
     finding.findingClass === "confirmedFailure" ? 0 : 1;
+  const coversChain = (finding: ChainFindingCoverage) => {
+    const covered = new Set(finding.originIds);
+    return allMemberIds.every((id) => covered.has(id));
+  };
+  // A covering conflict means no terminal conclusion is asserted (the backend overview ranks
+  // contradictoryEvidence before confirmedFailure), so no conclusion may name the chain. A
+  // conflict that covers only part of the chain does not veto yet: that is left to owner
+  // decision B on #838, together with the rest of the finding join.
+  if (
+    findings.some(
+      (finding) =>
+        finding.findingClass === "contradictoryEvidence" && coversChain(finding),
+    )
+  ) {
+    return null;
+  }
   const covering = findings
-    .filter((finding) => {
-      if (!TITLE_CONCLUSION_CLASSES.has(finding.findingClass)) return false;
-      const covered = new Set(finding.originIds);
-      return allMemberIds.every((id) => covered.has(id));
-    })
+    .filter(
+      (finding) =>
+        TITLE_CONCLUSION_CLASSES.has(finding.findingClass) &&
+        coversChain(finding),
+    )
     .sort(
       (a, b) =>
         classRank(a) - classRank(b) || compareStrings(a.findingId, b.findingId),
