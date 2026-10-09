@@ -35,6 +35,17 @@ const HOTDOG_REMOVED_IN_878: readonly string[] = ["hotdog-stand"];
  * 2026-10-08; red-pair floor, 2026-10-09 (owner decisions).
  */
 const RED_FAMILY_PAIR_DE00 = 15;
+const NEUTRAL_LEVELS: readonly EvtxLevel[] = ["Information", "Verbose"];
+/**
+ * Owner ruling (Adam, 2026-10-09: distinct, lighter Verbose): the Verbose mark
+ * stays at least this far from the Information mark. It applies to the two
+ * marks only, not to text pairs or mark-vs-text pairs: the level-mix bar and
+ * its legend separate the levels by marks, and on light themes Verbose text
+ * is capped near 7 dE00 from Information text by the 4.5:1 floor.
+ */
+const NEUTRAL_PAIR_DE00 = 10;
+const isNeutralMarkPair = (a: EvtxLevel, b: EvtxLevel) =>
+  a !== b && NEUTRAL_LEVELS.includes(a) && NEUTRAL_LEVELS.includes(b);
 const RED_FAMILY_LEVELS: readonly EvtxLevel[] = ["Critical", "Error"];
 const isRedFamilyPair = (a?: EvtxLevel, b?: EvtxLevel) =>
   a !== undefined &&
@@ -200,7 +211,7 @@ const LIGHT_ERROR_TEXT_HUE_BANDS: HueBands = [
 const LIGHT_FAMILY_THEME_IDS: readonly string[] = ["light", "classic-cmtrace"];
 
 type SurfaceKey =
-  "surface" | "rail" | "group" | "pressed" | "selected" | "ownRow";
+  "surface" | "rail" | "group" | "pressed" | "selected" | "ownRow" | "livePill";
 
 const SURFACE_TOKEN_LABEL: Record<SurfaceKey, string> = {
   surface: "colorNeutralBackground1",
@@ -214,6 +225,7 @@ const SURFACE_TOKEN_LABEL: Record<SurfaceKey, string> = {
   pressed: "colorNeutralBackground1Selected",
   selected: "selection background (colorPaletteBlueBackground2)",
   ownRow: "the level's own row background",
+  livePill: "the live source pill background (colorPaletteGreenBackground1)",
 };
 
 interface Placement {
@@ -406,6 +418,18 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
         section: "8.10 top event IDs and crashes per day bars",
       },
     ],
+  },
+  {
+    role: "live source text",
+    minimum: 4.5,
+    colors: (v) => ({ liveSourceText: v.liveSource.foreground }),
+    placements: [{ surface: "livePill", section: "8.1 live source pill label" }],
+  },
+  {
+    role: "live source dot",
+    minimum: 3,
+    colors: (v) => ({ liveSourceDot: v.liveSource.foreground }),
+    placements: [{ surface: "livePill", section: "8.1 live source pill dot" }],
   },
   {
     role: "finding callout border",
@@ -665,7 +689,6 @@ const THEME_OWNED_FAMILIES: readonly Family[] = [
   "brand",
   "single series",
 ];
-const NEUTRAL_LEVELS: readonly EvtxLevel[] = ["Information", "Verbose"];
 /** Intended overlaps between different families, each with its reason. */
 const FAMILY_EXCEPTIONS: readonly {
   reason: string;
@@ -678,7 +701,7 @@ const FAMILY_EXCEPTIONS: readonly {
   },
   {
     reason:
-      "Information and Verbose are neutrals and may look alike (marks and texts)",
+      "Information vs Verbose across families (mark vs text) is governed by NEUTRAL_PAIR_DE00 on the marks and the de-emphasis direction of the texts, not by a cross-family floor (Adam, 2026-10-09)",
     applies: (a, b) =>
       a.level !== undefined &&
       b.level !== undefined &&
@@ -747,15 +770,26 @@ describe("evtx visual tokens", () => {
         expect(failures, failures.join("; ")).toEqual([]);
       });
 
-      it("keeps Critical text and Error text at least the red-family floor apart", () => {
+      it("keeps severity level text apart pair by pair", () => {
         const visual = buildEvtxVisualTokens(theme);
-        const a = resolveToken(visual.levels.Critical.textColor, theme);
-        const b = resolveToken(visual.levels.Error.textColor, theme);
-        const d = deltaE00(a, b);
-        expect(
-          d,
-          `${id}: Critical text ${a} vs Error text ${b} dE00 = ${d.toFixed(1)}`,
-        ).toBeGreaterThanOrEqual(RED_FAMILY_PAIR_DE00);
+        const severities = ["Critical", "Error", "Warning"] as const;
+        const failures: string[] = [];
+        for (let i = 0; i < severities.length; i++) {
+          for (let j = i + 1; j < severities.length; j++) {
+            const a = severities[i];
+            const b = severities[j];
+            const colorA = resolveToken(visual.levels[a].textColor, theme);
+            const colorB = resolveToken(visual.levels[b].textColor, theme);
+            const floor = isRedFamilyPair(a, b) ? RED_FAMILY_PAIR_DE00 : 20;
+            const d = deltaE00(colorA, colorB);
+            if (d < floor) {
+              failures.push(
+                `${id}: ${a} text ${colorA} vs ${b} text ${colorB} dE00 = ${d.toFixed(1)} (< ${floor})`,
+              );
+            }
+          }
+        }
+        expect(failures, failures.join("; ")).toEqual([]);
       });
     },
   );
@@ -850,14 +884,19 @@ describe("evtx visual tokens", () => {
         for (let j = i + 1; j < LEVELS.length; j++) {
           const a = LEVELS[i];
           const b = LEVELS[j];
-          // Information and Verbose may look alike; both are neutrals.
-          if (a === "Information" && b === "Verbose") continue;
+          // hotdog-stand keeps its identical cyan neutrals (exempt, #878).
+          if (isNeutralMarkPair(a, b) && HOTDOG_REMOVED_IN_878.includes(id))
+            continue;
           const d = deltaE00(mark(a), mark(b));
           expect(
             d,
             `${id}: ${a} ${mark(a)} vs ${b} ${mark(b)} dE00 = ${d.toFixed(1)}`,
           ).toBeGreaterThanOrEqual(
-            isRedFamilyPair(a, b) ? RED_FAMILY_PAIR_DE00 : 20,
+            isNeutralMarkPair(a, b)
+              ? NEUTRAL_PAIR_DE00
+              : isRedFamilyPair(a, b)
+                ? RED_FAMILY_PAIR_DE00
+                : 20,
           );
         }
       }
@@ -1021,6 +1060,18 @@ describe("evtx visual tokens", () => {
         },
       );
 
+      it("keeps Verbose text de-emphasized relative to Information text", () => {
+        const info = resolved(visual.levels.Information.textColor);
+        const verbose = resolved(visual.levels.Verbose.textColor);
+        const [infoL] = hexToLab(info);
+        const [verboseL] = hexToLab(verbose);
+        const lightSurface = LIGHT_FAMILY_THEME_IDS.includes(id);
+        expect(
+          lightSurface ? verboseL > infoL : verboseL < infoL,
+          `${id}: Verbose text ${verbose} L* ${verboseL.toFixed(1)} vs Information text ${info} L* ${infoL.toFixed(1)} dE00 ${deltaE00(info, verbose).toFixed(1)} (need ${lightSurface ? "lighter" : "dimmer"})`,
+        ).toBe(true);
+      });
+
       it.each(["Information", "Verbose"] as const)(
         "keeps %s mark and text neutral gray (C* <= 12)",
         (level) => {
@@ -1055,6 +1106,8 @@ describe("evtx visual tokens", () => {
             return resolveToken(tokens.colorNeutralBackground1Selected, theme);
           case "selected":
             return resolveToken(visual.selection.background, theme);
+          case "livePill":
+            return resolveToken(visual.liveSource.background, theme);
           case "ownRow":
             return resolveToken(
               visual.levels[name as EvtxLevel].rowBackground,

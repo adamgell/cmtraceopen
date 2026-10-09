@@ -134,6 +134,14 @@ export interface EvtxVisualTokens {
   heatSteps: readonly string[];
   /** Bars of single-series charts (top IDs, crashes per day). */
   singleSeries: string;
+  /**
+   * The 8.1 live source pill (v1, not a v2 scenario state). `foreground`
+   * colors the label and the 7px dot. `border` is decorative: the label
+   * identifies the pill, so it carries no contrast floor (spec 8.1 names
+   * colorPaletteGreenBackground3, which measures 2.33 to 2.80:1 on the dark
+   * surfaces).
+   */
+  liveSource: EvtxColorTriplet;
 }
 
 const FINDING_SEVERITY_LEVEL: Record<DiagnosisFindingSeverity, EvtxLevel> = {
@@ -332,6 +340,11 @@ export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
         `color-mix(in srgb, ${palette.mergeColors[0]} ${percent}%, ${tokens.colorNeutralBackground1})`,
     ),
     singleSeries: palette.mergeColors[0],
+    liveSource: {
+      background: tokens.colorPaletteGreenBackground1,
+      border: tokens.colorPaletteGreenBackground3,
+      foreground: palette.status.success.foreground,
+    },
   };
 }
 
