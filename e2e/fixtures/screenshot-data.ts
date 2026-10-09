@@ -36,7 +36,7 @@ export const DEMO_LOG_ABS_PATH = path.resolve(
 
 /**
  * Synthetic path the UI DISPLAYS for the demo log. Screenshot captures mock
- * \`open_log_file\`, so this path is never opened and screenshots never show the
+ * `open_log_file`, so this path is never opened and screenshots never show the
  * host's real checkout path. Real file reads must use DEMO_LOG_ABS_PATH.
  */
 export const DEMO_LOG_DISPLAY_PATH =
