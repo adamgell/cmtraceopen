@@ -241,6 +241,24 @@ jobs:
           # derives it from the release's own signature assets.
           uploadUpdaterJson: false
 
+      - name: Verify macOS release trust and payload identity
+        if: runner.os == 'macOS'
+        timeout-minutes: 15
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          python3 scripts/verify-macos-release.py \
+            --bundle "src-tauri/target/${{ matrix.target }}/release/bundle" \
+            --receipts release-verification/macos --version "$VERSION"
+
+      - name: Retain macOS trust verification receipts
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-release-trust-${{ steps.resolve.outputs.tag_name }}
+          path: release-verification/macos
+          if-no-files-found: error
+
       - name: Upload AppImage inspection evidence
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
