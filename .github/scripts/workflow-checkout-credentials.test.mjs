@@ -13,16 +13,7 @@ const actionsUrl = new URL("../actions/", import.meta.url);
 // starting at 1>`. The list is EXACT: the test fails when an entry names a
 // checkout that does not exist and when a listed checkout is already hardened
 // (remove the entry then). Any checkout that is not listed must be hardened.
-//
-// Merge order with PR #900: #900 hardens the msrv checkout, #913 lists it.
-// Merge #900 first; then update #913 from main (a merge commit, no force push)
-// and remove the `cmtrace-ci.yml:msrv:1` entry before #913 merges. CI does not
-// re-run when main moves and the ruleset does not require up-to-date branches,
-// so merging in the wrong order would turn main red. If #913 were merged first,
-// #900 would have to be updated from main and drop the entry before merging.
 const PENDING_AUDIT = new Set([
-  // tracked in #906: fixed by PR #900 (see the merge-order note above)
-  "cmtrace-ci.yml:msrv:1",
   // tracked in #906 (runs git tag and git push, so it needs the credential)
   "cmtrace-nightly-signed.yml:publish-nightly-release:1",
   // tracked in #906
