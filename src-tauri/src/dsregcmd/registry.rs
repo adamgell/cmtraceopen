@@ -76,14 +76,17 @@ pub fn load_whfb_policy_evidence(bundle_path: &Path) -> DsregcmdWhfbPolicyEviden
     let hklm_microsoft_policies_path =
         registry_file_path(bundle_path, HKLM_MICROSOFT_POLICIES_FILE);
 
-    let current_registry = load_registry_map(&current_path, &mut evidence.artifact_paths);
-    let provider_registry = load_registry_map(&provider_path, &mut evidence.artifact_paths);
-    let hkcu_policy_registry = load_registry_map(&hkcu_policies_path, &mut evidence.artifact_paths);
-    let hklm_policy_registry = load_registry_map(&hklm_policies_path, &mut evidence.artifact_paths);
+    let current_registry = load_registry_map_or_empty(&current_path, &mut evidence.artifact_paths);
+    let provider_registry =
+        load_registry_map_or_empty(&provider_path, &mut evidence.artifact_paths);
+    let hkcu_policy_registry =
+        load_registry_map_or_empty(&hkcu_policies_path, &mut evidence.artifact_paths);
+    let hklm_policy_registry =
+        load_registry_map_or_empty(&hklm_policies_path, &mut evidence.artifact_paths);
     let hkcu_microsoft_policy_registry =
-        load_registry_map(&hkcu_microsoft_policies_path, &mut evidence.artifact_paths);
+        load_registry_map_or_empty(&hkcu_microsoft_policies_path, &mut evidence.artifact_paths);
     let hklm_microsoft_policy_registry =
-        load_registry_map(&hklm_microsoft_policies_path, &mut evidence.artifact_paths);
+        load_registry_map_or_empty(&hklm_microsoft_policies_path, &mut evidence.artifact_paths);
 
     evidence.policy_enabled = build_policy_value(
         current_policy_value(&current_registry, "UsePassportForWork"),
@@ -183,11 +186,7 @@ pub fn load_whfb_policy_evidence(bundle_path: &Path) -> DsregcmdWhfbPolicyEviden
 
 pub fn load_os_version_evidence(bundle_path: &Path) -> Option<DsregcmdOsVersionEvidence> {
     let path = registry_file_path(bundle_path, OS_VERSION_FILE);
-    let mut artifact_paths = Vec::new();
-    let registry = load_registry_map(&path, &mut artifact_paths);
-    if artifact_paths.is_empty() {
-        return None;
-    }
+    let registry = load_registry_map(&path)?;
 
     let mut evidence = DsregcmdOsVersionEvidence::default();
     for (key_path, values) in &registry {
@@ -210,12 +209,7 @@ pub fn load_os_version_evidence(bundle_path: &Path) -> Option<DsregcmdOsVersionE
 pub fn load_proxy_evidence(bundle_path: &Path) -> Option<DsregcmdProxyEvidence> {
     let ie_path = registry_file_path(bundle_path, PROXY_INTERNET_SETTINGS_FILE);
 
-    let mut artifact_paths = Vec::new();
-    let ie_registry = load_registry_map(&ie_path, &mut artifact_paths);
-
-    if artifact_paths.is_empty() {
-        return None;
-    }
+    let ie_registry = load_registry_map(&ie_path)?;
 
     let mut evidence = DsregcmdProxyEvidence::default();
 
@@ -240,11 +234,7 @@ pub fn load_proxy_evidence(bundle_path: &Path) -> Option<DsregcmdProxyEvidence> 
 
 pub fn load_enrollment_evidence(bundle_path: &Path) -> Option<DsregcmdEnrollmentEvidence> {
     let path = registry_file_path(bundle_path, ENROLLMENTS_FILE);
-    let mut artifact_paths = Vec::new();
-    let registry = load_registry_map(&path, &mut artifact_paths);
-    if artifact_paths.is_empty() {
-        return None;
-    }
+    let registry = load_registry_map(&path)?;
 
     let mut enrollments = Vec::new();
 
@@ -344,22 +334,46 @@ fn registry_file_path(bundle_path: &Path, file_name: &str) -> PathBuf {
         .join(file_name)
 }
 
-fn load_registry_map(path: &Path, artifact_paths: &mut Vec<String>) -> RegistryKeyMap {
+/// Read and parse one `.reg` export.
+///
+/// `None` means the artifact was not collected: the file is absent, cannot be
+/// read, or its decoded content holds no `[...]` key header at all (empty or
+/// not a registry export). A coverage gap is not evidence of an empty registry
+/// (#883), so callers must not turn `None` into a zero count. `Some` means the
+/// content was a registry export; the map may still be empty when the exported
+/// keys carry no named values, which keeps "exported, nothing relevant inside"
+/// distinct from "not collected".
+fn load_registry_map(path: &Path) -> Option<RegistryKeyMap> {
     if !path.is_file() {
-        return HashMap::new();
+        return None;
     }
 
-    artifact_paths.push(path.to_string_lossy().to_string());
-
-    match fs::read_to_string(path) {
-        Ok(content) => parse_reg_snapshot(&content),
-        Err(_) => match fs::read(path)
+    let content = fs::read_to_string(path).ok().or_else(|| {
+        fs::read(path)
             .ok()
             .and_then(|bytes| decode_reg_content(&bytes))
-        {
-            Some(content) => parse_reg_snapshot(&content),
-            None => HashMap::new(),
-        },
+    })?;
+
+    has_key_header(&content).then(|| parse_reg_snapshot(&content))
+}
+
+fn has_key_header(content: &str) -> bool {
+    content.lines().any(|line| {
+        let line = line.trim();
+        line.starts_with('[') && line.ends_with(']')
+    })
+}
+
+/// Like [`load_registry_map`] for the WHFB policy lookups, which merge several
+/// optional exports. The artifact path is recorded only for a collected export,
+/// so `artifact_paths` means "collected", never "attempted".
+fn load_registry_map_or_empty(path: &Path, artifact_paths: &mut Vec<String>) -> RegistryKeyMap {
+    match load_registry_map(path) {
+        Some(registry) => {
+            artifact_paths.push(path.to_string_lossy().to_string());
+            registry
+        }
+        None => HashMap::new(),
     }
 }
 
@@ -662,6 +676,91 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{extract_dword_value, RegistryValue};
+
+    fn bundle_with_enrollments_export(bytes: &[u8]) -> tempfile::TempDir {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let registry_dir = temp_dir.path().join("evidence").join("registry");
+        std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+        std::fs::write(registry_dir.join("enrollments.reg"), bytes).expect("write export");
+        temp_dir
+    }
+
+    /// #883: a present export that yields no registry keys was not read, so it
+    /// is a coverage gap (`None`), never "zero enrollments".
+    #[test]
+    fn an_empty_enrollments_export_is_not_collected() {
+        let bundle = bundle_with_enrollments_export(b"");
+        assert_eq!(load_enrollment_evidence(bundle.path()), None);
+    }
+
+    #[test]
+    fn an_undecodable_enrollments_export_is_not_collected() {
+        let bundle = bundle_with_enrollments_export(&[0xFF, 0xFE, 0x00, 0xD8, 0x01, 0x00, 0xFF]);
+        assert_eq!(load_enrollment_evidence(bundle.path()), None);
+
+        let bundle = bundle_with_enrollments_export(&[0x80, 0x81, 0x9D, 0xFF, 0x00, 0xC3]);
+        assert_eq!(load_enrollment_evidence(bundle.path()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_enrollments_export_is_not_collected() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let bundle = bundle_with_enrollments_export(
+            b"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n",
+        );
+        let file = bundle
+            .path()
+            .join("evidence")
+            .join("registry")
+            .join("enrollments.reg");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000))
+            .expect("remove permissions");
+        // A privileged runner can still read the file, which is not a gap.
+        if std::fs::read(&file).is_ok() {
+            return;
+        }
+        assert_eq!(load_enrollment_evidence(bundle.path()), None);
+    }
+
+    /// A registry export with no enrollment subkeys is real registry evidence,
+    /// whatever shape a key without enrollments takes.
+    #[test]
+    fn a_valid_enrollments_export_without_subkeys_is_zero_enrollments() {
+        let header_only = "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n";
+        let container_subkeys = format!(
+            "{header_only}\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\Context]\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\Status]\r\n"
+        );
+        let default_value_only = format!("{header_only}@=\"\"\r\n");
+
+        for export in [
+            header_only.to_string(),
+            container_subkeys,
+            default_value_only,
+        ] {
+            let bundle = bundle_with_enrollments_export(export.as_bytes());
+            let evidence = load_enrollment_evidence(bundle.path()).expect("export was collected");
+            assert_eq!(evidence.enrollment_count, 0);
+            assert!(evidence.enrollments.is_empty());
+        }
+    }
+
+    #[test]
+    fn unreadable_policy_exports_are_not_recorded_as_artifacts() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let registry_dir = temp_dir.path().join("evidence").join("registry");
+        std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+        std::fs::write(registry_dir.join("policymanager-device.reg"), b"").expect("write");
+        std::fs::write(registry_dir.join("os-version.reg"), b"").expect("write");
+        std::fs::write(registry_dir.join("proxy-internet-settings.reg"), b"").expect("write");
+
+        assert!(load_whfb_policy_evidence(temp_dir.path())
+            .artifact_paths
+            .is_empty());
+        assert_eq!(load_os_version_evidence(temp_dir.path()), None);
+        assert_eq!(load_proxy_evidence(temp_dir.path()), None);
+    }
 
     #[test]
     fn parses_registry_snapshot_values() {
