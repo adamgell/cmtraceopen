@@ -24,7 +24,7 @@ use crate::state::app_state::AppState;
 pub(crate) const MAX_EXPORT_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EXPORT_CHUNK_BASE64_CHARS: usize = MAX_EXPORT_CHUNK_BYTES.div_ceil(3) * 4;
 const MAX_EXPORT_CHUNK_RECORD_SEPARATORS: usize = 1_000;
-const MAX_EXPORT_SESSION_ID_CHARS: usize = 128;
+const MAX_EXPORT_SESSION_ID_BYTES: usize = 128;
 const MAX_EXPORT_SESSIONS: usize = 16;
 const MAX_CACHED_RECORD_SOURCE_LABELS: usize = 4_096;
 const EXPORT_SESSION_IDLE_TTL: Duration = Duration::from_secs(60 * 60);
@@ -408,7 +408,7 @@ impl<R: Read> Read for CancelReader<R> {
 
 fn validate_session_id(session_id: &str) -> Result<(), String> {
     if session_id.is_empty()
-        || session_id.len() > MAX_EXPORT_SESSION_ID_CHARS
+        || session_id.len() > MAX_EXPORT_SESSION_ID_BYTES
         || session_id.chars().any(char::is_control)
     {
         return Err("invalid event-log export session ID".to_string());

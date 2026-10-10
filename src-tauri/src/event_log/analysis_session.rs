@@ -37,7 +37,7 @@ const MAX_ANALYSIS_TIMELINE_PAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ANALYSIS_TIMELINE_PREVIEW_BYTES: usize = 512 * 1024;
 const MAX_ANALYSIS_TIMELINE_PREVIEW_ITEMS: usize = 100;
 const MAX_DIAGNOSIS_RESPONSE_ROWS: usize = 100;
-const MAX_ANALYSIS_SESSION_ID_CHARS: usize = 128;
+const MAX_ANALYSIS_SESSION_ID_BYTES: usize = 128;
 const DIAGNOSIS_RESPONSE_PROJECTION_SOURCE: &str = "diagnosis-response-projection";
 const MAX_DIAGNOSIS_RETAINED_EVENT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DIAGNOSIS_RETAINED_TEXT_FINDING_BYTES: usize = 4 * 1024 * 1024;
@@ -1392,7 +1392,7 @@ fn usize_to_u64(value: usize) -> u64 {
 
 fn validate_session_id(session_id: &str) -> Result<(), String> {
     if session_id.is_empty()
-        || session_id.len() > MAX_ANALYSIS_SESSION_ID_CHARS
+        || session_id.len() > MAX_ANALYSIS_SESSION_ID_BYTES
         || session_id.chars().any(char::is_control)
     {
         return Err("invalid event-log analysis session ID".to_string());
