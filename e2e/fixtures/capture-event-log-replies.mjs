@@ -22,12 +22,21 @@
  *
  * How it works
  * ------------
- * 1. Writes the fixture's records and gaps to e2e/fixtures/event-log-engine-input.json (committed).
+ * 1. Writes the fixture's records and gaps to `input.json` in a fresh `mkdtemp` directory under the
+ *    OS temp dir. Nothing under e2e/fixtures is touched yet.
  * 2. Runs the committed, ignored, env-gated test `event_log::analysis_session::screenshot_replies::
- *    capture_event_log_replies` (src-tauri/src/event_log/analysis_session.rs) with
- *    CMTRACE_EVENT_LOG_REPLIES_INPUT / _OUTPUT pointing at that file and a temp file. This script never edits a
- *    source file.
- * 3. Writes the engine output plus provenance (git commit, dirty flag) to the JSON fixture.
+ *    capture_event_log_replies` (src-tauri/src/event_log/analysis_session.rs) through `cargo test`,
+ *    with CMTRACE_EVENT_LOG_REPLIES_INPUT pointing at that temp `input.json` and
+ *    CMTRACE_EVENT_LOG_REPLIES_OUTPUT at `output.json` in the same temp directory. This script
+ *    never edits a source file.
+ * 3. Validates the engine output (it must exist, carry the expected sessionId and a diagnosis
+ *    overview) and adds provenance (git commit, dirty flag, input and engine-source hashes).
+ * 4. Only then publishes BOTH committed fixtures, event-log-engine-input.json and
+ *    event-log-engine-replies.json, together through `publishFixtures`: each new file is staged
+ *    next to its target, existing targets are backed up, and the staged files are renamed into
+ *    place (same directory, so each rename is atomic). If a rename fails, the files already
+ *    renamed are restored from their backups. A failed or interrupted capture therefore leaves the
+ *    committed input and replies as they were. The temp directory is always removed.
  *
  * Regenerate (from the repo root; needs a Rust toolchain and Node 22.18+ or 23.6+, where TypeScript
  * type stripping is on by default; Node 22.6 to 22.17 need `--experimental-strip-types`):
