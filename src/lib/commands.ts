@@ -1932,6 +1932,33 @@ export interface EventLogAnalysisTimelinePage extends Omit<
   coverageGapsPreview: TimelineCoverageGap[];
 }
 
+export interface EventLogAnalysisTimelineWindow {
+  sessionId: string;
+  revision: number;
+  startMs: number;
+  endMs: number;
+  /** Timeline offset of the first item at or after `startMs`. */
+  offset: number;
+  /** Timeline offset of the first in-window item that was left out, or null. */
+  nextOffset: number | null;
+  totalItems: number;
+  /** Every item inside the closed window, returned or not. */
+  windowItems: number;
+  omittedItems: number;
+  items: TimelineItem[];
+  serializedBytes: number;
+}
+
+export interface EventLogAnalysisEdgePage {
+  sessionId: string;
+  revision: number;
+  offset: number;
+  nextOffset: number | null;
+  totalEdges: number;
+  edges: TimelineCorrelationEdge[];
+  serializedBytes: number;
+}
+
 const EVENT_LOG_ANALYSIS_PAGE_BYTE_LIMIT = 8 * 1024 * 1024;
 
 function analysisCount(value: unknown, path: string): number {
@@ -2042,6 +2069,116 @@ function decodeEventLogAnalysisTimelinePage(
   };
 }
 
+function analysisInteger(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new Error(`Invalid event-log analysis response: ${path}`);
+  }
+  return value;
+}
+
+function analysisSessionId(value: unknown, path: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`Invalid event-log analysis response: ${path}`);
+  }
+  return value;
+}
+
+function decodeEventLogAnalysisTimelineWindow(
+  value: unknown,
+): EventLogAnalysisTimelineWindow {
+  const window = analysisRecord(value, "window");
+  const sessionId = analysisSessionId(window.sessionId, "window.sessionId");
+  if (!Array.isArray(window.items)) {
+    throw new Error("Invalid event-log analysis response: window.items");
+  }
+  const items = assertUnifiedTimelineShape({
+    items: window.items,
+    unplaced: [],
+    edges: [],
+    coverageGaps: [],
+  }).items;
+  const startMs = analysisInteger(window.startMs, "window.startMs");
+  const endMs = analysisInteger(window.endMs, "window.endMs");
+  const offset = analysisCount(window.offset, "window.offset");
+  const totalItems = analysisCount(window.totalItems, "window.totalItems");
+  const windowItems = analysisCount(window.windowItems, "window.windowItems");
+  const omittedItems = analysisCount(
+    window.omittedItems,
+    "window.omittedItems",
+  );
+  const nextOffset =
+    window.nextOffset === null
+      ? null
+      : analysisCount(window.nextOffset, "window.nextOffset");
+  const consumedOffset = offset + items.length;
+  if (
+    startMs > endMs ||
+    offset + windowItems > totalItems ||
+    items.length + omittedItems !== windowItems ||
+    items.some(
+      (item) => item.timestampMs < startMs || item.timestampMs > endMs,
+    ) ||
+    (omittedItems > 0 && nextOffset !== consumedOffset) ||
+    (omittedItems === 0 && nextOffset !== null) ||
+    (windowItems > 0 && items.length === 0)
+  ) {
+    throw new Error("Invalid event-log analysis response: window.nextOffset");
+  }
+  return {
+    sessionId,
+    revision: analysisCount(window.revision, "window.revision"),
+    startMs,
+    endMs,
+    offset,
+    nextOffset,
+    totalItems,
+    windowItems,
+    omittedItems,
+    items,
+    serializedBytes: analysisPageSerializedBytes(window.serializedBytes),
+  };
+}
+
+function decodeEventLogAnalysisEdgePage(
+  value: unknown,
+): EventLogAnalysisEdgePage {
+  const page = analysisRecord(value, "edgePage");
+  const sessionId = analysisSessionId(page.sessionId, "edgePage.sessionId");
+  if (!Array.isArray(page.edges)) {
+    throw new Error("Invalid event-log analysis response: edgePage.edges");
+  }
+  const edges = assertUnifiedTimelineShape({
+    items: [],
+    unplaced: [],
+    edges: page.edges,
+    coverageGaps: [],
+  }).edges;
+  const offset = analysisCount(page.offset, "edgePage.offset");
+  const totalEdges = analysisCount(page.totalEdges, "edgePage.totalEdges");
+  const nextOffset =
+    page.nextOffset === null
+      ? null
+      : analysisCount(page.nextOffset, "edgePage.nextOffset");
+  const consumedOffset = offset + edges.length;
+  if (
+    consumedOffset > totalEdges ||
+    (offset < totalEdges && edges.length === 0) ||
+    (consumedOffset < totalEdges && nextOffset !== consumedOffset) ||
+    (consumedOffset >= totalEdges && nextOffset !== null)
+  ) {
+    throw new Error("Invalid event-log analysis response: edgePage.nextOffset");
+  }
+  return {
+    sessionId,
+    revision: analysisCount(page.revision, "edgePage.revision"),
+    offset,
+    nextOffset,
+    totalEdges,
+    edges,
+    serializedBytes: analysisPageSerializedBytes(page.serializedBytes),
+  };
+}
+
 export async function createEventLogAnalysisSession(): Promise<EventLogAnalysisSessionStatus> {
   return invokeCommand("evtx_create_analysis_session");
 }
@@ -2070,6 +2207,38 @@ export async function queryEventLogAnalysisTimeline(
   limit: number,
 ): Promise<EventLogAnalysisTimelinePage> {
   return invokeCommand("evtx_query_analysis_timeline", {
+    sessionId,
+    offset,
+    limit,
+  });
+}
+
+/**
+ * Timeline items with `startMs <= timestampMs <= endMs`, in timeline order, byte-bounded like a
+ * page. `omittedItems` counts in-window items left out and `nextOffset` is the timeline offset of
+ * the first of them.
+ */
+export async function queryEventLogAnalysisTimelineWindow(
+  sessionId: string,
+  startMs: number,
+  endMs: number,
+  limit: number,
+): Promise<EventLogAnalysisTimelineWindow> {
+  return invokeCommand("evtx_query_analysis_timeline_window", {
+    sessionId,
+    startMs,
+    endMs,
+    limit,
+  });
+}
+
+/** Every correlation edge of a finalized session, `limit` edges at a time. */
+export async function queryEventLogAnalysisEdges(
+  sessionId: string,
+  offset: number,
+  limit: number,
+): Promise<EventLogAnalysisEdgePage> {
+  return invokeCommand("evtx_query_analysis_edges", {
     sessionId,
     offset,
     limit,
@@ -3079,6 +3248,8 @@ const COMMAND_DECODERS = {
   evtx_append_analysis_chunk: decodeEventLogAnalysisSessionStatus,
   evtx_finalize_analysis_session: decodeEventLogAnalysisSessionStatus,
   evtx_query_analysis_timeline: decodeEventLogAnalysisTimelinePage,
+  evtx_query_analysis_timeline_window: decodeEventLogAnalysisTimelineWindow,
+  evtx_query_analysis_edges: decodeEventLogAnalysisEdgePage,
   evtx_diagnose_analysis_session: decodeDiagnosisSummary,
   evtx_close_analysis_session: decodeUnitResponse,
   build_timeline_cmd: decodeTimelineBundle,

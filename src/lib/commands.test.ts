@@ -33,6 +33,8 @@ import {
   diagnoseEventLogAnalysisSession,
   EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT,
   queryEventLogAnalysisTimeline,
+  queryEventLogAnalysisTimelineWindow,
+  queryEventLogAnalysisEdges,
   finalizeEventLogExportSession,
 } from "./commands";
 import type {
@@ -2213,6 +2215,151 @@ describe("event-log analysis timeline IPC boundary", () => {
       );
     },
   );
+});
+
+describe("event-log analysis window and edge IPC boundary", () => {
+  const eventItem = (timestampMs: number, recordId: number) => ({
+    timestampMs,
+    severity: "info",
+    message: `Windowed row ${recordId}`,
+    origin: {
+      kind: "event",
+      stableId: `source|Application|record-${recordId}`,
+      source: "Application",
+      machine: null,
+      bundle: null,
+      channel: "Application",
+      provider: "Provider",
+      processId: null,
+      eventId: 1,
+      recordId,
+    },
+  });
+  const windowReply = {
+    sessionId: "analysis-session",
+    revision: 4,
+    startMs: 100,
+    endMs: 300,
+    offset: 10,
+    nextOffset: 12,
+    totalItems: 50,
+    windowItems: 5,
+    omittedItems: 3,
+    items: [eventItem(100, 11), eventItem(300, 12)],
+    serializedBytes: 2_048,
+  };
+  const edge = (id: string) => ({
+    id,
+    fromId: "source|Application|record-1",
+    toId: "source|Application|record-2",
+    key: { kind: "activityId", value: "{00000001-0000-0000-0000-000000000000}" },
+    strength: "exact",
+    confidence: "high",
+    candidateIds: [],
+    evidence: [],
+    coverage: { state: "covered" },
+  });
+  const edgeReply = {
+    sessionId: "analysis-session",
+    revision: 4,
+    offset: 2,
+    nextOffset: 4,
+    totalEdges: 6,
+    edges: [edge("edge-2"), edge("edge-3")],
+    serializedBytes: 1_024,
+  };
+
+  it("invokes the window command with camelCase arguments and accepts an inclusive-bound reply", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(windowReply);
+
+    await expect(
+      queryEventLogAnalysisTimelineWindow("analysis-session", 100, 300, 500),
+    ).resolves.toMatchObject({
+      offset: 10,
+      nextOffset: 12,
+      windowItems: 5,
+      omittedItems: 3,
+    });
+    expect(invoke).toHaveBeenCalledWith("evtx_query_analysis_timeline_window", {
+      sessionId: "analysis-session",
+      startMs: 100,
+      endMs: 300,
+      limit: 500,
+    });
+  });
+
+  it("accepts an empty window and a fully returned window", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      ...windowReply,
+      items: [],
+      windowItems: 0,
+      omittedItems: 0,
+      nextOffset: null,
+    });
+    await expect(
+      queryEventLogAnalysisTimelineWindow("analysis-session", 100, 300, 10),
+    ).resolves.toMatchObject({ items: [], nextOffset: null });
+
+    vi.mocked(invoke).mockResolvedValueOnce({
+      ...windowReply,
+      windowItems: 2,
+      omittedItems: 0,
+      nextOffset: null,
+    });
+    await expect(
+      queryEventLogAnalysisTimelineWindow("analysis-session", 100, 300, 10),
+    ).resolves.toMatchObject({ omittedItems: 0, nextOffset: null });
+  });
+
+  it.each([
+    ["an item outside the closed window", { items: [eventItem(301, 12)] }],
+    ["a left-out count that does not add up", { omittedItems: 2 }],
+    ["a continuation that skips rows", { nextOffset: 13 }],
+    ["a continuation with nothing left out", { omittedItems: 0, windowItems: 2 }],
+    ["an inverted window", { startMs: 400 }],
+    ["a window past the end of the timeline", { totalItems: 12 }],
+  ])("rejects a window reply with %s", async (_label, patch) => {
+    vi.mocked(invoke).mockResolvedValueOnce({ ...windowReply, ...patch });
+
+    await expect(
+      queryEventLogAnalysisTimelineWindow("analysis-session", 100, 300, 500),
+    ).rejects.toThrow("Invalid event-log analysis response: window.");
+  });
+
+  it("rejects a window reply with a zero authoritative byte count", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ ...windowReply, serializedBytes: 0 });
+
+    await expect(
+      queryEventLogAnalysisTimelineWindow("analysis-session", 100, 300, 500),
+    ).rejects.toThrow("serializedBytes");
+  });
+
+  it("invokes the edge command and accepts an exact next offset", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(edgeReply);
+
+    await expect(
+      queryEventLogAnalysisEdges("analysis-session", 2, 1_000),
+    ).resolves.toMatchObject({ offset: 2, nextOffset: 4, totalEdges: 6 });
+    expect(invoke).toHaveBeenCalledWith("evtx_query_analysis_edges", {
+      sessionId: "analysis-session",
+      offset: 2,
+      limit: 1_000,
+    });
+  });
+
+  it.each([
+    ["a next offset that skips an edge", { nextOffset: 5 }],
+    ["a missing next offset before the end", { nextOffset: null }],
+    ["a next offset at the end", { totalEdges: 4, nextOffset: 4 }],
+    ["an empty page before the end", { edges: [] }],
+    ["an edge page past the total", { totalEdges: 3 }],
+  ])("rejects an edge reply with %s", async (_label, patch) => {
+    vi.mocked(invoke).mockResolvedValueOnce({ ...edgeReply, ...patch });
+
+    await expect(
+      queryEventLogAnalysisEdges("analysis-session", 2, 1_000),
+    ).rejects.toThrow("Invalid event-log analysis response: edgePage.");
+  });
 });
 
 describe("firewall command tokens", () => {
