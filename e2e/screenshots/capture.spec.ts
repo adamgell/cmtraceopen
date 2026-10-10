@@ -7,26 +7,29 @@
  * How data gets in
  * ----------------
  * The app runs in a plain browser at :1420 with the Tauri IPC shim
- * (e2e/fixtures/tauri-shim.ts). Two population strategies are used:
+ * (e2e/fixtures/tauri-shim.ts). Every capture is fully mocked, never live:
+ * requests to the IPC bridge (127.0.0.1:1422) are blocked, so a bridge started
+ * by `npm run app:dev` anywhere on the machine cannot change what is captured.
  *
- *  - Log Viewer  → the real open-file flow. We override `get_initial_file_paths`
- *    to point at the committed demo CCM log. When the real Rust IPC bridge
- *    (:1422, started by `npm run app:dev`) is reachable, the genuine parser
- *    parses that file — otherwise we also override `open_log_file` with a mock
- *    ParseResult so the shot still works with no Rust build / in CI.
+ *  - Log Viewer  -> the real open-file flow. `get_initial_file_paths` returns a
+ *    synthetic Windows path and `open_log_file` returns a mock ParseResult, so
+ *    the sidebar shows the synthetic path and the grid shows parsed rows. The
+ *    readiness wait requires a parsed grid row, so an error state (for example
+ *    "Source path is missing or inaccessible") can never be captured.
  *
- *  - Intune / DSRegCmd → curated synthetic data injected straight into the live
+ *  - Intune / DSRegCmd -> curated synthetic data injected straight into the live
  *    Vite store singletons (`await import("/src/...")` resolves to the same
- *    module instances the app uses). Always mock: driving the real backend for
- *    these needs real IME logs / a real device capture, and a real dsregcmd
- *    capture would bake the host's device + tenant identifiers into a committed
- *    public screenshot.
+ *    module instances the app uses). A real dsregcmd capture would bake the
+ *    host's device + tenant identifiers into a committed public screenshot.
+ *
+ * Before every capture, `assertNoHostPaths` fails the run if the page text
+ * shows the home directory, user name, host name or repo path.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, expect } from "../fixtures";
 import {
-  DEMO_LOG_ABS_PATH,
+  DEMO_LOG_DISPLAY_PATH,
   MOCK_LOG_PARSE_RESULT,
   MOCK_INTUNE,
   MOCK_DSREGCMD,
@@ -37,22 +40,11 @@ import {
   buildElevatedEspSnapshot,
 } from "../fixtures/esp-diagnostics-data";
 import type { EspDiagnosticsSnapshot } from "../../src/workspaces/esp-diagnostics/types";
+import { assertNoHostPaths } from "../fixtures/host-path-guard";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.resolve(HERE, "..", "..", "screenshots");
 const outPath = (name: string) => path.join(OUT_DIR, name);
-
-/** Probe the real Rust IPC bridge started by `npm run app:dev`. */
-async function bridgeIsUp(): Promise<boolean> {
-  try {
-    const res = await fetch("http://127.0.0.1:1422/", {
-      signal: AbortSignal.timeout(700),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
 
 async function dismissSplash(
   page: import("@playwright/test").Page,
@@ -112,44 +104,121 @@ async function showEspCapture(
   await settle(page);
 }
 
-test.describe("repo screenshots", () => {
-  test("log-viewer", async ({ page }) => {
-    const live = await bridgeIsUp();
-    if (!live) {
-      console.log(
-        "[screenshots] IPC bridge (:1422) not detected — log view uses mock ParseResult.",
-      );
-    } else {
-      console.log(
-        "[screenshots] IPC bridge detected — log view parses the demo log via the real backend.",
-      );
-    }
+/** One row of a status-bar composite: a label and the bar captured as PNG. */
+interface StatusBarStrip {
+  label: string;
+  png: Buffer;
+}
 
+/**
+ * Puts the active workspace's global status bar into a given state and
+ * captures just the 24px bar.
+ */
+async function captureStatusBar(
+  page: import("@playwright/test").Page,
+  state: {
+    workspaceId: string;
+    platform: string;
+    /** The workspace renders lazy `statusBarContent` instead of the default. */
+    hasStatusContent?: boolean;
+    graphApiStatus?: string;
+    filterError?: string;
+    /** Text that proves the requested state has rendered. */
+    expectText?: string;
+  },
+): Promise<Buffer> {
+  await page.evaluate(async (next) => {
+    const { useUiStore } = await import("/src/stores/ui-store.ts");
+    const { useFilterStore } = await import("/src/stores/filter-store.ts");
+    useUiStore.setState({
+      currentPlatform: next.platform as never,
+      enabledWorkspaces: null,
+      activeWorkspace: next.workspaceId as never,
+      activeView: next.workspaceId as never,
+      graphApiStatus: (next.graphApiStatus ?? "disconnected") as never,
+    });
+    useFilterStore.setState({ filterError: next.filterError ?? null });
+  }, state);
+  const bar = page.getByTestId("global-status-bar");
+  await expect(bar).toHaveAttribute("data-workspace", state.workspaceId, {
+    timeout: 15_000,
+  });
+  if (state.hasStatusContent) {
+    // The Suspense fallback shows the default bar until the lazy content loads.
+    await expect(
+      bar.locator(`[data-status-content="${state.workspaceId}"]`),
+    ).toBeVisible({ timeout: 15_000 });
+  }
+  if (state.expectText) {
+    await expect(bar.getByText(state.expectText)).toBeVisible();
+  }
+  await assertNoHostPaths(page, "status bar");
+  return bar.screenshot({ animations: "disabled" });
+}
+
+/** Stacks labelled status-bar strips into one PNG for side-by-side review. */
+async function writeStatusBarComposite(
+  page: import("@playwright/test").Page,
+  themeLabel: string,
+  strips: StatusBarStrip[],
+  fileName: string,
+): Promise<void> {
+  const sheet = await page.context().newPage();
+  const rows = strips
+    .map(
+      (strip) => `
+        <div class="row">
+          <div class="label">${strip.label}</div>
+          <img src="data:image/png;base64,${strip.png.toString("base64")}" />
+        </div>`,
+    )
+    .join("");
+  await sheet.setContent(`
+    <html>
+      <body style="margin:0;padding:16px;background:#d0d0d0;font:13px 'Segoe UI',sans-serif;color:#000000">
+        <h1 style="font-size:15px;margin:0 0 12px">Global status bar: ${themeLabel}</h1>
+        <style>
+          .row { display:flex; align-items:center; gap:12px; margin-bottom:8px; }
+          .label { width:220px; flex-shrink:0; }
+          img { width:1440px; height:24px; display:block; outline:1px solid #606060; }
+        </style>
+        ${rows}
+      </body>
+    </html>`);
+  await assertNoHostPaths(sheet, fileName);
+  await sheet.screenshot({ path: outPath(fileName), fullPage: true });
+  await sheet.close();
+}
+
+test.describe("repo screenshots", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route("http://127.0.0.1:1422/**", (route) => route.abort());
+  });
+
+  test("log-viewer", async ({ page }) => {
     // Applied before the app boots; useFileAssociation() reads get_initial_file_paths
     // on mount and auto-opens the returned path through the real load pipeline.
     await page.addInitScript(
-      ({ demoPath, mockResult, useMock }) => {
+      ({ displayPath, mockResult }) => {
         const overrides =
           window.__e2e_ipc_overrides__ ?? (window.__e2e_ipc_overrides__ = {});
-        overrides["get_initial_file_paths"] = () => [demoPath];
-        if (useMock) {
-          overrides["open_log_file"] = () => mockResult;
-        }
+        overrides["get_initial_file_paths"] = () => [displayPath];
+        overrides["open_log_file"] = () => mockResult;
       },
       {
-        demoPath: DEMO_LOG_ABS_PATH,
+        displayPath: DEMO_LOG_DISPLAY_PATH,
         mockResult: MOCK_LOG_PARSE_RESULT,
-        useMock: !live,
       },
     );
 
     await page.goto("/");
     await dismissSplash(page);
 
-    // Wait for parsed rows to render (component cell is present in both modes).
-    await expect(page.getByText("AppEnforce").first()).toBeVisible({
-      timeout: 15_000,
-    });
+    // Readiness is a parsed grid row. The sidebar file name or an error notice
+    // that mentions the file must not satisfy it.
+    await expect(
+      page.getByRole("option").filter({ hasText: "AppEnforce" }).first(),
+    ).toBeVisible({ timeout: 15_000 });
 
     // Select the error row so the info pane shows entry details + the recognized
     // Windows error code. Best-effort — never fail the capture over selection.
@@ -160,6 +229,7 @@ test.describe("repo screenshots", () => {
     }
 
     await settle(page);
+    await assertNoHostPaths(page);
     await page.screenshot({ path: outPath("log-viewer.png") });
   });
 
@@ -192,6 +262,7 @@ test.describe("repo screenshots", () => {
     });
 
     await settle(page);
+    await assertNoHostPaths(page);
     await page.screenshot({ path: outPath("intune-diagnostics.png") });
   });
 
@@ -214,6 +285,7 @@ test.describe("repo screenshots", () => {
     });
 
     await settle(page);
+    await assertNoHostPaths(page);
     await page.screenshot({ path: outPath("dsregcmd.png") });
   });
 
@@ -238,6 +310,7 @@ test.describe("repo screenshots", () => {
           name: "Administrator coverage recommendation",
         }),
       ).toHaveCount(0);
+      await assertNoHostPaths(page);
       await page.screenshot({
         path: outPath(
           `esp-diagnostics-${viewport.width}x${viewport.height}-collapsed.png`,
@@ -246,6 +319,7 @@ test.describe("repo screenshots", () => {
       });
 
       await showEspCapture(page, elevated, "docked");
+      await assertNoHostPaths(page);
       await page.screenshot({
         path: outPath(
           `esp-diagnostics-${viewport.width}x${viewport.height}-docked.png`,
@@ -254,6 +328,7 @@ test.describe("repo screenshots", () => {
       });
 
       await showEspCapture(page, elevated, "full");
+      await assertNoHostPaths(page);
       await page.screenshot({
         path: outPath(
           `esp-diagnostics-${viewport.width}x${viewport.height}-full-logs.png`,
@@ -271,6 +346,7 @@ test.describe("repo screenshots", () => {
       await expect(recommendation).not.toContainText(
         "MDM diagnostic event logs",
       );
+      await assertNoHostPaths(page);
       await page.screenshot({
         path: outPath(
           `esp-diagnostics-${viewport.width}x${viewport.height}-non-elevated.png`,
@@ -302,12 +378,85 @@ test.describe("repo screenshots", () => {
         ),
       ).toBe(true);
       await showEspCapture(page, devicePreparation, "collapsed");
+      await assertNoHostPaths(page);
       await page.screenshot({
         path: outPath(
           `esp-diagnostics-${viewport.width}x${viewport.height}-device-preparation.png`,
         ),
         animations: "disabled",
       });
+    });
+  }
+
+  // Phase 0b (#826, spec section 8.18): every workspace's status bar in the
+  // three themes the acceptance names. One composite per theme keeps the
+  // review to three files instead of one strip per workspace and theme.
+  for (const theme of [
+    { id: "light", label: "Light" },
+    { id: "dark", label: "Dark" },
+    { id: "high-contrast", label: "High contrast" },
+  ]) {
+    test(`status bar ${theme.id}`, async ({ page }) => {
+      await page.goto("/");
+      await dismissSplash(page);
+
+      const workspaces = await page.evaluate(async (themeId) => {
+        const { useUiStore } = await import("/src/stores/ui-store.ts");
+        const { workspaceRegistry } =
+          await import("/src/workspaces/registry.ts");
+        useUiStore.getState().setThemeId(themeId as never);
+        return Array.from(workspaceRegistry.values()).map((ws) => {
+          if (ws.platforms !== "all" && ws.platforms.length === 0) {
+            throw new Error(`Workspace "${ws.id}" declares no platforms`);
+          }
+          return {
+            id: ws.id,
+            label: ws.label,
+            hasStatusContent: Boolean(ws.statusBarContent),
+            platform:
+              ws.platforms === "all" ? "windows" : (ws.platforms[0] as string),
+          };
+        });
+      }, theme.id);
+
+      const strips: StatusBarStrip[] = [];
+      for (const ws of workspaces) {
+        strips.push({
+          label: ws.label,
+          png: await captureStatusBar(page, {
+            workspaceId: ws.id,
+            platform: ws.platform,
+            hasStatusContent: ws.hasStatusContent,
+          }),
+        });
+      }
+
+      // States that only exist with data: the Graph API ring and a tone icon.
+      strips.push({
+        label: "Log, Graph API connected",
+        png: await captureStatusBar(page, {
+          workspaceId: "log",
+          platform: "windows",
+          graphApiStatus: "connected",
+          expectText: "Graph API: Connected",
+        }),
+      });
+      strips.push({
+        label: "Log, filter error",
+        png: await captureStatusBar(page, {
+          workspaceId: "log",
+          platform: "windows",
+          filterError: "Invalid clause",
+          expectText: "Filter error: Invalid clause",
+        }),
+      });
+
+      await writeStatusBarComposite(
+        page,
+        theme.label,
+        strips,
+        `status-bar-${theme.id}.png`,
+      );
     });
   }
 });

@@ -29,21 +29,12 @@ intentionally excluded from the normal `npm run test:e2e` run.
 
 The app runs at `:1420` with the Tauri IPC shim ([`e2e/fixtures/tauri-shim.ts`](../e2e/fixtures/tauri-shim.ts)).
 
-- **Log Viewer** opens a committed demo log, [`e2e/fixtures/demo/ConfigMgr_AppEnforce_demo.log`](../e2e/fixtures/demo/ConfigMgr_AppEnforce_demo.log).
-  If the real Rust backend is running (see below), the genuine parser parses it; otherwise a mock
-  parse result stands in so the shot still works with no Rust build / in CI.
+- **Log Viewer** is given a synthetic Windows path (`C:\Fixture\Logs\ConfigMgr_AppEnforce_demo.log`)
+  and a mock parse result, so the sidebar shows the synthetic path and the grid shows parsed rows.
+  The mirrored demo log is [`e2e/fixtures/demo/ConfigMgr_AppEnforce_demo.log`](../e2e/fixtures/demo/ConfigMgr_AppEnforce_demo.log).
 - **Intune** and **DSRegCmd** are populated with curated **synthetic** data from
   [`e2e/fixtures/screenshot-data.ts`](../e2e/fixtures/screenshot-data.ts). The data is fictional
   (Contoso, placeholder GUIDs) on purpose — a real `dsregcmd` capture would bake the host's device
   and tenant identifiers into a public screenshot.
 
-### Higher-fidelity Log Viewer capture
-
-Run the full app first, then capture in a second terminal:
-
-```bash
-npm run app:dev        # terminal 1 — starts the app + IPC bridge on :1422
-npm run screenshots    # terminal 2 — reuses :1420, parses the demo log via the real backend
-```
-
-The shim auto-detects the bridge; no flags needed.
+Captures never use the IPC bridge: requests to `127.0.0.1:1422` are blocked and the source is always mocked, so a running `npm run app:dev` cannot change a screenshot.

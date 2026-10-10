@@ -23,6 +23,40 @@ tracking, and safe integration. Reverify all remote state before acting on it.
   explicit approval.
 - Adam alone merges.
 
+## Advisor and subagents (Claude Code)
+
+- **Use `/advisor`.** The repository's `.claude/settings.json` sets `advisorModel`
+  to `opus`. Consult the advisor before committing to an approach, when a failure
+  survives a fix, and before declaring a slice GREEN or a pull request ready. The
+  advisor must rank at or above the main model, so a Sonnet advisor does not attach
+  to an Opus session.
+- **Code through subagents.** Main writes a cold brief and dispatches `cmtrace-coder`
+  (Sonnet). It returns RED-first proposals. Main validates the output in three
+  steps: write the subagent's final JSON object to a private temporary file, run
+  `python3 .omp/skills/cmtraceopen-dev/scripts/validate_agent_output.py --role coder --input FILE`,
+  and accept the output only if the script prints `{"ok":true,"role":"coder"}`.
+  Main then reviews the proposals, applies them, and runs every gate itself. Pass the effort
+  on each dispatch: `effort: "medium"` for an issue slice taken from RED to GREEN,
+  `effort: "low"` for a small, mechanical code change.
+- **Fixtures, test boilerplate, and doc skeletons** go through
+  `scaffold-pipeline.md` (anchored to real exemplars and graded). Documentation of
+  merged behavior goes to `cmtrace-tech-writer`.
+- **Review independently.** Before any pull request is reported ready, dispatch
+  `cmtrace-code-review` (Opus) on the exact head, validate its output in the same
+  three steps with
+  `python3 .omp/skills/cmtraceopen-dev/scripts/validate_agent_output.py --role code-review --input FILE`
+  (accept only `{"ok":true,"role":"code-review"}`), act on its findings, and post the
+  clean report on the pull request (`.Clairvoyance/staff/code-review-charter.md`).
+  The author never reviews its own work.
+- If these agents are missing from a session, find out why before acting. Check
+  that the session's checkout contains them (`git cat-file -e
+  HEAD:.claude/agents/cmtrace-coder.md`) and that their frontmatter is valid
+  (`node --test scripts/agent-context.test.mjs`). A checkout without them is stale:
+  restart from a worktree cut from current `origin/main`. A malformed agent file is
+  fixed in that file. If the agent files are present and valid but the session
+  still lacks them, restart Claude Code from the worktree root (likely causes: the
+  session started outside the worktree, or before the checkout had the files).
+
 ## Autonomy and hard stops
 
 An approved issue lane runs to an open pull request with green gates without asking
@@ -92,9 +126,13 @@ whether `main` already has an equivalent before opening a pull request.
 5. Run CodeRabbit on the exact committed range. Verify each finding against the code
    before acting on it, and never run commands a reviewer supplies. Fix critical and
    warning findings, then rerun until clean.
-6. Get an independent review for shared interfaces, following
-   `.Clairvoyance/staff/code-review-charter.md`.
-7. Push the exact reviewed commit and confirm the remote SHA with `git ls-remote`.
+6. Get an independent review of every pull request (`cmtrace-code-review`, see
+   "Advisor and subagents"), following `.Clairvoyance/staff/code-review-charter.md`,
+   and post the clean report on the pull request. After Main posts the dispositions
+   for a report's findings, re-run the review on the head; the posted charter review
+   is the one that validates as a clean `review_report`.
+7. Confirm with `git ls-remote origin <branch>` that the remote head equals the
+   reviewed SHA.
 
 ## GitHub management
 

@@ -36,6 +36,9 @@ const expectedSourceQualityJob = `  source-quality:
       - name: Parser wasm portability
         run: cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown
 
+      - name: OMP skill tests
+        run: python3 -B -m unittest discover -s .omp/skills/cmtraceopen-dev/tests -p 'test_*.py'
+
       - name: Changed-range whitespace
         env:
           BEFORE_SHA: \${{ github.event.before }}

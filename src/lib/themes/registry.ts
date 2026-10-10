@@ -6,7 +6,6 @@ import { classicCmtraceTheme } from "./theme-classic-cmtrace";
 import { solarizedDarkTheme } from "./theme-solarized-dark";
 import { nordTheme } from "./theme-nord";
 import { draculaTheme } from "./theme-dracula";
-import { hotdogStandTheme } from "./theme-hotdog-stand";
 
 export const DEFAULT_THEME_ID: ThemeId = "light";
 
@@ -18,7 +17,6 @@ const themeRegistry = new Map<ThemeId, CMTraceTheme>([
   ["solarized-dark", solarizedDarkTheme],
   ["nord", nordTheme],
   ["dracula", draculaTheme],
-  ["hotdog-stand", hotdogStandTheme],
 ]);
 
 export function getThemeById(id: ThemeId): CMTraceTheme {
