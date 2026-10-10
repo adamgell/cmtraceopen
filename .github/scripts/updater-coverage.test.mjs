@@ -43,3 +43,7 @@ test('publisher waits before any upload and compares complete content', () => {
   assert.ok(action.indexOf('--check-assets') < action.indexOf('gh release upload'));
   assert.match(action, /\.platforms == \$actual\[0\]\.platforms/);
 });
+
+test('numeric stable tags accepted by release workflow retain their exact URLs', () => {
+  assert.deepEqual(missingUpdaterAssets({version, tagName: version, assets}), []);
+});

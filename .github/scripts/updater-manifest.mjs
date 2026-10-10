@@ -66,7 +66,7 @@ export function buildUpdaterManifest({
 }
 
 export function missingUpdaterAssets({ version, tagName, assets }) {
-  if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version) || tagName !== `v${version}`) {
+  if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version) || ![version, `v${version}`].includes(tagName)) {
     throw new Error("Invalid stable updater version/tag identity");
   }
   if (!Array.isArray(assets)) throw new Error("Release assets must be an array");

@@ -6,9 +6,13 @@ import subprocess
 from urllib.parse import quote
 
 
-def validate_release(tag, release):
+def validate_tag(tag):
     if not isinstance(tag, str) or not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag):
         raise ValueError('Expected a stable vMAJOR.MINOR.PATCH tag')
+
+
+def validate_release(tag, release):
+    validate_tag(tag)
     if (release.get('tag_name') != tag or release.get('draft') is not False
             or release.get('prerelease') is not False or not release.get('published_at')):
         raise ValueError('Expected the selected published, non-draft, non-prerelease release')
@@ -17,7 +21,7 @@ def validate_release(tag, release):
 def main():
     tag = os.environ['TAG_NAME']
     # Validate before using the tag as an API path component.
-    validate_release(tag, {'tag_name': tag, 'draft': False, 'prerelease': False, 'published_at': 'pending lookup'})
+    validate_tag(tag)
     repository = os.environ['GITHUB_REPOSITORY']
     response = subprocess.run(
         ['gh', 'api', f'repos/{repository}/releases/tags/{quote(tag, safe="")}'],
