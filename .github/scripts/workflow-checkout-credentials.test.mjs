@@ -14,10 +14,12 @@ const actionsUrl = new URL("../actions/", import.meta.url);
 // checkout that does not exist and when a listed checkout is already hardened
 // (remove the entry then). Any checkout that is not listed must be hardened.
 //
-// Merge order with PR #900: #900 hardens the msrv checkout, #913 lists it. The
-// PR that merges second must remove the `cmtrace-ci.yml:msrv:1` entry. If #913
-// merges second it takes main and removes it; if #900 merges second, its
-// merge-ref CI fails until the entry is removed.
+// Merge order with PR #900: #900 hardens the msrv checkout, #913 lists it.
+// Merge #900 first; then update #913 from main (a merge commit, no force push)
+// and remove the `cmtrace-ci.yml:msrv:1` entry before #913 merges. CI does not
+// re-run when main moves and the ruleset does not require up-to-date branches,
+// so merging in the wrong order would turn main red. If #913 were merged first,
+// #900 would have to be updated from main and drop the entry before merging.
 const PENDING_AUDIT = new Set([
   // tracked in #906: fixed by PR #900 (see the merge-order note above)
   "cmtrace-ci.yml:msrv:1",
@@ -50,8 +52,9 @@ export function scan(label, text) {
   const raw = text.split(/\r?\n/);
   const lines = raw.map(stripComment);
   const checkouts = [];
+  const aliases = [];
   const jobs = new Set();
-  const mentions = lines.filter((l) => /actions\/checkout@/.test(l)).length;
+  const mentions = lines.filter((l) => /actions\/checkout@/i.test(l)).length;
   const hasJobs = lines.some((l) => /^jobs:\s*$/.test(l));
   const isComposite = !hasJobs;
   let inJobs = isComposite;
@@ -108,6 +111,12 @@ export function scan(label, text) {
       while (end < lines.length && (!lines[end].trim() || indentOf(lines[end]) > ind)) end++;
       const block = lines.slice(j, end);
       // Re-indent so the dash line reads as a direct key line.
+      // A YAML alias step expands to something the scanner cannot see.
+      if (/^\s*-\s*\*/.test(block[0])) {
+        aliases.push(`${label}:${job}:alias@line${j + 1}`);
+        j = end;
+        continue;
+      }
       const first = block[0];
       const after = first.slice(ind + 1);
       let k;
@@ -120,7 +129,7 @@ export function scan(label, text) {
         block[0] = "";
       }
       const direct = (re) => block.findIndex((b) => indentOf(b) === k && re.test(b));
-      const usesAt = direct(/^\s*uses:\s*["']?actions\/checkout@/);
+      const usesAt = direct(/^\s*uses:\s*["']?actions\/checkout@/i);
       if (usesAt >= 0) {
         let hardened = false;
         const withAt = direct(/^\s*with:\s*$/);
@@ -143,7 +152,7 @@ export function scan(label, text) {
     }
     i = j - 1;
   }
-  return { checkouts, jobs, mentions, hasJobs };
+  return { checkouts, aliases, jobs, mentions, hasJobs };
 }
 
 export function findCheckouts(label, text) {
@@ -184,6 +193,7 @@ test("every actions/checkout sets persist-credentials: false or is pending audit
       `${label}: scanner found ${result.checkouts.length} checkouts but ${result.mentions} lines mention actions/checkout@`,
     );
     if (result.hasJobs) assert.ok(result.jobs.size > 0, `${label}: jobs: present but no job parsed`);
+    assert.deepEqual(result.aliases, [], `${label}: alias steps cannot be scanned for checkouts`);
     all.push(...result.checkouts);
   }
   assert.ok(all.length > 0, "expected to find actions/checkout steps");
@@ -288,4 +298,24 @@ runs:
 test("fixture: a flow-style checkout the scanner cannot parse trips the cross-check", () => {
   const r = scan("a.yml", wf("      - {uses: actions/checkout@abc}"));
   assert.notEqual(r.checkouts.length, r.mentions);
+});
+
+test("fixture: Actions/Checkout with no with: is an offender (case-insensitive)", () => {
+  const r = scan("a.yml", wf("      - uses: Actions/Checkout@abc"));
+  assert.equal(r.mentions, 1);
+  assert.deepEqual(r.checkouts, [{ id: "a.yml:build:1", hardened: false }]);
+  assert.deepEqual(evaluate(r.checkouts, new Set()).offenders, ["a.yml:build:1"]);
+});
+
+test("fixture: an alias step is reported", () => {
+  const r = scan("a.yml", wf("      - *shared"));
+  assert.equal(r.aliases.length, 1);
+});
+
+test("fixture: sibling env: after with: does not leak into with:", () => {
+  const c = findCheckouts(
+    "a.yml",
+    wf("      - uses: actions/checkout@abc\n        with:\n          fetch-depth: 0\n        env:\n          persist-credentials: false"),
+  );
+  assert.equal(c[0].hardened, false);
 });
