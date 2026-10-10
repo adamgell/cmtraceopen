@@ -217,7 +217,6 @@ export function EventLogWorkspace() {
       if (resizeRef.current) {
         resizeRef.current = null;
         document.body.style.cursor = "";
-
         document.body.style.userSelect = "";
       }
     };
