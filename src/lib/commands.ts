@@ -1989,14 +1989,12 @@ function decodeEventLogAnalysisSessionStatus(
   value: unknown,
 ): EventLogAnalysisSessionStatus {
   const status = analysisRecord(value, "status");
-  if (typeof status.sessionId !== "string" || status.sessionId.length === 0) {
-    throw new Error("Invalid event-log analysis response: status.sessionId");
-  }
+  const sessionId = analysisSessionId(status.sessionId, "status.sessionId");
   if (typeof status.finalized !== "boolean") {
     throw new Error("Invalid event-log analysis response: status.finalized");
   }
   return {
-    sessionId: status.sessionId,
+    sessionId,
     revision: analysisCount(status.revision, "status.revision"),
     totalItems: analysisCount(status.totalItems, "status.totalItems"),
     eventItems: analysisCount(status.eventItems, "status.eventItems"),
@@ -2015,9 +2013,7 @@ function decodeEventLogAnalysisTimelinePage(
   value: unknown,
 ): EventLogAnalysisTimelinePage {
   const page = analysisRecord(value, "page");
-  if (typeof page.sessionId !== "string" || page.sessionId.length === 0) {
-    throw new Error("Invalid event-log analysis response: page.sessionId");
-  }
+  const sessionId = analysisSessionId(page.sessionId, "page.sessionId");
   if (
     !Array.isArray(page.items) ||
     !Array.isArray(page.unplacedPreview) ||
@@ -2048,7 +2044,7 @@ function decodeEventLogAnalysisTimelinePage(
     throw new Error("Invalid event-log analysis response: page.nextOffset");
   }
   return {
-    sessionId: page.sessionId,
+    sessionId,
     revision: analysisCount(page.revision, "page.revision"),
     offset,
     nextOffset,
@@ -2217,6 +2213,11 @@ export async function queryEventLogAnalysisTimeline(
  * Timeline items with `startMs <= timestampMs <= endMs`, in timeline order, byte-bounded like a
  * page. `omittedItems` counts in-window items left out and `nextOffset` is the timeline offset of
  * the first of them.
+ *
+ * To continue a truncated window, call `queryEventLogAnalysisTimeline(sessionId, nextOffset,
+ * Math.min(limit, omittedItems))` and repeat from that page's `nextOffset` until `omittedItems`
+ * rows are consumed. Never re-window from the last returned timestamp: rows tied on that
+ * timestamp would be repeated or dropped.
  */
 export async function queryEventLogAnalysisTimelineWindow(
   sessionId: string,

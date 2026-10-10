@@ -92,6 +92,10 @@ pub struct EventLogAnalysisTimelinePage {
 /// `EventLogAnalysisTimelinePage::items`, so it is exactly the slice of the concatenated pages that
 /// starts at `offset`. Nothing inside the window is skipped: whatever does not fit is counted in
 /// `omittedItems`, and `nextOffset` is the timeline offset of the first omitted item.
+///
+/// To continue a truncated window, query the timeline page from `nextOffset`, clipped to the
+/// window: `page(nextOffset, min(limit, omittedItems))`. Never re-window from the last returned
+/// timestamp: items tied on that timestamp would be repeated or dropped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventLogAnalysisTimelineWindow {
@@ -488,20 +492,9 @@ impl EventLogAnalysisSession {
     }
 
     fn page(&self, offset: u64, limit: u32) -> Result<EventLogAnalysisTimelinePage, String> {
-        let timeline = self
-            .timeline
-            .as_ref()
-            .ok_or_else(|| "event-log analysis session is not finalized".to_string())?;
-        let limit = usize::try_from(limit)
-            .map_err(|_| "timeline page limit is not representable".to_string())?;
-        if limit == 0 || limit > MAX_ANALYSIS_TIMELINE_PAGE_ITEMS {
-            return Err(format!(
-                "timeline page limit must be between 1 and {MAX_ANALYSIS_TIMELINE_PAGE_ITEMS}"
-            ));
-        }
-        let offset_usize = usize::try_from(offset)
-            .map_err(|_| "timeline page offset is not representable".to_string())?;
-        let start = offset_usize.min(timeline.items.len());
+        let timeline = self.finalized_timeline()?;
+        let limit = validated_timeline_limit(limit, "timeline page")?;
+        let start = validated_timeline_offset(offset, "timeline page")?.min(timeline.items.len());
         let requested_end = start.saturating_add(limit).min(timeline.items.len());
         let status = self.status();
         let include_previews = offset == 0;
@@ -555,7 +548,11 @@ impl EventLogAnalysisSession {
 
         let end = start.saturating_add(page.items.len());
         page.next_offset = (end < timeline.items.len()).then(|| usize_to_u64(end));
-        set_timeline_page_serialized_bytes(&mut page)?;
+        converge_serialized_bytes(
+            &mut page,
+            |value| value.serialized_bytes,
+            |value, bytes| value.serialized_bytes = bytes,
+        )?;
         if usize::try_from(page.serialized_bytes).unwrap_or(usize::MAX)
             > MAX_ANALYSIS_TIMELINE_PAGE_BYTES
         {
@@ -575,6 +572,9 @@ impl EventLogAnalysisSession {
     /// `UnifiedTimeline::items` is sorted by `timestampMs` ascending (`merge` in the parser crate,
     /// called from `TimelineBuilder::finish`), so both window edges are partition points and the
     /// window is one contiguous range of the timeline.
+    ///
+    /// A truncated window continues with `page(next_offset, min(limit, omitted_items))`, never by
+    /// re-windowing from the last returned timestamp (ties would repeat or drop items).
     fn window(
         &self,
         start_ms: i64,
@@ -582,7 +582,7 @@ impl EventLogAnalysisSession {
         limit: u32,
     ) -> Result<EventLogAnalysisTimelineWindow, String> {
         let timeline = self.finalized_timeline()?;
-        let limit = validated_timeline_limit(limit)?;
+        let limit = validated_timeline_limit(limit, "timeline page")?;
         if start_ms > end_ms {
             return Err("timeline window start must not be after its end".to_string());
         }
@@ -639,10 +639,8 @@ impl EventLogAnalysisSession {
     /// Edges `[offset, offset + limit)`, trimmed to the shared page byte budget.
     fn edge_page(&self, offset: u64, limit: u32) -> Result<EventLogAnalysisEdgePage, String> {
         let timeline = self.finalized_timeline()?;
-        let limit = validated_timeline_limit(limit)?;
-        let start = usize::try_from(offset)
-            .map_err(|_| "edge page offset is not representable".to_string())?
-            .min(timeline.edges.len());
+        let limit = validated_timeline_limit(limit, "edge page")?;
+        let start = validated_timeline_offset(offset, "edge page")?.min(timeline.edges.len());
         let requested_end = start.saturating_add(limit).min(timeline.edges.len());
         let status = self.status();
         let mut page = EventLogAnalysisEdgePage {
@@ -679,10 +677,7 @@ impl EventLogAnalysisSession {
     }
 
     fn diagnosis_snapshot(&self) -> Result<DiagnosisSnapshot, String> {
-        let timeline = self
-            .timeline
-            .as_ref()
-            .ok_or_else(|| "event-log analysis session is not finalized".to_string())?;
+        let timeline = self.finalized_timeline()?;
         Ok(DiagnosisSnapshot {
             event_projection: self.diagnosis_events.clone().finish(),
             text_findings: self.diagnosis_text_findings.clone(),
@@ -1295,25 +1290,18 @@ fn serialized_len<T: Serialize>(value: &T) -> Result<usize, String> {
         .map_err(|error| format!("event-log analysis response serialization failed: {error}"))
 }
 
-fn set_timeline_page_serialized_bytes(
-    page: &mut EventLogAnalysisTimelinePage,
-) -> Result<(), String> {
-    for _ in 0..4 {
-        let serialized_bytes = usize_to_u64(serialized_len(page)?);
-        if page.serialized_bytes == serialized_bytes {
-            return Ok(());
-        }
-        page.serialized_bytes = serialized_bytes;
-    }
-    Err("timeline page serialized byte size did not converge".to_string())
+/// Converts a row offset; `resource` names what is being paged in the error text.
+fn validated_timeline_offset(offset: u64, resource: &str) -> Result<usize, String> {
+    usize::try_from(offset).map_err(|_| format!("{resource} offset is not representable"))
 }
 
-fn validated_timeline_limit(limit: u32) -> Result<usize, String> {
-    let limit = usize::try_from(limit)
-        .map_err(|_| "timeline page limit is not representable".to_string())?;
+/// Validates a row limit; `resource` names what is being paged in the error text.
+fn validated_timeline_limit(limit: u32, resource: &str) -> Result<usize, String> {
+    let limit =
+        usize::try_from(limit).map_err(|_| format!("{resource} limit is not representable"))?;
     if limit == 0 || limit > MAX_ANALYSIS_TIMELINE_PAGE_ITEMS {
         return Err(format!(
-            "timeline page limit must be between 1 and {MAX_ANALYSIS_TIMELINE_PAGE_ITEMS}"
+            "{resource} limit must be between 1 and {MAX_ANALYSIS_TIMELINE_PAGE_ITEMS}"
         ));
     }
     Ok(limit)
@@ -2261,32 +2249,134 @@ mod tests {
                 .collect(),
         );
 
-        let mut seen = Vec::new();
-        let mut cursor = 1i64;
-        let mut calls = 0;
-        loop {
-            let window = session.window(cursor, RECORD_COUNT as i64, 1_000).unwrap();
-            assert!(!window.items.is_empty());
-            assert!(serialized_len(&window).unwrap() <= MAX_ANALYSIS_TIMELINE_PAGE_BYTES);
-            assert_eq!(
-                window.serialized_bytes,
-                usize_to_u64(serialized_len(&window).unwrap())
-            );
-            assert_eq!(
-                window.omitted_items,
-                window.window_items - usize_to_u64(window.items.len())
-            );
-            seen.extend(window.items.iter().map(item_record_id));
-            calls += 1;
-            if window.next_offset.is_none() {
-                break;
-            }
-            assert!(window.omitted_items > 0);
-            // The next record's timestamp equals its 1-based offset + 1.
-            cursor = window.next_offset.unwrap() as i64 + 1;
+        let first = session.window(1, RECORD_COUNT as i64, 1_000).unwrap();
+        assert!(!first.items.is_empty());
+        assert!(serialized_len(&first).unwrap() <= MAX_ANALYSIS_TIMELINE_PAGE_BYTES);
+        assert_eq!(
+            first.serialized_bytes,
+            usize_to_u64(serialized_len(&first).unwrap())
+        );
+        assert_eq!(
+            first.omitted_items,
+            first.window_items - usize_to_u64(first.items.len())
+        );
+        assert!(
+            first.omitted_items > 0,
+            "large rows must force a byte-budget truncation"
+        );
+        let mut seen = first.items.iter().map(item_record_id).collect::<Vec<_>>();
+
+        // Continue the documented way: pages from `nextOffset`, clipped to `omittedItems`.
+        let mut offset = first.next_offset.unwrap();
+        let mut remaining = first.omitted_items;
+        while remaining > 0 {
+            let clip = u32::try_from(remaining.min(1_000)).unwrap();
+            let page = session.page(offset, clip).unwrap();
+            assert_eq!(page.offset, offset);
+            assert!(!page.items.is_empty() && page.items.len() <= clip as usize);
+            seen.extend(page.items.iter().map(item_record_id));
+            offset += usize_to_u64(page.items.len());
+            remaining -= usize_to_u64(page.items.len());
         }
-        assert!(calls > 1, "large rows must force a byte-budget truncation");
         assert_eq!(seen, (1..=RECORD_COUNT as u64).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn window_includes_every_row_tied_on_both_bounds_across_event_and_log_items() {
+        let log = |line: u64, timestamp: i64| EventLogAnalysisLogEntryInput {
+            entry: LogEntry {
+                line_number: line as u32,
+                message: format!("tied log row {line}"),
+                timestamp: Some(timestamp),
+                file_path: "C:/logs/tied.log".to_string(),
+                ..LogEntry::default()
+            },
+            original_serialized_bytes: None,
+        };
+        let event = |id: u64, timestamp: i64| {
+            EventLogAnalysisRecordInput::complete(record(id, timestamp, "tied event row"))
+        };
+        let mut session = EventLogAnalysisSession::new("test-session".to_string());
+        session
+            .append_inputs(
+                vec![
+                    event(1, 500),
+                    event(2, 1_000),
+                    event(3, 1_000),
+                    event(4, 1_000),
+                    event(5, 2_000),
+                    event(6, 2_000),
+                    event(7, 2_500),
+                ],
+                vec![log(1, 1_000), log(2, 1_000), log(3, 2_000), log(4, 2_500)],
+            )
+            .unwrap();
+        session.finalize().unwrap();
+
+        // 1_000: 3 events + 2 log rows; 2_000: 2 events + 1 log row.
+        let full = session.window(1_000, 2_000, 1_000).unwrap();
+        assert_eq!(full.offset, 1);
+        assert_eq!(full.window_items, 8);
+        assert_eq!(full.items.len(), 8);
+        assert_eq!(full.omitted_items, 0);
+        assert_eq!(full.next_offset, None);
+        assert!(full
+            .items
+            .iter()
+            .all(|item| (1_000..=2_000).contains(&item.timestamp_ms)));
+        let log_rows = full
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.origin,
+                    cmtraceopen_parser::unified_timeline::TimelineOrigin::Log { .. }
+                )
+            })
+            .count();
+        assert_eq!(log_rows, 3);
+
+        // A limit that splits the tie at the end bound reports the rest exactly.
+        let cut = session.window(1_000, 2_000, 6).unwrap();
+        assert_eq!(cut.items.len(), 6);
+        assert_eq!(cut.omitted_items, 2);
+        assert_eq!(cut.next_offset, Some(7));
+        let rest = session.page(7, 2).unwrap();
+        let mut joined = cut.items.clone();
+        joined.extend(rest.items);
+        assert_eq!(joined, full.items);
+
+        // Windows pinned on a single tied instant return the whole tie.
+        assert_eq!(session.window(1_000, 1_000, 10).unwrap().items.len(), 5);
+        assert_eq!(session.window(2_000, 2_000, 10).unwrap().items.len(), 3);
+    }
+
+    #[test]
+    fn limit_and_not_finalized_errors_are_one_text_per_resource() {
+        let session = scrambled_session(10);
+        for limit in [0u32, 1_001] {
+            assert_eq!(
+                session.page(0, limit).unwrap_err(),
+                "timeline page limit must be between 1 and 1000"
+            );
+            assert_eq!(
+                session.window(0, 100, limit).unwrap_err(),
+                "timeline page limit must be between 1 and 1000"
+            );
+            assert_eq!(
+                session.edge_page(0, limit).unwrap_err(),
+                "edge page limit must be between 1 and 1000"
+            );
+        }
+        let unfinalized = EventLogAnalysisSession::new("test-session".to_string());
+        for error in [
+            unfinalized.page(0, 10).unwrap_err(),
+            unfinalized.window(0, 1, 10).unwrap_err(),
+            unfinalized.edge_page(0, 10).unwrap_err(),
+            unfinalized.diagnosis_snapshot().err().unwrap(),
+        ] {
+            assert_eq!(error, "event-log analysis session is not finalized");
+        }
     }
 
     #[test]
@@ -2327,6 +2417,12 @@ mod tests {
                     Some(format!("{{{:08X}-0000-0000-0000-000000000000}}", id / 2));
                 record
             })
+            .collect()
+    }
+
+    fn spread_records(count: u64, spacing_ms: i64) -> Vec<EvtxRecord> {
+        (1..=count)
+            .map(|id| record(id, id as i64 * spacing_ms, "ordinary informational event"))
             .collect()
     }
 
@@ -2389,6 +2485,29 @@ mod tests {
             window_micros.push(started.elapsed().as_micros());
             assert_eq!(window.items.len(), 151);
         }
+        // The spec window: +-75 SECONDS around the selected event.
+        // Dense fixture: 1 ms spacing, so the window overflows the 1000-item cap.
+        let dense_started = Instant::now();
+        let dense = session
+            .window(50_000 - 75_000, 50_000 + 75_000, 1_000)
+            .unwrap();
+        let dense_micros = dense_started.elapsed().as_micros();
+        assert_eq!(dense.items.len(), 1_000);
+        assert!(dense.omitted_items > 0);
+        // Realistic fixture: the same 100k records spread over 24 hours (864 ms apart), so a
+        // 150 s window holds about 174 items.
+        let spread = finalized_session(spread_records(RECORDS, 86_400_000 / RECORDS as i64));
+        let mut spread_micros = Vec::new();
+        let mut spread_items = 0usize;
+        for center in [3_600_000i64, 21_600_000, 43_200_000, 64_800_000, 82_800_000] {
+            let started = Instant::now();
+            let window = spread
+                .window(center - 75_000, center + 75_000, 1_000)
+                .unwrap();
+            spread_micros.push(started.elapsed().as_micros());
+            assert_eq!(window.omitted_items, 0);
+            spread_items = window.items.len();
+        }
         let wide_started = Instant::now();
         let wide = session.window(0, i64::MAX, 1_000).unwrap();
         let wide_micros = wide_started.elapsed().as_micros();
@@ -2410,7 +2529,15 @@ mod tests {
             "LATENCY records={RECORDS} items={} edges={} build_and_finalize={build:?}",
             status.total_items, status.total_edges
         );
-        println!("LATENCY window(+-75ms, 151 items) micros per call={window_micros:?}");
+        println!("LATENCY window(+-75 MILLISECONDS, 151 items) micros per call={window_micros:?}");
+        println!(
+            "LATENCY window(+-75 SECONDS, dense 1 ms spacing, {} returned, {} omitted) micros={dense_micros}",
+            dense.items.len(),
+            dense.omitted_items
+        );
+        println!(
+            "LATENCY window(+-75 SECONDS, 24 h spread, {spread_items} items) micros per call={spread_micros:?}"
+        );
         println!(
             "LATENCY window(all, limit 1000, {} items returned) micros={wide_micros}",
             wide.items.len()

@@ -2318,12 +2318,31 @@ describe("event-log analysis window and edge IPC boundary", () => {
     ["a continuation with nothing left out", { omittedItems: 0, windowItems: 2 }],
     ["an inverted window", { startMs: 400 }],
     ["a window past the end of the timeline", { totalItems: 12 }],
+    ["omitted rows with no rows returned", { items: [], windowItems: 3, omittedItems: 3, nextOffset: 10 }],
+    ["a non-safe-integer startMs", { startMs: 2 ** 53 }],
   ])("rejects a window reply with %s", async (_label, patch) => {
     vi.mocked(invoke).mockResolvedValueOnce({ ...windowReply, ...patch });
 
     await expect(
       queryEventLogAnalysisTimelineWindow("analysis-session", 100, 300, 500),
     ).rejects.toThrow("Invalid event-log analysis response: window.");
+  });
+
+  it.each([
+    ["window", ""],
+    ["edge", ""],
+  ])("rejects an empty sessionId on a %s reply", async (kind) => {
+    if (kind === "window") {
+      vi.mocked(invoke).mockResolvedValueOnce({ ...windowReply, sessionId: "" });
+      await expect(
+        queryEventLogAnalysisTimelineWindow("analysis-session", 100, 300, 500),
+      ).rejects.toThrow("window.sessionId");
+    } else {
+      vi.mocked(invoke).mockResolvedValueOnce({ ...edgeReply, sessionId: "" });
+      await expect(
+        queryEventLogAnalysisEdges("analysis-session", 2, 1_000),
+      ).rejects.toThrow("edgePage.sessionId");
+    }
   });
 
   it("rejects a window reply with a zero authoritative byte count", async () => {
