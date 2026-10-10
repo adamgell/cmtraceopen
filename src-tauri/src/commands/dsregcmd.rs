@@ -1703,6 +1703,86 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bundle_analysis_links_event_log_entries_to_diagnostics_on_load() {
+        use crate::intune::apps::windows::ime::models::{
+            EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogCorrelationKind,
+            EventLogEntry, EventLogSeverity,
+        };
+
+        let _env_guard = dsregcmd_test_env_lock()
+            .lock()
+            .expect("lock dsregcmd env guard");
+        let bundle = build_dsregcmd_bundle_fixture();
+
+        // The bundle file holds no links (no app path writes any); the analyzer builds them at load.
+        let entry = |id: u64, message: &str| EventLogEntry {
+            id,
+            channel: EventLogChannel::SystemLog,
+            channel_display: "System".to_string(),
+            provider: "Synthetic".to_string(),
+            event_id: 100,
+            severity: EventLogSeverity::Error,
+            timestamp: "2026-01-01T00:00:00.000Z".to_string(),
+            computer: None,
+            message: message.to_string(),
+            correlation_activity_id: None,
+            source_file: "System.evtx".to_string(),
+        };
+        let old_bundle_events = EventLogAnalysis {
+            source_kind: EventLogAnalysisSource::Bundle,
+            entries: vec![
+                entry(0, "Join pending, status 0x801c03f2."),
+                entry(1, "Longer code 0x801c03f21 must not match."),
+            ],
+            channel_summaries: Vec::new(),
+            correlation_links: Vec::new(),
+            parsed_file_count: 1,
+            total_entry_count: 2,
+            error_entry_count: 2,
+            warning_entry_count: 0,
+            timestamp_bounds: None,
+            live_query: None,
+        };
+        write_bundle_json(
+            &bundle
+                .path()
+                .join("evidence")
+                .join("event-logs")
+                .join("dsregcmd-events.json"),
+            &old_bundle_events,
+        );
+
+        let result = super::analyze_dsregcmd_blocking(
+            DSREGCMD_SAMPLE,
+            Some(bundle.path().to_string_lossy().as_ref()),
+        )
+        .expect("analyze dsregcmd bundle fixture");
+
+        let diagnostic = result
+            .diagnostics
+            .iter()
+            .find(|d| d.id == "entra-sync-pending")
+            .expect("the sample's client error code fires entra-sync-pending");
+        assert_eq!(diagnostic.related_error_codes, vec!["0x801c03f2"]);
+
+        let links = &result
+            .event_log_analysis
+            .as_ref()
+            .expect("event log analysis loaded")
+            .correlation_links;
+        assert_eq!(links.len(), 1, "only the exact-code entry links: {links:?}");
+        assert_eq!(links[0].event_log_entry_id, 0);
+        assert_eq!(
+            links[0].linked_diagnostic_id.as_deref(),
+            Some("entra-sync-pending")
+        );
+        assert_eq!(
+            links[0].correlation_kind,
+            EventLogCorrelationKind::ErrorCodeMatch
+        );
+    }
+
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn capture_command_returns_clear_error_on_unsupported_platform() {

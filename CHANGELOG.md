@@ -8,6 +8,8 @@ All notable changes to this project will be documented in this file.
 
 - **Parser source compatibility (#814)**: Advance `cmtraceopen-parser` to `0.4.0` for breaking source API changes from new Windows Firewall enum variants and public struct fields. Update affected exhaustive matches and struct literals; see the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
 
+- **DsRegCmd diagnostics link to event-log entries (#870)**: Diagnostics from rules that fire on a specific `0x` code now carry `related_error_codes` (public field on `DsregcmdDiagnosticInsight`; struct literals need `related_error_codes: Vec::new()`), and the analyzer links event-log entries that cite those codes on token boundaries. Only codes that appear in the rule's fields on token boundaries are recorded; a rule firing on a substring hit records none. See the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
+
 ### Fixed
 
 - **Windows Firewall logs (#814)**: Recognize firewall records separately from IIS, preserve all fields and Local wall-clock timestamps, report skipped NUL padding and warn about lost events, and retain encoding and source identity through live tailing and timeline queries.
