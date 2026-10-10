@@ -189,6 +189,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Issue #893: the OMP output validator must import on native Windows
       # Python. Only the validator test file runs here; lane_state locking on
