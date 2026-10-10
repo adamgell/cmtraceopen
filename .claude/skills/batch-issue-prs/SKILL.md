@@ -50,7 +50,7 @@ A subagent told to `git checkout -b ...` runs it in *your* worktree. It switches
 
 ## Never run rustfmt on a file that declares `mod`
 
-`rustfmt src-tauri/src/lib.rs` follows every `mod` declaration and reformats the entire crate. Commit or stage your own work first, then run `git diff --quiet`. If it fails, unstaged changes remain: stop and preserve them, and do not format. Format only files your branch created or modified: use `rustfmt --edition 2021 <file>` on a file that declares no `mod` (check the crate's `edition` in its Cargo.toml and use that), or `cargo fmt --all` while main is fmt-clean. Then check `git status` immediately. If a file your branch did not touch changed, that unstaged change is formatter output only, so revert just that file with `git checkout -- <file>` (it restores from the index, so committed and staged work survives) and stop, as the CI gate section above says; do not commit the reflow.
+`rustfmt src-tauri/src/lib.rs` follows every `mod` declaration and reformats the entire crate. Commit your own work first, then run `git status --porcelain`. It must print nothing (no staged, unstaged or untracked changes); if it prints anything, stop and do not format. Format only files your branch created or modified: use `rustfmt --edition 2021 <file>` on a file that declares no `mod` (check the crate's `edition` in its Cargo.toml and use that), or `cargo fmt --all` while main is fmt-clean. Then check `git status` immediately. Every change now is formatter output. If a file your branch did not touch changed, revert just that file with `git checkout -- <file>` (safe because the tree was clean and committed) and stop, as the CI gate section above says; do not commit the reflow.
 
 ## Verify the API before you call it
 
