@@ -50,7 +50,7 @@ A subagent told to `git checkout -b ...` runs it in *your* worktree. It switches
 
 ## Never run rustfmt on a file that declares `mod`
 
-`rustfmt src-tauri/src/lib.rs` follows every `mod` declaration and reformats the entire crate. Format only files you created, and check `git status` immediately after. If unrelated files appear, `git checkout --` them before doing anything else.
+`rustfmt src-tauri/src/lib.rs` follows every `mod` declaration and reformats the entire crate. Format only files your branch created or modified: use `rustfmt --edition 2021 <file>` on a file that declares no `mod` (check the crate's `edition` in its Cargo.toml and use that), or `cargo fmt --all` while main is fmt-clean. Then check `git status` immediately. If a file your branch did not touch changed, revert just that file with `git checkout -- <file>` and stop, as the CI gate section above says; do not commit the reflow.
 
 ## Verify the API before you call it
 
@@ -120,7 +120,7 @@ State the test count and the exact commands run. Never write that a command pass
 |---|---|
 | "The agent will obviously work in its own directory" | It will not. Default is the shared worktree. Set `isolation`. |
 | "cargo fmt is in the issue's verification block" | Check `.github/workflows/`. Intent is not enforcement. |
-| "I'll just format the whole crate, it's cleaner" | It buries your diff in unrelated churn and reviewers reject it. |
+| "I'll just format the whole crate, it's cleaner" | Main is fmt-clean and CI enforces it, so `cargo fmt --all` should touch only your files. If it touches anything else, stop and follow the CI gate rule above; never commit the reflow. |
 | "The seam map says the function is called X" | Reports drift. Grep the signature. |
 | "I'll wait for the synthesis agent to finish" | Take the partial results from the journal and move. |
 | "I'll open all three PRs then review them together" | Findings arrive late and fixes cross-contaminate. Converge one at a time. |
