@@ -93,9 +93,11 @@ pub struct EventLogAnalysisTimelinePage {
 /// starts at `offset`. Nothing inside the window is skipped: whatever does not fit is counted in
 /// `omittedItems`, and `nextOffset` is the timeline offset of the first omitted item.
 ///
-/// To continue a truncated window, query the timeline page from `nextOffset`, clipped to the
-/// window: `page(nextOffset, min(limit, omittedItems))`. Never re-window from the last returned
-/// timestamp: items tied on that timestamp would be repeated or dropped.
+/// To continue a truncated window, loop: `remaining = omittedItems`, `offset = nextOffset`; while
+/// `remaining > 0`, call `page(offset, min(limit, remaining))`, subtract the rows it returned from
+/// `remaining` and continue from its `nextOffset`. The byte budget can cut a page short, so this
+/// can take more than one call. Never re-window from the last returned timestamp: items tied on
+/// that timestamp would be repeated or dropped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventLogAnalysisTimelineWindow {
@@ -573,8 +575,10 @@ impl EventLogAnalysisSession {
     /// called from `TimelineBuilder::finish`), so both window edges are partition points and the
     /// window is one contiguous range of the timeline.
     ///
-    /// A truncated window continues with `page(next_offset, min(limit, omitted_items))`, never by
-    /// re-windowing from the last returned timestamp (ties would repeat or drop items).
+    /// A truncated window continues with a loop over `page(offset, min(limit, remaining))`, starting
+    /// at `next_offset` with `remaining = omitted_items` and subtracting each page's row count
+    /// (see `EventLogAnalysisTimelineWindow`). Never re-window from the last returned timestamp
+    /// (ties would repeat or drop items).
     fn window(
         &self,
         start_ms: i64,
@@ -2266,7 +2270,7 @@ mod tests {
         );
         let mut seen = first.items.iter().map(item_record_id).collect::<Vec<_>>();
 
-        // Continue the documented way: pages from `nextOffset`, clipped to `omittedItems`.
+        // Continue the documented way: a loop of pages clipped to the rows still remaining.
         let mut offset = first.next_offset.unwrap();
         let mut remaining = first.omitted_items;
         while remaining > 0 {

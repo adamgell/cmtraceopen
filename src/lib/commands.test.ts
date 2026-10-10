@@ -2319,7 +2319,6 @@ describe("event-log analysis window and edge IPC boundary", () => {
     ["an inverted window", { startMs: 400 }],
     ["a window past the end of the timeline", { totalItems: 12 }],
     ["omitted rows with no rows returned", { items: [], windowItems: 3, omittedItems: 3, nextOffset: 10 }],
-    ["a non-safe-integer startMs", { startMs: 2 ** 53 }],
   ])("rejects a window reply with %s", async (_label, patch) => {
     vi.mocked(invoke).mockResolvedValueOnce({ ...windowReply, ...patch });
 
@@ -2344,6 +2343,23 @@ describe("event-log analysis window and edge IPC boundary", () => {
       ).rejects.toThrow("edgePage.sessionId");
     }
   });
+
+  it.each([
+    ["startMs", { startMs: 100.5 }],
+    ["endMs", { endMs: 300.5 }],
+  ])(
+    "rejects a non-integer %s only through the integer check",
+    async (field, patch) => {
+      // Every other consistency rule still holds for these replies.
+      vi.mocked(invoke).mockResolvedValueOnce({ ...windowReply, ...patch });
+
+      await expect(
+        queryEventLogAnalysisTimelineWindow("analysis-session", 100, 300, 500),
+      ).rejects.toThrow(
+        `Invalid event-log analysis response: window.${field}`,
+      );
+    },
+  );
 
   it("rejects a window reply with a zero authoritative byte count", async () => {
     vi.mocked(invoke).mockResolvedValueOnce({ ...windowReply, serializedBytes: 0 });

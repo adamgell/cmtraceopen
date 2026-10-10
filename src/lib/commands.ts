@@ -2214,9 +2214,11 @@ export async function queryEventLogAnalysisTimeline(
  * page. `omittedItems` counts in-window items left out and `nextOffset` is the timeline offset of
  * the first of them.
  *
- * To continue a truncated window, call `queryEventLogAnalysisTimeline(sessionId, nextOffset,
- * Math.min(limit, omittedItems))` and repeat from that page's `nextOffset` until `omittedItems`
- * rows are consumed. Never re-window from the last returned timestamp: rows tied on that
+ * To continue a truncated window, loop: set `remaining = omittedItems` and `offset = nextOffset`;
+ * while `remaining > 0`, call `queryEventLogAnalysisTimeline(sessionId, offset,
+ * Math.min(limit, remaining))`, subtract the number of rows it returned from `remaining`, and
+ * continue from that page's `nextOffset`. The byte budget can cut a page short, so this can take
+ * more than one call. Never re-window from the last returned timestamp: rows tied on that
  * timestamp would be repeated or dropped.
  */
 export async function queryEventLogAnalysisTimelineWindow(
