@@ -8,12 +8,14 @@ import {
 } from "./dsregcmd-store";
 import { buildTimelineItems } from "./dsregcmd-formatters";
 import { useDsregcmdDerived } from "./use-dsregcmd-derived";
-import { EmptyState, SourceStatusNotice } from "../../components/common/sidebar-primitives";
+import { getVisibleFactRows } from "./FactGroupRenderer";
+import { SourceStatusNotice } from "../../components/common/sidebar-primitives";
 import { formatDisplayDateTime } from "../../lib/date-time-format";
 import { getBaseName } from "../../lib/file-paths";
 import { getLogListMetrics, LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import type { DsregcmdSourceContext } from "./types";
+import type { EventLogAnalysis } from "../../types/event-log";
 
 // ---------------------------------------------------------------------------
 // Source card helpers
@@ -44,6 +46,47 @@ function getKindLine(sourceContext: DsregcmdSourceContext): string | null {
       return "Pasted text";
   }
 }
+
+interface EventLogCount {
+  /** Null when the count would claim more than the evidence supports. */
+  value: number | null;
+  /** True when some live channels failed, so the real total can be higher. */
+  isLowerBound: boolean;
+}
+
+/**
+ * The Event logs count. A live query in which no channel was read has no known
+ * total, so it shows none rather than 0. When some channels failed the total is
+ * a lower bound.
+ */
+function getEventLogCount(analysis: EventLogAnalysis): EventLogCount {
+  const live = analysis.liveQuery;
+  if (!live) {
+    return { value: analysis.totalEntryCount, isLowerBound: false };
+  }
+  if (live.successfulChannelCount === 0) {
+    return { value: null, isLowerBound: false };
+  }
+  return {
+    value: analysis.totalEntryCount,
+    isLowerBound: live.failedChannelCount > 0,
+  };
+}
+
+const VISUALLY_HIDDEN: CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  margin: -1,
+  padding: 0,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
+
+const REASON_NO_RESULT_ID = "dsregcmd-nav-reason-no-result";
+const REASON_NO_EVENT_LOGS_ID = "dsregcmd-nav-reason-no-event-logs";
 
 function plural(count: number, singular: string, pluralForm: string): string {
   return `${count} ${count === 1 ? singular : pluralForm}`;
@@ -84,17 +127,16 @@ export function DsregcmdSidebar() {
   const fontSize = getLogListMetrics(logListFontSize).fontSize;
   const smallFont = Math.max(9, fontSize - 2);
   const tinyFont = Math.max(9, fontSize - 3);
+  const eyebrowFont = Math.max(10, fontSize - 3);
 
   const eventLogAnalysis = result?.eventLogAnalysis ?? null;
+  const sourceLabel =
+    sourceContext.source === null ? "No source loaded" : sourceContext.displayLabel;
   const showingEventLogs = activeTab === "event-logs" && eventLogAnalysis !== null;
 
   const counts = useMemo(() => {
     const visibleFactRows = factGroups.reduce(
-      (total, group) =>
-        total +
-        (showNotReported
-          ? group.rows.length
-          : group.rows.filter((row) => row.isNotReported !== true).length),
+      (total, group) => total + getVisibleFactRows(group, showNotReported).length,
       0,
     );
     return {
@@ -104,8 +146,8 @@ export function DsregcmdSidebar() {
     };
   }, [factGroups, result, showNotReported]);
 
+  const hasResult = result !== null;
   const kindLine = getKindLine(sourceContext);
-  const hasSource = sourceContext.source !== null;
   const pathRows = [
     { label: "Bundle root", value: sourceContext.bundlePath },
     { label: "Evidence file", value: sourceContext.evidenceFilePath },
@@ -137,27 +179,42 @@ export function DsregcmdSidebar() {
       : "3px solid transparent",
   });
 
-  const renderCount = (count: number | null) =>
+  const renderCount = (count: number | null, lowerBoundText?: string) =>
     count === null ? null : (
       <span style={{ ...numeric, fontSize: smallFont, color: tokens.colorNeutralForeground3 }}>
-        {count}
+        <span aria-hidden={lowerBoundText ? true : undefined}>
+          {count}
+          {lowerBoundText ? "+" : ""}
+        </span>
+        {lowerBoundText && <span style={VISUALLY_HIDDEN}>{lowerBoundText}</span>}
       </span>
     );
 
+  const renderDisabled = (key: string, label: string, reasonId: string) => (
+    <a
+      key={key}
+      role="link"
+      aria-disabled="true"
+      tabIndex={0}
+      aria-describedby={reasonId}
+      style={itemStyle(false, true)}
+      onClick={(event: MouseEvent) => event.preventDefault()}
+    >
+      <span>{label}</span>
+    </a>
+  );
+
   const renderItem = (id: DsregcmdSectionId | "event-logs") => {
+    const label = id === "event-logs" ? "Event logs" : SECTION_LABELS[id];
+    if (!hasResult) {
+      return renderDisabled(id, label, REASON_NO_RESULT_ID);
+    }
+
     if (id === "event-logs") {
       if (!eventLogAnalysis) {
-        return (
-          <a
-            key={id}
-            aria-disabled="true"
-            title="This source has no event log data."
-            style={itemStyle(false, true)}
-          >
-            <span>Event logs</span>
-          </a>
-        );
+        return renderDisabled(id, label, REASON_NO_EVENT_LOGS_ID);
       }
+      const eventLogCount = getEventLogCount(eventLogAnalysis);
       return (
         <a
           key={id}
@@ -169,8 +226,13 @@ export function DsregcmdSidebar() {
             setActiveTab("event-logs");
           }}
         >
-          <span>Event logs</span>
-          {renderCount(eventLogAnalysis.totalEntryCount)}
+          <span>{label}</span>
+          {renderCount(
+            eventLogCount.value,
+            eventLogCount.isLowerBound
+              ? `at least ${eventLogCount.value}; some channels could not be read`
+              : undefined,
+          )}
         </a>
       );
     }
@@ -195,14 +257,15 @@ export function DsregcmdSidebar() {
           navigateToSection(id);
         }}
       >
-        <span>{SECTION_LABELS[id]}</span>
+        <span>{label}</span>
         {renderCount(count)}
       </a>
     );
   };
 
   return (
-    <div
+    <nav
+      aria-label="Source and sections"
       style={{
         display: "flex",
         flexDirection: "column",
@@ -236,7 +299,7 @@ export function DsregcmdSidebar() {
           DSREGCMD
         </span>
         <div
-          title={sourceContext.displayLabel}
+          title={sourceLabel}
           style={{
             marginTop: "4px",
             fontWeight: 600,
@@ -246,16 +309,18 @@ export function DsregcmdSidebar() {
             whiteSpace: "nowrap",
           }}
         >
-          {sourceContext.displayLabel}
+          {sourceLabel}
         </div>
         {kindLine && (
           <div style={{ fontSize: smallFont, color: tokens.colorNeutralForeground2 }}>
             {kindLine}
           </div>
         )}
-        {hasSource && (
+        {/* Counts exist only once the source was read; before that, or after a
+            failed load, they would claim an empty source. */}
+        {hasResult && (
           <div style={{ ...numeric, fontSize: tinyFont, color: tokens.colorNeutralForeground3 }}>
-            {plural(sourceContext.rawLineCount, "line", "lines")} {"·"}{" "}
+            {plural(sourceContext.rawLineCount, "line", "lines")} {"\u00B7"}{" "}
             {plural(sourceContext.rawCharCount, "char", "chars")}
           </div>
         )}
@@ -282,30 +347,28 @@ export function DsregcmdSidebar() {
         />
       )}
 
-      {result ? (
-        <nav aria-label="On this page" style={{ flex: 1, overflow: "auto" }}>
-          <div
-            style={{
-              padding: "14px 16px 6px",
-              fontSize: tinyFont,
-              fontWeight: 600,
-              letterSpacing: "0.05em",
-              textTransform: "uppercase",
-              color: tokens.colorNeutralForeground3,
-            }}
-          >
-            On this page
-          </div>
-          {NAV_ORDER.map(renderItem)}
-        </nav>
-      ) : (
-        analysisState.phase === "idle" && (
-          <EmptyState
-            title="No dsregcmd analysis yet"
-            body="Use the toolbar actions to capture live output, paste clipboard text, open a text file, or open an evidence folder."
-          />
-        )
-      )}
-    </div>
+      <div style={{ flex: 1, overflow: "auto" }}>
+        <div
+          style={{
+            padding: "14px 16px 6px",
+            fontSize: eyebrowFont,
+            fontWeight: 700,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            color: tokens.colorNeutralForeground3,
+          }}
+        >
+          On this page
+        </div>
+        {NAV_ORDER.map(renderItem)}
+      </div>
+
+      <span id={REASON_NO_RESULT_ID} style={VISUALLY_HIDDEN}>
+        Available after a source has been analyzed.
+      </span>
+      <span id={REASON_NO_EVENT_LOGS_ID} style={VISUALLY_HIDDEN}>
+        Unavailable: this source has no event log data.
+      </span>
+    </nav>
   );
 }

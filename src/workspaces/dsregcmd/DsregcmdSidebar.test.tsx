@@ -1,8 +1,10 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DsregcmdSidebar } from "./DsregcmdSidebar";
 import { DsregcmdWorkspace } from "./DsregcmdWorkspace";
+import { getVisibleFactRows } from "./FactGroupRenderer";
 import { useDsregcmdStore } from "./dsregcmd-store";
+import { useDsregcmdDerived } from "./use-dsregcmd-derived";
 import {
   analysisResult,
   sourceContext as fixtureSourceContext,
@@ -140,13 +142,16 @@ describe("DsregcmdSidebar source card", () => {
 });
 
 describe("DsregcmdSidebar on this page", () => {
-  it("lists the sections as links with fragment hrefs and counts", () => {
+  it("lists the sections as links in one Source and sections landmark", () => {
     const result = seed();
     render(<DsregcmdSidebar />);
 
-    const nav = screen.getByRole("navigation", { name: "On this page" });
+    const nav = screen.getByRole("navigation", { name: "Source and sections" });
+    expect(screen.getAllByRole("navigation")).toHaveLength(1);
+    // The source card is inside the same landmark as the items.
+    expect(within(nav).getByText("DSREGCMD")).toBeInTheDocument();
     const links = within(nav).getAllByRole("link");
-    expect(links.map((link) => link.textContent?.replace(/\d+$/, ""))).toEqual([
+    expect(links.map((link) => link.querySelector("span")?.textContent)).toEqual([
       "Overview",
       "Findings",
       "Facts",
@@ -155,19 +160,12 @@ describe("DsregcmdSidebar on this page", () => {
       "Event logs",
       "Export",
     ]);
-    expect(within(nav).getByRole("link", { name: /^Findings/ })).toHaveAttribute(
-      "href",
-      "#dsregcmd-section-findings",
-    );
-    expect(within(nav).getByRole("link", { name: /^Findings/ })).toHaveTextContent(
-      `Findings${result.diagnostics.length}`,
-    );
+    const findings = within(nav).getByRole("link", { name: /^Findings/ });
+    expect(findings).toHaveAttribute("href", "#dsregcmd-section-findings");
+    expect(findings).toHaveTextContent(`Findings${result.diagnostics.length}`);
     expect(within(nav).getByRole("link", { name: /^Event logs/ })).toHaveAttribute(
       "href",
       "#dsregcmd-section-event-logs",
-    );
-    expect(within(nav).getByRole("link", { name: /^Event logs/ })).toHaveTextContent(
-      `Event logs${result.eventLogAnalysis?.totalEntryCount}`,
     );
     expect(within(nav).getByRole("link", { name: "Overview" })).toHaveAttribute(
       "href",
@@ -208,18 +206,41 @@ describe("DsregcmdSidebar on this page", () => {
     expect(screen.getByRole("link", { name: /^Findings/ }).style.borderLeft).toContain("transparent");
   });
 
-  it("counts visible fact rows and respects Show not reported fields", () => {
+  it("counts the fact rows the page renders and respects Show not reported fields", () => {
     seed();
-    render(<DsregcmdSidebar />);
+    render(
+      <>
+        <DsregcmdSidebar />
+        <DsregcmdWorkspace />
+      </>,
+    );
     const factsCount = () =>
-      Number(screen.getByRole("link", { name: /^Facts/ }).textContent?.replace(/\D/g, ""));
+      Number(
+        screen.getByRole("link", { name: /^Facts/ }).textContent?.replace(/\D/g, ""),
+      );
+    // FactsTable renders each visible row as a two-column grid.
+    const renderedRows = () =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>('[data-dsregcmd-section="facts"] div'),
+      ).filter((element) => element.style.gridTemplateColumns.startsWith("170px")).length;
+    const expectedRows = (show: boolean) => {
+      const { factGroups } = renderHook(() => useDsregcmdDerived()).result.current;
+      return factGroups.reduce(
+        (total, group) => total + getVisibleFactRows(group, show).length,
+        0,
+      );
+    };
 
     const hidden = factsCount();
+    expect(hidden).toBe(renderedRows());
+    expect(hidden).toBe(expectedRows(false));
+
     act(() => useDsregcmdStore.getState().setShowNotReported(true));
     const shown = factsCount();
 
-    expect(hidden).toBeGreaterThan(0);
-    expect(shown).toBeGreaterThanOrEqual(hidden);
+    expect(shown).toBe(renderedRows());
+    expect(shown).toBe(expectedRows(true));
+    expect(shown).toBeGreaterThan(hidden);
   });
 
   it("Event logs switches to the event-log surface and Back returns to analysis", () => {
@@ -269,23 +290,121 @@ describe("DsregcmdSidebar on this page", () => {
     delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
   });
 
-  it("disables Event logs and shows no count when the source has none", () => {
+  it("disables Event logs accessibly when the source has no event log data", () => {
     seed({}, false);
     render(<DsregcmdSidebar />);
 
-    const item = screen.getByText("Event logs").closest("a") as HTMLElement;
+    const item = screen.getByRole("link", { name: /^Event logs/ });
     expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveAttribute("tabindex", "0");
     expect(item).not.toHaveAttribute("href");
+    expect(item).toHaveAccessibleDescription(/no event log data/);
     expect(item.textContent).toBe("Event logs");
     fireEvent.click(item);
     expect(useDsregcmdStore.getState().activeTab).toBe("analysis");
   });
 
-  it("shows no navigation before a result exists", () => {
+  it("renders the navigation disabled with No source loaded before any source", () => {
     render(<DsregcmdSidebar />);
 
-    expect(screen.queryByRole("navigation", { name: "On this page" })).toBeNull();
-    expect(screen.getByText("No dsregcmd analysis yet")).toBeInTheDocument();
+    expect(screen.getByText("No source loaded")).toBeInTheDocument();
+    const links = within(
+      screen.getByRole("navigation", { name: "Source and sections" }),
+    ).getAllByRole("link");
+    expect(links).toHaveLength(7);
+    for (const link of links) {
+      expect(link).toHaveAttribute("aria-disabled", "true");
+      expect(link).toHaveAccessibleDescription(/after a source has been analyzed/);
+    }
+    fireEvent.click(links[1]);
+    expect(useDsregcmdStore.getState().pendingScrollSection).toBeNull();
+  });
+
+  it("renders the navigation disabled while analyzing", () => {
+    useDsregcmdStore.getState().beginAnalysis({ kind: "file", path: "C:\\temp\\dsregcmd.txt" });
+    render(<DsregcmdSidebar />);
+
+    for (const link of screen.getAllByRole("link")) {
+      expect(link).toHaveAttribute("aria-disabled", "true");
+    }
+  });
+
+  it("shows no lines and chars while analyzing or after a failed load", () => {
+    useDsregcmdStore.getState().beginAnalysis({ kind: "file", path: "C:\\temp\\dsregcmd.txt" });
+    const { unmount } = render(<DsregcmdSidebar />);
+    expect(screen.getByText("Text file \u00B7 dsregcmd.txt")).toBeInTheDocument();
+    expect(screen.queryByText(/\d+ lines?/)).toBeNull();
+    unmount();
+
+    act(() => useDsregcmdStore.getState().failAnalysis("Access denied"));
+    render(<DsregcmdSidebar />);
+    expect(screen.getByText("Text file \u00B7 dsregcmd.txt")).toBeInTheDocument();
+    expect(screen.queryByText(/\d+ lines?/)).toBeNull();
+    expect(screen.queryByText(/\d+ chars?/)).toBeNull();
+  });
+
+  describe("Event logs count", () => {
+    const withLiveQuery = (successful: number, failed: number, total: number) => {
+      const result = analysisResult();
+      result.eventLogAnalysis = {
+        ...result.eventLogAnalysis!,
+        totalEntryCount: total,
+        liveQuery: {
+          attemptedChannelCount: successful + failed,
+          successfulChannelCount: successful,
+          channelsWithResultsCount: total > 0 ? successful : 0,
+          failedChannelCount: failed,
+          perChannelEntryLimit: 500,
+          channels: [],
+        },
+      };
+      useDsregcmdStore
+        .getState()
+        .setResults("AzureAdJoined : YES", result, fixtureSourceContext());
+    };
+
+    it("shows no count when no live channel could be read", () => {
+      withLiveQuery(0, 3, 0);
+      render(<DsregcmdSidebar />);
+
+      const item = screen.getByRole("link", { name: /^Event logs/ });
+      expect(item.textContent).toBe("Event logs");
+    });
+
+    it("marks the count as a lower bound after a partial failure", () => {
+      withLiveQuery(2, 1, 7);
+      render(<DsregcmdSidebar />);
+
+      const item = screen.getByRole("link", { name: /^Event logs/ });
+      expect(item).toHaveTextContent("7+");
+      expect(item).toHaveAccessibleName(/at least 7; some channels could not be read/);
+    });
+
+    it("shows the plain count when every channel was read, including zero", () => {
+      withLiveQuery(3, 0, 0);
+      render(<DsregcmdSidebar />);
+      expect(screen.getByRole("link", { name: /^Event logs/ })).toHaveTextContent("Event logs0");
+
+      cleanup();
+      withLiveQuery(3, 0, 12);
+      render(<DsregcmdSidebar />);
+      expect(screen.getByRole("link", { name: /^Event logs/ })).toHaveTextContent("Event logs12");
+    });
+
+    it("shows the plain count for a non-live source", () => {
+      const result = analysisResult();
+      result.eventLogAnalysis = {
+        ...result.eventLogAnalysis!,
+        totalEntryCount: 5,
+        liveQuery: null,
+      };
+      useDsregcmdStore
+        .getState()
+        .setResults("AzureAdJoined : YES", result, fixtureSourceContext());
+      render(<DsregcmdSidebar />);
+
+      expect(screen.getByRole("link", { name: /^Event logs/ })).toHaveTextContent("Event logs5");
+    });
   });
 });
 
@@ -341,5 +460,66 @@ describe("DsregcmdWorkspace scroll-spy", () => {
     render(<DsregcmdWorkspace />);
 
     expect(observed).toHaveLength(0);
+  });
+  it("keeps the last section selected when the observer fires at the end of the range", () => {
+    seed();
+    render(
+      <>
+        <DsregcmdSidebar />
+        <DsregcmdWorkspace />
+      </>,
+    );
+    const container = section("overview").parentElement as HTMLElement;
+    Object.defineProperties(container, {
+      scrollTop: { value: 500, configurable: true },
+      clientHeight: { value: 300, configurable: true },
+      scrollHeight: { value: 800, configurable: true },
+    });
+
+    act(() => {
+      container.dispatchEvent(new Event("scroll"));
+    });
+    expect(useDsregcmdStore.getState().activeSection).toBe("export");
+
+    // A later observer callback must not overwrite the end-of-range choice.
+    act(() => callback?.([{ target: section("flows"), isIntersecting: true }]));
+    expect(useDsregcmdStore.getState().activeSection).toBe("export");
+  });
+
+  it("restores the analysis scroll position when returning from Event logs", () => {
+    const offsets = new WeakMap<Element, number>();
+    Object.defineProperty(HTMLElement.prototype, "scrollTop", {
+      configurable: true,
+      get() {
+        return offsets.get(this) ?? 0;
+      },
+      set(value: number) {
+        offsets.set(this, value);
+      },
+    });
+    try {
+      seed();
+      render(
+        <>
+          <DsregcmdSidebar />
+          <DsregcmdWorkspace />
+        </>,
+      );
+      const container = section("overview").parentElement as HTMLElement;
+      container.scrollTop = 420;
+      act(() => {
+        container.dispatchEvent(new Event("scroll"));
+      });
+
+      fireEvent.click(screen.getByRole("link", { name: /^Event logs/ }));
+      expect(document.getElementById("dsregcmd-section-overview")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Back to analysis" }));
+
+      const remounted = section("overview").parentElement as HTMLElement;
+      expect(remounted).not.toBe(container);
+      expect(remounted.scrollTop).toBe(420);
+    } finally {
+      delete (HTMLElement.prototype as { scrollTop?: unknown }).scrollTop;
+    }
   });
 });

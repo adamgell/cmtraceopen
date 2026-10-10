@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -66,6 +67,9 @@ export function DsregcmdWorkspace() {
   const pendingScrollSection = useDsregcmdStore((s) => s.pendingScrollSection);
   const clearPendingScroll = useDsregcmdStore((s) => s.clearPendingScroll);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  // Where the analysis view was scrolled, kept across the unmount that happens
+  // while the event-log view shows so "Back to analysis" can return there.
+  const analysisScrollTopRef = useRef(0);
 
   const diagnostics = result?.diagnostics ?? [];
   const {
@@ -126,6 +130,14 @@ export function DsregcmdWorkspace() {
       element.getAttribute("data-dsregcmd-section") as DsregcmdSectionId;
     const visible = new Set<Element>();
 
+    // The last section can be too short to reach the upper band, so the end of
+    // the scroll range selects it. Both the observer and the scroll handler
+    // apply this rule so neither can overwrite the other's choice.
+    const last = elements[elements.length - 1];
+    const isAtEndOfRange = () =>
+      container.scrollTop > 0 &&
+      container.scrollTop + container.clientHeight >= container.scrollHeight - 2;
+
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -134,6 +146,10 @@ export function DsregcmdWorkspace() {
           } else {
             visible.delete(entry.target);
           }
+        }
+        if (last && isAtEndOfRange()) {
+          setActiveSection(sectionOf(last));
+          return;
         }
         const first = elements.find((element) => visible.has(element));
         if (first) {
@@ -144,13 +160,9 @@ export function DsregcmdWorkspace() {
     );
     elements.forEach((element) => observer.observe(element));
 
-    // The last section can be too short to reach the upper band, so the end
-    // of the scroll range selects it.
     const handleScroll = () => {
-      const atEnd =
-        container.scrollTop + container.clientHeight >= container.scrollHeight - 2;
-      const last = elements[elements.length - 1];
-      if (atEnd && container.scrollTop > 0 && last) {
+      analysisScrollTopRef.current = container.scrollTop;
+      if (last && isAtEndOfRange()) {
         setActiveSection(sectionOf(last));
       }
     };
@@ -161,6 +173,23 @@ export function DsregcmdWorkspace() {
       container.removeEventListener("scroll", handleScroll);
     };
   }, [hasResult, setActiveSection, showEventLogs]);
+
+  // A new result starts at the top.
+  useEffect(() => {
+    analysisScrollTopRef.current = 0;
+  }, [result]);
+
+  // Returning from the event-log view remounts the scroll container at the top;
+  // put it back where the user left it.
+  useLayoutEffect(() => {
+    if (!hasResult || showEventLogs) {
+      return;
+    }
+    const container = scrollContainerRef.current;
+    if (container && analysisScrollTopRef.current > 0) {
+      container.scrollTop = analysisScrollTopRef.current;
+    }
+  }, [hasResult, showEventLogs]);
 
   // A nav click may arrive while the event-log view is showing, when the target
   // section is not mounted yet; scroll once the analysis view has rendered.
@@ -335,7 +364,10 @@ export function DsregcmdWorkspace() {
       }}
     >
       {showEventLogs && result.eventLogAnalysis ? (
-        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <div
+          key="event-logs"
+          style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
           <div
             style={{
               padding: "4px 12px",
@@ -357,6 +389,7 @@ export function DsregcmdWorkspace() {
         </div>
       ) : (
       <div
+        key="analysis"
         ref={scrollContainerRef}
         style={{
           flex: 1,
