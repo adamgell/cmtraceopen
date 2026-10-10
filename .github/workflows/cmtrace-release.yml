@@ -336,6 +336,7 @@ jobs:
     name: Publish updater manifest
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     permissions:
       contents: write
     # Shared with codesign.yml; see the note there for why grouping publisher

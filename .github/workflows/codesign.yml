@@ -432,6 +432,7 @@ jobs:
       - prepare-windows-release
       - windows-signed-release
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     permissions:
       contents: write
     # Shared with cmtrace-release.yml so the two publishers for a tag run one
