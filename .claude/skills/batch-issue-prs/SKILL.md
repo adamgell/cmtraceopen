@@ -82,8 +82,8 @@ later session.
   issue to be finished: a draft PR is the review surface, not the finish line.
 - Always `--draft`. Draft is what makes this safe to pre-authorize: nothing merges
   without a human.
-- Still needs an explicit ask: merging, marking ready for review, force-pushing a
-  shared branch, pushing to `main`, and closing or reopening someone else's PR.
+- Still needs an explicit ask: merging, marking ready for review, force-pushing any
+  branch, pushing to `main`, and closing or reopening someone else's PR.
 - A PR body states what is done, what is deliberately not done, and every assumption
   made in place of a blocking question.
 
