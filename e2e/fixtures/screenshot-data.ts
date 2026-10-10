@@ -447,7 +447,8 @@ export const MOCK_INTUNE = {
 
 // ---------------------------------------------------------------------------
 // DSRegCmd — arguments for `useDsregcmdStore.getState().setResults(rawInput, result, context)`.
-// A fictional Microsoft Entra joined device with one Warning and one Info finding.
+// A fictional Microsoft Entra joined device, MDM enrolled, with exactly one Info
+// finding (on-prem-sso-missing) and no Warning or Error findings.
 // ---------------------------------------------------------------------------
 
 const DSREGCMD_RAW = [
@@ -596,8 +597,8 @@ const DSREGCMD_RESULT = {
     captureConfidence: "high",
     captureConfidenceReason:
       "Capture ran in the signed-in user context with a full SSO State section present.",
-    mdmEnrolled: false,
-    missingMdm: true,
+    mdmEnrolled: true,
+    missingMdm: false,
     complianceUrlPresent: true,
     missingComplianceUrl: false,
     azureAdPrtPresent: true,
@@ -615,26 +616,6 @@ const DSREGCMD_RESULT = {
     remoteSessionSystem: false,
   },
   diagnostics: [
-    {
-      id: "mdm-not-enrolled",
-      severity: "Warning",
-      category: "Management",
-      title: "Device is Entra joined but not MDM enrolled",
-      summary:
-        "No MDM enrollment URLs resolved to an active enrollment, so Intune compliance and policy may not apply.",
-      evidence: [
-        "MdmUrl present but enrollment state not detected",
-        "DeviceManagementSrvUrl is empty",
-      ],
-      nextChecks: [
-        "Confirm the auto-enrollment GPO / CSP is scoped to this device",
-        "Check the DeviceManagement section on the endpoint",
-      ],
-      suggestedFixes: [
-        "Trigger enrollment via Settings > Access work or school",
-        "Verify the user has an Intune license assigned",
-      ],
-    },
     {
       id: "on-prem-sso-missing",
       severity: "Info",

@@ -331,10 +331,12 @@ function sourceContext(): DsregcmdSourceContext {
   };
 }
 
-function seedReady() {
+function seedReady(mdmEnrolled: boolean | null = true) {
+  const result = analysisResult();
+  result.derived.mdmEnrolled = mdmEnrolled;
   useDsregcmdStore
     .getState()
-    .setResults("AzureAdJoined : YES", analysisResult(), sourceContext());
+    .setResults("AzureAdJoined : YES", result, sourceContext());
 }
 
 afterEach(() => {
@@ -348,6 +350,27 @@ beforeEach(() => {
 });
 
 describe("DsregcmdWorkspace fixtures", () => {
+  it.each([
+    { mdmEnrolled: false, label: "Not enrolled" },
+    { mdmEnrolled: null, label: "Unknown" },
+  ])(
+    "shows $label on sidebar and MDM Signals card when mdmEnrolled is $mdmEnrolled",
+    ({ mdmEnrolled, label }) => {
+      seedReady(mdmEnrolled);
+      render(
+        <>
+          <DsregcmdSidebar />
+          <DsregcmdWorkspace />
+        </>,
+      );
+
+      const sidebarRow = screen.getByText("MDM visibility:").parentElement;
+      expect(sidebarRow).toHaveTextContent(`MDM visibility: ${label}`);
+      const factsCard = screen.getByText("MDM Signals").parentElement;
+      expect(factsCard).toHaveTextContent(label);
+    },
+  );
+
   it("DSREG-003 shows health cards, issues overview, and sidebar findings", () => {
     seedReady();
     render(
@@ -362,6 +385,11 @@ describe("DsregcmdWorkspace fixtures", () => {
     expect(screen.getAllByText("Capture Confidence").length).toBeGreaterThan(0);
     expect(screen.getByText("PRT State")).toBeInTheDocument();
     expect(screen.getByText("MDM Signals")).toBeInTheDocument();
+    // Sidebar and facts panel must render the same MDM visibility label.
+    const sidebarRow = screen.getByText("MDM visibility:").parentElement;
+    expect(sidebarRow).toHaveTextContent("MDM visibility: Present");
+    const factsCard = screen.getByText("MDM Signals").parentElement;
+    expect(factsCard).toHaveTextContent("Present");
     expect(screen.getByText("NGC")).toBeInTheDocument();
     expect(screen.getAllByText("Certificate").length).toBeGreaterThan(0);
     expect(screen.getByText("90 days")).toBeInTheDocument();
