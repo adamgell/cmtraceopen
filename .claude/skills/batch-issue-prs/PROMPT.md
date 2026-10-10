@@ -14,9 +14,8 @@ One branch and one PR per issue, off origin/main. Establish a green baseline
 before you touch anything.
 
 Then for each PR in turn, converging one before starting the next:
-  /code-review
-  /coderabbit:autofix
-  /loop the gh-copilot-review-loop skill until a cycle returns no new comments
+  cmtrace-code-review subagent review (validated by Main)
+  coderabbit-review-loop skill until CodeRabbit approves the head
 
 Any subagent that writes code gets isolation: "worktree". Report what you did NOT
 finish as plainly as what you did.
@@ -33,8 +32,8 @@ approximated. If an issue is blocked or needs a corpus you don't have, build
 everything that isn't blocked and tell me exactly what you left and why.
 
 One branch and one PR per issue off origin/main. Per-PR review loop:
-/code-review, then /coderabbit:autofix, then /loop gh-copilot-review-loop
-until clean. Subagents that write code get isolation: "worktree".
+cmtrace-code-review subagent (validated by Main), then the
+coderabbit-review-loop skill until clean. Subagents that write code get isolation: "worktree".
 ```
 
 ## Review-only pass
@@ -43,8 +42,8 @@ until clean. Subagents that write code get isolation: "worktree".
 Use the batch-issue-prs skill.
 
 Don't write new features. Take the open PRs I own and drive each to a clean
-review cycle: /code-review, /coderabbit:autofix, then /loop the
-gh-copilot-review-loop skill until a completed cycle produces no new comments.
+review cycle: the cmtrace-code-review subagent (validated by
+Main), then the coderabbit-review-loop skill until CodeRabbit approves the head.
 
 Re-run the real gates before you call any PR clean, and show me the output.
 Tell me which review comments you rejected and why.
