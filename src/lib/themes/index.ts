@@ -11,7 +11,6 @@ export {
   cyanBrand,
   frostBrand,
   purpleBrand,
-  redBrand,
 } from "./brand-ramps";
 
 // Severity palettes
@@ -25,7 +24,6 @@ export { classicCmtraceTheme } from "./theme-classic-cmtrace";
 export { solarizedDarkTheme } from "./theme-solarized-dark";
 export { nordTheme } from "./theme-nord";
 export { draculaTheme } from "./theme-dracula";
-export { hotdogStandTheme } from "./theme-hotdog-stand";
 
 // Registry (lookup + enumeration)
 export { DEFAULT_THEME_ID, getThemeById, getAllThemes } from "./registry";

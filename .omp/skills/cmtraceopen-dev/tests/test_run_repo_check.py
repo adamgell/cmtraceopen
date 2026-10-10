@@ -330,13 +330,13 @@ class RepositoryCheckTests(unittest.TestCase):
             self.assertEqual("completed", result["outcome"])
             kevent.assert_called_once_with(
                 123,
-                filter=run_repo_check.select.KQ_FILTER_PROC,
+                filter=kqueue_surface["KQ_FILTER_PROC"],
                 flags=(
-                    run_repo_check.select.KQ_EV_ADD
-                    | run_repo_check.select.KQ_EV_ENABLE
-                    | run_repo_check.select.KQ_EV_ONESHOT
+                    kqueue_surface["KQ_EV_ADD"]
+                    | kqueue_surface["KQ_EV_ENABLE"]
+                    | kqueue_surface["KQ_EV_ONESHOT"]
                 ),
-                fflags=run_repo_check.select.KQ_NOTE_EXIT,
+                fflags=kqueue_surface["KQ_NOTE_EXIT"],
             )
             self.assertEqual(2, queue.control.call_count)
             queue.close.assert_called_once_with()

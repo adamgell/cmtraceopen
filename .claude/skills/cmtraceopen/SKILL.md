@@ -34,7 +34,7 @@ Read it from GitHub and `git ls-remote` at the moment you act.
 - Project history, decisions, or architecture trade-offs
 - Creating fixtures, tests, or benchmarks
 
-## Hard rules (full text in `soul.md`)
+## Hard rules (these summarize `soul.md`'s operating rules, which holds them in full; rule 8 is in the execution charter)
 
 1. **No backward-compatibility layers.** Remove obsolete paths.
 2. **Simplest implementation wins.** No speculative abstractions.
@@ -43,6 +43,11 @@ Read it from GitHub and `git ls-remote` at the moment you act.
 5. **Conservative parse stance.** Malformed input parses conservatively; never assert rejection.
 6. **Isolation discipline.** One worktree per lane. Commit and push before ending a cycle.
 7. **Independent verification.** Never accept another agent's say-so.
+8. **Use `/advisor` and code through subagents.** Consult the Opus advisor at
+   decision points, dispatch `cmtrace-coder` (Sonnet, `medium` for slices, `low` for
+   small mechanical changes) for code, and post a `cmtrace-code-review` report on
+   every PR before reporting it ready. Details: the execution charter's "Advisor and
+   subagents" section.
 
 ## Where things live
 

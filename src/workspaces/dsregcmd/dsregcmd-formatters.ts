@@ -488,7 +488,9 @@ export function toneForMdmVisibility(
       : "good";
   }
 
-  return "neutral";
+  // `false` is an affirmative finding of no enrollment; `null` is "could not
+  // be determined" and must stay neutral rather than claim a problem.
+  return derived.mdmEnrolled === false ? "warn" : "neutral";
 }
 
 export function getMdmVisibilityLabel(
@@ -500,7 +502,7 @@ export function getMdmVisibilityLabel(
       : "Present";
   }
 
-  return "Unknown";
+  return derived.mdmEnrolled === false ? "Not enrolled" : "Unknown";
 }
 
 export function getNgcReadinessValue(

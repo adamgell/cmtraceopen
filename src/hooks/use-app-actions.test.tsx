@@ -163,6 +163,25 @@ describe("useAppActions", () => {
     },
   );
 
+  it.each([
+    { isAnalyzing: true, canOpenSources: false },
+    { isAnalyzing: false, canOpenSources: true },
+  ])(
+    "sets dsregcmd source availability when isAnalyzing is $isAnalyzing",
+    ({ isAnalyzing, canOpenSources }) => {
+      useUiStore.setState({
+        activeWorkspace: "dsregcmd",
+        activeView: "dsregcmd",
+      });
+      useDsregcmdStore.setState({ isAnalyzing });
+
+      const { result } = renderHook(() => useAppActions());
+
+      expect(result.current.commandState.canOpenSources).toBe(canOpenSources);
+      expect(result.current.commandState.isLoading).toBe(!canOpenSources);
+    },
+  );
+
   it("does not let background workspace activity disable source commands", () => {
     useIntuneStore.setState({ isAnalyzing: true });
     useEspDiagnosticsStore.setState({ phase: "live", sessionId: "session-1" });

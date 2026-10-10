@@ -1,6 +1,6 @@
 import { tokens } from "@fluentui/react-components";
 import { useDsregcmdStore } from "./dsregcmd-store";
-import { selectTopFindings } from "./dsregcmd-formatters";
+import { getMdmVisibilityLabel, selectTopFindings } from "./dsregcmd-formatters";
 import { useAppActions } from "../../hooks/use-app-actions";
 import {
   EmptyState,
@@ -77,7 +77,7 @@ export function DsregcmdSidebar() {
             <div style={{ padding: "12px 10px", borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, fontSize: "inherit", color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
               <div><strong>Join type:</strong> {result.derived.joinTypeLabel}</div>
               <div style={{ marginTop: "6px" }}><strong>PRT present:</strong> {result.derived.azureAdPrtPresent === null ? 'Unknown' : result.derived.azureAdPrtPresent ? 'Yes' : 'No'}</div>
-              <div style={{ marginTop: "6px" }}><strong>MDM enrolled:</strong> {result.derived.mdmEnrolled === null ? 'Unknown' : result.derived.mdmEnrolled ? 'Yes' : 'No'}</div>
+              <div style={{ marginTop: "6px" }}><strong>MDM visibility:</strong> {getMdmVisibilityLabel(result.derived)}</div>
               <div style={{ marginTop: "6px" }}><strong>Issues:</strong> {errorCount} errors • {warningCount} warnings • {infoCount} info</div>
               {sourceContext.evidenceFilePath && (
                 <div style={{ marginTop: "6px", wordBreak: "break-word" }}><strong>Evidence file:</strong> {sourceContext.evidenceFilePath}</div>

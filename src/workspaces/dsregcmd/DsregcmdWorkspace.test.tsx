@@ -331,10 +331,12 @@ function sourceContext(): DsregcmdSourceContext {
   };
 }
 
-function seedReady() {
+function seedReady(mdmEnrolled: boolean | null = true) {
+  const result = analysisResult();
+  result.derived.mdmEnrolled = mdmEnrolled;
   useDsregcmdStore
     .getState()
-    .setResults("AzureAdJoined : YES", analysisResult(), sourceContext());
+    .setResults("AzureAdJoined : YES", result, sourceContext());
 }
 
 afterEach(() => {
@@ -347,7 +349,31 @@ beforeEach(() => {
   useDsregcmdStore.getState().clear();
 });
 
+/** Matches any button the removed header row used to carry, including the old "Capture" label and the toolbar's "Capture now". */
+const NO_HEADER_BUTTONS = /^(Capture|Paste|Open (Text File|Evidence Folder))/;
+
 describe("DsregcmdWorkspace fixtures", () => {
+  it.each([
+    { mdmEnrolled: false, label: "Not enrolled" },
+    { mdmEnrolled: null, label: "Unknown" },
+  ])(
+    "shows $label on sidebar and MDM Signals card when mdmEnrolled is $mdmEnrolled",
+    ({ mdmEnrolled, label }) => {
+      seedReady(mdmEnrolled);
+      render(
+        <>
+          <DsregcmdSidebar />
+          <DsregcmdWorkspace />
+        </>,
+      );
+
+      const sidebarRow = screen.getByText("MDM visibility:").parentElement;
+      expect(sidebarRow).toHaveTextContent(`MDM visibility: ${label}`);
+      const factsCard = screen.getByText("MDM Signals").parentElement;
+      expect(factsCard).toHaveTextContent(label);
+    },
+  );
+
   it("DSREG-003 shows health cards, issues overview, and sidebar findings", () => {
     seedReady();
     render(
@@ -362,6 +388,11 @@ describe("DsregcmdWorkspace fixtures", () => {
     expect(screen.getAllByText("Capture Confidence").length).toBeGreaterThan(0);
     expect(screen.getByText("PRT State")).toBeInTheDocument();
     expect(screen.getByText("MDM Signals")).toBeInTheDocument();
+    // Sidebar and facts panel must render the same MDM visibility label.
+    const sidebarRow = screen.getByText("MDM visibility:").parentElement;
+    expect(sidebarRow).toHaveTextContent("MDM visibility: Present");
+    const factsCard = screen.getByText("MDM Signals").parentElement;
+    expect(factsCard).toHaveTextContent("Present");
     expect(screen.getByText("NGC")).toBeInTheDocument();
     expect(screen.getAllByText("Certificate").length).toBeGreaterThan(0);
     expect(screen.getByText("90 days")).toBeInTheDocument();
@@ -403,6 +434,23 @@ describe("DsregcmdWorkspace fixtures", () => {
     expect(screen.getByText("1 of 1 entries")).toBeInTheDocument();
     expect(screen.getAllByText("AAD Operational").length).toBeGreaterThan(0);
     expect(screen.getByText("PRT refresh failed")).toBeInTheDocument();
+  });
+
+  it("renders no workspace header row when results are loaded", () => {
+    seedReady();
+    render(<DsregcmdWorkspace />);
+
+    expect(screen.queryByText("dsregcmd Workspace")).toBeNull();
+    expect(screen.queryByRole("button", { name: NO_HEADER_BUTTONS })).toBeNull();
+  });
+
+  it("renders no workspace header row in the empty state", () => {
+    useDsregcmdStore.getState().clear();
+    render(<DsregcmdWorkspace />);
+
+    expect(screen.queryByText("dsregcmd Workspace")).toBeNull();
+    expect(screen.queryByRole("button", { name: NO_HEADER_BUTTONS })).toBeNull();
+    expect(screen.getByText("No dsregcmd source loaded")).toBeInTheDocument();
   });
 
   it("DSREG-006 shows export controls for JSON, status, summary, and raw input", () => {

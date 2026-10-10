@@ -8,8 +8,7 @@ export type ThemeId =
   | "classic-cmtrace"
   | "solarized-dark"
   | "nord"
-  | "dracula"
-  | "hotdog-stand";
+  | "dracula";
 
 export type ColorScheme = "light" | "dark";
 

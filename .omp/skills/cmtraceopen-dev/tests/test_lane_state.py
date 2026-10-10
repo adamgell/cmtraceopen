@@ -4721,8 +4721,8 @@ class MutationRetryTests(unittest.TestCase):
             with (
                 mock.patch.object(lane_state, "LOCK_TIMEOUT_SECONDS", 0.0),
                 mock.patch.object(
-                    lane_state.fcntl,
-                    "flock",
+                    lane_state,
+                    "_lock_fd_nonblocking",
                     side_effect=BlockingIOError,
                 ),
                 self.assertRaises(lane_state.RetriableConflict),
@@ -5628,6 +5628,53 @@ class CliTests(unittest.TestCase):
             "terminal_rejection",
             json.loads(output.getvalue())["classification"],
         )
+
+@unittest.skipIf(os.name == "nt", "POSIX flock path")
+class PosixLockHelperTests(unittest.TestCase):
+    def test_lock_excludes_second_descriptor_until_unlocked(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "lock")
+            first = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+            second = os.open(path, os.O_RDWR)
+            try:
+                lane_state._lock_fd_nonblocking(first)
+                with self.assertRaises(BlockingIOError):
+                    lane_state._lock_fd_nonblocking(second)
+                lane_state._unlock_fd(first)
+                lane_state._lock_fd_nonblocking(second)
+                lane_state._unlock_fd(second)
+            finally:
+                os.close(first)
+                os.close(second)
+
+
+class WindowsLockBranchTests(unittest.TestCase):
+    def _run_windows_branch(self, side_effect: BaseException) -> None:
+        fake_msvcrt = mock.Mock(LK_NBLCK=2, LK_UNLCK=0)
+        fake_msvcrt.locking.side_effect = side_effect
+        with (
+            mock.patch.object(lane_state.os, "name", "nt"),
+            mock.patch.object(lane_state.os, "lseek"),
+            mock.patch.dict(sys.modules, {"msvcrt": fake_msvcrt}),
+        ):
+            lane_state._lock_fd_nonblocking(7)
+
+    def test_contention_errnos_become_blocking_io_error(self) -> None:
+        import errno
+
+        for code in (errno.EACCES, errno.EDEADLK):
+            with self.subTest(code=code), self.assertRaises(BlockingIOError):
+                self._run_windows_branch(OSError(code, "locked"))
+
+    def test_other_oserror_is_reraised_unchanged(self) -> None:
+        import errno
+
+        error = OSError(errno.EBADF, "bad descriptor")
+        with self.assertRaises(OSError) as caught:
+            self._run_windows_branch(error)
+        self.assertIs(error, caught.exception)
+        self.assertNotIsInstance(caught.exception, BlockingIOError)
+
 
 if __name__ == "__main__":
     unittest.main()

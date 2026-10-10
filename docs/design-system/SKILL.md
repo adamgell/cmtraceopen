@@ -60,8 +60,8 @@ If you find yourself reaching for a hex code that isn't in `tokens.css`, stop. E
 </html>
 ```
 
-Switch themes by changing the `data-cmt-theme` attribute. The eight valid IDs:
-`light` · `dark` · `high-contrast` · `classic-cmtrace` · `solarized-dark` · `nord` · `dracula` · `hotdog-stand`
+Switch themes by changing the `data-cmt-theme` attribute. The seven valid IDs:
+`light` · `dark` · `high-contrast` · `classic-cmtrace` · `solarized-dark` · `nord` · `dracula`
 
 ---
 
@@ -105,7 +105,7 @@ Use `--cmt-stroke-2` between regions. Reserve `shadow8` for popovers and `shadow
 Look at `LogRow.tsx` first. The row has fixed slots: gutter (line# + marker dot) · time · component · message · source · thread. Don't add a 7th column; either pack it into Inspector, or reuse an existing slot with a tooltip.
 
 ### Theming a new feature
-If the feature has a new color need, add it as a semantic token in **all eight themes** before shipping. Never reference brand ramp stops directly from a component — go through a semantic layer (`--cmt-status-success-fg`, not `--cmt-teal-70`).
+If the feature has a new color need, add it as a semantic token in **all seven themes** before shipping. Never reference brand ramp stops directly from a component — go through a semantic layer (`--cmt-status-success-fg`, not `--cmt-teal-70`).
 
 ---
 
@@ -135,5 +135,5 @@ If the feature has a new color need, add it as a semantic token in **all eight t
 
 - Look at `LogRow.tsx`. It's the densest, most-considered component and sets the rhythm for everything else.
 - Default to **Light theme + Teal brand**. It's the canonical surface; everything else is a variation.
-- Ship it behind the existing eight themes. If your design only works in one theme, the design isn't done.
+- Ship it behind the existing seven themes. If your design only works in one theme, the design isn't done.
 - The product is for people who read logs for a living. Respect their time.

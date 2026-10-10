@@ -41,7 +41,7 @@ describe("AppearanceTab", () => {
     expect(screen.getByRole("option", { name: "Nord" })).toBeEnabled();
     expect(screen.getByRole("option", { name: "Solarized Dark" })).toBeEnabled();
     expect(screen.getByRole("option", { name: "High Contrast" })).toBeEnabled();
-    expect(screen.getByRole("option", { name: "Hot Dog Stand" })).toBeEnabled();
+    expect(screen.queryByRole("option", { name: "Hot Dog Stand" })).toBeNull();
 
     expect(screen.getByText("Application text size")).toBeVisible();
     expect(screen.getByText("Details pane text size")).toBeVisible();
