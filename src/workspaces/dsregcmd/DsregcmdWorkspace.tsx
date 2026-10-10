@@ -2,13 +2,20 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { Button, Textarea, tokens } from "@fluentui/react-components";
+import { ArrowLeft16Regular } from "@fluentui/react-icons";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { useDsregcmdStore } from "./dsregcmd-store";
+import {
+  dsregcmdSectionDomId,
+  useDsregcmdStore,
+  type DsregcmdSectionId,
+} from "./dsregcmd-store";
+import { useDsregcmdDerived } from "./use-dsregcmd-derived";
 import { DsregcmdEventLogSurface } from "./DsregcmdEventLogSurface";
 import { redactDsregcmdStatusText, writeTextOutputFile } from "../../lib/commands";
 import {
@@ -17,16 +24,12 @@ import {
   formatHourDuration,
   formatPhaseLabel,
   formatValue,
-  getDisplayConfidenceAssessment,
-  getDisplayPhaseAssessment,
-  getFactGroups,
   getMdmVisibilityLabel,
   getNgcCaption,
   getNgcReadinessValue,
   getSummaryText,
   getPolicyDisplayValue,
   buildTimelineItems,
-  computeDisplayedPrtAgeHours,
   qualifyByCaptureConfidence,
   toneForCaptureConfidence,
   toneForJoinType,
@@ -42,7 +45,6 @@ import {
   SectionFrame,
   EmptyWorkspace,
   FlowBox,
-  TabButton,
 } from "./PolicyEvidencePane";
 
 export function DsregcmdWorkspace() {
@@ -56,57 +58,22 @@ export function DsregcmdWorkspace() {
     message: string;
   } | null>(null);
   const [showRawInput, setShowRawInput] = useState(false);
-  const [showNotReported, setShowNotReported] = useState(false);
+  const showNotReported = useDsregcmdStore((s) => s.showNotReported);
+  const setShowNotReported = useDsregcmdStore((s) => s.setShowNotReported);
   const activeTab = useDsregcmdStore((s) => s.activeTab);
   const setActiveTab = useDsregcmdStore((s) => s.setActiveTab);
-
-  const eventLogEntryCount = result?.eventLogAnalysis?.totalEntryCount ?? 0;
+  const setActiveSection = useDsregcmdStore((s) => s.setActiveSection);
+  const pendingScrollSection = useDsregcmdStore((s) => s.pendingScrollSection);
+  const clearPendingScroll = useDsregcmdStore((s) => s.clearPendingScroll);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const diagnostics = result?.diagnostics ?? [];
-  const errorCount = diagnostics.filter(
-    (item) => item.severity === "Error",
-  ).length;
-  const warningCount = diagnostics.filter(
-    (item) => item.severity === "Warning",
-  ).length;
+  const {
+    displayPhase,
+    displayConfidence,
+    factGroups,
+  } = useDsregcmdDerived();
 
-  const displayedPrtAgeHours = useMemo(
-    () => computeDisplayedPrtAgeHours(result, sourceContext),
-    [result, sourceContext],
-  );
-
-  const displayPhase = useMemo(
-    () =>
-      result
-        ? getDisplayPhaseAssessment(result, errorCount, warningCount)
-        : null,
-    [errorCount, result, warningCount],
-  );
-  const displayConfidence = useMemo(
-    () =>
-      result ? getDisplayConfidenceAssessment(result, sourceContext) : null,
-    [result, sourceContext],
-  );
-
-  const factGroups = useMemo(
-    () =>
-      result && displayPhase && displayConfidence
-        ? getFactGroups(
-            result,
-            displayedPrtAgeHours,
-            displayPhase,
-            displayConfidence,
-            sourceContext,
-          )
-        : [],
-    [
-      displayConfidence,
-      displayPhase,
-      displayedPrtAgeHours,
-      result,
-      sourceContext,
-    ],
-  );
   const summaryText = useMemo(
     () =>
       result && displayPhase && displayConfidence
@@ -137,6 +104,75 @@ export function DsregcmdWorkspace() {
       window.clearTimeout(timer);
     };
   }, [exportStatus]);
+
+  const hasResult = result !== null;
+  const showEventLogs = activeTab === "event-logs" && !!result?.eventLogAnalysis;
+
+  // Scroll-spy: the current nav item follows the first section whose top sits
+  // in the upper band of the scroll container.
+  useEffect(() => {
+    if (!hasResult || showEventLogs || typeof IntersectionObserver === "undefined") {
+      return undefined;
+    }
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return undefined;
+    }
+
+    const elements = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-dsregcmd-section]"),
+    );
+    const sectionOf = (element: Element) =>
+      element.getAttribute("data-dsregcmd-section") as DsregcmdSectionId;
+    const visible = new Set<Element>();
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            visible.add(entry.target);
+          } else {
+            visible.delete(entry.target);
+          }
+        }
+        const first = elements.find((element) => visible.has(element));
+        if (first) {
+          setActiveSection(sectionOf(first));
+        }
+      },
+      { root: container, rootMargin: "0px 0px -70% 0px", threshold: 0 },
+    );
+    elements.forEach((element) => observer.observe(element));
+
+    // The last section can be too short to reach the upper band, so the end
+    // of the scroll range selects it.
+    const handleScroll = () => {
+      const atEnd =
+        container.scrollTop + container.clientHeight >= container.scrollHeight - 2;
+      const last = elements[elements.length - 1];
+      if (atEnd && container.scrollTop > 0 && last) {
+        setActiveSection(sectionOf(last));
+      }
+    };
+    container.addEventListener("scroll", handleScroll, { passive: true });
+
+    return () => {
+      observer.disconnect();
+      container.removeEventListener("scroll", handleScroll);
+    };
+  }, [hasResult, setActiveSection, showEventLogs]);
+
+  // A nav click may arrive while the event-log view is showing, when the target
+  // section is not mounted yet; scroll once the analysis view has rendered.
+  useEffect(() => {
+    if (!pendingScrollSection || !hasResult || showEventLogs) {
+      return;
+    }
+    document
+      .getElementById(dsregcmdSectionDomId(pendingScrollSection))
+      ?.scrollIntoView?.({ block: "start" });
+    clearPendingScroll();
+  }, [clearPendingScroll, hasResult, pendingScrollSection, showEventLogs]);
 
   const setExportSuccess = useCallback((message: string) => {
     setExportStatus({ tone: "success", message });
@@ -298,36 +334,30 @@ export function DsregcmdWorkspace() {
         backgroundColor: tokens.colorNeutralBackground2,
       }}
     >
-      {/* Tab strip */}
-      <div
-        style={{
-          display: "flex",
-          gap: 2,
-          padding: "0 12px",
-          borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-          background: tokens.colorNeutralBackground3,
-          flexShrink: 0,
-        }}
-      >
-        <TabButton
-          label="Analysis"
-          isActive={activeTab === "analysis"}
-          onClick={() => setActiveTab("analysis")}
-        />
-        <TabButton
-          label="Event Logs"
-          count={eventLogEntryCount}
-          isActive={activeTab === "event-logs"}
-          onClick={() => setActiveTab("event-logs")}
-        />
-      </div>
-
-      {activeTab === "event-logs" && result.eventLogAnalysis ? (
+      {showEventLogs && result.eventLogAnalysis ? (
         <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <div
+            style={{
+              padding: "4px 12px",
+              flexShrink: 0,
+              borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+              backgroundColor: tokens.colorNeutralBackground3,
+            }}
+          >
+            <Button
+              appearance="subtle"
+              size="small"
+              icon={<ArrowLeft16Regular />}
+              onClick={() => setActiveTab("analysis")}
+            >
+              Back to analysis
+            </Button>
+          </div>
           <DsregcmdEventLogSurface eventLogAnalysis={result.eventLogAnalysis} />
         </div>
       ) : (
       <div
+        ref={scrollContainerRef}
         style={{
           flex: 1,
           overflow: "auto",
@@ -337,6 +367,11 @@ export function DsregcmdWorkspace() {
           gap: "16px",
         }}
       >
+        <div
+          id={dsregcmdSectionDomId("overview")}
+          data-dsregcmd-section="overview"
+          style={{ display: "flex", flexDirection: "column", gap: "16px", flexShrink: 0 }}
+        >
         <div
           style={{
             display: "grid",
@@ -524,7 +559,9 @@ export function DsregcmdWorkspace() {
             </div>
           </div>
         </SectionFrame>
+        </div>
 
+        <div id={dsregcmdSectionDomId("findings")} data-dsregcmd-section="findings">
         <SectionFrame
           title="Issues Overview"
           caption="Ordered diagnostic findings with evidence, recommended checks, and suggested fixes."
@@ -547,7 +584,9 @@ export function DsregcmdWorkspace() {
             </div>
           )}
         </SectionFrame>
+        </div>
 
+        <div id={dsregcmdSectionDomId("facts")} data-dsregcmd-section="facts">
         <SectionFrame
           title="Facts by Group"
           caption="Backend-extracted facts organized for quick review rather than raw line order."
@@ -561,7 +600,7 @@ export function DsregcmdWorkspace() {
           >
             <Button
               appearance={showNotReported ? "primary" : "secondary"}
-              onClick={() => setShowNotReported((value) => !value)}
+              onClick={() => setShowNotReported(!showNotReported)}
             >
               {showNotReported
                 ? "Hide not reported fields"
@@ -584,7 +623,9 @@ export function DsregcmdWorkspace() {
             ))}
           </div>
         </SectionFrame>
+        </div>
 
+        <div id={dsregcmdSectionDomId("timeline")} data-dsregcmd-section="timeline">
         <SectionFrame
           title="Timeline"
           caption="Important timestamps surfaced from PRT, certificate, and diagnostics fields."
@@ -675,7 +716,9 @@ export function DsregcmdWorkspace() {
             </div>
           )}
         </SectionFrame>
+        </div>
 
+        <div id={dsregcmdSectionDomId("flows")} data-dsregcmd-section="flows">
         <SectionFrame
           title="Flows"
           caption="Pragmatic first-pass flow boxes for registration, management, and token health."
@@ -745,6 +788,7 @@ export function DsregcmdWorkspace() {
             />
           </div>
         </SectionFrame>
+        </div>
 
         <SectionFrame
           title="Explainer"
@@ -836,6 +880,7 @@ export function DsregcmdWorkspace() {
           </div>
         </SectionFrame>
 
+        <div id={dsregcmdSectionDomId("export")} data-dsregcmd-section="export">
         <SectionFrame
           title="Export"
           caption="No-dependency export controls for handing off or attaching analysis output."
@@ -907,6 +952,7 @@ export function DsregcmdWorkspace() {
             />
           )}
         </SectionFrame>
+        </div>
       </div>
       )}
     </div>
