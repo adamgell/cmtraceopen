@@ -69,7 +69,11 @@ function getEventLogCount(analysis: EventLogAnalysis): EventLogCount {
   }
   return {
     value: analysis.totalEntryCount,
-    isLowerBound: live.failedChannelCount > 0,
+    // A failed channel contributed nothing, and a channel at the per-channel
+    // cap may hold more events than were loaded.
+    isLowerBound:
+      live.failedChannelCount > 0 ||
+      live.channels.some((channel) => channel.entryCount >= live.perChannelEntryLimit),
   };
 }
 
@@ -230,7 +234,7 @@ export function DsregcmdSidebar() {
           {renderCount(
             eventLogCount.value,
             eventLogCount.isLowerBound
-              ? `at least ${eventLogCount.value}; some channels could not be read`
+              ? `at least ${eventLogCount.value}; some channels could not be read or hold more events than were loaded`
               : undefined,
           )}
         </a>
@@ -363,12 +367,18 @@ export function DsregcmdSidebar() {
         {NAV_ORDER.map(renderItem)}
       </div>
 
-      <span id={REASON_NO_RESULT_ID} style={VISUALLY_HIDDEN}>
-        Available after a source has been analyzed.
-      </span>
-      <span id={REASON_NO_EVENT_LOGS_ID} style={VISUALLY_HIDDEN}>
-        Unavailable: this source has no event log data.
-      </span>
+      {/* Reason text exists only while an item references it, so it is not
+          read out in browse mode when everything is enabled. */}
+      {!hasResult && (
+        <span id={REASON_NO_RESULT_ID} style={VISUALLY_HIDDEN}>
+          Available after a source has been analyzed.
+        </span>
+      )}
+      {hasResult && !eventLogAnalysis && (
+        <span id={REASON_NO_EVENT_LOGS_ID} style={VISUALLY_HIDDEN}>
+          No event log data was loaded for this source.
+        </span>
+      )}
     </nav>
   );
 }

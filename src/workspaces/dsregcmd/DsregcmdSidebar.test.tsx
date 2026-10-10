@@ -298,10 +298,18 @@ describe("DsregcmdSidebar on this page", () => {
     expect(item).toHaveAttribute("aria-disabled", "true");
     expect(item).toHaveAttribute("tabindex", "0");
     expect(item).not.toHaveAttribute("href");
-    expect(item).toHaveAccessibleDescription(/no event log data/);
+    expect(item).toHaveAccessibleDescription(/No event log data was loaded/);
     expect(item.textContent).toBe("Event logs");
     fireEvent.click(item);
     expect(useDsregcmdStore.getState().activeTab).toBe("analysis");
+  });
+
+  it("renders no reason text when every item is enabled", () => {
+    seed();
+    render(<DsregcmdSidebar />);
+
+    expect(screen.queryByText(/Available after a source/)).toBeNull();
+    expect(screen.queryByText(/No event log data was loaded/)).toBeNull();
   });
 
   it("renders the navigation disabled with No source loaded before any source", () => {
@@ -377,7 +385,20 @@ describe("DsregcmdSidebar on this page", () => {
 
       const item = screen.getByRole("link", { name: /^Event logs/ });
       expect(item).toHaveTextContent("7+");
-      expect(item).toHaveAccessibleName(/at least 7; some channels could not be read/);
+      expect(item).toHaveAccessibleName(/at least 7; some channels could not be read or hold more events than were loaded/);
+    });
+
+    it("marks the count as a lower bound when a channel hit the per-channel cap", () => {
+      withLiveQuery(2, 0, 400);
+      const result = useDsregcmdStore.getState().result!;
+      result.eventLogAnalysis!.liveQuery!.perChannelEntryLimit = 200;
+      result.eventLogAnalysis!.liveQuery!.channels = [
+        { channel: "AadOperational", channelDisplay: "AAD", channelPath: "p", sourceFile: "f", status: "Success", entryCount: 200, errorMessage: null },
+      ] as never;
+      render(<DsregcmdSidebar />);
+
+      const item = screen.getByRole("link", { name: /^Event logs/ });
+      expect(item).toHaveTextContent("400+");
     });
 
     it("shows the plain count when every channel was read, including zero", () => {
