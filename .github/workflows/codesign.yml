@@ -288,6 +288,17 @@ jobs:
             -ReceiptPath "release-verification/exes.json" `
             -Target "${{ matrix.rust_target }}"
 
+      - name: Verify NSIS bundled application signature
+        shell: pwsh
+        timeout-minutes: 5
+        env:
+          NSIS_PATH: ${{ steps.stage_artifacts.outputs.nsis_path }}
+        run: |
+          . ./scripts/verify-nsis-payload.ps1
+          Write-NsisPayloadReceipt -InstallerPath $env:NSIS_PATH `
+            -ExtractionRoot "$env:RUNNER_TEMP/nsis-payload-${{ matrix.artifact_suffix }}" `
+            -ReceiptRoot "release-verification" -Target "${{ matrix.rust_target }}"
+
       - name: Attest signed EXEs
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

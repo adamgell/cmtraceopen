@@ -303,3 +303,42 @@ Describe 'Windows SDK SignTool selection' {
         { Get-WindowsSignTool -SdkRoot $sdk } | Should -Throw '*SignTool is missing*'
     }
 }
+
+Describe 'NSIS bundled payload signature evidence' {
+    BeforeAll { . (Join-Path $PSScriptRoot 'verify-nsis-payload.ps1') }
+    BeforeEach {
+        $caseRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        [void][IO.Directory]::CreateDirectory($caseRoot)
+        $installer = Join-Path $caseRoot 'setup.exe'
+        [IO.File]::WriteAllText($installer, 'installer')
+        $extractionRoot = Join-Path $caseRoot 'extracted'
+        $receiptRoot = Join-Path $caseRoot 'receipts'
+        Mock Write-WindowsReleaseSignatureReceipt { }
+        Mock Expand-NsisVerificationPayload {
+            [void][IO.Directory]::CreateDirectory($extractionRoot)
+            [IO.File]::WriteAllText((Join-Path $extractionRoot 'cmtrace-open.exe'), 'installed payload')
+        }
+        Mock Get-WindowsReleaseContext { [ordered]@{ sourceCommit = 'a' * 40; runId = '1'; runAttempt = '1'; target = 'x86_64-pc-windows-msvc' } }
+    }
+    It 'verifies the bundled application separately and binds installer/payload hashes' {
+        Write-NsisPayloadReceipt -InstallerPath $installer -ExtractionRoot $extractionRoot -ReceiptRoot $receiptRoot -Target 'x86_64-pc-windows-msvc'
+        Should -Invoke Write-WindowsReleaseSignatureReceipt -Times 1 -ParameterFilter { $Paths[0] -eq (Join-Path $extractionRoot 'cmtrace-open.exe') }
+        $proof = Get-Content (Join-Path $receiptRoot 'nsis-bundled-payload.json') -Raw | ConvertFrom-Json
+        $proof.installer.sha256 | Should -Be ((Get-FileHash $installer).Hash.ToLowerInvariant())
+        $proof.payload.sha256 | Should -Be ((Get-FileHash (Join-Path $extractionRoot 'cmtrace-open.exe')).Hash.ToLowerInvariant())
+    }
+    It 'rejects an unsigned bundled application rather than writing acceptance' {
+        Mock Write-WindowsReleaseSignatureReceipt { throw 'Authenticode verification failed' }
+        { Write-NsisPayloadReceipt -InstallerPath $installer -ExtractionRoot $extractionRoot -ReceiptRoot $receiptRoot -Target 'x86_64-pc-windows-msvc' } | Should -Throw '*Authenticode*'
+        Test-Path (Join-Path $receiptRoot 'nsis-bundled-payload.json') | Should -BeFalse
+    }
+    It 'does not extract over an existing directory' {
+        [void][IO.Directory]::CreateDirectory($extractionRoot)
+        { Write-NsisPayloadReceipt -InstallerPath $installer -ExtractionRoot $extractionRoot -ReceiptRoot $receiptRoot -Target 'x86_64-pc-windows-msvc' } | Should -Throw '*exists*'
+        Should -Invoke Expand-NsisVerificationPayload -Times 0
+    }
+    It 'rejects a missing bundled application' {
+        Mock Expand-NsisVerificationPayload { [void][IO.Directory]::CreateDirectory($extractionRoot) }
+        { Write-NsisPayloadReceipt -InstallerPath $installer -ExtractionRoot $extractionRoot -ReceiptRoot $receiptRoot -Target 'x86_64-pc-windows-msvc' } | Should -Throw
+    }
+}
