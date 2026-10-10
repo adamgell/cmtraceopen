@@ -1770,12 +1770,20 @@ export interface EventLogExportResult {
   bytes: number;
 }
 
-function isEventLogExportSessionId(value: unknown): value is string {
+const EVENT_LOG_SESSION_ID_MAX_BYTES = 128;
+const sessionIdEncoder = new TextEncoder();
+
+/**
+ * Mirrors the Rust `validate_session_id` of both the analysis and the export session registries:
+ * non-empty, at most 128 UTF-8 bytes, and no Unicode control character (`char::is_control`, the
+ * Cc category: U+0000-U+001F and U+007F-U+009F).
+ */
+function isEventLogSessionId(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
-    value.length <= 128 &&
-    !/[\u0000-\u001f\u007f]/.test(value)
+    sessionIdEncoder.encode(value).length <= EVENT_LOG_SESSION_ID_MAX_BYTES &&
+    !/[\u0000-\u001f\u007f-\u009f]/.test(value)
   );
 }
 
@@ -1787,7 +1795,7 @@ function decodeEventLogExportSessionStatus(
     value,
     commandName,
     {
-      sessionId: isEventLogExportSessionId,
+      sessionId: isEventLogSessionId,
       nextSequence: isNonNegativeCommandCount,
       receivedRecords: isNonNegativeCommandCount,
       receivedBytes: isNonNegativeCommandCount,
@@ -1805,7 +1813,7 @@ function decodeEventLogExportResult(
   commandName: string,
 ): EventLogExportResult {
   return decodeRecordResponse<EventLogExportResult>(value, commandName, {
-    sessionId: isEventLogExportSessionId,
+    sessionId: isEventLogSessionId,
     records: isNonNegativeCommandCount,
     bytes: isNonNegativeCommandCount,
   });
@@ -2073,7 +2081,7 @@ function analysisInteger(value: unknown, path: string): number {
 }
 
 function analysisSessionId(value: unknown, path: string): string {
-  if (typeof value !== "string" || value.length === 0) {
+  if (!isEventLogSessionId(value)) {
     throw new Error(`Invalid event-log analysis response: ${path}`);
   }
   return value;

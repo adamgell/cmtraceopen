@@ -32,6 +32,7 @@ import {
   registerLogFileHandler,
   diagnoseEventLogAnalysisSession,
   EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT,
+  createEventLogAnalysisSession,
   queryEventLogAnalysisTimeline,
   queryEventLogAnalysisTimelineWindow,
   queryEventLogAnalysisEdges,
@@ -2394,6 +2395,98 @@ describe("event-log analysis window and edge IPC boundary", () => {
     await expect(
       queryEventLogAnalysisEdges("analysis-session", 2, 1_000),
     ).rejects.toThrow("Invalid event-log analysis response: edgePage.");
+  });
+});
+
+describe("event-log session id rules shared with the backend", () => {
+  const status = {
+    revision: 0,
+    totalItems: 0,
+    eventItems: 0,
+    logItems: 0,
+    totalUnplaced: 0,
+    totalEdges: 0,
+    totalCoverageGaps: 0,
+    finalized: false,
+  };
+  const accepted: Array<[string, string]> = [
+    ["a 128-byte ASCII id", "a".repeat(128)],
+    ["a 42-character id of 3-byte characters (126 bytes)", "\u20ac".repeat(42)],
+  ];
+  const rejected: Array<[string, string]> = [
+    ["a 129-byte ASCII id", "a".repeat(129)],
+    ["a 43-character id of 3-byte characters (129 bytes)", "\u20ac".repeat(43)],
+    ["an id with a C0 control character", "abc\u0007def"],
+    ["an id with DEL", "abc\u007fdef"],
+    ["an id with a C1 control character", "abc\u0085def"],
+    ["an empty id", ""],
+  ];
+
+  it("counts UTF-8 bytes, not UTF-16 units, in the fixtures", () => {
+    expect("\u20ac".repeat(43).length).toBe(43);
+    expect(new TextEncoder().encode("\u20ac".repeat(43)).length).toBe(129);
+  });
+
+  it.each(accepted)("analysis status decoder accepts %s", async (_l, sessionId) => {
+    vi.mocked(invoke).mockResolvedValueOnce({ ...status, sessionId });
+    await expect(createEventLogAnalysisSession()).resolves.toMatchObject({
+      sessionId,
+    });
+  });
+
+  it.each(rejected)("analysis status decoder rejects %s", async (_l, sessionId) => {
+    vi.mocked(invoke).mockResolvedValueOnce({ ...status, sessionId });
+    await expect(createEventLogAnalysisSession()).rejects.toThrow(
+      "status.sessionId",
+    );
+  });
+
+  it.each(rejected)("analysis window decoder rejects %s", async (_l, sessionId) => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      sessionId,
+      revision: 1,
+      startMs: 0,
+      endMs: 1,
+      offset: 0,
+      nextOffset: null,
+      totalItems: 0,
+      windowItems: 0,
+      omittedItems: 0,
+      items: [],
+      serializedBytes: 100,
+    });
+    await expect(
+      queryEventLogAnalysisTimelineWindow("analysis-session", 0, 1, 10),
+    ).rejects.toThrow("window.sessionId");
+  });
+
+  it.each(rejected)("analysis edge decoder rejects %s", async (_l, sessionId) => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      sessionId,
+      revision: 1,
+      offset: 0,
+      nextOffset: null,
+      totalEdges: 0,
+      edges: [],
+      serializedBytes: 100,
+    });
+    await expect(
+      queryEventLogAnalysisEdges("analysis-session", 0, 10),
+    ).rejects.toThrow("edgePage.sessionId");
+  });
+
+  it.each(accepted)("export decoder accepts %s", async (_l, sessionId) => {
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId, records: 1, bytes: 10 });
+    await expect(finalizeEventLogExportSession("export-1")).resolves.toEqual({
+      sessionId,
+      records: 1,
+      bytes: 10,
+    });
+  });
+
+  it.each(rejected)("export decoder rejects %s", async (_l, sessionId) => {
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId, records: 1, bytes: 10 });
+    await expect(finalizeEventLogExportSession("export-1")).rejects.toThrow();
   });
 });
 

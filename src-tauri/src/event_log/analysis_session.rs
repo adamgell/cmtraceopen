@@ -586,7 +586,7 @@ impl EventLogAnalysisSession {
         limit: u32,
     ) -> Result<EventLogAnalysisTimelineWindow, String> {
         let timeline = self.finalized_timeline()?;
-        let limit = validated_timeline_limit(limit, "timeline page")?;
+        let limit = validated_timeline_limit(limit, "timeline window")?;
         if start_ms > end_ms {
             return Err("timeline window start must not be after its end".to_string());
         }
@@ -2365,7 +2365,7 @@ mod tests {
             );
             assert_eq!(
                 session.window(0, 100, limit).unwrap_err(),
-                "timeline page limit must be between 1 and 1000"
+                "timeline window limit must be between 1 and 1000"
             );
             assert_eq!(
                 session.edge_page(0, limit).unwrap_err(),
