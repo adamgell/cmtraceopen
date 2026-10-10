@@ -1,4 +1,17 @@
 import { tokens } from "@fluentui/react-components";
+import {
+  Circle12Regular,
+  Circle16Regular,
+  DismissCircle12Regular,
+  DismissCircle16Regular,
+  ErrorCircle12Regular,
+  ErrorCircle16Regular,
+  Info12Regular,
+  Info16Regular,
+  PlugDisconnected16Regular,
+  Warning12Regular,
+  Warning16Regular,
+} from "@fluentui/react-icons";
 import { describe, expect, it } from "vitest";
 import { contrastRatio, parseHex, readableOn } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
@@ -13,6 +26,19 @@ const LEVELS: EvtxLevel[] = [
   "Information",
   "Verbose",
 ];
+
+/**
+ * Spec 7.3 / A.3 level icons. In classic-cmtrace Critical and Error share a
+ * tint and their icons both fall back to black, so the glyph is the only cue
+ * between them; swapping any two must fail.
+ */
+const LEVEL_ICONS = {
+  Critical: { grid: DismissCircle12Regular, rail: DismissCircle16Regular },
+  Error: { grid: ErrorCircle12Regular, rail: ErrorCircle16Regular },
+  Warning: { grid: Warning12Regular, rail: Warning16Regular },
+  Information: { grid: Info12Regular, rail: Info16Regular },
+  Verbose: { grid: Circle12Regular, rail: Circle16Regular },
+} as const;
 
 const STRENGTHS: DiagnosisCorrelationStatus[] = [
   "exact",
@@ -887,8 +913,8 @@ describe("evtx visual tokens", () => {
         expect(entry.rowBackground).toBe(rows[level].background);
         expect(entry.rowText).toBe(rows[level].text);
         expect(entry.selectedIconColor).toBe(selectedIcon);
-        expect(entry.GridIcon).toBeDefined();
-        expect(entry.RailIcon).toBeDefined();
+        expect(entry.GridIcon).toBe(LEVEL_ICONS[level].grid);
+        expect(entry.RailIcon).toBe(LEVEL_ICONS[level].rail);
       }
     },
   );
@@ -948,7 +974,16 @@ describe("evtx visual tokens", () => {
       expect(visual.strengths.coverageBlocked.borderStyle).not.toBe(
         visual.strengths.candidate.borderStyle,
       );
-      expect(visual.strengths.coverageBlocked.Icon).toBeDefined();
+      // A coverage gap is not a failure (soul.md): it must never borrow a
+      // failure glyph such as DismissCircle or ErrorCircle.
+      expect(visual.strengths.coverageBlocked.Icon).toBe(
+        PlugDisconnected16Regular,
+      );
+      // Only coverageBlocked carries an icon; the other badges are text-only.
+      expect(visual.strengths.exact.Icon).toBeUndefined();
+      expect(visual.strengths.candidate.Icon).toBeUndefined();
+      expect(visual.strengths.ambiguous.Icon).toBeUndefined();
+      expect(visual.strengths.notCausal.Icon).toBeUndefined();
     });
   });
 
