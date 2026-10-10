@@ -13,7 +13,8 @@ function buildSourceContext(
   rawInput: string,
   resolvedPath: string | null,
   evidenceFilePath: string | null,
-  bundlePath: string | null
+  bundlePath: string | null,
+  capturedAt: string | null = null
 ): DsregcmdSourceContext {
   const displayLabel =
     source.kind === "clipboard"
@@ -33,6 +34,7 @@ function buildSourceContext(
     displayLabel,
     rawLineCount: rawInput.length === 0 ? 0 : rawInput.split(/\r?\n/).length,
     rawCharCount: rawInput.length,
+    capturedAt: source.kind === "capture" ? capturedAt : null,
   };
 }
 
@@ -41,6 +43,7 @@ async function readDsregcmdSource(source: DsregcmdSourceDescriptor): Promise<{
   resolvedPath: string | null;
   evidenceFilePath: string | null;
   bundleRootPath: string | null;
+  capturedAt: string | null;
 }> {
   switch (source.kind) {
     case "file": {
@@ -50,6 +53,7 @@ async function readDsregcmdSource(source: DsregcmdSourceDescriptor): Promise<{
         resolvedPath: loadedSource.resolvedPath,
         evidenceFilePath: loadedSource.evidenceFilePath,
         bundleRootPath: loadedSource.bundlePath,
+        capturedAt: null,
       };
     }
     case "folder": {
@@ -59,6 +63,7 @@ async function readDsregcmdSource(source: DsregcmdSourceDescriptor): Promise<{
         resolvedPath: loadedSource.resolvedPath,
         evidenceFilePath: loadedSource.evidenceFilePath,
         bundleRootPath: loadedSource.bundlePath,
+        capturedAt: null,
       };
     }
     case "clipboard": {
@@ -68,15 +73,20 @@ async function readDsregcmdSource(source: DsregcmdSourceDescriptor): Promise<{
         resolvedPath: null,
         evidenceFilePath: null,
         bundleRootPath: null,
+        capturedAt: null,
       };
     }
     case "capture": {
       const captureResult = await captureDsregcmd();
+      // The only source whose capture moment we witnessed: client clock, taken
+      // as the capture completes.
+      const capturedAt = new Date().toISOString();
       return {
         rawInput: captureResult.input,
         resolvedPath: captureResult.evidenceFilePath,
         evidenceFilePath: captureResult.evidenceFilePath,
         bundleRootPath: captureResult.bundlePath,
+        capturedAt,
       };
     }
     case "text": {
@@ -115,7 +125,7 @@ export async function analyzeDsregcmdSource(
   store.beginAnalysis(source, "path" in source ? source.path : null);
 
   try {
-    const { rawInput, resolvedPath, evidenceFilePath, bundleRootPath } =
+    const { rawInput, resolvedPath, evidenceFilePath, bundleRootPath, capturedAt } =
       await readDsregcmdSource(source);
 
     if (!rawInput.trim()) {
@@ -131,7 +141,8 @@ export async function analyzeDsregcmdSource(
       rawInput,
       resolvedPath,
       evidenceFilePath,
-      bundleRootPath
+      bundleRootPath,
+      capturedAt
     );
     useDsregcmdStore.getState().setResults(rawInput, result, context);
     return result;

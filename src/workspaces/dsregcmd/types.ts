@@ -313,6 +313,12 @@ export interface DsregcmdSourceContext {
   evidenceFilePath: string | null;
   rawLineCount: number;
   rawCharCount: number;
+  /**
+   * Client-clock ISO time at which a live capture completed. Set only for
+   * `capture` sources; null for file, folder and pasted sources, whose capture
+   * time is not known and must never be inferred.
+   */
+  capturedAt?: string | null;
 }
 
 export type DsregcmdAnalysisPhase = "idle" | "analyzing" | "ready" | "error";
