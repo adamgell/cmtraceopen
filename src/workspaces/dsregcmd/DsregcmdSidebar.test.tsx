@@ -543,4 +543,39 @@ describe("DsregcmdWorkspace scroll-spy", () => {
       delete (HTMLElement.prototype as { scrollTop?: unknown }).scrollTop;
     }
   });
+
+  it("saves and restores the scroll offset without IntersectionObserver", () => {
+    vi.stubGlobal("IntersectionObserver", undefined);
+    const offsets = new WeakMap<Element, number>();
+    Object.defineProperty(HTMLElement.prototype, "scrollTop", {
+      configurable: true,
+      get() {
+        return offsets.get(this) ?? 0;
+      },
+      set(value: number) {
+        offsets.set(this, value);
+      },
+    });
+    try {
+      seed();
+      render(
+        <>
+          <DsregcmdSidebar />
+          <DsregcmdWorkspace />
+        </>,
+      );
+      const container = section("overview").parentElement as HTMLElement;
+      container.scrollTop = 300;
+      act(() => {
+        container.dispatchEvent(new Event("scroll"));
+      });
+
+      fireEvent.click(screen.getByRole("link", { name: /^Event logs/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Back to analysis" }));
+
+      expect((section("overview").parentElement as HTMLElement).scrollTop).toBe(300);
+    } finally {
+      delete (HTMLElement.prototype as { scrollTop?: unknown }).scrollTop;
+    }
+  });
 });

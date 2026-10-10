@@ -115,7 +115,7 @@ export function DsregcmdWorkspace() {
   // Scroll-spy: the current nav item follows the first section whose top sits
   // in the upper band of the scroll container.
   useEffect(() => {
-    if (!hasResult || showEventLogs || typeof IntersectionObserver === "undefined") {
+    if (!hasResult || showEventLogs) {
       return undefined;
     }
     const container = scrollContainerRef.current;
@@ -138,7 +138,12 @@ export function DsregcmdWorkspace() {
       container.scrollTop > 0 &&
       container.scrollTop + container.clientHeight >= container.scrollHeight - 2;
 
-    const observer = new IntersectionObserver(
+    // The observer only drives the active section; the scroll listener below
+    // saves the offset and works without it.
+    const observer =
+      typeof IntersectionObserver === "undefined"
+        ? null
+        : new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
@@ -158,7 +163,7 @@ export function DsregcmdWorkspace() {
       },
       { root: container, rootMargin: "0px 0px -70% 0px", threshold: 0 },
     );
-    elements.forEach((element) => observer.observe(element));
+    elements.forEach((element) => observer?.observe(element));
 
     const handleScroll = () => {
       analysisScrollTopRef.current = container.scrollTop;
@@ -169,7 +174,7 @@ export function DsregcmdWorkspace() {
     container.addEventListener("scroll", handleScroll, { passive: true });
 
     return () => {
-      observer.disconnect();
+      observer?.disconnect();
       container.removeEventListener("scroll", handleScroll);
     };
   }, [hasResult, setActiveSection, showEventLogs]);

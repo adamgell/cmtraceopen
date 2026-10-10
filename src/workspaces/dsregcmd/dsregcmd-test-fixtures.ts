@@ -296,5 +296,6 @@ export function sourceContext(): DsregcmdSourceContext {
     evidenceFilePath: "C:\\temp\\dsregcmd.txt",
     rawLineCount: 40,
     rawCharCount: 800,
+    capturedAt: null,
   };
 }

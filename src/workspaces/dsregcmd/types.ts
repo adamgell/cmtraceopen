@@ -318,7 +318,7 @@ export interface DsregcmdSourceContext {
    * `capture` sources; null for file, folder and pasted sources, whose capture
    * time is not known and must never be inferred.
    */
-  capturedAt?: string | null;
+  capturedAt: string | null;
 }
 
 export type DsregcmdAnalysisPhase = "idle" | "analyzing" | "ready" | "error";
