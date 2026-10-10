@@ -2054,3 +2054,159 @@ mod tests {
         );
     }
 }
+
+/// The Event Logs screenshot harness replies, and the always-on test that keeps them honest.
+///
+/// `e2e/fixtures/event-log-engine-input.json` is the synthetic engine input and
+/// `e2e/fixtures/event-log-engine-replies.json` is what the engine answered for it. Both are
+/// committed. `engine_replies_for_input` is the one place that turns the former into the latter, so
+/// the env-gated capture test and the regular drift test cannot diverge.
+#[cfg(test)]
+mod screenshot_replies {
+    use super::*;
+    use sha2::Digest;
+
+    const REGENERATE: &str = "regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`";
+
+    /// Replays the UI's call sequence over `input`: create, append in chunks, finalize, every
+    /// timeline page, diagnose. Builds the session directly (no Tauri runtime).
+    fn engine_replies_for_input(input: &serde_json::Value) -> serde_json::Value {
+        let records: Vec<EvtxRecord> = serde_json::from_value(input["records"].clone()).unwrap();
+        let gaps: Vec<EvtxCoverageGap> =
+            serde_json::from_value(input["coverageGaps"].clone()).unwrap();
+        let chunk_limit = input["chunkRecordLimit"].as_u64().unwrap() as usize;
+        let page_size = input["pageSize"].as_u64().unwrap() as u32;
+        let session_id = input["sessionId"].as_str().unwrap().to_string();
+
+        // The validation evtx_diagnose_analysis_session runs before it touches the session.
+        validate_diagnosis_coverage_gaps(&gaps).unwrap();
+
+        let mut session = EventLogAnalysisSession::new(session_id.clone());
+        let create = session.status();
+        let mut append = Vec::new();
+        let mut chunk_counts = Vec::new();
+        for chunk in records.chunks(chunk_limit) {
+            let inputs = chunk
+                .iter()
+                .cloned()
+                .map(EventLogAnalysisRecordInput::complete)
+                .collect();
+            append.push(session.append_inputs(inputs, Vec::new()).unwrap());
+            chunk_counts.push(chunk.len());
+        }
+        let finalize = session.finalize().unwrap();
+        let mut pages = Vec::new();
+        let mut offset = 0u64;
+        loop {
+            let page = session.page(offset, page_size).unwrap();
+            let next = page.next_offset;
+            pages.push(serde_json::json!({ "offset": offset, "limit": page_size, "page": page }));
+            match next {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        let diagnosis = session
+            .diagnosis_snapshot()
+            .unwrap()
+            .summarize(gaps.clone());
+
+        serde_json::json!({
+            "sessionId": session_id,
+            "appendChunkRecordCounts": chunk_counts,
+            "diagnoseCoverageGaps": gaps,
+            "create": create,
+            "append": append,
+            "finalize": finalize,
+            "timelinePages": pages,
+            "diagnosis": diagnosis,
+        })
+    }
+
+    /// Captures the real engine's replies. Not a regression test: it only runs when
+    /// `CMTRACE_EVENT_LOG_REPLIES_INPUT` and `CMTRACE_EVENT_LOG_REPLIES_OUTPUT` are both set, which
+    /// `e2e/fixtures/capture-event-log-replies.mjs` does.
+    #[test]
+    #[ignore = "run by e2e/fixtures/capture-event-log-replies.mjs"]
+    fn capture_event_log_replies() {
+        let (Some(input_path), Some(output_path)) = (
+            std::env::var_os("CMTRACE_EVENT_LOG_REPLIES_INPUT"),
+            std::env::var_os("CMTRACE_EVENT_LOG_REPLIES_OUTPUT"),
+        ) else {
+            println!(
+                "skipping: set CMTRACE_EVENT_LOG_REPLIES_INPUT and CMTRACE_EVENT_LOG_REPLIES_OUTPUT to capture"
+            );
+            return;
+        };
+        let input_text = std::fs::read_to_string(&input_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", input_path.to_string_lossy()));
+        let input: serde_json::Value = serde_json::from_str(&input_text)
+            .unwrap_or_else(|error| panic!("parse {}: {error}", input_path.to_string_lossy()));
+        let output = engine_replies_for_input(&input);
+        std::fs::write(&output_path, serde_json::to_string(&output).unwrap())
+            .unwrap_or_else(|error| panic!("write {}: {error}", output_path.to_string_lossy()));
+    }
+
+    fn read_fixture_text(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("e2e")
+            .join("fixtures")
+            .join(name);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}; {REGENERATE}", path.display()))
+    }
+
+    fn read_fixture(name: &str) -> serde_json::Value {
+        let text = read_fixture_text(name);
+        serde_json::from_str(&text)
+            .unwrap_or_else(|error| panic!("parse {name}: {error}; {REGENERATE}"))
+    }
+
+    /// Always on: the committed replies must be exactly what the engine answers for the committed
+    /// input. A hand edit of the replies, or an engine change that alters them, fails here.
+    ///
+    /// Also pins `provenance.inputSha256` (the link the screenshot spec uses between the dataset
+    /// and the replies) to the SHA-256 of the committed input file's bytes.
+    ///
+    /// Not compared: `about`, `provenance.engineCommit`, `provenance.engineTreeDirty` and
+    /// `provenance.capturedBy`. `provenance.inputSha256` is pinned here to the input bytes, and
+    /// `capture-event-log-replies.mjs --check` verifies `provenance.engineSourceSha256`.
+    #[test]
+    fn committed_engine_replies_match_the_engine() {
+        let input_text = read_fixture_text("event-log-engine-input.json");
+        let input: serde_json::Value = serde_json::from_str(&input_text)
+            .unwrap_or_else(|error| panic!("parse event-log-engine-input.json: {error}"));
+        let mut committed = read_fixture("event-log-engine-replies.json");
+        let committed = committed.as_object_mut().expect("replies are an object");
+        committed.remove("about");
+        let provenance = committed
+            .remove("provenance")
+            .expect("replies have provenance");
+        let input_sha256: String = sha2::Sha256::digest(input_text.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            provenance["inputSha256"].as_str(),
+            Some(input_sha256.as_str()),
+            "e2e/fixtures/event-log-engine-replies.json provenance.inputSha256 is not the SHA-256 of \
+             e2e/fixtures/event-log-engine-input.json; {REGENERATE} (do not hand-edit the replies)"
+        );
+
+        let actual = engine_replies_for_input(&input);
+        let actual = actual.as_object().expect("engine replies are an object");
+
+        let mut keys: Vec<&String> = committed.keys().chain(actual.keys()).collect();
+        keys.sort();
+        keys.dedup();
+        for key in keys {
+            assert!(
+                committed.get(key) == actual.get(key),
+                "e2e/fixtures/event-log-engine-replies.json field `{key}` no longer matches what the \
+                 engine answers for e2e/fixtures/event-log-engine-input.json; {REGENERATE} \
+                 (do not hand-edit the replies)"
+            );
+        }
+    }
+}
