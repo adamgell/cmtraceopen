@@ -1419,6 +1419,7 @@ fn build_diagnostics(
         }
     }
 
+    super::event_links::attach_related_error_codes(&mut diagnostics, facts);
     diagnostics
 }
 

@@ -564,6 +564,7 @@ pub(super) fn issue(
         evidence,
         next_checks,
         suggested_fixes,
+        related_error_codes: Vec::new(),
     }
 }
 

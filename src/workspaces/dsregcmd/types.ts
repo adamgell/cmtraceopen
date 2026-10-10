@@ -212,6 +212,12 @@ export interface DsregcmdDiagnosticInsight {
   evidence: string[];
   nextChecks: string[];
   suggestedFixes: string[];
+  /**
+   * Lowercase 0x-prefixed error codes this diagnostic's rule cites. Event-log
+   * entries that mention one are linked through `linkedDiagnosticId`.
+   * Optional because analyses from before issue #870 omit it.
+   */
+  relatedErrorCodes?: string[];
 }
 
 export interface DsregcmdOsVersionEvidence {
