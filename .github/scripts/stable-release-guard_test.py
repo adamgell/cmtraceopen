@@ -14,8 +14,11 @@ class StableReleaseTests(unittest.TestCase):
     def test_accepts_published_stable(self):
         self.guard.validate_release('v1.6.3', self.release)
 
+    def test_accepts_numeric_stable_tag_supported_by_release_workflow(self):
+        self.guard.validate_release('1.6.3', self.release | {'tag_name': '1.6.3'})
+
     def test_rejects_nightly_and_malformed_tags(self):
-        for tag in ['nightly', 'v1.6.3-nightly', 'v01.6.3', '../main', '1.6.3', 'v1.6.3\n']:
+        for tag in ['nightly', 'v1.6.3-nightly', 'v01.6.3', '../main', 'v1.6.3\n']:
             with self.subTest(tag=tag), self.assertRaises(ValueError):
                 self.guard.validate_release(tag, self.release)
 

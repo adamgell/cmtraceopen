@@ -7,8 +7,8 @@ from urllib.parse import quote
 
 
 def validate_tag(tag):
-    if not isinstance(tag, str) or not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag):
-        raise ValueError('Expected a stable vMAJOR.MINOR.PATCH tag')
+    if not isinstance(tag, str) or not re.fullmatch(r'v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag):
+        raise ValueError('Expected a stable MAJOR.MINOR.PATCH tag with optional v prefix')
 
 
 def validate_release(tag, release):
