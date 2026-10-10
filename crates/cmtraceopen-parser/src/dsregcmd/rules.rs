@@ -6,9 +6,10 @@ use chrono::{DateTime, Utc};
 
 use super::derive::{
     aggregated_error_text, contains_aadsts_code, contains_text, contains_win32_code, derive_facts,
-    equals_text, has_code, is_failure, is_failure_text, is_missing, issue, push_test_failure,
-    render_bool, render_optional, render_phase_code_evidence,
+    equals_text, is_failure, is_failure_text, is_missing, issue, push_test_failure, render_bool,
+    render_optional, render_phase_code_evidence,
 };
+use super::derive::{coded, matched_has_code, matched_in};
 
 // Re-export public items that external callers depend on.
 pub use super::extended::{
@@ -108,11 +109,12 @@ fn build_diagnostics(
         ));
     }
 
-    if contains_text(&facts.registration.client_error_code, "0x801c03f2")
+    let codes = matched_in(&[(&facts.registration.client_error_code, "0x801c03f2")]);
+    if !codes.is_empty()
         || contains_text(&facts.registration.server_error_code, "directoryerror")
         || aggregated_errors.contains("directory sync pending")
     {
-        diagnostics.push(issue(
+        diagnostics.push(coded(issue(
             "entra-sync-pending",
             IntuneDiagnosticSeverity::Error,
             "sync",
@@ -129,7 +131,7 @@ fn build_diagnostics(
             vec![
                 "Wait for directory synchronization to complete, then retry registration.".to_string(),
             ],
-        ));
+        ), codes));
     }
 
     if aggregated_errors.contains("aadsts50155") {
@@ -224,8 +226,9 @@ fn build_diagnostics(
         vec!["Correct the AD hybrid join configuration and retry registration.".to_string()],
     );
 
-    if has_code(facts, "0xcaa90017") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0xcaa90017"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "adal-protocol-not-supported",
             IntuneDiagnosticSeverity::Error,
             "authentication",
@@ -237,11 +240,12 @@ fn build_diagnostics(
                 "Check whether the endpoint returned by federation metadata matches the protocol expected by Windows.".to_string(),
             ],
             vec!["Enable or repair the required WS-Trust support in the identity provider.".to_string()],
-        ));
+        ), codes));
     }
 
-    if has_code(facts, "0xcaa9002c") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0xcaa9002c"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "adal-parse-xml-failed",
             IntuneDiagnosticSeverity::Error,
             "configuration",
@@ -253,11 +257,12 @@ fn build_diagnostics(
                 "Check whether a proxy is replacing the expected federation XML with an HTML or otherwise modified response.".to_string(),
             ],
             vec!["Repair the federation metadata response so it returns valid XML.".to_string()],
-        ));
+        ), codes));
     }
 
-    if has_code(facts, "0xcaa90023") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0xcaa90023"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "adal-password-endpoint-missing",
             IntuneDiagnosticSeverity::Error,
             "configuration",
@@ -269,11 +274,12 @@ fn build_diagnostics(
                 "Confirm the identity provider publishes the correct endpoints for federated hybrid join.".to_string(),
             ],
             vec!["Fix the federation metadata so the required endpoints are advertised.".to_string()],
-        ));
+        ), codes));
     }
 
-    if has_code(facts, "0xcaa82ee2") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0xcaa82ee2"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "adal-timeout",
             IntuneDiagnosticSeverity::Error,
             "network",
@@ -285,11 +291,12 @@ fn build_diagnostics(
                 "Check proxy behavior, network stability, and endpoint reachability.".to_string(),
             ],
             vec!["Resolve the network timeout path before retrying authentication.".to_string()],
-        ));
+        ), codes));
     }
 
-    if has_code(facts, "0xcaa82efe") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0xcaa82efe"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "adal-connection-aborted",
             IntuneDiagnosticSeverity::Error,
             "network",
@@ -301,11 +308,12 @@ fn build_diagnostics(
                 "Retry from a more stable network path and compare results.".to_string(),
             ],
             vec!["Stabilize the network path or endpoint availability before retrying.".to_string()],
-        ));
+        ), codes));
     }
 
-    if has_code(facts, "0xcaa82f8f") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0xcaa82f8f"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "adal-secure-failure",
             IntuneDiagnosticSeverity::Error,
             "network",
@@ -317,11 +325,12 @@ fn build_diagnostics(
                 "Review whether TLS inspection or certificate replacement is breaking trust.".to_string(),
             ],
             vec!["Fix certificate trust or time skew before retrying federated authentication.".to_string()],
-        ));
+        ), codes));
     }
 
-    if has_code(facts, "0xcaa82efd") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0xcaa82efd"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "adal-cannot-connect",
             IntuneDiagnosticSeverity::Error,
             "network",
@@ -333,11 +342,12 @@ fn build_diagnostics(
                 "Validate DNS resolution and HTTPS connectivity for the authentication endpoint.".to_string(),
             ],
             vec!["Restore connectivity to the authentication endpoint and retry.".to_string()],
-        ));
+        ), codes));
     }
 
-    if has_code(facts, "0xcaa20003") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0xcaa20003"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "adal-invalid-grant",
             IntuneDiagnosticSeverity::Error,
             "authentication",
@@ -349,11 +359,12 @@ fn build_diagnostics(
                 "Check claim issuance rules and token content from the identity provider.".to_string(),
             ],
             vec!["Repair the federation assertion flow before retrying sign-in.".to_string()],
-        ));
+        ), codes));
     }
 
-    if has_code(facts, "0xcaa90014") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0xcaa90014"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "adal-wstrust-request-failed",
             IntuneDiagnosticSeverity::Error,
             "authentication",
@@ -365,11 +376,12 @@ fn build_diagnostics(
                 "Check whether metadata, claim rules, or certificate trust issues are causing the failure.".to_string(),
             ],
             vec!["Repair the WS-Trust issuance path before retrying authentication.".to_string()],
-        ));
+        ), codes));
     }
 
-    if has_code(facts, "0xcaa90006") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0xcaa90006"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "adal-token-request-failed",
             IntuneDiagnosticSeverity::Error,
             "authentication",
@@ -381,11 +393,12 @@ fn build_diagnostics(
                 "Review WS-Trust endpoint health and metadata correctness.".to_string(),
             ],
             vec!["Resolve the WS-Trust token issuance failure and retry.".to_string()],
-        ));
+        ), codes));
     }
 
-    if has_code(facts, "0xcaa1002d") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0xcaa1002d"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "adal-operation-pending",
             IntuneDiagnosticSeverity::Warning,
             "authentication",
@@ -397,13 +410,15 @@ fn build_diagnostics(
                 "Look for a more specific network, WS-Trust, or server-side error in the surrounding fields.".to_string(),
             ],
             Vec::new(),
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.registration.client_error_code, "0x801c001d")
-        || contains_text(&facts.pre_join_tests.ad_configuration_test, "0x801c001d")
-    {
-        diagnostics.push(issue(
+    let codes = matched_in(&[
+        (&facts.registration.client_error_code, "0x801c001d"),
+        (&facts.pre_join_tests.ad_configuration_test, "0x801c001d"),
+    ]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "scp-read-failed",
             IntuneDiagnosticSeverity::Error,
             "configuration",
@@ -420,13 +435,15 @@ fn build_diagnostics(
             vec![
                 "Correct the hybrid join SCP configuration before retrying registration.".to_string(),
             ],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.registration.client_error_code, "0x801c0021")
-        || contains_text(&facts.pre_join_tests.drs_discovery_test, "0x801c0021")
-    {
-        diagnostics.push(issue(
+    let codes = matched_in(&[
+        (&facts.registration.client_error_code, "0x801c0021"),
+        (&facts.pre_join_tests.drs_discovery_test, "0x801c0021"),
+    ]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "drs-discovery-code",
             IntuneDiagnosticSeverity::Error,
             "discovery",
@@ -441,13 +458,15 @@ fn build_diagnostics(
                 "Check proxy, DNS, and TLS inspection behavior around discovery endpoints.".to_string(),
             ],
             vec!["Restore discovery endpoint access and retry hybrid join.".to_string()],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.registration.client_error_code, "0x801c001f")
-        || contains_text(&facts.pre_join_tests.drs_discovery_test, "0x801c001f")
-    {
-        diagnostics.push(issue(
+    let codes = matched_in(&[
+        (&facts.registration.client_error_code, "0x801c001f"),
+        (&facts.pre_join_tests.drs_discovery_test, "0x801c001f"),
+    ]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "drs-discovery-timeout",
             IntuneDiagnosticSeverity::Error,
             "network",
@@ -462,11 +481,12 @@ fn build_diagnostics(
                 "Check WinHTTP proxy configuration and whether the computer account can authenticate through the proxy.".to_string(),
             ],
             vec!["Resolve the discovery timeout path before retrying join.".to_string()],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.registration.client_error_code, "0x801c003d") {
-        diagnostics.push(issue(
+    let codes = matched_in(&[(&facts.registration.client_error_code, "0x801c003d")]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "user-realm-discovery-failed",
             IntuneDiagnosticSeverity::Error,
             "authentication",
@@ -478,13 +498,15 @@ fn build_diagnostics(
                 "Check whether proxy requirements or tenant domain configuration are interfering with realm discovery.".to_string(),
             ],
             vec!["Restore user realm discovery before retrying hybrid join.".to_string()],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.registration.client_error_code, "0x8007000d")
-        || contains_text(&facts.diagnostics.http_error, "0x8007000d")
-    {
-        diagnostics.push(issue(
+    let codes = matched_in(&[
+        (&facts.registration.client_error_code, "0x8007000d"),
+        (&facts.diagnostics.http_error, "0x8007000d"),
+    ]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "invalid-discovery-response",
             IntuneDiagnosticSeverity::Error,
             "network",
@@ -500,11 +522,12 @@ fn build_diagnostics(
                 "Compare the endpoint behavior from the system context against a healthy device.".to_string(),
             ],
             vec!["Fix the proxy or response path so discovery returns the expected JSON.".to_string()],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.registration.client_error_code, "0x801c0002") {
-        diagnostics.push(issue(
+    let codes = matched_in(&[(&facts.registration.client_error_code, "0x801c0002")]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "join-device-authentication-error",
             IntuneDiagnosticSeverity::Error,
             "authentication",
@@ -520,11 +543,12 @@ fn build_diagnostics(
                 "Check whether the server error indicates an authentication mismatch or stale registration state.".to_string(),
             ],
             vec!["Repair device registration state before retrying join.".to_string()],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.registration.client_error_code, "0x801c0006") {
-        diagnostics.push(issue(
+    let codes = matched_in(&[(&facts.registration.client_error_code, "0x801c0006")]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "join-internal-service-error",
             IntuneDiagnosticSeverity::Error,
             "join",
@@ -540,7 +564,7 @@ fn build_diagnostics(
                 "Compare with another registration attempt after a short wait.".to_string(),
             ],
             vec!["Retry the join after confirming the service-side condition has cleared.".to_string()],
-        ));
+        ), codes));
     }
 
     if facts.sso_state.azure_ad_prt == Some(false) {
@@ -561,8 +585,9 @@ fn build_diagnostics(
         ));
     }
 
-    if contains_text(&facts.diagnostics.attempt_status, "0xc000006d") {
-        diagnostics.push(issue(
+    let codes = matched_in(&[(&facts.diagnostics.attempt_status, "0xc000006d")]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "invalid-credentials",
             IntuneDiagnosticSeverity::Error,
             "credentials",
@@ -576,11 +601,12 @@ fn build_diagnostics(
             vec![
                 "Retry authentication with the correct credentials or refreshed password.".to_string(),
             ],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.diagnostics.attempt_status, "0xc000006a") {
-        diagnostics.push(issue(
+    let codes = matched_in(&[(&facts.diagnostics.attempt_status, "0xc000006a")]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "wrong-password",
             IntuneDiagnosticSeverity::Error,
             "credentials",
@@ -595,11 +621,12 @@ fn build_diagnostics(
                 "Confirm the user is signing in with the intended UPN and password.".to_string(),
             ],
             vec!["Retry sign-in after password sync finishes or after correcting credentials.".to_string()],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.diagnostics.attempt_status, "0xc00000d0") {
-        diagnostics.push(issue(
+    let codes = matched_in(&[(&facts.diagnostics.attempt_status, "0xc00000d0")]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "request-not-accepted",
             IntuneDiagnosticSeverity::Error,
             "authentication",
@@ -615,14 +642,16 @@ fn build_diagnostics(
                 "Check for federation or proxy behavior that alters the request flow.".to_string(),
             ],
             vec!["Resolve the endpoint rejection cause before retrying PRT acquisition.".to_string()],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.diagnostics.attempt_status, "0xc000023c")
-        || contains_text(&facts.diagnostics.attempt_status, "0xc00000be")
-        || contains_text(&facts.diagnostics.attempt_status, "0xc00000c4")
-    {
-        diagnostics.push(issue(
+    let codes = matched_in(&[
+        (&facts.diagnostics.attempt_status, "0xc000023c"),
+        (&facts.diagnostics.attempt_status, "0xc00000be"),
+        (&facts.diagnostics.attempt_status, "0xc00000c4"),
+    ]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "prt-network-path-error",
             IntuneDiagnosticSeverity::Error,
             "network",
@@ -638,11 +667,12 @@ fn build_diagnostics(
                 "Review proxy requirements and intermittent network stability issues.".to_string(),
             ],
             vec!["Restore the endpoint network path and retry token acquisition.".to_string()],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.diagnostics.attempt_status, "0xc000005f") {
-        diagnostics.push(issue(
+    let codes = matched_in(&[(&facts.diagnostics.attempt_status, "0xc000005f")]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "prt-user-realm-not-found",
             IntuneDiagnosticSeverity::Error,
             "user",
@@ -657,11 +687,12 @@ fn build_diagnostics(
                 "If the on-premises domain is nonroutable, review Alternate Login ID configuration.".to_string(),
             ],
             vec!["Correct the user realm or UPN configuration before retrying sign-in.".to_string()],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.diagnostics.attempt_status, "0xc004844c") {
-        diagnostics.push(issue(
+    let codes = matched_in(&[(&facts.diagnostics.attempt_status, "0xc004844c")]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "malformed-upn",
             IntuneDiagnosticSeverity::Error,
             "user",
@@ -676,11 +707,12 @@ fn build_diagnostics(
                 "For hybrid join, compare with whoami /upn on the device and confirm the domain controller returns the expected value.".to_string(),
             ],
             vec!["Correct the user's UPN formatting or Alternate Login ID configuration.".to_string()],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.diagnostics.attempt_status, "0xc0048442") {
-        diagnostics.push(issue(
+    let codes = matched_in(&[(&facts.diagnostics.attempt_status, "0xc0048442")]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "missing-user-sid-in-token",
             IntuneDiagnosticSeverity::Error,
             "authentication",
@@ -695,11 +727,12 @@ fn build_diagnostics(
                 "Compare the behavior from another network path without TLS or proxy interception.".to_string(),
             ],
             vec!["Fix the token response path before retrying sign-in.".to_string()],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.diagnostics.attempt_status, "0xc00484c1") {
-        diagnostics.push(issue(
+    let codes = matched_in(&[(&facts.diagnostics.attempt_status, "0xc00484c1")]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "wstrust-empty-saml",
             IntuneDiagnosticSeverity::Error,
             "authentication",
@@ -714,13 +747,15 @@ fn build_diagnostics(
                 "Check federation logs for server-side faults during token issuance.".to_string(),
             ],
             vec!["Repair the WS-Trust response path before retrying authentication.".to_string()],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.diagnostics.attempt_status, "0xc004848b")
-        || contains_text(&facts.diagnostics.attempt_status, "0xc004848c")
-    {
-        diagnostics.push(issue(
+    let codes = matched_in(&[
+        (&facts.diagnostics.attempt_status, "0xc004848b"),
+        (&facts.diagnostics.attempt_status, "0xc004848c"),
+    ]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "mex-endpoint-misconfigured",
             IntuneDiagnosticSeverity::Error,
             "configuration",
@@ -735,11 +770,12 @@ fn build_diagnostics(
                 "Check whether a proxy is modifying the federation metadata response.".to_string(),
             ],
             vec!["Fix the MEX configuration to advertise the required endpoints.".to_string()],
-        ));
+        ), codes));
     }
 
-    if contains_text(&facts.diagnostics.attempt_status, "0xc00cee4f") {
-        diagnostics.push(issue(
+    let codes = matched_in(&[(&facts.diagnostics.attempt_status, "0xc00cee4f")]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "federation-xml-dtd-prohibited",
             IntuneDiagnosticSeverity::Error,
             "configuration",
@@ -754,7 +790,7 @@ fn build_diagnostics(
                 "Check whether the identity provider or proxy is modifying the XML document.".to_string(),
             ],
             vec!["Remove the DTD from the federation XML response and retry authentication.".to_string()],
-        ));
+        ), codes));
     }
 
     if contains_aadsts_code(&facts.registration.server_error_description, "aadsts50126")
@@ -783,8 +819,9 @@ fn build_diagnostics(
         ));
     }
 
-    if has_code(facts, "0x80090016") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0x80090016"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "tpm-bad-keyset",
             IntuneDiagnosticSeverity::Error,
             "configuration",
@@ -796,11 +833,12 @@ fn build_diagnostics(
                 "Compare with device registration history and account recovery behavior on the machine.".to_string(),
             ],
             vec!["Repair or re-register the device after correcting the TPM keyset issue.".to_string()],
-        ));
+        ), codes));
     }
 
-    if has_code(facts, "0x80290407") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0x80290407"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "tpm-internal-error",
             IntuneDiagnosticSeverity::Error,
             "configuration",
@@ -812,11 +850,12 @@ fn build_diagnostics(
                 "Compare with a retry that uses a non-TPM path if the platform and Windows version support it.".to_string(),
             ],
             vec!["Resolve or bypass the unhealthy TPM path before retrying join.".to_string()],
-        ));
+        ), codes));
     }
 
-    if has_code(facts, "0x80280036") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0x80280036"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "tpm-not-fips",
             IntuneDiagnosticSeverity::Error,
             "configuration",
@@ -828,11 +867,12 @@ fn build_diagnostics(
                 "Check whether the Windows version can fall back to a non-TPM registration path.".to_string(),
             ],
             vec!["Correct the TPM mode or use a supported fallback path before retrying.".to_string()],
-        ));
+        ), codes));
     }
 
-    if has_code(facts, "0x80090031") {
-        diagnostics.push(issue(
+    let codes = matched_has_code(facts, &["0x80090031"]);
+    if !codes.is_empty() {
+        diagnostics.push(coded(issue(
             "tpm-locked-out",
             IntuneDiagnosticSeverity::Warning,
             "configuration",
@@ -844,7 +884,7 @@ fn build_diagnostics(
                 "Check whether repeated recent authentication failures triggered TPM anti-hammering.".to_string(),
             ],
             Vec::new(),
-        ));
+        ), codes));
     }
 
     if aggregated_errors.contains("aadsts90002")
@@ -1419,7 +1459,6 @@ fn build_diagnostics(
         }
     }
 
-    super::event_links::attach_related_error_codes(&mut diagnostics, facts);
     diagnostics
 }
 

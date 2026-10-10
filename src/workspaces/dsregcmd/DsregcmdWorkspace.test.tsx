@@ -265,6 +265,7 @@ function analysisResult(): DsregcmdAnalysisResult {
         evidence: ["azureAdPrt=YES"],
         nextChecks: ["dsregcmd /status"],
         suggestedFixes: ["Sign out and sign in again"],
+        relatedErrorCodes: [],
       },
     ],
     policyEvidence: policyEvidence(),
@@ -429,6 +430,7 @@ describe("DsregcmdWorkspace fixtures", () => {
         evidence: [],
         nextChecks: [],
         suggestedFixes: [],
+        relatedErrorCodes: [],
       },
       {
         id: "error-finding",
@@ -439,6 +441,7 @@ describe("DsregcmdWorkspace fixtures", () => {
         evidence: [],
         nextChecks: [],
         suggestedFixes: [],
+        relatedErrorCodes: [],
       },
     ];
     useDsregcmdStore

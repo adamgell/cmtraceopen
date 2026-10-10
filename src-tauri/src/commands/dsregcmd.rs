@@ -1715,7 +1715,7 @@ mod tests {
             .expect("lock dsregcmd env guard");
         let bundle = build_dsregcmd_bundle_fixture();
 
-        // An old bundle: written before linking existed, so no correlation links.
+        // The bundle file holds no links (no app path writes any); the analyzer builds them at load.
         let entry = |id: u64, message: &str| EventLogEntry {
             id,
             channel: EventLogChannel::SystemLog,

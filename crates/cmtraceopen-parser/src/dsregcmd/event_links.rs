@@ -1,89 +1,22 @@
 //! Links dsregcmd diagnostics to the event-log entries that cite the same
 //! error code (issue #870).
 //!
-//! Two halves:
+//! The codes come from the rules themselves: a rule that fires on a specific
+//! `0x` code builds its diagnostic with `coded(...)`, recording exactly the
+//! codes it matched in the fields it read (see `derive::matched_in` and
+//! `derive::matched_has_code`). This module only consumes
+//! `DsregcmdDiagnosticInsight::related_error_codes`.
 //!
-//! 1. [`attach_related_error_codes`] fills `DsregcmdDiagnosticInsight::related_error_codes`
-//!    for the rules that key on a specific code. The codes come from a table of
-//!    rule id to the literals that rule already tests for, and a code is kept
-//!    only when the capture itself contains it, so a diagnostic never claims a
-//!    code the capture did not print.
-//! 2. [`link_event_log_entries`] writes an `ErrorCodeMatch` correlation link for
-//!    every error or warning entry whose message cites one of those codes.
-//!
-//! The matcher compares lowercase `0x`-prefixed hex on token boundaries. The
-//! Intune path (`correlate_diagnostics`) uses a plain substring test, under which
-//! `0x8018000` would match inside `0x80180001`; this path does not.
+//! [`link_event_log_entries`] writes an `ErrorCodeMatch` correlation link for
+//! every error or warning entry whose message cites one of those codes, on a
+//! token boundary. The Intune path (`correlate_diagnostics`) uses a plain
+//! substring test, under which `0x8018000` would match inside `0x80180001`;
+//! this path does not.
 
 use std::collections::HashSet;
 
-use crate::dsregcmd::models::{DsregcmdAnalysisResult, DsregcmdDiagnosticInsight, DsregcmdFacts};
+use crate::dsregcmd::models::DsregcmdAnalysisResult;
 use crate::intune::apps::windows::ime::models::{EventLogCorrelationKind, EventLogCorrelationLink};
-
-use super::derive::has_code;
-
-/// Rule id to the specific error codes that rule tests for. Rules that fire on
-/// a pattern rather than a code (connectivity, enrollment state, certificate
-/// validity, and so on) are intentionally absent.
-const RULE_ERROR_CODES: &[(&str, &[&str])] = &[
-    ("entra-sync-pending", &["0x801c03f2"]),
-    ("adal-protocol-not-supported", &["0xcaa90017"]),
-    ("adal-parse-xml-failed", &["0xcaa9002c"]),
-    ("adal-password-endpoint-missing", &["0xcaa90023"]),
-    ("adal-timeout", &["0xcaa82ee2"]),
-    ("adal-connection-aborted", &["0xcaa82efe"]),
-    ("adal-secure-failure", &["0xcaa82f8f"]),
-    ("adal-cannot-connect", &["0xcaa82efd"]),
-    ("adal-invalid-grant", &["0xcaa20003"]),
-    ("adal-wstrust-request-failed", &["0xcaa90014"]),
-    ("adal-token-request-failed", &["0xcaa90006"]),
-    ("adal-operation-pending", &["0xcaa1002d"]),
-    ("scp-read-failed", &["0x801c001d"]),
-    ("drs-discovery-code", &["0x801c0021"]),
-    ("drs-discovery-timeout", &["0x801c001f"]),
-    ("user-realm-discovery-failed", &["0x801c003d"]),
-    ("invalid-discovery-response", &["0x8007000d"]),
-    ("join-device-authentication-error", &["0x801c0002"]),
-    ("join-internal-service-error", &["0x801c0006"]),
-    ("invalid-credentials", &["0xc000006d"]),
-    ("wrong-password", &["0xc000006a"]),
-    ("request-not-accepted", &["0xc00000d0"]),
-    (
-        "prt-network-path-error",
-        &["0xc000023c", "0xc00000be", "0xc00000c4"],
-    ),
-    ("prt-user-realm-not-found", &["0xc000005f"]),
-    ("malformed-upn", &["0xc004844c"]),
-    ("missing-user-sid-in-token", &["0xc0048442"]),
-    ("wstrust-empty-saml", &["0xc00484c1"]),
-    ("mex-endpoint-misconfigured", &["0xc004848b", "0xc004848c"]),
-    ("federation-xml-dtd-prohibited", &["0xc00cee4f"]),
-    ("tpm-bad-keyset", &["0x80090016"]),
-    ("tpm-internal-error", &["0x80290407"]),
-    ("tpm-not-fips", &["0x80280036"]),
-    ("tpm-locked-out", &["0x80090031"]),
-];
-
-/// Fill `related_error_codes` on the diagnostics whose rule is in
-/// [`RULE_ERROR_CODES`], keeping only codes the capture contains.
-pub(super) fn attach_related_error_codes(
-    diagnostics: &mut [DsregcmdDiagnosticInsight],
-    facts: &DsregcmdFacts,
-) {
-    for diagnostic in diagnostics {
-        let Some((_, codes)) = RULE_ERROR_CODES
-            .iter()
-            .find(|(rule_id, _)| *rule_id == diagnostic.id)
-        else {
-            continue;
-        };
-        diagnostic.related_error_codes = codes
-            .iter()
-            .filter(|code| has_code(facts, code))
-            .map(|code| code.to_string())
-            .collect();
-    }
-}
 
 /// True when `message_lower` contains `code` as a whole token: the characters
 /// on either side, if any, are not ASCII alphanumeric or `_`. Both inputs must
@@ -106,15 +39,19 @@ fn contains_code_token(message_lower: &str, code: &str) -> bool {
     })
 }
 
-/// Append an `ErrorCodeMatch` link for every error or warning event-log entry
-/// whose message cites a code in a diagnostic's `related_error_codes`. One link
-/// per (entry, diagnostic) pair; links already present (for example from a
-/// bundle written by a later build) are not duplicated. Does nothing when there
-/// is no event-log analysis or no diagnostic carries a code.
+/// Replace the event-log analysis's correlation links with the analyzer's own:
+/// an `ErrorCodeMatch` link for every error or warning entry whose message
+/// cites a code in a diagnostic's `related_error_codes`, one per (entry,
+/// diagnostic) pair. Links read from the input (a bundle's
+/// `dsregcmd-events.json`) are dropped first, because no app path writes links
+/// there and the analyzer owns the link set. Does nothing when there is no
+/// event-log analysis.
 pub(super) fn link_event_log_entries(result: &mut DsregcmdAnalysisResult) {
     let Some(analysis) = result.event_log_analysis.as_mut() else {
         return;
     };
+
+    analysis.correlation_links.clear();
 
     let coded: Vec<(&str, Vec<String>)> = result
         .diagnostics
@@ -134,15 +71,7 @@ pub(super) fn link_event_log_entries(result: &mut DsregcmdAnalysisResult) {
         return;
     }
 
-    let mut seen: HashSet<(u64, String)> = analysis
-        .correlation_links
-        .iter()
-        .filter_map(|l| {
-            l.linked_diagnostic_id
-                .as_ref()
-                .map(|id| (l.event_log_entry_id, id.clone()))
-        })
-        .collect();
+    let mut seen: HashSet<(u64, String)> = HashSet::new();
 
     let mut new_links = Vec::new();
     for entry in &analysis.entries {
@@ -338,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_links_are_kept_and_not_duplicated() {
+    fn foreign_links_in_the_input_do_not_survive_or_suppress_the_analyzers_own() {
         let mut events = analysis(vec![entry(
             0,
             EventLogSeverity::Error,
@@ -348,36 +277,270 @@ mod tests {
             event_log_entry_id: 0,
             linked_intune_event_id: None,
             linked_diagnostic_id: Some("drs-discovery-code".to_string()),
+            correlation_kind: EventLogCorrelationKind::TimeWindowChannelMatch,
+            time_delta_secs: Some(9.0),
+        });
+        events.correlation_links.push(EventLogCorrelationLink {
+            event_log_entry_id: 0,
+            linked_intune_event_id: None,
+            linked_diagnostic_id: Some("not-a-real-diagnostic".to_string()),
             correlation_kind: EventLogCorrelationKind::ErrorCodeMatch,
             time_delta_secs: None,
         });
         let result = run(SAMPLE, Some(events));
+        let links = result.event_log_analysis.unwrap().correlation_links;
+        assert_eq!(links.len(), 1, "{links:?}");
         assert_eq!(
-            result.event_log_analysis.unwrap().correlation_links.len(),
-            1
+            links[0].correlation_kind,
+            EventLogCorrelationKind::ErrorCodeMatch
+        );
+        assert_eq!(links[0].time_delta_secs, None);
+        assert_eq!(
+            links[0].linked_diagnostic_id.as_deref(),
+            Some("drs-discovery-code")
         );
     }
 
     #[test]
-    fn rule_table_ids_exist_and_codes_are_normalized() {
-        for (rule_id, codes) in RULE_ERROR_CODES {
-            assert!(!codes.is_empty(), "{rule_id}");
-            for code in *codes {
-                assert!(
-                    code.starts_with("0x")
-                        && code[2..]
-                            .chars()
-                            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-                    "{rule_id}: {code} must be lowercase 0x hex"
-                );
-            }
-        }
-        let rules_source = include_str!("rules.rs");
-        for (rule_id, _) in RULE_ERROR_CODES {
-            assert!(
-                rules_source.contains(&format!("\"{rule_id}\"")),
-                "{rule_id} is not a rule id in rules.rs"
+    fn a_code_found_only_in_a_field_the_rule_did_not_read_is_not_recorded() {
+        // prt-network-path-error reads Attempt Status only; the AD Connectivity
+        // Test field cites a different code that has_code would also find.
+        let sample = r#"
+ AzureAdJoined : YES
+ DomainJoined : NO
+ AzureAdPrt : NO
+ Attempt Status : 0xc000023c
+ AD Connectivity Test : FAIL [0xc00000be]
+"#;
+        let events = analysis(vec![entry(
+            0,
+            EventLogSeverity::Error,
+            "Kerberos failure 0xc00000be",
+        )]);
+        let result = run(sample, Some(events));
+        let diagnostic = result
+            .diagnostics
+            .iter()
+            .find(|d| d.id == "prt-network-path-error")
+            .expect("prt-network-path-error fires");
+        assert_eq!(diagnostic.related_error_codes, vec!["0xc000023c"]);
+        assert!(linked_ids(&result).is_empty());
+    }
+
+    /// (rule id, capture line that fires it, codes the rule must record)
+    const CODE_KEYED_RULES: &[(&str, &str, &[&str])] = &[
+        (
+            "entra-sync-pending",
+            "Client ErrorCode : 0x801c03f2",
+            &["0x801c03f2"],
+        ),
+        (
+            "adal-protocol-not-supported",
+            "Client ErrorCode : 0xcaa90017",
+            &["0xcaa90017"],
+        ),
+        (
+            "adal-parse-xml-failed",
+            "Client ErrorCode : 0xcaa9002c",
+            &["0xcaa9002c"],
+        ),
+        (
+            "adal-password-endpoint-missing",
+            "Client ErrorCode : 0xcaa90023",
+            &["0xcaa90023"],
+        ),
+        (
+            "adal-timeout",
+            "Client ErrorCode : 0xcaa82ee2",
+            &["0xcaa82ee2"],
+        ),
+        (
+            "adal-connection-aborted",
+            "Client ErrorCode : 0xcaa82efe",
+            &["0xcaa82efe"],
+        ),
+        (
+            "adal-secure-failure",
+            "Client ErrorCode : 0xcaa82f8f",
+            &["0xcaa82f8f"],
+        ),
+        (
+            "adal-cannot-connect",
+            "Client ErrorCode : 0xcaa82efd",
+            &["0xcaa82efd"],
+        ),
+        (
+            "adal-invalid-grant",
+            "Client ErrorCode : 0xcaa20003",
+            &["0xcaa20003"],
+        ),
+        (
+            "adal-wstrust-request-failed",
+            "Client ErrorCode : 0xcaa90014",
+            &["0xcaa90014"],
+        ),
+        (
+            "adal-token-request-failed",
+            "Client ErrorCode : 0xcaa90006",
+            &["0xcaa90006"],
+        ),
+        (
+            "adal-operation-pending",
+            "Client ErrorCode : 0xcaa1002d",
+            &["0xcaa1002d"],
+        ),
+        (
+            "scp-read-failed",
+            "Client ErrorCode : 0x801c001d",
+            &["0x801c001d"],
+        ),
+        (
+            "scp-read-failed",
+            "AD Configuration Test : FAIL [0x801c001d]",
+            &["0x801c001d"],
+        ),
+        (
+            "drs-discovery-code",
+            "Client ErrorCode : 0x801c0021",
+            &["0x801c0021"],
+        ),
+        (
+            "drs-discovery-code",
+            "DRS Discovery Test : FAIL [0x801c0021]",
+            &["0x801c0021"],
+        ),
+        (
+            "drs-discovery-timeout",
+            "Client ErrorCode : 0x801c001f",
+            &["0x801c001f"],
+        ),
+        (
+            "drs-discovery-timeout",
+            "DRS Discovery Test : FAIL [0x801c001f]",
+            &["0x801c001f"],
+        ),
+        (
+            "user-realm-discovery-failed",
+            "Client ErrorCode : 0x801c003d",
+            &["0x801c003d"],
+        ),
+        (
+            "invalid-discovery-response",
+            "Client ErrorCode : 0x8007000d",
+            &["0x8007000d"],
+        ),
+        (
+            "join-device-authentication-error",
+            "Client ErrorCode : 0x801c0002",
+            &["0x801c0002"],
+        ),
+        (
+            "join-internal-service-error",
+            "Client ErrorCode : 0x801c0006",
+            &["0x801c0006"],
+        ),
+        (
+            "invalid-credentials",
+            "Attempt Status : 0xc000006d",
+            &["0xc000006d"],
+        ),
+        (
+            "wrong-password",
+            "Attempt Status : 0xc000006a",
+            &["0xc000006a"],
+        ),
+        (
+            "request-not-accepted",
+            "Attempt Status : 0xc00000d0",
+            &["0xc00000d0"],
+        ),
+        (
+            "prt-network-path-error",
+            "Attempt Status : 0xc000023c 0xc00000c4",
+            &["0xc000023c", "0xc00000c4"],
+        ),
+        (
+            "prt-user-realm-not-found",
+            "Attempt Status : 0xc000005f",
+            &["0xc000005f"],
+        ),
+        (
+            "malformed-upn",
+            "Attempt Status : 0xc004844c",
+            &["0xc004844c"],
+        ),
+        (
+            "missing-user-sid-in-token",
+            "Attempt Status : 0xc0048442",
+            &["0xc0048442"],
+        ),
+        (
+            "wstrust-empty-saml",
+            "Attempt Status : 0xc00484c1",
+            &["0xc00484c1"],
+        ),
+        (
+            "mex-endpoint-misconfigured",
+            "Attempt Status : 0xc004848b",
+            &["0xc004848b"],
+        ),
+        (
+            "federation-xml-dtd-prohibited",
+            "Attempt Status : 0xc00cee4f",
+            &["0xc00cee4f"],
+        ),
+        (
+            "tpm-bad-keyset",
+            "Client ErrorCode : 0x80090016",
+            &["0x80090016"],
+        ),
+        (
+            "tpm-internal-error",
+            "Client ErrorCode : 0x80290407",
+            &["0x80290407"],
+        ),
+        (
+            "tpm-not-fips",
+            "Client ErrorCode : 0x80280036",
+            &["0x80280036"],
+        ),
+        (
+            "tpm-locked-out",
+            "Client ErrorCode : 0x80090031",
+            &["0x80090031"],
+        ),
+    ];
+
+    #[test]
+    fn every_code_keyed_rule_records_exactly_the_codes_it_matched() {
+        for (rule_id, line, expected) in CODE_KEYED_RULES {
+            let sample =
+                format!("\n AzureAdJoined : NO\n DomainJoined : YES\n AzureAdPrt : NO\n {line}\n");
+            let result = run(&sample, None);
+            let diagnostic = result
+                .diagnostics
+                .iter()
+                .find(|d| d.id == *rule_id)
+                .unwrap_or_else(|| panic!("{rule_id} did not fire for '{line}'"));
+            assert_eq!(
+                &diagnostic.related_error_codes, expected,
+                "{rule_id}: {line}"
             );
+        }
+    }
+
+    #[test]
+    fn every_coded_rule_in_rules_rs_is_covered_by_the_table() {
+        let covered: HashSet<&str> = CODE_KEYED_RULES.iter().map(|(id, _, _)| *id).collect();
+        let source = include_str!("rules.rs");
+        let production = &source[..source.find("#[cfg(test)]").expect("test module marker")];
+        assert_eq!(
+            production.matches("coded(issue(").count(),
+            covered.len(),
+            "a rule built with coded(...) is missing from CODE_KEYED_RULES, or the reverse"
+        );
+        for id in covered {
+            assert!(production.contains(&format!("\"{id}\"")), "{id}");
         }
     }
 }

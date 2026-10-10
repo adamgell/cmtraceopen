@@ -416,6 +416,58 @@ pub(super) fn has_code(facts: &DsregcmdFacts, code: &str) -> bool {
         || contains_text(&facts.pre_join_tests.ad_connectivity_test, code)
 }
 
+/// Fields [`has_code`] reads, in one place so [`matched_has_code`] cannot drift
+/// from it.
+fn has_code_fields(facts: &DsregcmdFacts) -> [&Option<String>; 11] {
+    [
+        &facts.registration.client_error_code,
+        &facts.registration.server_error_code,
+        &facts.registration.server_message,
+        &facts.registration.server_error_description,
+        &facts.diagnostics.attempt_status,
+        &facts.diagnostics.http_error,
+        &facts.pre_join_tests.token_acquisition_test,
+        &facts.pre_join_tests.drs_discovery_test,
+        &facts.pre_join_tests.ad_configuration_test,
+        &facts.pre_join_tests.drs_connectivity_test,
+        &facts.pre_join_tests.ad_connectivity_test,
+    ]
+}
+
+/// The subset of `codes` that [`has_code`] finds in the capture, in `codes`
+/// order. Used as both a rule's firing condition (non-empty) and the codes the
+/// diagnostic records as `related_error_codes`.
+pub(super) fn matched_has_code(facts: &DsregcmdFacts, codes: &[&str]) -> Vec<String> {
+    let fields = has_code_fields(facts);
+    codes
+        .iter()
+        .filter(|code| fields.iter().any(|field| contains_text(field, code)))
+        .map(|code| code.to_string())
+        .collect()
+}
+
+/// The distinct codes among `(field, code)` pairs whose field contains the
+/// code, in pair order. For rules that read specific fields only, so the
+/// recorded codes are exactly the ones found in the fields the rule read.
+pub(super) fn matched_in(pairs: &[(&Option<String>, &str)]) -> Vec<String> {
+    let mut matched: Vec<String> = Vec::new();
+    for (field, code) in pairs {
+        if contains_text(field, code) && !matched.iter().any(|m| m == code) {
+            matched.push(code.to_string());
+        }
+    }
+    matched
+}
+
+/// Attach the codes a rule matched to the diagnostic it built.
+pub(super) fn coded(
+    mut insight: DsregcmdDiagnosticInsight,
+    codes: Vec<String>,
+) -> DsregcmdDiagnosticInsight {
+    insight.related_error_codes = codes;
+    insight
+}
+
 pub(super) fn has_any_code(facts: &DsregcmdFacts, codes: &[&str]) -> bool {
     codes.iter().any(|code| has_code(facts, code))
 }
