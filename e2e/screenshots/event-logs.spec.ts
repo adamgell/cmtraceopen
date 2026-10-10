@@ -32,6 +32,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, expect } from "../fixtures";
+import { assertNoHostPaths } from "../fixtures/host-path-guard";
 import {
   buildParseResult,
   buildSourceManifest,
@@ -233,6 +234,7 @@ test.describe("event-logs screenshots", () => {
 
   test("event-logs table", async ({ page }) => {
     await expect(page.getByRole("region", { name: "Event log details" })).toHaveCount(0);
+    await assertNoHostPaths(page);
     await page.screenshot({
       path: outPath("event-logs-table.png"),
       animations: "disabled",
@@ -254,6 +256,7 @@ test.describe("event-logs screenshots", () => {
     await expect(
       page.getByRole("region", { name: "Event log details" }),
     ).toContainText("Installation failed.");
+    await assertNoHostPaths(page);
     await page.screenshot({
       path: outPath("event-logs-selected.png"),
       animations: "disabled",
