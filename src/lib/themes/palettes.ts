@@ -57,7 +57,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     },
   },
   "classic-cmtrace": {
-    error: { background: "#FF0000", text: "#FFFF00" },
+    error: { background: "#DD0000", text: "#FFFF00" },
     warning: { background: "#FFFF00", text: "#000000" },
     info: { background: "#FFFFFF", text: "#000000" },
     success: { background: "#92D050", text: "#000000" },
@@ -75,10 +75,10 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     },
   },
   "solarized-dark": {
-    error: { background: "#073642", text: "#DC322F" },
-    warning: { background: "#073642", text: "#B58900" },
+    error: { background: "#073642", text: "#E87B72" },
+    warning: { background: "#073642", text: "#BD9519" },
     info: { background: "#002B36", text: "#839496" },
-    success: { background: "#073642", text: "#859900" },
+    success: { background: "#073642", text: "#90A115" },
     highlightDefault: "#586E75",
     mergeColors: [
       "#268BD2", "#DC322F", "#859900", "#6C71C4",
@@ -93,7 +93,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     },
   },
   nord: {
-    error: { background: "#3B4252", text: "#BF616A" },
+    error: { background: "#3B4252", text: "#FC9080" },
     warning: { background: "#3B4252", text: "#EBCB8B" },
     info: { background: "#2E3440", text: "#D8DEE9" },
     success: { background: "#3B4252", text: "#A3BE8C" },
@@ -111,7 +111,7 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
     },
   },
   dracula: {
-    error: { background: "#44475A", text: "#FF5555" },
+    error: { background: "#44475A", text: "#FCA09D" },
     warning: { background: "#44475A", text: "#F1FA8C" },
     info: { background: "#282A36", text: "#F8F8F2" },
     success: { background: "#44475A", text: "#50FA7B" },

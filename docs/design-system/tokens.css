@@ -250,7 +250,7 @@
   --cmt-status-success-fg: #0e700e; --cmt-status-success-bg: #f1faf1; --cmt-status-success-border: #9fd89f;
   --cmt-status-warning-fg: #bc4b09; --cmt-status-warning-bg: #fff9f5; --cmt-status-warning-border: #fdcfb4;
   --cmt-status-danger-fg:  #b10e1c; --cmt-status-danger-bg:  #fdf3f4; --cmt-status-danger-border:  #eeacb2;
-  --cmt-sev-error-bg:   #FF0000;  --cmt-sev-error-fg:   #FFFF00;
+  --cmt-sev-error-bg:   #DD0000;  --cmt-sev-error-fg:   #FFFF00;
   --cmt-sev-warning-bg: #FFFF00;  --cmt-sev-warning-fg: #000000;
   --cmt-sev-info-bg:    #FFFFFF;  --cmt-sev-info-fg:    #000000;
   --cmt-sev-highlight:  #FFFF00;
@@ -272,8 +272,8 @@
   --cmt-status-success-fg: #859900; --cmt-status-success-bg: #073642; --cmt-status-success-border: #586e75;
   --cmt-status-warning-fg: #b58900; --cmt-status-warning-bg: #073642; --cmt-status-warning-border: #586e75;
   --cmt-status-danger-fg:  #dc322f; --cmt-status-danger-bg:  #073642; --cmt-status-danger-border:  #586e75;
-  --cmt-sev-error-bg:   #073642;  --cmt-sev-error-fg:   #DC322F;
-  --cmt-sev-warning-bg: #073642;  --cmt-sev-warning-fg: #B58900;
+  --cmt-sev-error-bg:   #073642;  --cmt-sev-error-fg:   #E87B72;
+  --cmt-sev-warning-bg: #073642;  --cmt-sev-warning-fg: #BD9519;
   --cmt-sev-info-bg:    #002B36;  --cmt-sev-info-fg:    #839496;
   --cmt-sev-highlight:  #586E75;
 }
@@ -294,7 +294,7 @@
   --cmt-status-success-fg: #A3BE8C; --cmt-status-success-bg: #3B4252; --cmt-status-success-border: #4C566A;
   --cmt-status-warning-fg: #EBCB8B; --cmt-status-warning-bg: #3B4252; --cmt-status-warning-border: #4C566A;
   --cmt-status-danger-fg:  #BF616A; --cmt-status-danger-bg:  #3B4252; --cmt-status-danger-border:  #4C566A;
-  --cmt-sev-error-bg:   #3B4252;  --cmt-sev-error-fg:   #BF616A;
+  --cmt-sev-error-bg:   #3B4252;  --cmt-sev-error-fg:   #FC9080;
   --cmt-sev-warning-bg: #3B4252;  --cmt-sev-warning-fg: #EBCB8B;
   --cmt-sev-info-bg:    #2E3440;  --cmt-sev-info-fg:    #D8DEE9;
   --cmt-sev-highlight:  #4C566A;
@@ -316,7 +316,7 @@
   --cmt-status-success-fg: #50FA7B; --cmt-status-success-bg: #44475A; --cmt-status-success-border: #6272A4;
   --cmt-status-warning-fg: #F1FA8C; --cmt-status-warning-bg: #44475A; --cmt-status-warning-border: #6272A4;
   --cmt-status-danger-fg:  #FF5555; --cmt-status-danger-bg:  #44475A; --cmt-status-danger-border:  #6272A4;
-  --cmt-sev-error-bg:   #44475A;  --cmt-sev-error-fg:   #FF5555;
+  --cmt-sev-error-bg:   #44475A;  --cmt-sev-error-fg:   #FCA09D;
   --cmt-sev-warning-bg: #44475A;  --cmt-sev-warning-fg: #F1FA8C;
   --cmt-sev-info-bg:    #282A36;  --cmt-sev-info-fg:    #F8F8F2;
   --cmt-sev-highlight:  #6272A4;
