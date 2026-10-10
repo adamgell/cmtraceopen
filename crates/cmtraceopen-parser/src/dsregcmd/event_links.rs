@@ -15,31 +15,12 @@
 
 use std::collections::HashSet;
 
+use super::derive::contains_code_token;
+
 use crate::dsregcmd::models::DsregcmdAnalysisResult;
 #[cfg(test)]
 use crate::dsregcmd::models::DsregcmdFacts;
 use crate::intune::apps::windows::ime::models::{EventLogCorrelationKind, EventLogCorrelationLink};
-
-/// True when `message_lower` contains `code` as a whole token: the characters
-/// on either side, if any, are not ASCII alphanumeric or `_`. Both inputs must
-/// already be lowercase.
-fn contains_code_token(message_lower: &str, code: &str) -> bool {
-    if code.is_empty() {
-        return false;
-    }
-    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
-    message_lower.match_indices(code).any(|(start, _)| {
-        let before_ok = message_lower[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !is_word(c));
-        let after_ok = message_lower[start + code.len()..]
-            .chars()
-            .next()
-            .is_none_or(|c| !is_word(c));
-        before_ok && after_ok
-    })
-}
 
 /// Replace the event-log analysis's correlation links with the analyzer's own:
 /// an `ErrorCodeMatch` link for every error or warning entry whose message
@@ -570,11 +551,13 @@ mod tests {
                 has_code(&facts, "0xdeadbeef"),
                 "has_code misses field {index}"
             );
+            let matched = matched_has_code(&facts, &["0xdeadbeef", "0x1"]);
             assert_eq!(
-                matched_has_code(&facts, &["0xdeadbeef", "0x1"]),
+                matched.fired,
                 vec!["0xdeadbeef"],
                 "matched_has_code misses field {index}"
             );
+            assert_eq!(matched.recorded, vec!["0xdeadbeef"], "field {index}");
         }
         let empty = DsregcmdFacts::default();
         assert!(!has_code(&empty, "0xdeadbeef"));
@@ -603,6 +586,52 @@ mod tests {
                 .find(|d| d.id == "entra-sync-pending")
                 .unwrap_or_else(|| panic!("entra-sync-pending did not fire for {sample}"));
             assert!(diagnostic.related_error_codes.is_empty());
+        }
+    }
+
+    #[test]
+    fn substring_only_hit_fires_but_records_nothing_and_links_nothing() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Client ErrorCode : 0x801c03f21
+"#;
+        let events = analysis(vec![
+            entry(0, EventLogSeverity::Error, "status 0x801c03f2"),
+            entry(1, EventLogSeverity::Error, "status 0x801c03f21"),
+        ]);
+        let result = run(sample, Some(events));
+        let diagnostic = result
+            .diagnostics
+            .iter()
+            .find(|d| d.id == "entra-sync-pending")
+            .expect("firing is the substring test, unchanged");
+        assert!(diagnostic.related_error_codes.is_empty());
+        assert!(linked_ids(&result).is_empty());
+    }
+
+    #[test]
+    fn every_code_keyed_rule_fires_on_a_suffixed_code_but_records_nothing() {
+        for (rule_id, line, expected) in CODE_KEYED_RULES {
+            let mut suffixed = line.to_string();
+            for code in *expected {
+                suffixed = suffixed.replace(code, &format!("{code}a"));
+            }
+            let sample = format!(
+                "\n AzureAdJoined : NO\n DomainJoined : YES\n AzureAdPrt : NO\n {suffixed}\n"
+            );
+            let result = run(&sample, None);
+            let diagnostic = result
+                .diagnostics
+                .iter()
+                .find(|d| d.id == *rule_id)
+                .unwrap_or_else(|| panic!("{rule_id} must still fire for '{suffixed}'"));
+            assert!(
+                diagnostic.related_error_codes.is_empty(),
+                "{rule_id}: '{suffixed}' recorded {:?}",
+                diagnostic.related_error_codes
+            );
         }
     }
 }

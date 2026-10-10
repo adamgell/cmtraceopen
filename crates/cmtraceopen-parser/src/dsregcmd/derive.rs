@@ -425,37 +425,102 @@ fn has_code_fields(facts: &DsregcmdFacts) -> [&Option<String>; 11] {
     ]
 }
 
-/// The subset of `codes` that [`has_code`] finds in the capture, in `codes`
-/// order. Used as both a rule's firing condition (non-empty) and the codes the
-/// diagnostic records as `related_error_codes`.
-pub(super) fn matched_has_code(facts: &DsregcmdFacts, codes: &[&str]) -> Vec<String> {
-    let fields = has_code_fields(facts);
-    codes
-        .iter()
-        .filter(|code| fields.iter().any(|field| contains_text(field, code)))
-        .map(|code| code.to_string())
-        .collect()
+/// True when `text_lower` contains `code` as a whole token: the characters on
+/// either side, if any, are not ASCII alphanumeric or `_`. Both inputs must
+/// already be lowercase. The one token-boundary matcher for error codes, used
+/// both to decide which codes a rule records and to link event-log entries.
+pub(super) fn contains_code_token(text_lower: &str, code: &str) -> bool {
+    if code.is_empty() {
+        return false;
+    }
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    text_lower.match_indices(code).any(|(start, _)| {
+        let before_ok = text_lower[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_word(c));
+        let after_ok = text_lower[start + code.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !is_word(c));
+        before_ok && after_ok
+    })
 }
 
-/// The distinct codes among `(field, code)` pairs whose field contains the
-/// code, in pair order. For rules that read specific fields only, so the
-/// recorded codes are exactly the ones found in the fields the rule read.
-pub(super) fn matched_in(pairs: &[(&Option<String>, &str)]) -> Vec<String> {
-    let mut matched: Vec<String> = Vec::new();
-    for (field, code) in pairs {
-        if contains_text(field, code) && !matched.iter().any(|m| m == code) {
-            matched.push(code.to_string());
+/// True when `field` holds `code` on token boundaries (case-insensitive).
+fn field_cites_code(field: &Option<String>, code: &str) -> bool {
+    field.as_deref().is_some_and(|value| {
+        contains_code_token(&value.to_ascii_lowercase(), &code.to_ascii_lowercase())
+    })
+}
+
+/// The result of matching a rule's code list against the fields it reads.
+///
+/// Firing and recording are deliberately separate. A rule fires exactly when
+/// [`CodeMatch::is_empty`] is false, which is the substring test the rules have
+/// always used (`contains_text`), so firing is unchanged. The codes the
+/// diagnostic records as `related_error_codes` are only those that also occur
+/// in a field on token boundaries: a rule that fires on a substring hit such as
+/// `0x801c03f21` records nothing and links nothing, rather than claiming a code
+/// the capture never printed.
+pub(super) struct CodeMatch {
+    pub(super) fired: Vec<String>,
+    pub(super) recorded: Vec<String>,
+}
+
+impl CodeMatch {
+    pub(super) fn is_empty(&self) -> bool {
+        self.fired.is_empty()
+    }
+}
+
+fn push_unique(list: &mut Vec<String>, code: &str) {
+    if !list.iter().any(|existing| existing == code) {
+        list.push(code.to_string());
+    }
+}
+
+/// Match `codes` against the fields [`has_code`] reads.
+pub(super) fn matched_has_code(facts: &DsregcmdFacts, codes: &[&str]) -> CodeMatch {
+    let fields = has_code_fields(facts);
+    let mut result = CodeMatch {
+        fired: Vec::new(),
+        recorded: Vec::new(),
+    };
+    for code in codes {
+        if fields.iter().any(|field| contains_text(field, code)) {
+            push_unique(&mut result.fired, code);
+        }
+        if fields.iter().any(|field| field_cites_code(field, code)) {
+            push_unique(&mut result.recorded, code);
         }
     }
-    matched
+    result
 }
 
-/// Attach the codes a rule matched to the diagnostic it built.
+/// Match `(field, code)` pairs, for rules that read specific fields only.
+pub(super) fn matched_in(pairs: &[(&Option<String>, &str)]) -> CodeMatch {
+    let mut result = CodeMatch {
+        fired: Vec::new(),
+        recorded: Vec::new(),
+    };
+    for (field, code) in pairs {
+        if contains_text(field, code) {
+            push_unique(&mut result.fired, code);
+        }
+        if field_cites_code(field, code) {
+            push_unique(&mut result.recorded, code);
+        }
+    }
+    result
+}
+
+/// Attach the token-bounded codes a rule matched to the diagnostic it built.
 pub(super) fn coded(
     mut insight: DsregcmdDiagnosticInsight,
-    codes: Vec<String>,
+    codes: CodeMatch,
 ) -> DsregcmdDiagnosticInsight {
-    insight.related_error_codes = codes;
+    insight.related_error_codes = codes.recorded;
     insight
 }
 
