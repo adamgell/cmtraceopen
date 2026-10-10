@@ -16,6 +16,8 @@
 use std::collections::HashSet;
 
 use crate::dsregcmd::models::DsregcmdAnalysisResult;
+#[cfg(test)]
+use crate::dsregcmd::models::DsregcmdFacts;
 use crate::intune::apps::windows::ime::models::{EventLogCorrelationKind, EventLogCorrelationLink};
 
 /// True when `message_lower` contains `code` as a whole token: the characters
@@ -541,6 +543,66 @@ mod tests {
         );
         for id in covered {
             assert!(production.contains(&format!("\"{id}\"")), "{id}");
+        }
+    }
+
+    #[test]
+    fn has_code_and_matched_has_code_agree_on_every_field() {
+        use crate::dsregcmd::derive::{has_code, matched_has_code};
+        type Slot = fn(&mut DsregcmdFacts) -> &mut Option<String>;
+        let slots: [Slot; 11] = [
+            |f| &mut f.registration.client_error_code,
+            |f| &mut f.registration.server_error_code,
+            |f| &mut f.registration.server_message,
+            |f| &mut f.registration.server_error_description,
+            |f| &mut f.diagnostics.attempt_status,
+            |f| &mut f.diagnostics.http_error,
+            |f| &mut f.pre_join_tests.token_acquisition_test,
+            |f| &mut f.pre_join_tests.drs_discovery_test,
+            |f| &mut f.pre_join_tests.ad_configuration_test,
+            |f| &mut f.pre_join_tests.drs_connectivity_test,
+            |f| &mut f.pre_join_tests.ad_connectivity_test,
+        ];
+        for (index, slot) in slots.iter().enumerate() {
+            let mut facts = DsregcmdFacts::default();
+            *slot(&mut facts) = Some("FAIL [0xdeadbeef]".to_string());
+            assert!(
+                has_code(&facts, "0xdeadbeef"),
+                "has_code misses field {index}"
+            );
+            assert_eq!(
+                matched_has_code(&facts, &["0xdeadbeef", "0x1"]),
+                vec!["0xdeadbeef"],
+                "matched_has_code misses field {index}"
+            );
+        }
+        let empty = DsregcmdFacts::default();
+        assert!(!has_code(&empty, "0xdeadbeef"));
+        assert!(matched_has_code(&empty, &["0xdeadbeef"]).is_empty());
+    }
+
+    #[test]
+    fn entra_sync_pending_firing_on_a_non_code_operand_records_no_code() {
+        let directory_error = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Server ErrorCode : DirectoryError
+"#;
+        let pending_text = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Server Message : Directory sync pending for this device
+"#;
+        for sample in [directory_error, pending_text] {
+            let result = run(sample, None);
+            let diagnostic = result
+                .diagnostics
+                .iter()
+                .find(|d| d.id == "entra-sync-pending")
+                .unwrap_or_else(|| panic!("entra-sync-pending did not fire for {sample}"));
+            assert!(diagnostic.related_error_codes.is_empty());
         }
     }
 }

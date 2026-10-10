@@ -403,21 +403,12 @@ pub(super) fn aggregated_error_text(facts: &DsregcmdFacts) -> String {
 }
 
 pub(super) fn has_code(facts: &DsregcmdFacts, code: &str) -> bool {
-    contains_text(&facts.registration.client_error_code, code)
-        || contains_text(&facts.registration.server_error_code, code)
-        || contains_text(&facts.registration.server_message, code)
-        || contains_text(&facts.registration.server_error_description, code)
-        || contains_text(&facts.diagnostics.attempt_status, code)
-        || contains_text(&facts.diagnostics.http_error, code)
-        || contains_text(&facts.pre_join_tests.token_acquisition_test, code)
-        || contains_text(&facts.pre_join_tests.drs_discovery_test, code)
-        || contains_text(&facts.pre_join_tests.ad_configuration_test, code)
-        || contains_text(&facts.pre_join_tests.drs_connectivity_test, code)
-        || contains_text(&facts.pre_join_tests.ad_connectivity_test, code)
+    has_code_fields(facts)
+        .iter()
+        .any(|field| contains_text(field, code))
 }
 
-/// Fields [`has_code`] reads, in one place so [`matched_has_code`] cannot drift
-/// from it.
+/// The one list of fields [`has_code`] and [`matched_has_code`] both read.
 fn has_code_fields(facts: &DsregcmdFacts) -> [&Option<String>; 11] {
     [
         &facts.registration.client_error_code,
