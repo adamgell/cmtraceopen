@@ -5,7 +5,7 @@
  *
  * Values are CSS colors: Fluent token references (`var(--…)`), hex entries of
  * the active theme's severity palette, or `color-mix()` expressions, so they
- * follow all eight themes. Canvas and SVG consumers cannot read `var()` or
+ * follow every theme. Canvas and SVG consumers cannot read `var()` or
  * `color-mix()` directly and must resolve these strings themselves.
  *
  * Level marks and channel colors come from the theme's `eventLog` semantic
@@ -139,7 +139,7 @@ export interface EvtxVisualTokens {
    * colors the label and the 7px dot and is the theme's `eventLog.live`.
    * `border` is decorative: the label identifies the pill, so it carries no
    * contrast floor (INVENTORY_EXEMPTIONS). Spec 8.1 names
-   * colorPaletteGreenBackground3 for it. Measured (hotdog-stand excluded):
+   * colorPaletteGreenBackground3 for it. Measured:
    * against the pill fill it is 3.07 to 21.00:1 (3.07 in every theme but
    * light and classic 5.03 and high-contrast 21.00); against the toolbar
    * that hosts the pill (colorNeutralBackground2, Toolbar.tsx) it is 1.87
@@ -294,8 +294,7 @@ export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
       // carrying the meaning. Its solid accessible border keeps it from being
       // mistaken for Candidate (dashed) or Not linked (dotted). Background3
       // plus Foreground2 keep the label at 4.5:1 in every theme; on a surface
-      // background the label drops below that in dracula, solarized and
-      // hotdog-stand.
+      // background the label drops below that in dracula and solarized.
       coverageBlocked: {
         label: "Coverage blocked",
         background: tokens.colorNeutralBackground3,

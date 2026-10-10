@@ -49,13 +49,6 @@ const STRENGTHS: DiagnosisCorrelationStatus[] = [
 ];
 
 /**
- * removed in #878. hotdog-stand is exempt from the red-family rule (red
- * surface), the neutral-badge outcome rule (every neutral is yellow on red)
- * and every placement rule; its values are unchanged.
- */
-const HOTDOG_REMOVED_IN_878: readonly string[] = ["hotdog-stand"];
-
-/**
  * Critical and Error share the red family: every cross pair between them
  * (mark or text) uses this one floor. "Critical stays red-family",
  * 2026-10-08; red-pair floor, 2026-10-09 (owner decisions).
@@ -88,15 +81,6 @@ function themeById(id: string) {
 }
 
 const themes = getAllThemes().map((theme) => [theme.id, theme] as const);
-const redFamilyThemes = themes.filter(
-  ([id]) => !HOTDOG_REMOVED_IN_878.includes(id),
-);
-const outcomeCheckedThemes = themes.filter(
-  ([id]) => !HOTDOG_REMOVED_IN_878.includes(id),
-);
-const surfaceThemes = themes.filter(
-  ([id]) => !HOTDOG_REMOVED_IN_878.includes(id),
-);
 const classicTheme = themes.filter(([id]) => id === "classic-cmtrace");
 
 type Lab = [number, number, number];
@@ -505,12 +489,6 @@ const INVENTORY_EXEMPTIONS: readonly {
     reason: "a sequential ramp of data fills; the faint steps are intentional",
   },
   {
-    what: "row text, level words and finding callout text on error or warning tints",
-    section: "6.3, 8.13",
-    reason:
-      "the palette.error.text on palette.error.background pairing is owned by PR #877",
-  },
-  {
     what: "selection inset border and Exact badge border on the selection background (light, classic-cmtrace: 2.87:1)",
     section: "6.2, Q-1, 8.11, 8.13",
     reason:
@@ -799,7 +777,7 @@ describe("evtx visual tokens", () => {
     expect(visual.channelColor(13)).toBe(visual.channelColor(1));
   });
 
-  describe.each(surfaceThemes)(
+  describe.each(themes)(
     "FAMILY_SEPARATION in the %s theme",
     (id, theme) => {
       it("keeps every pair of colors from different families apart", () => {
@@ -940,9 +918,6 @@ describe("evtx visual tokens", () => {
         for (let j = i + 1; j < LEVELS.length; j++) {
           const a = LEVELS[i];
           const b = LEVELS[j];
-          // hotdog-stand keeps its identical cyan neutrals (exempt, #878).
-          if (isNeutralMarkPair(a, b) && HOTDOG_REMOVED_IN_878.includes(id))
-            continue;
           const d = deltaE00(mark(a), mark(b));
           expect(
             d,
@@ -987,7 +962,7 @@ describe("evtx visual tokens", () => {
     });
   });
 
-  describe.each(redFamilyThemes)("red family in the %s theme", (id, theme) => {
+  describe.each(themes)("red family in the %s theme", (id, theme) => {
     const visual = buildEvtxVisualTokens(theme);
 
     it.each(["Critical", "Error"] as const)("keeps %s red", (level) => {
@@ -1000,7 +975,7 @@ describe("evtx visual tokens", () => {
     });
   });
 
-  describe.each(redFamilyThemes)(
+  describe.each(themes)(
     "severity vividness in the %s theme",
     (id, theme) => {
       const visual = buildEvtxVisualTokens(theme);
@@ -1060,7 +1035,7 @@ describe("evtx visual tokens", () => {
     });
   });
 
-  describe.each(surfaceThemes)(
+  describe.each(themes)(
     "semantic hue and chroma in the %s theme",
     (id, theme) => {
       const visual = buildEvtxVisualTokens(theme);
@@ -1187,7 +1162,7 @@ describe("evtx visual tokens", () => {
     },
   );
 
-  describe.each(surfaceThemes)(
+  describe.each(themes)(
     "placement inventory in the %s theme",
     (id, theme) => {
       const visual = buildEvtxVisualTokens(theme);
@@ -1238,6 +1213,36 @@ describe("evtx visual tokens", () => {
           expect(failures, failures.join("; ")).toEqual([]);
         },
       );
+
+      it("keeps row text and finding callout text at 4.5:1 on their own tints", () => {
+        const failures: string[] = [];
+        const pairs: [string, string, string][] = [
+          ...LEVELS.map(
+            (l) =>
+              [
+                `${l} rowText`,
+                visual.levels[l].rowText,
+                visual.levels[l].rowBackground,
+              ] as [string, string, string],
+          ),
+          [
+            "findingCallout",
+            visual.findingCallout.foreground,
+            visual.findingCallout.background,
+          ],
+        ];
+        for (const [name, fg, bg] of pairs) {
+          const text = resolveToken(fg, theme);
+          const tint = resolveToken(bg, theme);
+          const ratio = contrastRatio(text, tint);
+          if (ratio < 4.5) {
+            failures.push(
+              `${id}: ${name} ${text} on ${tint} = ${ratio.toFixed(2)} (< 4.5)`,
+            );
+          }
+        }
+        expect(failures, failures.join("; ")).toEqual([]);
+      });
 
       it("gives every mark context an outline at 3:1 on its background", () => {
         const failures: string[] = [];
@@ -1329,7 +1334,7 @@ describe("evtx visual tokens", () => {
     });
   });
 
-  describe.each(outcomeCheckedThemes)(
+  describe.each(themes)(
     "neutral badges in the %s theme",
     (id, theme) => {
       const visual = buildEvtxVisualTokens(theme);
@@ -1452,7 +1457,7 @@ describe("evtx visual tokens", () => {
     });
   });
 
-  describe.each(surfaceThemes)(
+  describe.each(themes)(
     "readableOn outputs in the %s theme",
     (id, theme) => {
       const visual = buildEvtxVisualTokens(theme);
