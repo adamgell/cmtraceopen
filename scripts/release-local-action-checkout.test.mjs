@@ -101,6 +101,7 @@ test("the guard detects a job that names a local action without checking out", (
 // they need no native artifact, credentials, network, or application execution.
 for (const [name, program, script] of [
   ["complete updater coverage", process.execPath, "../.github/scripts/updater-coverage.test.mjs"],
+  ["NSIS signing sequence", process.execPath, "./nsis-signing-sequence.test.mjs"],
   ["published stable release guard", "python3", "../.github/scripts/stable-release-guard_test.py"],
   ["macOS trust boundary", "python3", "./verify-macos-release_test.py"],
 ]) {

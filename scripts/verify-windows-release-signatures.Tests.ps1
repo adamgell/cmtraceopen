@@ -342,3 +342,65 @@ Describe 'NSIS bundled payload signature evidence' {
         { Write-NsisPayloadReceipt -InstallerPath $installer -ExtractionRoot $extractionRoot -ReceiptRoot $receiptRoot -Target 'x86_64-pc-windows-msvc' } | Should -Throw
     }
 }
+
+
+Describe 'Tauri bundling-time signing hook' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot 'sign-tauri-windows.ps1')
+        function Invoke-ArtifactSigning { param($Files, $Endpoint, $CodeSigningAccountName,
+            $CertificateProfileName, $FileDigest, $TimestampRfc3161, $TimestampDigest, $Timeout,
+            $ExcludeEnvironmentCredential, $ExcludeWorkloadIdentityCredential,
+            $ExcludeManagedIdentityCredential, $ExcludeSharedTokenCacheCredential,
+            $ExcludeVisualStudioCredential, $ExcludeVisualStudioCodeCredential,
+            $ExcludeAzureCliCredential, $ExcludeAzurePowerShellCredential,
+            $ExcludeAzureDeveloperCliCredential, $ExcludeInteractiveBrowserCredential) }
+        $hookSettings = @('AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET',
+            'SIGNING_ENDPOINT', 'SIGNING_ACCOUNT_NAME', 'SIGNING_PROFILE_NAME')
+        $previousHookSettings = @{}
+        foreach ($name in $hookSettings) {
+            $previousHookSettings[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+    }
+    BeforeEach {
+        foreach ($name in $hookSettings) { [Environment]::SetEnvironmentVariable($name, 'offline-fixture') }
+        $hookFile = Join-Path $TestDrive ('payload ' + [guid]::NewGuid() + '.exe')
+        Set-Content -LiteralPath $hookFile -Value 'offline unsigned fixture'
+        Mock Import-Module { }
+        Mock Invoke-ArtifactSigning { }
+        Mock Get-AuthenticodeSignature { [pscustomobject]@{ Status = 'Valid' } }
+    }
+    AfterAll {
+        foreach ($name in $hookSettings) { [Environment]::SetEnvironmentVariable($name, $previousHookSettings[$name]) }
+    }
+    It 'signs only the bundler-supplied file with the existing pinned module and environment credential' {
+        Invoke-TauriWindowsSigning -LiteralPath $hookFile
+        Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter { $Name -eq 'ArtifactSigning' -and $RequiredVersion -eq '0.1.8' }
+        Should -Invoke Invoke-ArtifactSigning -Times 1 -Exactly -ParameterFilter {
+            $Files -eq $hookFile -and $FileDigest -eq 'SHA256' -and $TimestampDigest -eq 'SHA256' -and
+            $TimestampRfc3161 -eq 'http://timestamp.acs.microsoft.com' -and $Timeout -eq 300 -and
+            -not $ExcludeEnvironmentCredential -and $ExcludeAzureCliCredential -and
+            $ExcludeWorkloadIdentityCredential -and $ExcludeManagedIdentityCredential -and
+            $ExcludeSharedTokenCacheCredential -and $ExcludeVisualStudioCredential -and
+            $ExcludeVisualStudioCodeCredential -and $ExcludeAzurePowerShellCredential -and
+            $ExcludeAzureDeveloperCliCredential -and $ExcludeInteractiveBrowserCredential
+        }
+    }
+    It 'fails before signing when an existing credential is absent' {
+        $env:AZURE_CLIENT_SECRET = ''
+        { Invoke-TauriWindowsSigning -LiteralPath $hookFile } | Should -Throw '*AZURE_CLIENT_SECRET*'
+        Should -Invoke Invoke-ArtifactSigning -Times 0
+    }
+    It 'propagates a provider failure and does not inspect a nonexistent signature' {
+        Mock Invoke-ArtifactSigning { throw 'offline provider failure' }
+        { Invoke-TauriWindowsSigning -LiteralPath $hookFile } | Should -Throw '*provider failure*'
+        Should -Invoke Get-AuthenticodeSignature -Times 0
+    }
+    It 'rejects an unsigned result even when the provider returns successfully' {
+        Mock Get-AuthenticodeSignature { [pscustomobject]@{ Status = 'NotSigned' } }
+        { Invoke-TauriWindowsSigning -LiteralPath $hookFile } | Should -Throw '*valid Authenticode*'
+    }
+    It 'rejects a directory and does not sign files recursively' {
+        { Invoke-TauriWindowsSigning -LiteralPath $TestDrive } | Should -Throw '*regular EXE or DLL*'
+        Should -Invoke Invoke-ArtifactSigning -Times 0
+    }
+}

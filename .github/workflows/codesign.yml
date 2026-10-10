@@ -203,14 +203,38 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # ── Build full edition + NSIS installer ──
-      # Tauri patches the binary with bundle-type metadata during bundling,
-      # so the NSIS installer must be built in the same step as the binary.
-      - name: Build full edition (NSIS + standalone EXE)
+      # Compile without Azure credentials. Tauri bundle then patches the NSIS
+      # payload and invokes signCommand before packing it, also signing the
+      # uninstaller, plugins and outer installer through the existing provider.
+      - name: Compile full edition without bundling
+        run: npm run app:build:release -- --target ${{ matrix.rust_target }} --no-bundle
+
+      - name: Install existing Artifact Signing module for bundler hook
+        shell: pwsh
+        run: Install-Module -Name ArtifactSigning -RequiredVersion 0.1.8 -Force -Repository PSGallery
+
+      - name: Bundle NSIS with signed application payload
+        timeout-minutes: 20
+        shell: pwsh
         env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          SIGNING_ENDPOINT: ${{ secrets.SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT_NAME: ${{ secrets.SIGNING_ACCOUNT_NAME }}
+          SIGNING_PROFILE_NAME: ${{ secrets.SIGNING_PROFILE_NAME }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run app:build:release -- --target ${{ matrix.rust_target }} --bundles nsis
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $hook = Join-Path $PWD 'scripts/sign-tauri-windows.ps1'
+          $configPath = Join-Path $env:RUNNER_TEMP 'tauri-nsis-signing.json'
+          @{ bundle = @{ windows = @{ signCommand = @{
+            cmd = 'pwsh'
+            args = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $hook, '%1')
+          } } } } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding utf8
+          node scripts/tauri.mjs bundle --target ${{ matrix.rust_target }} --bundles nsis --config $configPath
+          if ($LASTEXITCODE -ne 0) { throw 'Signed NSIS bundling failed.' }
 
       # Save the full binary before lite build overwrites it
       # (both builds produce cmtrace-open.exe in the same release dir)
