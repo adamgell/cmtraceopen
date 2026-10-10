@@ -9,9 +9,10 @@ import { defineConfig, devices } from "@playwright/test";
  * committed PNGs into `screenshots/` and must not run as part of `npm run test:e2e`.
  * The main e2e config ignores this directory (see `testIgnore` there).
  *
- * Reuses an already-running dev server on :1420 when present. Captures that
- * need deterministic data (the Event Logs spec) block the IPC bridge on :1422
- * themselves, so a running `npm run app:dev` does not change their output.
+ * Captures are fully mocked: the specs block the IPC bridge on :1422, so a
+ * running `npm run app:dev` cannot change what is captured. Playwright reuses a
+ * dev server already listening on :1420, so the global setup fails fast if that
+ * server does not belong to this checkout.
  */
 export default defineConfig({
   testDir: "./e2e/screenshots",

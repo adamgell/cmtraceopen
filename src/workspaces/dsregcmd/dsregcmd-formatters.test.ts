@@ -1,6 +1,59 @@
 import { describe, expect, it } from "vitest";
-import { selectTopFindings, toneForPrtState } from "./dsregcmd-formatters";
-import type { DsregcmdSeverity } from "./types";
+import {
+  getMdmVisibilityLabel,
+  selectTopFindings,
+  toneForMdmVisibility,
+  toneForPrtState,
+} from "./dsregcmd-formatters";
+import type { DsregcmdAnalysisResult, DsregcmdSeverity } from "./types";
+
+type MdmDerived = Pick<
+  DsregcmdAnalysisResult["derived"],
+  "mdmEnrolled" | "missingMdm" | "missingComplianceUrl"
+>;
+
+const mdmDerived = (overrides: Partial<MdmDerived>) =>
+  ({
+    mdmEnrolled: null,
+    missingMdm: false,
+    missingComplianceUrl: false,
+    ...overrides,
+  }) as DsregcmdAnalysisResult["derived"];
+
+/// The sidebar and the facts panel must tell the same story for every
+/// `mdmEnrolled` value. `false` is not "Unknown": it means the analysis
+/// affirmatively found no enrollment, which deserves a warning tone.
+describe("MDM visibility", () => {
+  it("reports Present and good when enrolled with both URLs", () => {
+    const derived = mdmDerived({ mdmEnrolled: true });
+    expect(getMdmVisibilityLabel(derived)).toBe("Present");
+    expect(toneForMdmVisibility(derived)).toBe("good");
+  });
+
+  it("reports Partial and neutral when enrolled but a URL is missing", () => {
+    const missingMdm = mdmDerived({ mdmEnrolled: true, missingMdm: true });
+    const missingCompliance = mdmDerived({
+      mdmEnrolled: true,
+      missingComplianceUrl: true,
+    });
+    expect(getMdmVisibilityLabel(missingMdm)).toBe("Partial");
+    expect(toneForMdmVisibility(missingMdm)).toBe("neutral");
+    expect(getMdmVisibilityLabel(missingCompliance)).toBe("Partial");
+    expect(toneForMdmVisibility(missingCompliance)).toBe("neutral");
+  });
+
+  it("reports Not enrolled and warn when enrollment is affirmatively absent", () => {
+    const derived = mdmDerived({ mdmEnrolled: false });
+    expect(getMdmVisibilityLabel(derived)).toBe("Not enrolled");
+    expect(toneForMdmVisibility(derived)).toBe("warn");
+  });
+
+  it("keeps Unknown and neutral when enrollment could not be determined", () => {
+    const derived = mdmDerived({ mdmEnrolled: null });
+    expect(getMdmVisibilityLabel(derived)).toBe("Unknown");
+    expect(toneForMdmVisibility(derived)).toBe("neutral");
+  });
+});
 
 /// The Top Findings list claims "Highest-priority diagnostics first". The
 /// analysis returns its diagnostics grouped by rule family, so the claim only

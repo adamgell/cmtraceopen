@@ -4,8 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+
+- **Hot Dog Stand theme**: Remove the theme. Anyone who had it selected opens in the Light theme.
+
 ### Changed
 
+- **Reference screenshots**: Remove outdated reference screenshots that showed identifying environment details, and replace the 0.3.0 workspace screenshot with a text caption.
 - **Parser source compatibility (#814)**: Advance `cmtraceopen-parser` to `0.4.0` for breaking source API changes from new Windows Firewall enum variants and public struct fields. Update affected exhaustive matches and struct literals; see the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
 
 ### Fixed
@@ -754,7 +759,7 @@ Major UX overhaul and parser expansion. The log viewer now has dynamic columns d
 
 CMTrace Open 0.3.0 expands the app from a log viewer with Intune diagnostics into a broader troubleshooting tool for Windows management and identity issues. This release adds a dedicated DSRegCmd troubleshooting workspace, supports startup file handling through Windows file association flows, and prepares signed Windows release artifacts for easier distribution in managed environments.
 
-![main workspace of the dsregcmd space](references/dsregcmd1.png)
+The DSRegCmd workspace main view.
 
 ### Added
 
