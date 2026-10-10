@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+
+- **Hot Dog Stand theme**: Remove the theme. Anyone who had it selected opens in the Light theme.
+
 ### Changed
 
 - **Reference screenshots**: Remove outdated reference screenshots that showed identifying environment details, and replace the 0.3.0 workspace screenshot with a text caption.

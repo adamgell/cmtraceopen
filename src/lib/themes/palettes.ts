@@ -128,22 +128,4 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       error: { foreground: "#FF5555", background: "rgba(255, 85, 85, 0.15)" },
     },
   },
-  "hotdog-stand": {
-    error: { background: "#FF0000", text: "#FFFF00" },
-    warning: { background: "#FFFF00", text: "#FF0000" },
-    info: { background: "#FF0000", text: "#FFFF00" },
-    success: { background: "#008000", text: "#FFFFFF" },
-    highlightDefault: "#00FF00",
-    mergeColors: [
-      "#00BFFF", "#00FF00", "#FF69B4", "#FFFF00",
-      "#FFA500", "#00FFFF", "#FF00FF", "#FFFFFF",
-    ],
-    whatifOverlay: "rgba(255, 0, 255, 0.30)",
-    whatifText: "#FF00FF",
-    status: {
-      success: { foreground: "#00FF00", background: "rgba(0, 255, 0, 0.15)" },
-      warning: { foreground: "#FFFF00", background: "rgba(255, 255, 0, 0.15)" },
-      error: { foreground: "#FF0000", background: "rgba(255, 0, 0, 0.15)" },
-    },
-  },
 };
