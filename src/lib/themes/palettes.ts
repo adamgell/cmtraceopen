@@ -19,6 +19,24 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: { foreground: "#bc4b09", background: "rgba(188, 75, 9, 0.1)" },
       error: { foreground: "#b10e1c", background: "rgba(177, 14, 28, 0.1)" },
     },
+    eventLog: {
+      critical: "#881337",
+      error: "#dc2626",
+      warning: "#a16207",
+      information: "#616161",
+      verbose: "#8c8c8c",
+      text: {
+        critical: "#881337",
+        error: "#b40000",
+        warning: "#7b4809",
+        information: "#616161",
+        verbose: "#6f6f6f",
+      },
+      live: "#0e700e",
+      channels: [
+        "#a400c5", "#1a1a4d", "#0891b2", "#611871", "#6d5b9e", "#2d2cdc",
+      ],
+    },
   },
   dark: {
     error: { background: "#7F1D1D", text: "#FCA5A5" },
@@ -36,6 +54,24 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       success: { foreground: "#4ade80", background: "rgba(74, 222, 128, 0.15)" },
       warning: { foreground: "#fbbf24", background: "rgba(251, 191, 36, 0.15)" },
       error: { foreground: "#f87171", background: "rgba(248, 113, 113, 0.15)" },
+    },
+    eventLog: {
+      critical: "#ff4d80",
+      error: "#ff5a1f",
+      warning: "#fbbf24",
+      information: "#aea9a9",
+      verbose: "#8b8b8b",
+      text: {
+        critical: "#ff90ae",
+        error: "#fb987f",
+        warning: "#fbbf24",
+        information: "#adadad",
+        verbose: "#999999",
+      },
+      live: "#4ade80",
+      channels: [
+        "#e188f4", "#93ecec", "#007c99", "#c539e2", "#a29bf6", "#dcd0ff",
+      ],
     },
   },
   "high-contrast": {
@@ -55,6 +91,24 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: { foreground: "#FFFF00", background: "rgba(255, 255, 0, 0.15)" },
       error: { foreground: "#FF0000", background: "rgba(255, 0, 0, 0.15)" },
     },
+    eventLog: {
+      critical: "#ff4d80",
+      error: "#FF0000",
+      warning: "#fcc34e",
+      information: "#aaaaaa",
+      verbose: "#808080",
+      text: {
+        critical: "#ff4d80",
+        error: "#FF0000",
+        warning: "#f2ce5c",
+        information: "#bbbbbb",
+        verbose: "#a0a0a0",
+      },
+      live: "#00FF00",
+      channels: [
+        "#cc9afb", "#8e71f4", "#0083a3", "#f3d0fb", "#3d98ff", "#c300eb",
+      ],
+    },
   },
   "classic-cmtrace": {
     error: { background: "#DD0000", text: "#FFFF00" },
@@ -72,6 +126,24 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       success: { foreground: "#0e700e", background: "rgba(14, 112, 14, 0.1)" },
       warning: { foreground: "#bc4b09", background: "rgba(188, 75, 9, 0.1)" },
       error: { foreground: "#b10e1c", background: "rgba(177, 14, 28, 0.1)" },
+    },
+    eventLog: {
+      critical: "#881337",
+      error: "#dc2626",
+      warning: "#a16207",
+      information: "#514d47",
+      verbose: "#8a8a80",
+      text: {
+        critical: "#881337",
+        error: "#b40000",
+        warning: "#723f00",
+        information: "#61615e",
+        verbose: "#706e6c",
+      },
+      live: "#0e700e",
+      channels: [
+        "#c261fc", "#006261", "#aa0dcb", "#6a5185", "#0a8e87", "#0f9dbd",
+      ],
     },
   },
   "solarized-dark": {
@@ -91,6 +163,24 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: { foreground: "#B58900", background: "rgba(181, 137, 0, 0.15)" },
       error: { foreground: "#DC322F", background: "rgba(220, 50, 47, 0.15)" },
     },
+    eventLog: {
+      critical: "#ff4d80",
+      error: "#ff5a1f",
+      warning: "#B58900",
+      information: "#b2ada7",
+      verbose: "#8e8e8a",
+      text: {
+        critical: "#fc91b9",
+        error: "#fd9e7e",
+        warning: "#fbbf24",
+        information: "#adadad",
+        verbose: "#9a9a9a",
+      },
+      live: "#709c18",
+      channels: [
+        "#a9acda", "#ad56bf", "#526cff", "#f5ccff", "#de85ff", "#7476a1",
+      ],
+    },
   },
   nord: {
     error: { background: "#3B4252", text: "#FC9080" },
@@ -109,6 +199,24 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       warning: { foreground: "#EBCB8B", background: "rgba(235, 203, 139, 0.15)" },
       error: { foreground: "#BF616A", background: "rgba(191, 97, 106, 0.15)" },
     },
+    eventLog: {
+      critical: "#ff618f",
+      error: "#ff6933",
+      warning: "#d4a72c",
+      information: "#f6f2ea",
+      verbose: "#a69e96",
+      text: {
+        critical: "#ff90ae",
+        error: "#fb987f",
+        warning: "#f2cd7c",
+        information: "#bab7b2",
+        verbose: "#aeaeae",
+      },
+      live: "#A3BE8C",
+      channels: [
+        "#9e9efa", "#00ada5", "#f3d0fb", "#d152ff", "#00ffee", "#b094bd",
+      ],
+    },
   },
   dracula: {
     error: { background: "#44475A", text: "#FCA09D" },
@@ -126,6 +234,24 @@ export const themeSeverityPalettes: Record<ThemeId, LogSeverityPalette> = {
       success: { foreground: "#50FA7B", background: "rgba(80, 250, 123, 0.15)" },
       warning: { foreground: "#F1FA8C", background: "rgba(241, 250, 140, 0.15)" },
       error: { foreground: "#FF5555", background: "rgba(255, 85, 85, 0.15)" },
+    },
+    eventLog: {
+      critical: "#ff5787",
+      error: "#ff6229",
+      warning: "#faf283",
+      information: "#b2b2a8",
+      verbose: "#969494",
+      text: {
+        critical: "#ff90ae",
+        error: "#fb987f",
+        warning: "#faf283",
+        information: "#9c9c9c",
+        verbose: "#939393",
+      },
+      live: "#50FA7B",
+      channels: [
+        "#de5cff", "#7a88ff", "#11d0c6", "#2c968f", "#2378c7", "#0c7e97",
+      ],
     },
   },
 };
