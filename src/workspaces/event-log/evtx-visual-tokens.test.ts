@@ -29,7 +29,7 @@ const LEVELS: EvtxLevel[] = [
 
 /**
  * Spec 7.3 / A.3 level icons. In classic-cmtrace Critical and Error share a
- * tint and their icons both fall back to black, so the glyph is the only cue
+ * tint and their icons both fall back to white, so the glyph is the only cue
  * between them; swapping any two must fail.
  */
 const LEVEL_ICONS = {

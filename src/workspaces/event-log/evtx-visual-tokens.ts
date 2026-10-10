@@ -65,9 +65,10 @@ export interface EvtxLevelVisual {
    * Background1, Background2 and the selection background; Information and
    * Verbose are neutral grays used on Background1 and Background2 only (8.13).
    * Deviates from spec 8.6, which names status.error.foreground and
-   * warning.text for the counts: those measure 2.19:1 on the solarized-dark
-   * selection background and 2.46:1 on the nord rail. Not for text on the row
-   * tint; that pairing is `rowText`.
+   * warning.text for the counts: status.error.foreground measures 2.19:1 on
+   * the solarized-dark selection background and 2.46:1 on the nord rail, and
+   * warning.text measures 3.61:1 on the solarized-dark selection background.
+   * Not for text on the row tint; that pairing is `rowText`.
    */
   textColor: string;
   /** Rail icon, drawn on colorNeutralBackground2. Same as the mark. */
@@ -276,9 +277,10 @@ export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
       ambiguous: {
         label: "Ambiguous",
         background: palette.warning.background,
-        // Deviates from spec 6.3 (palette.warning.text label): in
-        // solarized-dark that pair is 4.05:1 on the badge, so the label falls
-        // back to black or white when it misses 4.5:1.
+        // Deviates from spec 6.3 (palette.warning.text label): the label goes
+        // through readableOn, which falls back to black or white when the
+        // warning text misses 4.5:1 on the badge. No theme falls back at
+        // present (the lowest is 4.63:1, solarized-dark).
         foreground: readableOn(
           palette.warning.background,
           palette.warning.text,
@@ -293,8 +295,8 @@ export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
       // neither success nor failure, so it stays neutral, with the icon
       // carrying the meaning. Its solid accessible border keeps it from being
       // mistaken for Candidate (dashed) or Not linked (dotted). Background3
-      // plus Foreground2 keep the label at 4.5:1 in every theme; on a surface
-      // background the label drops below that in dracula and solarized.
+      // plus Foreground2 keep the label at 4.5:1 in every theme (the lowest
+      // is 4.86:1, solarized-dark).
       coverageBlocked: {
         label: "Coverage blocked",
         background: tokens.colorNeutralBackground3,
