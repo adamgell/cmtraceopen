@@ -241,6 +241,16 @@ jobs:
           # derives it from the release's own signature assets.
           uploadUpdaterJson: false
 
+      - name: Upload AppImage inspection evidence
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: appimage-abi-${{ matrix.label }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/provenance/appimage-abi.json
+          if-no-files-found: error
+
       - name: Set up Python for macOS trust verification
         if: runner.os == 'macOS'
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -263,16 +273,6 @@ jobs:
         with:
           name: macos-release-trust-${{ steps.resolve.outputs.tag_name }}
           path: release-verification/macos
-          if-no-files-found: error
-
-      - name: Upload AppImage inspection evidence
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: appimage-abi-${{ matrix.label }}
-          path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-            src-tauri/target/${{ matrix.target }}/release/bundle/provenance/appimage-abi.json
           if-no-files-found: error
 
       - name: Attest release artifacts
