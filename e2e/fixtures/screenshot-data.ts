@@ -4,9 +4,9 @@
  * These objects are injected into the running frontend so each workspace renders
  * a realistic, populated state without a real backend or real device data:
  *
- *  - `MOCK_LOG_PARSE_RESULT` — a `ParseResult` mirroring `demo/ConfigMgr_AppEnforce_demo.log`.
- *    Used only as the fallback when the real Rust IPC bridge (`:1422`) is NOT running;
- *    when it is, the real parser parses the demo log on disk instead.
+ *  - `MOCK_LOG_PARSE_RESULT`: a `ParseResult` mirroring `demo/ConfigMgr_AppEnforce_demo.log`.
+ *    Always returned by the mocked `open_log_file`. The screenshot specs block the IPC
+ *    bridge (`:1422`), so the real parser is never used for captures.
  *  - `MOCK_INTUNE` — arguments for the Intune store's `setResults(...)`.
  *  - `MOCK_DSREGCMD` — arguments for the DSRegCmd store's `setResults(...)`. Always synthetic:
  *    a real `dsregcmd /status` capture would leak the host's device/tenant identifiers into a
@@ -27,12 +27,20 @@ import espDiagnosticsFixture from "./demo/esp-diagnostics.json" with { type: "js
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-/** Absolute path to the committed demo CCM log parsed in live (bridge) mode. */
+/** Absolute path to the committed demo CCM log, for tests that read real file bytes. Never displayed in screenshots. */
 export const DEMO_LOG_ABS_PATH = path.resolve(
   HERE,
   "demo",
   "ConfigMgr_AppEnforce_demo.log",
 );
+
+/**
+ * Synthetic path the UI DISPLAYS for the demo log. Screenshot captures mock
+ * `open_log_file`, so this path is never opened and screenshots never show the
+ * host's real checkout path. Real file reads must use DEMO_LOG_ABS_PATH.
+ */
+export const DEMO_LOG_DISPLAY_PATH =
+  "C:\\Fixture\\Logs\\ConfigMgr_AppEnforce_demo.log";
 
 /** Sanitized ESP cockpit, Graph, and scenario fixtures for actual-chrome captures. */
 export const MOCK_ESP_DIAGNOSTICS = {
@@ -191,7 +199,7 @@ function buildLogEntries(): LogEntry[] {
       threadDisplay: String(THREAD),
       sourceFile: "appexcnlib.cpp",
       format: "Ccm",
-      filePath: DEMO_LOG_ABS_PATH,
+      filePath: DEMO_LOG_DISPLAY_PATH,
       timezoneOffset: 0,
     };
 
@@ -231,7 +239,7 @@ export const MOCK_LOG_PARSE_RESULT: ParseResult = {
   },
   totalLines: LOG_ENTRIES.length,
   parseErrors: 0,
-  filePath: DEMO_LOG_ABS_PATH,
+  filePath: DEMO_LOG_DISPLAY_PATH,
   fileSize: 6144,
   byteOffset: 6144,
 };
@@ -447,7 +455,8 @@ export const MOCK_INTUNE = {
 
 // ---------------------------------------------------------------------------
 // DSRegCmd — arguments for `useDsregcmdStore.getState().setResults(rawInput, result, context)`.
-// A fictional Microsoft Entra joined device with one Warning and one Info finding.
+// A fictional Microsoft Entra joined device, MDM enrolled, with exactly one Info
+// finding (on-prem-sso-missing) and no Warning or Error findings.
 // ---------------------------------------------------------------------------
 
 const DSREGCMD_RAW = [
@@ -596,8 +605,8 @@ const DSREGCMD_RESULT = {
     captureConfidence: "high",
     captureConfidenceReason:
       "Capture ran in the signed-in user context with a full SSO State section present.",
-    mdmEnrolled: false,
-    missingMdm: true,
+    mdmEnrolled: true,
+    missingMdm: false,
     complianceUrlPresent: true,
     missingComplianceUrl: false,
     azureAdPrtPresent: true,
@@ -615,26 +624,6 @@ const DSREGCMD_RESULT = {
     remoteSessionSystem: false,
   },
   diagnostics: [
-    {
-      id: "mdm-not-enrolled",
-      severity: "Warning",
-      category: "Management",
-      title: "Device is Entra joined but not MDM enrolled",
-      summary:
-        "No MDM enrollment URLs resolved to an active enrollment, so Intune compliance and policy may not apply.",
-      evidence: [
-        "MdmUrl present but enrollment state not detected",
-        "DeviceManagementSrvUrl is empty",
-      ],
-      nextChecks: [
-        "Confirm the auto-enrollment GPO / CSP is scoped to this device",
-        "Check the DeviceManagement section on the endpoint",
-      ],
-      suggestedFixes: [
-        "Trigger enrollment via Settings > Access work or school",
-        "Verify the user has an Intune license assigned",
-      ],
-    },
     {
       id: "on-prem-sso-missing",
       severity: "Info",

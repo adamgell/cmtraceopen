@@ -1,5 +1,14 @@
 import { Badge, tokens } from "@fluentui/react-components";
-import { useEspDiagnosticsStore } from "./esp-diagnostics-store";
+import {
+  ArrowSync12Regular,
+  ErrorCircle12Regular,
+  Warning12Regular,
+} from "@fluentui/react-icons";
+import { useStatusBarForeground } from "../../components/layout/status-bar-foreground";
+import {
+  useEspDiagnosticsStore,
+  type EspGraphPhase,
+} from "./esp-diagnostics-store";
 
 const phaseLabels = {
   idle: "Waiting for evidence",
@@ -22,7 +31,27 @@ const graphLabels = {
   cancelled: "Graph cancelled",
 } as const;
 
+/**
+ * The bar sits on the brand background, where colored text fails contrast, so
+ * Graph state carries its tone as an icon beside the label.
+ */
+function GraphToneIcon({ phase }: { phase: EspGraphPhase }) {
+  if (phase === "error") {
+    return <ErrorCircle12Regular role="img" aria-label="Error" />;
+  }
+  if (phase === "partial") {
+    return <Warning12Regular role="img" aria-label="Warning" />;
+  }
+  if (phase === "loading") {
+    return <ArrowSync12Regular role="img" aria-label="In progress" />;
+  }
+  // "ready" deliberately has no icon: the store counts skipped and notFound
+  // sections as complete, so a check could hide a Graph coverage gap.
+  return null;
+}
+
 export function EspStatusBarContent() {
+  const foreground = useStatusBarForeground();
   const phase = useEspDiagnosticsStore((state) => state.phase);
   const snapshot = useEspDiagnosticsStore((state) => state.snapshot);
   const elevationProbe = useEspDiagnosticsStore((state) => state.elevationProbe);
@@ -52,6 +81,7 @@ export function EspStatusBarContent() {
 
   return (
     <div
+      data-status-content="esp-diagnostics"
       style={{
         width: "100%",
         minWidth: 0,
@@ -60,7 +90,7 @@ export function EspStatusBarContent() {
         justifyContent: "space-between",
         gap: 12,
         fontFamily: tokens.fontFamilyMonospace,
-        fontSize: 11,
+        color: foreground,
       }}
     >
       <div
@@ -72,7 +102,11 @@ export function EspStatusBarContent() {
           overflow: "hidden",
         }}
       >
-        <Badge appearance="outline" color={isLive ? "success" : "brand"}>
+        <Badge
+          appearance="outline"
+          color="brand"
+          style={{ color: foreground, borderColor: foreground }}
+        >
           ESP
         </Badge>
         <span
@@ -82,17 +116,20 @@ export function EspStatusBarContent() {
             height: 7,
             flexShrink: 0,
             borderRadius: "50%",
-            backgroundColor: isLive
-              ? tokens.colorPaletteGreenBackground3
-              : tokens.colorNeutralForegroundDisabled,
+            // Live is shape (filled vs hollow), not palette color, so the
+            // in-app high-contrast theme is covered. Under OS forced-colors
+            // mode the background is forced and the box-shadow dropped, so
+            // both states vanish and the phase label carries the state.
+            backgroundColor: isLive ? foreground : "transparent",
+            boxShadow: `0 0 0 1px ${foreground}`,
           }}
         />
         <strong style={{ whiteSpace: "nowrap" }}>{phaseLabels[phase]}</strong>
-        <span style={{ color: tokens.colorNeutralForeground3 }}>•</span>
+        <span aria-hidden="true">•</span>
         <span style={{ whiteSpace: "nowrap" }}>
           {sourceCount} {sourceCount === 1 ? "source" : "sources"}
         </span>
-        <span style={{ color: tokens.colorNeutralForeground3 }}>•</span>
+        <span aria-hidden="true">•</span>
         <span style={{ whiteSpace: "nowrap" }}>{evidenceCount} evidence</span>
       </div>
 
@@ -105,30 +142,16 @@ export function EspStatusBarContent() {
           whiteSpace: "nowrap",
         }}
       >
-        <span
-          style={{
-            color:
-              hasElevationInfo && !isElevated
-                ? tokens.colorPaletteYellowForeground2
-                : tokens.colorNeutralForeground2,
-          }}
-        >
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {hasElevationInfo && !isElevated && (
+            <Warning12Regular role="img" aria-label="Warning" />
+          )}
           {elevationLabel}
         </span>
-        <span style={{ color: tokens.colorNeutralForeground3 }}>•</span>
-        <span
-          style={{
-            color:
-              graphPhase === "error"
-                ? tokens.colorPaletteRedForeground1
-                : graphPhase === "partial" || graphPhase === "loading"
-                  ? tokens.colorPaletteYellowForeground2
-                  : graphPhase === "ready"
-                    ? tokens.colorPaletteGreenForeground1
-                    : tokens.colorNeutralForeground3,
-          }}
-        >
-          {graphLabels[graphPhase]}
+        <span aria-hidden="true">•</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <GraphToneIcon phase={graphPhase} />
+          <span>{graphLabels[graphPhase]}</span>
         </span>
       </div>
     </div>

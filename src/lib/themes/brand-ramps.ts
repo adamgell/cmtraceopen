@@ -114,26 +114,3 @@ export const purpleBrand: BrandVariants = {
   150: "#F4EDFE",
   160: "#FAF7FF",
 };
-
-/**
- * Red brand ramp -- used by hotdog-stand.
- * Anchored on #FF0000.
- */
-export const redBrand: BrandVariants = {
-  10: "#2D0000",
-  20: "#4A0000",
-  30: "#680000",
-  40: "#870000",
-  50: "#A60000",
-  60: "#C60000",
-  70: "#E60000",
-  80: "#FF0000",
-  90: "#FF2A2A",
-  100: "#FF5555",
-  110: "#FF7777",
-  120: "#FF9999",
-  130: "#FFBBBB",
-  140: "#FFDDDD",
-  150: "#FFEEEE",
-  160: "#FFF5F5",
-};

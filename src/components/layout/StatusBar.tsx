@@ -1,5 +1,10 @@
 import { Suspense, useMemo, type ReactNode } from "react";
-import { Badge, Spinner, tokens } from "@fluentui/react-components";
+import { Badge, tokens } from "@fluentui/react-components";
+import {
+  ArrowSync12Regular,
+  ErrorCircle12Regular,
+  Warning12Regular,
+} from "@fluentui/react-icons";
 import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { getBaseName } from "../../lib/file-paths";
 import {
@@ -28,6 +33,7 @@ import { useEvtxStore } from "../../workspaces/event-log/evtx-store";
 import { useSecureBootStore } from "../../workspaces/secureboot/secureboot-store";
 import { getWorkspace } from "../../workspaces/registry";
 import type { WorkspaceDefinition } from "../../workspaces/types";
+import { useStatusBarForeground } from "./status-bar-foreground";
 
 interface SeverityCounts {
   errors: number;
@@ -69,6 +75,21 @@ const GRAPH_API_INDICATORS: Record<
   },
 };
 
+/**
+ * Colored text fails contrast on the brand background, so the right-hand
+ * status carries its tone as an icon next to the label instead.
+ */
+type StatusTone = "progress" | "warning" | "error";
+
+const STATUS_TONE_ICONS: Record<
+  StatusTone,
+  { Icon: typeof ErrorCircle12Regular; label: string }
+> = {
+  progress: { Icon: ArrowSync12Regular, label: "In progress" },
+  warning: { Icon: Warning12Regular, label: "Warning" },
+  error: { Icon: ErrorCircle12Regular, label: "Error" },
+};
+
 function formatSeverityCounts(counts: SeverityCounts): string {
   const parts: string[] = [];
   if (counts.errors > 0)
@@ -100,6 +121,7 @@ export function WorkspaceStatusBarContent({
 }
 
 export function StatusBar() {
+  const foreground = useStatusBarForeground();
   const entries = useLogStore((s) => s.entries);
   const totalLines = useLogStore((s) => s.totalLines);
   const formatDetected = useLogStore((s) => s.formatDetected);
@@ -265,7 +287,7 @@ export function StatusBar() {
 
   let leftParts: string[] = [];
   let rightStatusText = "";
-  let rightTone: string | undefined;
+  let rightTone: StatusTone | undefined;
 
   if (activeView === "log") {
     leftParts = [
@@ -364,10 +386,7 @@ export function StatusBar() {
     rightStatusText = [logStatusText, filterStatusText]
       .filter((part) => part.length > 0)
       .join(" | ");
-    rightTone =
-      filterStatus.tone === "error"
-        ? tokens.colorPaletteRedForeground2
-        : undefined;
+    rightTone = filterStatus.tone === "error" ? "error" : undefined;
   } else if (isIntuneWorkspace(activeView)) {
     const intuneSourceLabel = getBaseName(
       intuneAnalysisState.requestedPath ?? intuneSourceContext.analyzedPath,
@@ -397,7 +416,7 @@ export function StatusBar() {
     if (intuneAnalysisState.phase === "analyzing") {
       rightStatusText =
         intuneAnalysisState.detail ?? intuneAnalysisState.message;
-      rightTone = tokens.colorPaletteBlueForeground2;
+      rightTone = "progress";
     } else if (
       intuneAnalysisState.phase === "error" ||
       intuneAnalysisState.phase === "empty"
@@ -408,10 +427,7 @@ export function StatusBar() {
       ]
         .filter((part): part is string => Boolean(part))
         .join(" | ");
-      rightTone =
-        intuneAnalysisState.phase === "error"
-          ? tokens.colorPaletteRedForeground2
-          : tokens.colorPaletteMarigoldForeground2;
+      rightTone = intuneAnalysisState.phase === "error" ? "error" : "warning";
     } else if (intuneSummary) {
       rightStatusText = [
         `${intuneSummary.totalEvents} events`,
@@ -439,10 +455,10 @@ export function StatusBar() {
     }
     if (sysmonIsAnalyzing) {
       rightStatusText = "Analyzing Sysmon EVTX files...";
-      rightTone = tokens.colorPaletteBlueForeground2;
+      rightTone = "progress";
     } else if (sysmonError) {
       rightStatusText = sysmonError;
-      rightTone = tokens.colorPaletteRedForeground2;
+      rightTone = "error";
     } else if (sysmonSummary) {
       rightStatusText = [
         `${sysmonSummary.totalEvents.toLocaleString()} events`,
@@ -497,7 +513,7 @@ export function StatusBar() {
         evtxRecordCount > 0
           ? `${evtxRecordCount.toLocaleString()} events loaded...`
           : "Querying event logs...";
-      rightTone = tokens.colorPaletteBlueForeground2;
+      rightTone = "progress";
     } else if (evtxRecordCount > 0) {
       const timeStr =
         evtxLoadElapsedMs != null
@@ -528,7 +544,7 @@ export function StatusBar() {
     if (securebootAnalysisState.phase === "analyzing") {
       rightStatusText =
         securebootAnalysisState.detail ?? securebootAnalysisState.message;
-      rightTone = tokens.colorPaletteBlueForeground2;
+      rightTone = "progress";
     } else if (securebootAnalysisState.phase === "error") {
       rightStatusText = [
         securebootAnalysisState.message,
@@ -536,7 +552,7 @@ export function StatusBar() {
       ]
         .filter((part): part is string => Boolean(part))
         .join(" | ");
-      rightTone = tokens.colorPaletteRedForeground2;
+      rightTone = "error";
     } else if (securebootResult) {
       rightStatusText = [
         `${sbDiagnostics.length} diagnostics`,
@@ -546,7 +562,7 @@ export function StatusBar() {
     } else {
       rightStatusText = securebootAnalysisState.message;
     }
-  } else {
+  } else if (activeView === "dsregcmd") {
     const diagnostics = dsregcmdResult?.diagnostics ?? [];
     const errorCount = diagnostics.filter(
       (item) => item.severity === "Error",
@@ -571,7 +587,7 @@ export function StatusBar() {
     if (dsregcmdAnalysisState.phase === "analyzing") {
       rightStatusText =
         dsregcmdAnalysisState.detail ?? dsregcmdAnalysisState.message;
-      rightTone = tokens.colorPaletteBlueForeground2;
+      rightTone = "progress";
     } else if (dsregcmdAnalysisState.phase === "error") {
       rightStatusText = [
         dsregcmdAnalysisState.message,
@@ -579,7 +595,7 @@ export function StatusBar() {
       ]
         .filter((part): part is string => Boolean(part))
         .join(" | ");
-      rightTone = tokens.colorPaletteRedForeground2;
+      rightTone = "error";
     } else if (dsregcmdResult) {
       rightStatusText = [
         `${diagnostics.length} diagnostics`,
@@ -590,9 +606,14 @@ export function StatusBar() {
     } else {
       rightStatusText = dsregcmdAnalysisState.message;
     }
+  } else {
+    // Workspaces without a branch above report only their view label rather
+    // than borrowing another workspace's analysis state.
+    leftParts = [uiChromeStatus.viewLabel];
   }
 
   const leftStatusText = leftParts.join(" • ");
+  const toneIcon = rightTone ? STATUS_TONE_ICONS[rightTone] : null;
 
   const activeViewLabel =
     activeView === "log"
@@ -615,21 +636,24 @@ export function StatusBar() {
                       ? "Secure Boot"
                       : activeView === "dsregcmd"
                         ? "dsregcmd"
-                        : activeView;
+                        : getWorkspace(activeView).label;
 
   return (
     <div
+      data-testid="global-status-bar"
+      data-workspace={activeView}
       style={{
         display: "flex",
         justifyContent: "space-between",
         alignItems: "center",
-        padding: "6px 10px",
-        backgroundColor: tokens.colorNeutralBackground2,
-        borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+        padding: "0 10px",
+        height: "24px",
+        boxSizing: "border-box",
+        backgroundColor: tokens.colorBrandBackground,
+        color: foreground,
         fontSize: "12px",
         fontFamily: LOG_UI_FONT_FAMILY,
         flexShrink: 0,
-        minHeight: "34px",
         gap: "10px",
       }}
     >
@@ -644,7 +668,11 @@ export function StatusBar() {
               overflow: "hidden",
             }}
           >
-            <Badge appearance="outline" color="brand">
+            <Badge
+              appearance="outline"
+              color="brand"
+              style={{ color: foreground, borderColor: foreground }}
+            >
               {activeViewLabel}
             </Badge>
             <span
@@ -673,8 +701,6 @@ export function StatusBar() {
                   display: "flex",
                   alignItems: "center",
                   gap: "4px",
-                  fontSize: "11px",
-                  color: graphApiIndicator.color,
                 }}
                 title={graphApiIndicator.title}
               >
@@ -683,15 +709,20 @@ export function StatusBar() {
                     width: "6px",
                     height: "6px",
                     borderRadius: "50%",
-                    backgroundColor: "currentColor",
+                    backgroundColor: graphApiIndicator.color,
+                    boxShadow: `0 0 0 1px ${foreground}`,
                     display: "inline-block",
                   }}
                 />
                 {graphApiIndicator.label}
               </span>
             )}
-            {activeView === "event-log" && evtxIsLoading && (
-              <Spinner size="tiny" />
+            {toneIcon && (
+              <toneIcon.Icon
+                role="img"
+                aria-label={toneIcon.label}
+                style={{ flexShrink: 0 }}
+              />
             )}
             <span
               title={rightStatusText}
@@ -700,7 +731,6 @@ export function StatusBar() {
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
-                color: rightTone,
                 fontWeight: 500,
                 fontVariantNumeric: "tabular-nums",
               }}

@@ -48,6 +48,9 @@ jobs:
       - name: Parser wasm portability
         run: cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown
 
+      - name: OMP skill tests
+        run: python3 -B -m unittest discover -s .omp/skills/cmtraceopen-dev/tests -p 'test_*.py'
+
       - name: Changed-range whitespace
         env:
           BEFORE_SHA: ${{ github.event.before }}
@@ -188,6 +191,30 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Issue #893: the OMP output validator must import on native Windows
+      # Python. Only the validator test file runs here; lane_state locking on
+      # Windows is tracked separately (#902). Advisory: the msrv job
+      # is not in build.needs and is not a required context. This step runs
+      # first so an earlier Rust failure cannot skip it.
+      - name: OMP validator on Windows Python
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -B -m unittest discover -s .omp/skills/cmtraceopen-dev/tests -p test_validate_agent_output.py
+          if ($LASTEXITCODE -ne 0) { throw "Validator tests failed." }
+          $payload = @'
+          {"role":"coder","phase":"blocked","summary":"x","implementation_proposals":[],"proposed_red_checks":[],"proposed_green_checks":[],"proposed_verification_checks":[],"blockers":["b"]}
+          '@
+          $path = Join-Path $env:RUNNER_TEMP "coder-payload.json"
+          Set-Content -Path $path -Value $payload -Encoding ascii
+          $output = python -B .omp/skills/cmtraceopen-dev/scripts/validate_agent_output.py --role coder --input $path
+          if ($LASTEXITCODE -ne 0) { throw "Validator CLI exited with $LASTEXITCODE." }
+          Write-Host $output
+          $verdict = $output | ConvertFrom-Json
+          if ($verdict.ok -ne $true) { throw "Validator did not print an ok verdict." }
 
       - name: Install system dependencies
         if: runner.os == 'Linux'

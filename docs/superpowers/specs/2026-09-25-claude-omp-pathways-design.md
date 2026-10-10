@@ -30,8 +30,10 @@ A new dev machine therefore cannot run either runtime from a clone.
 ## Non-goals
 
 - Hermes and Codex loading these skills. Only Claude Code and OMP are consumers.
-- Claude acting as Main for the issue-to-draft-PR orchestration. That is piece 3,
-  designed separately after piece 2 is verified.
+- ~~Claude acting as Main for the issue-to-draft-PR orchestration.~~ Superseded on
+  2026-10-08: Adam made Claude Code Main for issue lanes, coding through
+  `cmtrace-coder` and reviewing through `cmtrace-code-review`. The operating rules are
+  in the execution charter's "Advisor and subagents" section; see Piece 3.
 - Moving OMP runtime state into the repo. The model-probe report under
   `~/.omp/agent/cmtraceopen/` is per-machine evidence that OMP regenerates, not a
   skill.
@@ -171,7 +173,8 @@ where it matters.
 | `tech-writer` | `sonnet`, `effort: low` | `cmtraceopen` |
 | `ui-design` | `sonnet` | `frontend-design`, `test-driven-development`, `systematic-debugging` |
 
-OMP's `advisor: true` has no Claude equivalent; `.omp/WATCHDOG.md` priorities
+OMP's `advisor: true` maps to Claude Code's advisor: `.claude/settings.json` sets
+`advisorModel` to `opus` (added 2026-10-08; see the execution charter); `.omp/WATCHDOG.md` priorities
 become Main's responsibility in piece 3.
 
 ### Validator change
@@ -218,7 +221,16 @@ A new `scripts/agent-context.test.mjs`, added to the existing
   `validate_agent_output.py --role code-review` accepts its output, and rejects it
   after adding an extra top-level key.
 
-## Piece 3 (later)
+## Piece 3 (adopted 2026-10-08)
+
+Status: in use by Adam's decision of 2026-10-08, ahead of the separate design this
+section anticipated. The execution charter's "Advisor and subagents" section is the
+operating contract, including the `validate_agent_output.py` checks below. Only the
+validator is adopted, together with the `lane_state.py` helpers it imports at load
+time (`is_portable_repo_relative`, `decode_json_object`, `require_sha`,
+`validate_independent_review_gate_states`) and the command policy it applies.
+`lane_state.py`'s own broker role and `run_repo_check.py` are not part of the
+adopted contract yet.
 
 Claude as Main for `cmtraceopen-dev`: dispatch the `cmtrace-*` subagents with the
 Agent tool, keep `lane_state.py`, `run_repo_check.py`, `check_command_policy.py`,
