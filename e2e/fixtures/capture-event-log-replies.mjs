@@ -60,7 +60,15 @@
  * `engineTreeDirty` track the checkout and so change with it.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -111,6 +119,40 @@ function engineSourceSha256() {
     hash.update(file).update("\0").update(content).update("\0");
   }
   return hash.digest("hex");
+}
+
+/**
+ * Publishes the committed fixtures (`[target, text]` pairs, in order) so a failure at any point
+ * leaves the old set intact. This is the only place the script writes under e2e/fixtures.
+ *
+ * Each new file is first written in full next to its target (same directory, so the final
+ * `renameSync` is atomic on one filesystem and never exposes a truncated file). Every existing
+ * target is copied to a same-directory backup. The targets are then renamed into place one by
+ * one; if any rename fails, the ones already done are restored from their backups. Staged and
+ * backup files are removed in a `finally`.
+ */
+function publishFixtures(pairs) {
+  const staged = pairs.map(([target]) => `${target}.staged-${process.pid}`);
+  const backups = pairs.map(([target]) => `${target}.backup-${process.pid}`);
+  const published = [];
+  try {
+    pairs.forEach(([target, text], i) => {
+      writeFileSync(staged[i], text);
+      if (existsSync(target)) copyFileSync(target, backups[i]);
+    });
+    pairs.forEach(([target], i) => {
+      renameSync(staged[i], target);
+      published.push(i);
+    });
+  } catch (error) {
+    for (const i of published.reverse()) {
+      if (existsSync(backups[i])) renameSync(backups[i], pairs[i][0]);
+      else rmSync(pairs[i][0], { force: true });
+    }
+    throw error;
+  } finally {
+    for (const file of [...staged, ...backups]) rmSync(file, { force: true });
+  }
 }
 
 const parseResult = buildParseResult();
@@ -198,17 +240,10 @@ try {
   };
   const repliesText = JSON.stringify(replies, null, 2) + "\n";
 
-  // Publish both committed files together, input first. If the second write fails, put the
-  // first back so the pair never ends up out of sync.
-  const previousInput = existsSync(ENGINE_INPUT_PATH) ? readFileSync(ENGINE_INPUT_PATH) : null;
-  writeFileSync(ENGINE_INPUT_PATH, inputText);
-  try {
-    writeFileSync(ENGINE_REPLIES_PATH, repliesText);
-  } catch (error) {
-    if (previousInput === null) rmSync(ENGINE_INPUT_PATH, { force: true });
-    else writeFileSync(ENGINE_INPUT_PATH, previousInput);
-    throw error;
-  }
+  publishFixtures([
+    [ENGINE_INPUT_PATH, inputText],
+    [ENGINE_REPLIES_PATH, repliesText],
+  ]);
 
   console.log(
     `wrote ${path.relative(REPO, ENGINE_REPLIES_PATH)} ` +
