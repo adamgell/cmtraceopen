@@ -34,7 +34,6 @@ import {
 export { selectVisibleRecords } from "./evtx-filter";
 import {
   DEFAULT_QUICK_FILTER,
-  levelsFilteredAtSource,
   parseEventIdSelectors,
   type EvtxBeforeLoadCriteria,
   type EvtxEventIdSelector,
@@ -690,12 +689,35 @@ function buildServerFilter(
     filter.eventIdMode = "include";
   }
 
-  // `levelsFilteredAtSource` owns the rule (and why Information keeps the selection local), so the
-  // level toggles' counts can tell a level that was never requested from one with no events.
-  if (levelsFilteredAtSource(filterLevels)) {
+  // Information includes an unbounded provider-specific raw-level domain (6..254). The parser
+  // intentionally caps XPath OR expressions, so leave level selection local whenever Information
+  // is selected rather than issuing an over-budget or incomplete server predicate.
+  if (
+    filterLevels.size > 0 &&
+    filterLevels.size < ALL_LEVELS.length &&
+    !filterLevels.has("Information")
+  ) {
     filter.levels = [...filterLevels].map((level) => ALL_LEVELS.indexOf(level) + 1);
   }
   return filter;
+}
+
+/**
+ * One string per distinct request the service would receive for these before-load criteria.
+ *
+ * A refetch empties the records and reloads every loaded channel, so the setters below refetch only
+ * when this key changes. While Information is selected the level predicate is never sent, so a
+ * toggle changes nothing the service sees and the criterion is just a local filter. Exported so the
+ * filter row can say which toggles reload. Levels are sorted: the same set in another insertion
+ * order is the same request.
+ */
+export function serverFilterKey(
+  timeWindow: EvtxTimeWindow,
+  filterEventIds: string,
+  filterLevels: Set<EvtxLevel>
+): string {
+  const filter = buildServerFilter(timeWindow, filterEventIds, filterLevels);
+  return JSON.stringify({ ...filter, levels: filter.levels && [...filter.levels].sort() });
 }
 function hasInvalidEventIdFilter(raw: string): boolean {
   const trimmed = raw.trim();
@@ -893,6 +915,15 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         refreshRequested = false;
       }
     });
+  };
+
+  const currentServerFilterKey = () => {
+    const { timeWindow, filterEventIds, filterLevels } = get();
+    return serverFilterKey(timeWindow, filterEventIds, filterLevels);
+  };
+  // Refetches only when the setter changed the request the service would receive.
+  const refreshIfServerFilterChanged = (before: string) => {
+    if (currentServerFilterKey() !== before) refreshBeforeLoad();
   };
 
   return ({
@@ -2073,8 +2104,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   },
 
   setFilterLevels: (levels) => {
+    const before = currentServerFilterKey();
     set({ filterLevels: levels });
-    refreshBeforeLoad();
+    refreshIfServerFilterChanged(before);
   },
 
   toggleFilterLevel: (level) => {
@@ -2083,15 +2115,18 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     if (next.has(level)) next.delete(level);
     else next.add(level);
     if (next.size === 0) ALL_LEVELS.forEach((known) => next.add(known));
+    const before = currentServerFilterKey();
     set({ filterLevels: next });
-    refreshBeforeLoad();
+    refreshIfServerFilterChanged(before);
   },
 
   setFilterEventIds: (eventIds) => {
+    const before = currentServerFilterKey();
     set({ filterEventIds: eventIds });
-    refreshBeforeLoad();
+    refreshIfServerFilterChanged(before);
   },
   setBeforeLoadCriteria: (criteria) => {
+    const before = currentServerFilterKey();
     set({
       filterLevels: new Set(criteria.levels),
       filterEventIds: criteria.eventIds,
@@ -2100,13 +2135,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         ? { selectedChannels: new Set(criteria.selectedChannels) }
         : {}),
     });
-    refreshBeforeLoad();
+    refreshIfServerFilterChanged(before);
   },
   setFilterSearch: (search) => set({ filterSearch: search }),
   setQuickFilter: (filter) => set({ quickFilter: { ...filter } }),
   setTimeWindow: (window) => {
+    const before = currentServerFilterKey();
     set({ timeWindow: window });
-    refreshBeforeLoad();
+    refreshIfServerFilterChanged(before);
   },
   // Changing the grouping invalidates every collapse key, so the old set is discarded rather than
   // left to collapse unrelated groups that happen to share a key.
