@@ -851,6 +851,58 @@ describe("compareLoadedFiles", () => {
       }
     });
 
+    it("does not call any channel 0 when a hole is in a source no loaded record can place", () => {
+      const prior = priorFor();
+      const records = [
+        record({ channel: "System", sourceLabel: "System.evtx", timestampEpoch: prior.fromMs - HOUR }),
+        record({ channel: "System", sourceLabel: "System.evtx", timestampEpoch: ANCHOR }),
+      ];
+      const common = { visibility: visibility({ selectedChannels: new Set(["System"]) }) };
+
+      // A source nothing was loaded from might hold any selected channel.
+      const lost = compareLoadedFiles(
+        input(records, {
+          ...common,
+          coverageDetails: [
+            { source: "Lost.evtx", kind: "chunk", reason: "chunk 1 unreadable", chunkId: 1 },
+          ],
+        })
+      );
+      const unreadable = compareLoadedFiles(
+        input(records, {
+          ...common,
+          sourceCoverage: [{ kind: "accessDenied", path: "C:/logs/Security.evtx", reason: "access denied" }],
+        })
+      );
+      for (const outcome of [lost, unreadable]) {
+        expect(outcome.status).toBe("partial");
+        if (outcome.status === "partial") {
+          expect(outcome.result.counts.channels.has("System")).toBe(false);
+        }
+      }
+    });
+
+    it("does not call a channel 0 when a visible event in it could not be placed in time", () => {
+      const prior = priorFor();
+      const records = [
+        record({ channel: "System", sourceLabel: "System.evtx", timestampEpoch: prior.fromMs - HOUR }),
+        record({ channel: "System", sourceLabel: "System.evtx", timestampEpoch: ANCHOR }),
+        record({ channel: "Setup", sourceLabel: "Setup.evtx", timestampEpoch: prior.fromMs - HOUR }),
+        record({ channel: "Setup", sourceLabel: "Setup.evtx", timestampEpoch: ANCHOR }),
+        // It has no usable timestamp, so it may belong to the previous period.
+        record({ channel: "Setup", sourceLabel: "Setup.evtx", timestampEpoch: 0 }),
+      ];
+      const outcome = compareLoadedFiles(
+        input(records, {
+          visibility: visibility({ selectedChannels: new Set(["System", "Setup"]) }),
+        })
+      );
+      expect(outcome.status).toBe("partial");
+      if (outcome.status !== "partial") return;
+      expect(outcome.result.counts.channels.get("System")).toBe(0);
+      expect(outcome.result.counts.channels.has("Setup")).toBe(false);
+    });
+
     it("does not call a channel 0 when its source reported a hole", () => {
       const prior = priorFor();
       const outcome = compareLoadedFiles(
@@ -1172,6 +1224,20 @@ describe("a live comparison", () => {
     expect(outcome.result.counts.total).toBe(0);
     expect(outcome.result.counts.channels.has("System")).toBe(false);
     expect(outcome.result.gaps.length).toBeGreaterThan(0);
+  });
+
+  it("does not call a channel 0 when an event it delivered could not be placed in time", () => {
+    const session = begin({ channels: ["System", "Application"] });
+    batch(session, "System", 0, [record({ channel: "System", timestampEpoch: 0 })]);
+    terminal(session, "System", 1, 1);
+    session.replied("System", reply(1));
+    deliver(session, "Application", []);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    expect(outcome.result.counts.channels.has("System")).toBe(false);
+    expect(outcome.result.counts.channels.get("Application")).toBe(0);
   });
 
   it("does not call a channel 0 when its reply reported a hole, though events arrived", () => {

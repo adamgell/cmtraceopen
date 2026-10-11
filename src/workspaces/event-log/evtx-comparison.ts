@@ -175,6 +175,8 @@ export interface ComparisonTally {
   counts: ComparisonCounts;
   /** Visible records with no usable timestamp or level: counted nowhere, so counts may be low. */
   unplacedRecords: number;
+  /** The channels of those records, which may hold events of the period that went uncounted. */
+  unplacedChannels: ReadonlySet<string>;
   /** Visible records stamped outside the previous period. Expected from files, a fault from a query. */
   outsideWindowRecords: number;
 }
@@ -202,6 +204,7 @@ export function createAggregator(
 ): ComparisonAggregator {
   let total = 0;
   let unplacedRecords = 0;
+  const unplacedChannels = new Set<string>();
   let outsideWindowRecords = 0;
   const levels = emptyLevels();
   const channels = new Map<string, number>();
@@ -215,6 +218,7 @@ export function createAggregator(
           !Object.prototype.hasOwnProperty.call(levels, candidate.level)
         ) {
           unplacedRecords++;
+          unplacedChannels.add(candidate.channel);
         } else if (candidate.timestampEpoch < period.fromMs || candidate.timestampEpoch > period.toMs) {
           outsideWindowRecords++;
         } else {
@@ -234,6 +238,7 @@ export function createAggregator(
           distinctEvents: new Set(distinctEvents),
         },
         unplacedRecords,
+        unplacedChannels: new Set(unplacedChannels),
         outsideWindowRecords,
       };
     },
@@ -561,15 +566,24 @@ export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutco
   // A channel read in full that held no events in the period is a real zero. A channel is read in
   // full only if none of the sources that hold it reported a hole: a clean capture of System does
   // not make System zero when another capture of System lost a chunk.
+  // Nor is a channel with an event that could not be placed in time, or any channel while a hole
+  // is in a source no loaded record can place, since that source might hold any of them.
   const counted = new Map(tally.counts.channels);
   const gapSources = new Set(carried.values());
+  const captureSources = new Set(coverage.captures.map((capture) => capture.source));
+  const holeInAnUnplacedSource = [...gapSources].some((source) => !captureSources.has(source));
   const channelsWithAHole = new Set(
     coverage.captures
       .filter((capture) => gapSources.has(capture.source))
       .map((capture) => capture.channel)
   );
   for (const capture of coverage.captures) {
-    if (!counted.has(capture.channel) && !channelsWithAHole.has(capture.channel)) {
+    if (
+      !counted.has(capture.channel) &&
+      !holeInAnUnplacedSource &&
+      !channelsWithAHole.has(capture.channel) &&
+      !tally.unplacedChannels.has(capture.channel)
+    ) {
       counted.set(capture.channel, 0);
     }
   }
@@ -830,11 +844,17 @@ function finishIfSettled(session: ActiveSession): void {
   gaps.push(...session.currentPeriodGaps.map((gap) => `Current period: ${gap}`));
 
   // A channel read in full that held no events in the period is a real zero, which an unread
-  // channel, or one whose stream reported anything missing, is not.
+  // channel, one whose stream reported anything missing, or one with an event that could not be
+  // placed in time, is not.
   const counted = new Map(tally.counts.channels);
   for (const channel of session.channels) {
     const stream = session.streams.get(channel);
-    if (!counted.has(channel) && stream !== undefined && stream.gaps.length === 0) {
+    if (
+      !counted.has(channel) &&
+      stream !== undefined &&
+      stream.gaps.length === 0 &&
+      !tally.unplacedChannels.has(channel)
+    ) {
       counted.set(channel, 0);
     }
   }
