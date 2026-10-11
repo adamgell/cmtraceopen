@@ -101,6 +101,11 @@ describe("EventLogWorkspace three-column shell", () => {
     }
   });
 
+  it("caps the rail at 40% of the row so the main view keeps room on a narrow window", () => {
+    render(<EventLogWorkspace />);
+    expect(region("rail")).toHaveStyle({ maxWidth: "40%", minWidth: "0px" });
+  });
+
   it("hides and shows the channel pane without discarding its state", () => {
     render(<EventLogWorkspace />);
     const search = screen.getByTestId("channel-picker");

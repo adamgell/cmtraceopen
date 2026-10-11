@@ -80,6 +80,22 @@ describe("EvtxResizeHandle", () => {
     fireEvent.pointerUp(handle, { pointerId: 1 });
   });
 
+  it("captures the pointer on a primary press only, and disables touch panning", () => {
+    const capture = vi.fn();
+    const original = HTMLElement.prototype.setPointerCapture;
+    HTMLElement.prototype.setPointerCapture = capture;
+    try {
+      const { handle } = renderHandle();
+      expect(handle.style.touchAction).toBe("none");
+      fireEvent.pointerDown(handle, { button: 2, isPrimary: true, pointerId: 7 });
+      expect(capture).not.toHaveBeenCalled();
+      fireEvent.pointerDown(handle, { button: 0, isPrimary: true, pointerId: 7 });
+      expect(capture).toHaveBeenCalledWith(7);
+    } finally {
+      HTMLElement.prototype.setPointerCapture = original;
+    }
+  });
+
   it("does not arm a drag from a right-click or a non-primary pointer", () => {
     const { onChange, handle } = renderHandle();
     fireEvent.pointerDown(handle, { clientX: 500, button: 2, isPrimary: true, pointerId: 1 });
