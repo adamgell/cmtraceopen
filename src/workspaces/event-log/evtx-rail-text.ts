@@ -21,17 +21,25 @@ export interface RailTextColors {
   primary: string;
   /** Labels, counts and captions: Foreground3, or Foreground2 where Foreground3 misses it. */
   secondary: string;
+  /**
+   * The same rule for captions drawn on the `colorNeutralBackground1` cards inside the rail
+   * (Foreground3 measures 3.37:1 there in solarized-dark and 3.03:1 in dracula).
+   */
+  cardSecondary: string;
 }
 
 export function pickRailTextColors(theme: CMTraceTheme): RailTextColors {
   const fluent = theme.fluentTheme as unknown as Record<string, string>;
-  const surface = fluent.colorNeutralBackground2;
-  const passes = (key: string) => contrastRatio(fluent[key], surface) >= TEXT_FLOOR;
+  const passes = (key: string, surfaceKey = "colorNeutralBackground2") =>
+    contrastRatio(fluent[key], fluent[surfaceKey]) >= TEXT_FLOOR;
   return {
     primary: passes("colorNeutralForeground1")
       ? tokens.colorNeutralForeground1
       : tokens.colorNeutralForeground2,
     secondary: passes("colorNeutralForeground3")
+      ? tokens.colorNeutralForeground3
+      : tokens.colorNeutralForeground2,
+    cardSecondary: passes("colorNeutralForeground3", "colorNeutralBackground1")
       ? tokens.colorNeutralForeground3
       : tokens.colorNeutralForeground2,
   };

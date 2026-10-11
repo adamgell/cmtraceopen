@@ -212,6 +212,7 @@ function CoverageGapRow({
   occurrences: number;
   sizes: RailSizes;
 }) {
+  const { cardSecondary } = useRailTextColors();
   return (
     <div style={{ display: "grid", gap: "2px", fontSize: `${sizes.small}px` }}>
       <span style={{ color: tokens.colorNeutralForeground2 }}>
@@ -219,7 +220,7 @@ function CoverageGapRow({
         {countLabel(occurrences, "occurrence")})
       </span>
       {gap.evidence.length > 0 && (
-        <span style={{ color: tokens.colorNeutralForeground3 }}>
+        <span style={{ color: cardSecondary }}>
           Coverage evidence: {evidenceText(gap.evidence)}
         </span>
       )}
@@ -251,6 +252,7 @@ function FindingCard({
   visuals: EvtxVisualTokens;
 }) {
   const [checksExpanded, setChecksExpanded] = useState(false);
+  const { cardSecondary } = useRailTextColors();
   const [evidenceExpanded, setEvidenceExpanded] = useState(false);
   const level = visuals.findingSeverityVisual(finding.severity);
   const shownEvidence = evidenceExpanded
@@ -298,7 +300,7 @@ function FindingCard({
           style={{
             fontSize: `${sizes.caption}px`,
             fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            color: tokens.colorNeutralForeground3,
+            color: cardSecondary,
             textAlign: "right",
           }}
         >
@@ -341,7 +343,7 @@ function FindingCard({
             <div key={index}>{evidenceLabel(item, includeOrigin)}</div>
           ))}
           {evidenceExpanded && hiddenEvidence > 0 && (
-            <div style={{ color: tokens.colorNeutralForeground3 }}>
+            <div style={{ color: cardSecondary }}>
               {omittedLabel(hiddenEvidence, "evidence reference")}
             </div>
           )}
@@ -476,6 +478,7 @@ function RailCard({
   stale?: boolean;
   children: ReactNode;
 }) {
+  const { cardSecondary } = useRailTextColors();
   return (
     <section
       aria-label={title}
@@ -496,7 +499,7 @@ function RailCard({
           fontWeight: 700,
           letterSpacing: "0.08em",
           textTransform: "uppercase",
-          color: tokens.colorNeutralForeground3,
+          color: cardSecondary,
         }}
       >
         {title}
@@ -627,11 +630,12 @@ function CorrelationSummaryCard({
   sizes: RailSizes;
   stale: boolean;
 }) {
+  const { cardSecondary } = useRailTextColors();
   const breakdown = correlationBreakdown(summary);
   const total = summary.overview.correlationCount;
   const preview = summary.correlations.length;
   const lineStyle = { fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground2 };
-  const mutedStyle = { fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground3 };
+  const mutedStyle = { fontSize: `${sizes.small}px`, color: cardSecondary };
   return (
     <RailCard title="Correlations" sizes={sizes} stale={stale}>
       {breakdown.complete ? (
@@ -667,6 +671,7 @@ function CorrelationRow({
   edge: DiagnosisCorrelationEdge;
   sizes: RailSizes;
 }) {
+  const { cardSecondary } = useRailTextColors();
   const target =
     edge.right ?? (edge.candidateIds.join(", ") || "no direct match");
   return (
@@ -675,7 +680,7 @@ function CorrelationRow({
         Correlation: {edge.status} ({edge.basis}) {edge.left} {"→"} {target}
       </span>
       {edge.evidence.length > 0 && (
-        <span style={{ color: tokens.colorNeutralForeground3 }}>
+        <span style={{ color: cardSecondary }}>
           Correlation evidence:{" "}
           {edge.evidence
             .map((item) => `${item.originId} ${item.field}=${item.value}`)
