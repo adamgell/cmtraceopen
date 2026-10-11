@@ -33,6 +33,12 @@ export type ComparableWindow = Exclude<EvtxTimeWindow, "all">;
 export interface PriorWindow {
   window: ComparableWindow;
   lengthMs: number;
+  /**
+   * The instant the current window was measured from. The current window begins at
+   * `anchorEpoch - lengthMs`, so a consumer whose own anchor differs is looking at a different
+   * current window than this comparison was made against.
+   */
+  anchorEpoch: number;
   /** Inclusive epoch-millisecond bounds. */
   fromMs: number;
   toMs: number;
@@ -95,6 +101,7 @@ export function computePriorWindow(window: EvtxTimeWindow, anchorEpoch: number):
     prior: {
       window,
       lengthMs,
+      anchorEpoch,
       fromMs,
       toMs,
       from: new Date(fromMs).toISOString(),
@@ -232,6 +239,7 @@ export type ComparisonUnavailableReason =
   | "invalidAnchor"
   | "notReady"
   | "noChannels"
+  | "currentPeriodIncomplete"
   | "noTimedRecords"
   | "priorPeriodNotSpanned"
   | "queryFailed";

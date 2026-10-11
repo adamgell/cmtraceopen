@@ -10,7 +10,7 @@
  *
  * The Tauri bridge is mocked because the store imports it at module scope.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   beginLiveComparison,
   cancelComparison,
@@ -197,6 +197,9 @@ beforeEach(() => {
   installBridge();
   resetStore();
 });
+
+// A test that leaves a comparison running must not have the next test's setup stop it.
+afterEach(() => cancelComparison());
 
 function startComparison(): Promise<void> {
   return comparePreviousPeriod(ANCHOR);
@@ -500,6 +503,109 @@ describe("when a comparison cannot be made", () => {
     resetStore({ loadedChannels: new Set<string>() });
     await comparePreviousPeriod(ANCHOR);
     expectUnavailable("noChannels");
+  });
+});
+
+describe("when the current period is not fully loaded", () => {
+  const AUTO_LOAD_MAX_EVENTS = 2_000;
+
+  /** A reply whose records travelled as batches, with its end-of-stream marker delivered first. */
+  function streamedReply(args: QueryArgs, rows: EvtxRecord[], coverageGaps: unknown[] = []) {
+    const channelName = args.channels[0];
+    if (rows.length > 0) deliver(channelName, 0, rows, args.requestId);
+    complete(channelName, rows.length > 0 ? 1 : 0, rows.length, args.requestId);
+    return reply(rows.length, {
+      channels: [{ name: channelName, eventCount: rows.length, sourceType: "live" as const }],
+      coverageGaps,
+    });
+  }
+
+  /** Reads Security with the automatic load, which stops at the per-channel bound. */
+  async function autoLoadSecurity(rowCount: number) {
+    invoke.mockReset();
+    invoke.mockImplementation(async (name: string, rawArgs: unknown) => {
+      if (name === "evtx_enumerate_channels") return [liveInfo("Security")];
+      return streamedReply(
+        rawArgs as QueryArgs,
+        Array.from({ length: rowCount }, () => record("Security"))
+      );
+    });
+    resetStore({ sourceMode: null, selectedChannels: new Set<string>(), loadedChannels: new Set<string>(), channels: [] });
+    await useEvtxStore.getState().enumerateChannels();
+    installBridge();
+  }
+
+  it("is unavailable for a channel a stopped load left partly on screen, which the grid still counts", async () => {
+    invoke.mockReset();
+    invoke.mockImplementation(async (_name: string, rawArgs: unknown) =>
+      streamedReply(rawArgs as QueryArgs, [record("Security"), record("Security"), record("Security")], [
+        {
+          source: "Security",
+          kind: "cancelled",
+          reason: "operator stopped the load after 3 events were fetched (the channel may hold more)",
+        },
+      ])
+    );
+    resetStore({
+      channels: [liveInfo("Security")],
+      selectedChannels: new Set(["Security"]),
+      loadedChannels: new Set<string>(),
+    });
+    await useEvtxStore.getState().queryChannels(["Security"]);
+    expect(useEvtxStore.getState().records).toHaveLength(3);
+    expect(useEvtxStore.getState().loadedChannels.has("Security")).toBe(false);
+    installBridge();
+
+    await comparePreviousPeriod(ANCHOR);
+
+    expect(settled()).toEqual({
+      status: "unavailable",
+      reason: "currentPeriodIncomplete",
+      detail:
+        "The current period is not loaded in full for Security. Load it in full to compare it with the previous period.",
+    });
+    expect(queryCommandCalls()).toBe(0);
+  });
+
+  it("is unavailable for a channel the automatic load cut off at its bound", async () => {
+    await autoLoadSecurity(AUTO_LOAD_MAX_EVENTS);
+    expect(useEvtxStore.getState().loadedChannels.has("Security")).toBe(true);
+    expect(
+      useEvtxStore.getState().coverageGaps.some((gap) => gap.includes("may hold more"))
+    ).toBe(true);
+
+    await comparePreviousPeriod(ANCHOR);
+
+    expect(settled()).toMatchObject({
+      status: "unavailable",
+      reason: "currentPeriodIncomplete",
+      detail: expect.stringContaining("Security") as string,
+    });
+    expect(queryCommandCalls()).toBe(0);
+  });
+
+  it("compares a channel the automatic load read to its end, even though it used the bound", async () => {
+    await autoLoadSecurity(AUTO_LOAD_MAX_EVENTS - 1);
+    expect(
+      useEvtxStore.getState().coverageGaps.some((gap) => gap.includes("may hold more"))
+    ).toBe(false);
+
+    void startComparison();
+    await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(1));
+    expect(comparisonQueries()[0].args.channels).toEqual(["Security"]);
+  });
+
+  it("does not hold a partly loaded channel against a comparison that does not include it", async () => {
+    resetStore({
+      records: [record("Security")],
+      selectedChannels: new Set(["System"]),
+      loadedChannels: new Set(["System"]),
+      coverageGaps: [`Security: newest ${AUTO_LOAD_MAX_EVENTS} events shown (the channel may hold more)`],
+    });
+
+    void startComparison();
+    await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(1));
+    expect(comparisonQueries()[0].args.channels).toEqual(["System"]);
   });
 });
 

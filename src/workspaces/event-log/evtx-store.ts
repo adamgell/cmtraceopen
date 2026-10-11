@@ -2547,7 +2547,7 @@ function reconcileStreamedResult(
     // A channel that came back at the bound may hold more, and this side cannot tell: the read
     // stopped at the bound rather than counting the channel. Saying what was not read is the
     // difference between a partial view and a view that claims to be whole.
-    gaps.push(`${context}: newest ${cappedAt} events shown (the channel may hold more)`);
+    gaps.push(`${context}: newest ${cappedAt} ${CAPPED_GAP_SUFFIX}`);
   }
   return {
     checked,
@@ -2558,6 +2558,9 @@ function reconcileStreamedResult(
     gaps,
   };
 }
+
+/** What a channel's coverage note ends with when a bounded read stopped at its bound. */
+const CAPPED_GAP_SUFFIX = "events shown (the channel may hold more)";
 
 function invalidateAllStreamedRecords(requestId: string): void {
   const channels = new Set([
@@ -2788,6 +2791,27 @@ export async function comparePreviousPeriod(anchorEpoch: number): Promise<void> 
       anchorEpoch,
       visibility,
     });
+    return;
+  }
+
+  // The grid counts every selected channel that has records, wholly read or not. A channel left
+  // partly on screen by a stopped load, or cut off at the automatic load's bound, is a slice of its
+  // period; comparing a slice with a whole previous period would be a ratio of unlike sets.
+  const channelsWithRecords = new Set(state.records.map((record) => record.channel));
+  const incomplete = [...state.selectedChannels].filter(
+    (channel) =>
+      (channelsWithRecords.has(channel) && !state.loadedChannels.has(channel)) ||
+      state.coverageGaps.some(
+        (gap) =>
+          gap.endsWith(CAPPED_GAP_SUFFIX) &&
+          coverageBelongsToChannel(gap, channel, state.remoteMachine)
+      )
+  );
+  if (incomplete.length > 0) {
+    publishComparisonUnavailable(
+      "currentPeriodIncomplete",
+      `The current period is not loaded in full for ${incomplete.join(", ")}. Load it in full to compare it with the previous period.`
+    );
     return;
   }
 

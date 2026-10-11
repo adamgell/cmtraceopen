@@ -88,6 +88,10 @@ describe("computePriorWindow", () => {
       expect(prior.toMs - prior.fromMs + 1).toBe(length);
       expect(prior.lengthMs).toBe(length);
       expect(prior.window).toBe(window);
+      // The anchor is recoverable from the period, so a consumer can tell whether its own current
+      // window still meets this one.
+      expect(prior.anchorEpoch).toBe(ANCHOR);
+      expect(prior.toMs + 1 + prior.lengthMs).toBe(prior.anchorEpoch);
     }
   );
 
