@@ -802,6 +802,9 @@ function seedFixtureEvents() {
   });
 }
 
+const exportStatus = () =>
+  document.querySelector<HTMLElement>("[data-evtx-export-status]") as HTMLElement;
+
 describe("EventLogWorkspace fixtures", () => {
   beforeEach(() => {
     invoke.mockReset();
@@ -991,8 +994,11 @@ describe("EventLogWorkspace fixtures", () => {
     );
     fireEvent.click(screen.getByText("JSON"));
 
-    await screen.findByText(
-      `Exported ${expected.length.toLocaleString()} events (9,999 bytes)`,
+    // The visible status; the same text is also announced through a hidden live region.
+    await waitFor(() =>
+      expect(exportStatus()).toHaveTextContent(
+        `Exported ${expected.length.toLocaleString()} events (9,999 bytes)`,
+      ),
     );
     const appendCalls = invoke.mock.calls.filter(
       ([command]) => command === "evtx_append_export_chunk",
@@ -1268,7 +1274,7 @@ describe("EventLogWorkspace fixtures", () => {
 
     await selectExportFormat("JSON");
 
-    await waitFor(() => expect(screen.getByText(/^Exported /)).toBeInTheDocument());
+    await waitFor(() => expect(exportStatus()).toHaveTextContent(/^Exported /));
   });
 
   it("keeps a running export as the only one, with the control unavailable while it runs", async () => {
