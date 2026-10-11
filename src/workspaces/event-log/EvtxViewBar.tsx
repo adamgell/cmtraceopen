@@ -18,6 +18,7 @@ import {
   Button,
   Dropdown,
   Menu,
+  MenuDivider,
   MenuItem,
   MenuList,
   MenuPopover,
@@ -49,6 +50,7 @@ import {
   discoverMappedProperties,
   type EvtxColumnId,
 } from "./evtx-columns";
+import { EvtxExportSubsetDialog } from "./EvtxExportSubsetDialog";
 import { EVTX_EXPORT_FORMATS } from "./evtx-export";
 import {
   EVTX_GROUP_LABELS,
@@ -68,6 +70,7 @@ import {
 } from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
 import { streamEventLogExport } from "./event-export-session";
+import type { EvtxRecord } from "./types";
 
 const VIEW_ICONS: Record<EvtxViewId, FluentIcon> = {
   table: TableSimple20Regular,
@@ -120,6 +123,37 @@ const useStyles = makeStyles({
 const GROUP_FIELDS: EvtxGroupField[] = ["eventId", "provider", "channel", "level", "day"];
 const NO_GROUPING = "__none__";
 const EXPORT_TITLE = "Export the events currently shown, using the same filters as the list";
+const SUBSET_TITLE =
+  "Copy the events currently shown into new .evtx files. The files are not redacted.";
+// Spec 8.17: shown as the reason while the item is disabled for a remote source.
+const SUBSET_REMOTE_REASON = "Not available for remote sources.";
+const SUBSET_REMOTE_REASON_ID = "evtx-subset-remote-reason";
+
+/**
+ * The records the list shows, in the order it shows them. Every export reads this, so a file can
+ * never quietly differ from the view.
+ */
+function visibleRecordsInListOrder(
+  state: ReturnType<typeof useEvtxStore.getState>,
+  nowEpoch: number,
+): EvtxRecord[] {
+  return sortRecords(
+    selectVisibleRecords({
+      records: state.records,
+      selectedChannels: state.selectedChannels,
+      filterLevels: state.filterLevels,
+      filterEventIds: state.filterEventIds,
+      filterSearch: state.filterSearch,
+      quickFilter: state.quickFilter,
+      timeWindow: state.timeWindow,
+      visibleColumns: state.columnConfig.order,
+      timeZoneMode: state.timeZoneMode,
+      nowEpoch,
+    }),
+    state.sortField,
+    state.sortDirection,
+  );
+}
 
 interface EvtxViewBarProps {
   /** The workspace clock snapshot, so an export selects the same records the list shows. */
@@ -196,6 +230,29 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
   // before the dialog opens and cleared in `finally`, so it covers the dialog and the session
   // together, and a thrown dialog error cannot leave it set.
   const exportPendingRef = useRef(false);
+
+  // EVTX subset (spec 8.17). Windows only, and not for a remote source until remote export is
+  // verified. The dialog is mounted with a snapshot of the records, so what it exports is what the
+  // list showed when it was opened.
+  const currentPlatform = useUiStore((s) => s.currentPlatform);
+  const remoteMachine = useEvtxStore((s) => s.remoteMachine);
+  const subsetSupported = currentPlatform === "windows";
+  const subsetBlockedByRemote = remoteMachine !== null;
+  const [subsetRecords, setSubsetRecords] = useState<readonly EvtxRecord[] | null>(null);
+  const exportButtonRef = useRef<HTMLButtonElement | null>(null);
+  const openSubsetDialog = () => {
+    const visible = visibleRecordsInListOrder(useEvtxStore.getState(), nowEpoch);
+    if (visible.length === 0) {
+      setExportState("Nothing to export");
+      return;
+    }
+    setSubsetRecords(visible);
+  };
+  const closeSubsetDialog = () => {
+    setSubsetRecords(null);
+    // The menu item that opened the dialog is gone, so focus would otherwise fall to the page.
+    requestAnimationFrame(() => exportButtonRef.current?.focus());
+  };
   useEffect(
     () => () => {
       exportAbortRef.current?.abort();
@@ -208,23 +265,7 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
   const exportVisible = async (format: (typeof EVTX_EXPORT_FORMATS)[number]) => {
     if (exportPendingRef.current) return;
     const state = useEvtxStore.getState();
-    const visibleColumns = state.columnConfig.order;
-    const exportRecords = sortRecords(
-      selectVisibleRecords({
-        records: state.records,
-        selectedChannels: state.selectedChannels,
-        filterLevels: state.filterLevels,
-        filterEventIds: state.filterEventIds,
-        filterSearch: state.filterSearch,
-        quickFilter: state.quickFilter,
-        timeWindow: state.timeWindow,
-        visibleColumns,
-        timeZoneMode: state.timeZoneMode,
-        nowEpoch,
-      }),
-      state.sortField,
-      state.sortDirection,
-    );
+    const exportRecords = visibleRecordsInListOrder(state, nowEpoch);
     if (exportRecords.length === 0) {
       setExportState("Nothing to export");
       return;
@@ -600,6 +641,7 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
       <Menu>
         <MenuTrigger disableButtonEnhancement>
           <Button
+            ref={exportButtonRef}
             size="small"
             appearance="outline"
             disabled={isExporting}
@@ -616,9 +658,36 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
                 {format.label}
               </MenuItem>
             ))}
+            {subsetSupported && (
+              <>
+                <MenuDivider />
+                <MenuItem
+                  disabled={subsetBlockedByRemote}
+                  title={subsetBlockedByRemote ? SUBSET_REMOTE_REASON : SUBSET_TITLE}
+                  aria-describedby={subsetBlockedByRemote ? SUBSET_REMOTE_REASON_ID : undefined}
+                  onClick={openSubsetDialog}
+                >
+                  {"EVTX subset\u2026"}
+                </MenuItem>
+              </>
+            )}
           </MenuList>
+          {/* Outside the list: a menu may own only items, and the item's description must still be
+              reachable while the item is disabled. */}
+          {subsetSupported && subsetBlockedByRemote && (
+            <span id={SUBSET_REMOTE_REASON_ID} className={styles.visuallyHidden}>
+              {SUBSET_REMOTE_REASON}
+            </span>
+          )}
         </MenuPopover>
       </Menu>
+      {subsetRecords !== null && (
+        <EvtxExportSubsetDialog
+          records={subsetRecords}
+          onClose={closeSubsetDialog}
+          onFinished={setExportState}
+        />
+      )}
     </div>
   );
 }

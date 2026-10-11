@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -6,6 +6,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { EvtxViewBar } from "./EvtxViewBar";
+import { useUiStore } from "../../stores/ui-store";
+import type { EvtxRecord } from "./types";
 import { EVTX_EXPORT_FORMATS } from "./evtx-export";
 import { defaultColumnConfig } from "./evtx-columns";
 import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
@@ -169,15 +171,23 @@ describe("EvtxViewBar", () => {
     expect(useEvtxStore.getState().columnConfig.order.length).toBe(count + 1);
   });
 
-  it("lists exactly the existing export formats", async () => {
+  it("lists the existing export formats, then the Windows-only EVTX subset item", async () => {
     render(<EvtxViewBar nowEpoch={0} />);
     fireEvent.click(
       screen.getByTitle("Export the events currently shown, using the same filters as the list"),
     );
     const items = await screen.findAllByRole("menuitem");
-    expect(items.map((item) => item.textContent)).toEqual(
-      EVTX_EXPORT_FORMATS.map((format) => format.label),
-    );
+    expect(items.map((item) => item.textContent)).toEqual([
+      ...EVTX_EXPORT_FORMATS.map((format) => format.label),
+      "EVTX subset\u2026",
+    ]);
+    // Set off from the report formats by a divider that sits between them and the new item.
+    const divider = document.querySelector(".fui-MenuDivider");
+    expect(divider).not.toBeNull();
+    const follows = (a: Element, b: Element) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(items[EVTX_EXPORT_FORMATS.length - 1], divider as Element)).toBe(true);
+    expect(follows(divider as Element, items[EVTX_EXPORT_FORMATS.length])).toBe(true);
   });
 
   it("reorders a column and resets columns inside the Columns popover, with icon arrows", async () => {
@@ -204,5 +214,107 @@ describe("EvtxViewBar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Reset columns" }));
     expect(useEvtxStore.getState().columnConfig.order).toEqual(defaults);
+  });
+});
+
+const EXPORT_BUTTON_TITLE =
+  "Export the events currently shown, using the same filters as the list";
+
+const subsetRecord = (partial: Partial<EvtxRecord> = {}): EvtxRecord => ({
+  id: 1,
+  eventRecordId: 1,
+  timestamp: "2026-08-09T12:00:00Z",
+  timestampEpoch: 0,
+  provider: "Provider",
+  channel: "System",
+  eventId: 1,
+  level: "Error",
+  computer: "HOST",
+  message: "event",
+  eventData: [],
+  rawXml: "<Event />",
+  sourceLabel: "Live",
+  ...partial,
+});
+
+async function openExportMenu() {
+  fireEvent.click(screen.getByTitle(EXPORT_BUTTON_TITLE));
+  return screen.findAllByRole("menuitem");
+}
+
+describe("EVTX subset menu entry", () => {
+  beforeEach(() => {
+    resetStores();
+    useUiStore.setState(useUiStore.getInitialState(), true);
+    useEvtxStore.setState({
+      records: [
+        subsetRecord({ id: 1, channel: "System", eventRecordId: 10, level: "Error" }),
+        subsetRecord({ id: 2, channel: "System", eventRecordId: 11, level: "Warning" }),
+        subsetRecord({ id: 3, channel: "Application", eventRecordId: 5, level: "Error" }),
+      ],
+      selectedChannels: new Set(["System", "Application"]),
+      timeWindow: "all",
+      sourceMode: "live",
+    });
+  });
+  afterEach(cleanup);
+
+  it.each(["macos", "linux"] as const)("is not offered on %s", async (platform) => {
+    useUiStore.setState({ currentPlatform: platform });
+    render(<EvtxViewBar nowEpoch={0} />);
+    const items = await openExportMenu();
+    expect(items.map((item) => item.textContent)).toEqual(
+      EVTX_EXPORT_FORMATS.map((format) => format.label),
+    );
+    expect(screen.queryByRole("menuitem", { name: /EVTX subset/ })).toBeNull();
+    expect(document.querySelector(".fui-MenuDivider")).toBeNull();
+  });
+
+  it("is disabled for a remote source, with the spec's reason reachable", async () => {
+    useEvtxStore.setState({ remoteMachine: "SRV01" });
+    render(<EvtxViewBar nowEpoch={0} />);
+    await openExportMenu();
+    const item = screen.getByRole("menuitem", { name: /EVTX subset/ });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveAttribute("title", "Not available for remote sources.");
+    expect(item).toHaveAccessibleDescription("Not available for remote sources.");
+    fireEvent.click(item);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("opens the dialog with exactly the records the list shows", async () => {
+    // The Warning event is filtered out of the list, so it must not be offered for export.
+    useEvtxStore.setState({ filterLevels: new Set(["Error"]) });
+    render(<EvtxViewBar nowEpoch={0} />);
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    const sources = within(within(dialog).getByRole("list", { name: "Sources" }));
+    expect(sources.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Application1 event",
+      "System1 event",
+    ]);
+  });
+
+  it("reports Nothing to export instead of opening an empty dialog", async () => {
+    useEvtxStore.setState({ records: [] });
+    render(<EvtxViewBar nowEpoch={0} />);
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+    expect(document.querySelector("[data-evtx-export-status]")).toHaveTextContent(
+      "Nothing to export",
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("returns focus to the Export button when the dialog is cancelled", async () => {
+    render(<EvtxViewBar nowEpoch={0} />);
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+    await screen.findByRole("alertdialog");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(screen.getByTitle(EXPORT_BUTTON_TITLE)).toHaveFocus());
   });
 });

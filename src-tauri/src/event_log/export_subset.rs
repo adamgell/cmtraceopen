@@ -96,10 +96,7 @@ pub fn export_subset(
     sources: &[EvtxSubsetSource],
 ) -> Result<EvtxSubsetResult, String> {
     let plan = engine::plan_subset_export(folder, sources)?;
-    log::info!(
-        "event=evtx_export_subset sources={} folder_chosen=true",
-        plan.exports.len()
-    );
+    log::info!("event=evtx_export_subset sources={}", plan.exports.len());
     Ok(engine::run_plan(&plan, &windows_backend::WindowsBackend))
 }
 
