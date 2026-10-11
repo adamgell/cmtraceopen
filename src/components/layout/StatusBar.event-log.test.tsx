@@ -284,6 +284,71 @@ describe("StatusBar Event Logs content", () => {
     });
   });
 
+  describe("coverage", () => {
+    function loadWithNoErrors() {
+      useEvtxStore.setState({
+        sourceMode: "live",
+        loadedChannels: new Set(["Application"]),
+        records: [record("Information")],
+      });
+    }
+
+    it("shows no marker when nothing is missing", () => {
+      loadWithNoErrors();
+      render(<StatusBar />);
+
+      expect(left()).not.toHaveTextContent(/coverage/);
+    });
+
+    it.each([
+      ["a legacy gap message", { coverageGaps: ["Security: access denied"] }],
+      [
+        "a structured gap",
+        {
+          coverageDetails: [
+            { source: "Security", kind: "accessDenied" as const, reason: "access denied" },
+          ],
+        },
+      ],
+      ["a live tail gap", { tailCoverageGaps: ["System: live tail batch 3 was not received"] }],
+    ])("says the coverage is incomplete beside the counts for %s", (_name, gaps) => {
+      loadWithNoErrors();
+      useEvtxStore.setState(gaps);
+      render(<StatusBar />);
+
+      // A zero next to a gap is not evidence that nothing failed (soul.md rule 4).
+      expect(left()).toHaveTextContent(
+        "Live · 1 channel · 0 text logs · 1 event · 0 errors · 0 warnings · coverage incomplete",
+      );
+    });
+
+    it("says it in the Correlation variant too", () => {
+      loadWithNoErrors();
+      useEvtxStore.setState({ coverageGaps: ["Security: access denied"] });
+      setLayoutView("correlation");
+      act(() =>
+        useEvtxCorrelationStatusStore
+          .getState()
+          .publish({ exact: 0, candidate: 0, ambiguous: 0, unplaced: 0 }),
+      );
+      render(<StatusBar />);
+
+      expect(left()).toHaveTextContent(
+        "Correlation · 0 chains · 0 exact, 0 candidate, 0 ambiguous · 0 not placed · coverage incomplete",
+      );
+    });
+
+    it("drops the marker when the gaps clear", () => {
+      loadWithNoErrors();
+      useEvtxStore.setState({ coverageGaps: ["Security: access denied"] });
+      render(<StatusBar />);
+      expect(left()).toHaveTextContent(/coverage incomplete/);
+
+      act(() => useEvtxStore.setState({ coverageGaps: [] }));
+      expect(left()).not.toHaveTextContent(/coverage/);
+    });
+  });
+
   describe("right segment", () => {
     it("names the active layout view", () => {
       useEvtxStore.setState({

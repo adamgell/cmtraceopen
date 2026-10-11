@@ -189,6 +189,16 @@ export interface EvtxStatusCounts {
   warnings: number;
 }
 
+/**
+ * Appended when the loaded events have coverage gaps (a denied channel, a cancelled or bounded
+ * read, a skipped source). The counts then describe what loaded, not the machine: "0 errors"
+ * beside a gap is not evidence that nothing failed, so the bar says the coverage is incomplete
+ * instead of letting the number stand alone. The gap detail stays in the coverage banner.
+ */
+const EVTX_COVERAGE_INCOMPLETE_SEGMENT: EvtxStatusSegment = [
+  { text: "coverage incomplete" },
+];
+
 /** "{Live|Files} · {c} channels · {l} text logs · {n} events · {e} errors · {w} warnings". */
 export function buildEvtxCountsSegments(
   counts: EvtxStatusCounts,
@@ -405,6 +415,9 @@ export function StatusBar() {
   const evtxIsLoading = useEvtxStore((s) => s.isLoading);
   const evtxLoadedChannelCount = useEvtxStore((s) => s.loadedChannels.size);
   const evtxTimeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  const evtxCoverageGaps = useEvtxStore((s) => s.coverageGaps);
+  const evtxCoverageDetails = useEvtxStore((s) => s.coverageDetails);
+  const evtxTailCoverageGaps = useEvtxStore((s) => s.tailCoverageGaps);
   const evtxLayoutView = useEvtxLayoutStore((s) => s.activeView);
   const evtxCorrelationStatus = useEvtxCorrelationStatusStore((s) => s.status);
   const currentPlatform = useUiStore((s) => s.currentPlatform);
@@ -496,9 +509,10 @@ export function StatusBar() {
   );
 
   // "Updated" is the last load or tail append the status bar observed. The store keeps no
-  // wall-clock stamp, and the bar stays mounted across workspaces, so every settled change to
-  // the loaded records is seen here. Records that were already loaded when the bar mounted get no
-  // stamp: that time was not observed, so it is left out rather than guessed.
+  // wall-clock stamp. AppShell renders the bar unconditionally, so it stays mounted across
+  // workspace switches and sees every settled change to the loaded records. Records that were
+  // already loaded when the bar mounted get no stamp: that time was not observed, so it is left
+  // out rather than guessed. (A remount would restart the stamp the same way.)
   const [evtxUpdatedAt, setEvtxUpdatedAt] = useState<number | null>(null);
   const observedRecordsRef = useRef(evtxRecords);
   const wasLoadingRef = useRef(evtxIsLoading);
@@ -786,7 +800,11 @@ export function StatusBar() {
       // Nothing is loaded, so there is nothing to count. Zeros here would read as a result.
       leftSegments = [[{ text: "Ready" }]];
     } else {
-      leftSegments =
+      const coverageIncomplete =
+        evtxCoverageGaps.length > 0 ||
+        evtxCoverageDetails.length > 0 ||
+        evtxTailCoverageGaps.length > 0;
+      const countsSegments =
         evtxLayoutView === "correlation" && evtxCorrelationStatus !== null
           ? buildEvtxCorrelationSegments(evtxCorrelationStatus)
           : buildEvtxCountsSegments({
@@ -802,6 +820,9 @@ export function StatusBar() {
               errors: evtxProblemCounts.errors,
               warnings: evtxProblemCounts.warnings,
             });
+      leftSegments = coverageIncomplete
+        ? [...countsSegments, EVTX_COVERAGE_INCOMPLETE_SEGMENT]
+        : countsSegments;
       rightSegments = [
         [{ text: `${EVTX_VIEW_LABELS[evtxLayoutView]} view` }],
         ...(evtxUpdatedAt === null

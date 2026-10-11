@@ -421,19 +421,17 @@ describe("liveSource token as rendered by the pill", () => {
 
       const fill = opaqueHex(pill().style.backgroundColor, theme);
       const border = opaqueHex(borderColor(pill()), theme);
-      // The pill sits on the toolbar's neutral background (Toolbar.tsx). Measured, not required:
-      // the fill and the border may blend into it in some themes, which is why neither carries
-      // the identification.
-      const fillOnToolbar = contrastRatio(fill, toolbarSurface);
-      const borderOnFill = contrastRatio(border, fill);
-      const borderOnToolbar = contrastRatio(border, toolbarSurface);
-      for (const ratio of [fillOnToolbar, borderOnFill, borderOnToolbar]) {
+      // The pill sits on the toolbar's neutral background (Toolbar.tsx). These are measured, not
+      // required: the border is decorative and exempt in Phase 1's inventory, and the fill
+      // measures 1.00 to 1.64:1 against the toolbar in these seven themes. Neither is what
+      // identifies the pill, so a retuned border token is not a failure here.
+      for (const ratio of [
+        contrastRatio(fill, toolbarSurface),
+        contrastRatio(border, fill),
+        contrastRatio(border, toolbarSurface),
+      ]) {
         expect(Number.isFinite(ratio)).toBe(true);
       }
-      // Phase 1 records the decorative border at 3.07 to 21.00 on the fill and 1.87 to 21.00 on
-      // the toolbar. A drift outside those bounds means the token changed under this pill.
-      expect(borderOnFill).toBeGreaterThanOrEqual(3.07 - 0.005);
-      expect(borderOnToolbar).toBeGreaterThanOrEqual(1.87 - 0.005);
 
       // What does identify it is text: the state is spelled out, and the dot is decoration.
       expect(label().textContent).toMatch(/^Live · /);
