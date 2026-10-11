@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parseAst } from "vite";
 import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import { buildCorrelationChains } from "./evtx-correlation-chains";
 import {
   countProblemLevels,
   countTextLogSources,
-  hasReadAnything,
+  currentCorrelationStatus,
   loadedChannelCountFor,
+  readStateFor,
   summarizeEvtxCorrelationStatus,
   summarizeVisibleRecords,
   useEvtxCorrelationStatusStore,
@@ -121,20 +123,40 @@ describe("loadedChannelCountFor", () => {
   });
 });
 
-describe("hasReadAnything", () => {
+describe("readStateFor", () => {
+  const event = { originKind: "event" as const };
+  const textLog = { originKind: "log" as const };
+  const bare = {}; // an event record carries no origin kind
+
   it("needs a completed channel in live mode, whatever records are on screen", () => {
-    expect(hasReadAnything({ sourceMode: "live", loadedChannelCount: 2, recordCount: 0 })).toBe(true);
+    expect(readStateFor({ sourceMode: "live", loadedChannelCount: 2, records: [] })).toBe("events");
     // A cancelled or refused read leaves loadedChannels empty even when partial records show.
-    expect(hasReadAnything({ sourceMode: "live", loadedChannelCount: 0, recordCount: 40 })).toBe(false);
+    expect(
+      readStateFor({ sourceMode: "live", loadedChannelCount: 0, records: [event, event] }),
+    ).toBe("nothing");
   });
 
-  it("needs a record in files mode, event or archived text log", () => {
-    expect(hasReadAnything({ sourceMode: "files", loadedChannelCount: 0, recordCount: 1 })).toBe(true);
-    expect(hasReadAnything({ sourceMode: "files", loadedChannelCount: 0, recordCount: 0 })).toBe(false);
+  it("needs an EVENT record to have read events in files mode", () => {
+    expect(readStateFor({ sourceMode: "files", loadedChannelCount: 0, records: [event] })).toBe("events");
+    expect(readStateFor({ sourceMode: "files", loadedChannelCount: 0, records: [bare] })).toBe("events");
+    expect(
+      readStateFor({ sourceMode: "files", loadedChannelCount: 0, records: [textLog, textLog, event] }),
+    ).toBe("events");
+  });
+
+  it("reads records that are all text logs as text logs only: no event was read", () => {
+    // An evidence archive whose two .evtx files failed to read, beside one readable text log.
+    expect(
+      readStateFor({ sourceMode: "files", loadedChannelCount: 0, records: [textLog, textLog] }),
+    ).toBe("textLogsOnly");
+  });
+
+  it("reads a files source with no records as nothing", () => {
+    expect(readStateFor({ sourceMode: "files", loadedChannelCount: 0, records: [] })).toBe("nothing");
   });
 
   it("reads nothing when no source is open", () => {
-    expect(hasReadAnything({ sourceMode: null, loadedChannelCount: 3, recordCount: 3 })).toBe(false);
+    expect(readStateFor({ sourceMode: null, loadedChannelCount: 3, records: [event] })).toBe("nothing");
   });
 });
 
@@ -178,37 +200,42 @@ describe("summarizeVisibleRecords", () => {
     expect(
       summarizeVisibleRecords(
         levels("Error", "Critical", "Warning", "Information"),
-        { events: 40, channels: 3, textLogs: 2 },
+        { records: 40, channels: 3, textLogs: 2, eventsRead: true },
         7,
       ),
     ).toEqual({
       generation: 7,
-      visible: 4,
-      loaded: 40,
-      channels: 3,
       textLogs: 2,
-      errors: 2,
-      warnings: 1,
+      events: { visible: 4, loaded: 40, channels: 3, errors: 2, warnings: 1 },
     });
   });
 
   it("reports an empty grid as zero visible with the loaded count intact", () => {
-    expect(summarizeVisibleRecords([], { events: 12, channels: 2, textLogs: 0 }, 3)).toEqual({
+    expect(
+      summarizeVisibleRecords([], { records: 12, channels: 2, textLogs: 0, eventsRead: true }, 3),
+    ).toEqual({
       generation: 3,
-      visible: 0,
-      loaded: 12,
-      channels: 2,
       textLogs: 0,
-      errors: 0,
-      warnings: 0,
+      events: { visible: 0, loaded: 12, channels: 2, errors: 0, warnings: 0 },
     });
+  });
+
+  it("leaves the event counts absent, not zero, when no event record was read", () => {
+    // The grid shows text-log lines, but the event channels were not read: their counts are unknown.
+    const summary = summarizeVisibleRecords(
+      levels("Information", "Warning"),
+      { records: 2, channels: 0, textLogs: 1, eventsRead: false },
+      4,
+    );
+
+    expect(summary).toEqual({ generation: 4, textLogs: 1, events: null });
   });
 });
 
 describe("valueForGeneration", () => {
   const summary = summarizeVisibleRecords(
     levels("Error"),
-    { events: 1, channels: 1, textLogs: 0 },
+    { records: 1, channels: 1, textLogs: 0, eventsRead: true },
     5,
   );
 
@@ -348,7 +375,7 @@ describe("published stores", () => {
     expect(useEvtxVisibleSummaryStore.getState().summary).toBeNull();
     const summary = summarizeVisibleRecords(
       levels("Warning"),
-      { events: 1, channels: 1, textLogs: 0 },
+      { records: 1, channels: 1, textLogs: 0, eventsRead: true },
       2,
     );
     useEvtxVisibleSummaryStore.getState().publish(summary);
@@ -410,6 +437,41 @@ describe("published stores", () => {
     expect(current()).toBeNull();
   });
 
+  it("refuses a status the summarizer did not issue, even a spread of one that it did", () => {
+    const store = useEvtxCorrelationStatusStore.getState();
+    store.setAnalysis(key(2));
+    const issued = statusFor(key(2));
+
+    // The brand survives a spread, so the type allows this; the store checks the object itself.
+    store.publish({ ...issued, exact: 99 });
+    expect(current()).toBeNull();
+
+    store.publish(issued);
+    expect(current()).toBe(issued);
+    expect(Object.isFrozen(issued)).toBe(true);
+  });
+
+  it("keeps counts across a generation change that rebuilt nothing", () => {
+    // A refused or failed open bumps the load generation and leaves the session on screen. The
+    // session is named by its id and revision, and the bar compares with that, not the generation.
+    const store = useEvtxCorrelationStatusStore.getState();
+    store.setAnalysis(key(2));
+    store.publish(statusFor(key(2)));
+
+    expect(
+      currentCorrelationStatus(useEvtxCorrelationStatusStore.getState()),
+    ).toMatchObject({ exact: 2 });
+  });
+
+  it("reads no counts when the status does not name the session on screen", () => {
+    const issued = statusFor(key(2));
+    expect(currentCorrelationStatus({ analysis: null, status: issued })).toBeNull();
+    expect(currentCorrelationStatus({ analysis: key(2), status: null })).toBeNull();
+    expect(currentCorrelationStatus({ analysis: key(2, "other"), status: issued })).toBeNull();
+    expect(currentCorrelationStatus({ analysis: key(2, "session-1", 9), status: issued })).toBeNull();
+    expect(currentCorrelationStatus({ analysis: key(2), status: issued })).toBe(issued);
+  });
+
   it("clears the counts on publish(null)", () => {
     const store = useEvtxCorrelationStatusStore.getState();
     store.setAnalysis(key(2));
@@ -419,26 +481,79 @@ describe("published stores", () => {
   });
 });
 
-/** Every module specifier a source imports, re-exports or dynamically imports. */
+/** Stands for a specifier that is not a string literal, so it can never match an allowed one. */
+const NON_LITERAL_SPECIFIER = "<non-literal specifier>";
+
+interface AstNode {
+  type: string;
+  [key: string]: unknown;
+}
+
+const isNode = (value: unknown): value is AstNode =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof (value as { type?: unknown }).type === "string";
+
+function stringLiteral(node: unknown): string | undefined {
+  return isNode(node) && node.type === "Literal" && typeof node.value === "string"
+    ? node.value
+    : undefined;
+}
+
+/**
+ * Every module a source pulls in: imports, re-exports, `import x = require()`, `import()` with or
+ * without an options argument, type-level `import("m")`, `require()`, and Vite's
+ * `import.meta.glob`. Parsed with Vite's own parser rather than matched with regexes, so comments
+ * and strings that merely look like code are not read as code. A specifier that is not a string
+ * literal, and any `import.meta.glob`, is reported by name so it can never pass an allow-list.
+ */
 function moduleSpecifiers(source: string): string[] {
-  const code = source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
-  const specifiers = new Set<string>();
-  const patterns = [
-    // import x from "m"; import type { x } from 'm'; export { x } from "m"; export * from "m";
-    /\b(?:import|export)\b[^"'`;]*?\bfrom\s*(["'`])([^"'`]+)\1/g,
-    // import "m"; (a bare side-effect import)
-    /\bimport\s*(["'`])([^"'`]+)\1/g,
-    // import("m")
-    /\bimport\s*\(\s*(["'`])([^"'`]+)\1\s*\)/g,
-    // require("m")
-    /\brequire\s*\(\s*(["'`])([^"'`]+)\1\s*\)/g,
-  ];
-  for (const pattern of patterns) {
-    for (const match of code.matchAll(pattern)) specifiers.add(match[2]);
-  }
-  return [...specifiers].sort();
+  const found = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!isNode(value)) return;
+    switch (value.type) {
+      case "ImportDeclaration":
+      case "ExportAllDeclaration":
+      case "ExportNamedDeclaration":
+      case "ImportExpression":
+      case "TSImportType":
+        // `export const x` has no source; every other form here names a module.
+        if (value.source !== null && value.source !== undefined) {
+          found.add(stringLiteral(value.source) ?? NON_LITERAL_SPECIFIER);
+        }
+        break;
+      case "TSExternalModuleReference":
+        found.add(stringLiteral(value.expression) ?? NON_LITERAL_SPECIFIER);
+        break;
+      case "CallExpression":
+        if (
+          isNode(value.callee) &&
+          value.callee.type === "Identifier" &&
+          value.callee.name === "require" &&
+          Array.isArray(value.arguments)
+        ) {
+          found.add(stringLiteral(value.arguments[0]) ?? NON_LITERAL_SPECIFIER);
+        }
+        break;
+      case "MemberExpression":
+        if (
+          isNode(value.object) &&
+          value.object.type === "MetaProperty" &&
+          isNode(value.property) &&
+          (value.property.name === "glob" || value.property.name === "globEager")
+        ) {
+          found.add(`import.meta.${String(value.property.name)}`);
+        }
+        break;
+    }
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(parseAst(source, { lang: "ts" }));
+  return [...found].sort();
 }
 
 describe("module purity", () => {
@@ -458,6 +573,11 @@ describe("module purity", () => {
         export type { F } from "./eight";
         const lazy = () => import("./nine");
         const cjs = require('./ten');
+        import eq = require("./eleven");
+        type Q = typeof import("./twelve");
+        type R = import("./thirteen").X;
+        const withOptions = await import("./fourteen", { with: { type: "json" } });
+        export const local = 1;
         // import "./commented";
         /* import "./blocked"; */
         const text = "not an import";
@@ -465,9 +585,39 @@ describe("module purity", () => {
     ).toEqual(
       [
         "./one", "./two", "./three", "./four", "./five", "./six", "./seven", "./eight",
-        "./nine", "./ten",
+        "./nine", "./ten", "./eleven", "./twelve", "./thirteen", "./fourteen",
       ].sort(),
     );
+  });
+
+  it("reads a dynamic import with an options argument and import.meta.glob", () => {
+    // The store's Tauri listeners register as soon as it is imported by any of these routes.
+    expect(
+      moduleSpecifiers(`const store = await import("./evtx-store", { with: {} });`),
+    ).toEqual(["./evtx-store"]);
+    expect(
+      moduleSpecifiers(`const all = import.meta.glob("./evtx-store.ts", { eager: true });`),
+    ).toEqual(["import.meta.glob"]);
+    expect(moduleSpecifiers(`const all = import.meta.globEager("./*.ts");`)).toEqual([
+      "import.meta.globEager",
+    ]);
+  });
+
+  it("flags a specifier that is not a string literal", () => {
+    expect(moduleSpecifiers(`const m = await import(name);`)).toEqual([NON_LITERAL_SPECIFIER]);
+    expect(moduleSpecifiers(`const m = require(path + ".js");`)).toEqual([NON_LITERAL_SPECIFIER]);
+  });
+
+  it("is not fooled by comment markers inside strings", () => {
+    // A regex comment-stripper would drop everything after the "//" or up to the next "*/".
+    expect(
+      moduleSpecifiers(`
+        const url = "https://example.test/a";
+        const glob = "/* not a comment";
+        import real from "./real";
+        const end = "*/";
+      `),
+    ).toEqual(["./real"]);
   });
 
   it("imports neither the status bar, the evtx store, Tauri nor React", () => {

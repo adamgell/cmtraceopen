@@ -13,12 +13,15 @@
  *   how many channels and text-log sources those events came from;
  * - the correlation counts for the Correlation view variant.
  *
- * Every value carries the evtx store's `loadGeneration` as its key. A generation is bumped by each
- * new load, refresh, source change and reset, so a value published for one source can never be
- * shown against another: the reader compares the key with the store's current generation
- * (`valueForGeneration`) and treats a mismatch as "not published". The correlation counts are
- * keyed more tightly, by the analysis session and revision they were built from. The workspace
- * publishes nothing while a query runs or when nothing was read, and clears everything on unmount.
+ * The visible summary carries the evtx store's `loadGeneration` as its key. A generation is
+ * bumped by each new load, refresh, source change and reset, so a summary published for one
+ * source can never be shown against another: the reader compares the key with the store's current
+ * generation (`valueForGeneration`) and treats a mismatch as "not published". The correlation
+ * counts are keyed by the analysis session and revision they were built from, and the reader
+ * compares them with the session the workspace named (`currentCorrelationStatus`), not with the
+ * current generation: a load that is refused or fails leaves the session on screen, and its counts
+ * stay valid. The workspace publishes nothing while a query runs or when nothing was read, and
+ * clears everything on unmount.
  */
 import { create } from "zustand";
 import type { CorrelationChainModel } from "./evtx-correlation-chains";
@@ -27,7 +30,7 @@ import type { EvtxRecord } from "./types";
 /** A published value, valid only for the evtx store generation it was computed under. */
 export interface GenerationKeyed {
   /** `useEvtxStore.getState().loadGeneration` when the value was computed. */
-  generation: number;
+  readonly generation: number;
 }
 
 export interface EvtxProblemCounts {
@@ -54,21 +57,40 @@ export function countProblemLevels(
   return { errors, warnings };
 }
 
+/** What the source on screen has produced. */
+export type EvtxReadState =
+  /** Nothing: no channel completed (live), or no record at all (files). */
+  | "nothing"
+  /** Files whose records are all archived text logs: no event record was read. */
+  | "textLogsOnly"
+  | "events";
+
 /**
- * Whether the source on screen read anything at all. A live load counts once a channel has
- * completed (`loadedChannels`, which a cancelled or refused read never fills); a file source
- * counts once it produced a record, event or archived text log.
+ * What the source on screen has read. A live load counts once a channel has completed
+ * (`loadedChannels`, which a cancelled or refused read never fills). A file source counts as
+ * having read events once it produced an EVENT record; records that are all archived text logs
+ * are "textLogsOnly", because the event files beside them may have failed to read.
  *
- * A read that produced nothing leaves error and warning counts unknown, not zero, so the status
- * bar publishes no counts for it and does not stamp "Updated" (soul.md rule 4).
+ * Without a read event the error and warning counts are unknown, not zero, and so are the event
+ * and channel counts: "0 channels" would read as "this source has no event channels" rather than
+ * "they could not be read". The status bar therefore publishes no event counts for "textLogsOnly"
+ * and no counts at all for "nothing" (soul.md rule 4).
  */
-export function hasReadAnything(input: {
+export function readStateFor(input: {
   sourceMode: "files" | "live" | null;
   loadedChannelCount: number;
-  recordCount: number;
-}): boolean {
-  if (input.sourceMode === "live") return input.loadedChannelCount > 0;
-  return input.sourceMode === "files" && input.recordCount > 0;
+  records: readonly Pick<EvtxRecord, "originKind">[];
+}): EvtxReadState {
+  if (input.sourceMode === "live") {
+    return input.loadedChannelCount > 0 ? "events" : "nothing";
+  }
+  if (input.sourceMode !== "files") return "nothing";
+  let sawTextLog = false;
+  for (const record of input.records) {
+    if (record.originKind !== "log") return "events";
+    sawTextLog = true;
+  }
+  return sawTextLog ? "textLogsOnly" : "nothing";
 }
 
 /**
@@ -117,44 +139,59 @@ export function countTextLogSources(
   return sources.size;
 }
 
-export interface EvtxVisibleSummary extends GenerationKeyed, EvtxProblemCounts {
+/** The event counts of a visible summary. */
+export interface EvtxEventCounts extends EvtxProblemCounts {
   /** Rows the grid shows: `{n} events`, equal to the chip row's "Showing {visible}". */
   visible: number;
   /** Events loaded behind them: the chip row's "of {loaded}". */
   loaded: number;
   /** `loadedChannelCountFor` for the source on screen: `{c} channels`. */
   channels: number;
-  /** `countTextLogSources` for the source on screen: `{l} text logs`. */
+}
+
+export interface EvtxVisibleSummary extends GenerationKeyed {
+  /** `countTextLogSources` for the source on screen: `{l} text logs`. Known whenever one exists. */
   textLogs: number;
+  /**
+   * The event, channel, error and warning counts, or null when no event record was read (a files
+   * source whose records are all text logs): those counts are unknown, not zero.
+   */
+  events: EvtxEventCounts | null;
 }
 
 /**
  * Summarizes the rows the workspace computed. `visible` is its `visibleRecords`, not a new pass;
- * `loaded` describes the records behind it.
+ * `loaded` describes the records behind it. With `eventsRead` false the event counts are absent.
  */
 export function summarizeVisibleRecords(
   visible: readonly Pick<EvtxRecord, "level">[],
-  loaded: { events: number; channels: number; textLogs: number },
+  loaded: { records: number; channels: number; textLogs: number; eventsRead: boolean },
   generation: number,
 ): EvtxVisibleSummary {
   return {
     generation,
-    visible: visible.length,
-    loaded: loaded.events,
-    channels: loaded.channels,
     textLogs: loaded.textLogs,
-    ...countProblemLevels(visible),
+    events: loaded.eventsRead
+      ? {
+          visible: visible.length,
+          loaded: loaded.records,
+          channels: loaded.channels,
+          ...countProblemLevels(visible),
+        }
+      : null,
   };
 }
 
 /**
- * The analysis session the correlation counts were built from, and the load generation it was
- * built under. A session id alone is not enough: a session is rebuilt as its input changes, and
- * its revision says which build the counts belong to.
+ * The analysis session the correlation counts were built from. A session id alone is not enough:
+ * a session is rebuilt as its input changes, and its revision says which build the counts belong
+ * to. `generation` is the load generation the build's input was snapshotted under; it names the
+ * build and is not compared with the store's current generation, which moves on loads that
+ * rebuild nothing (a refused or failed open leaves the session on screen valid).
  */
 export interface EvtxAnalysisKey extends GenerationKeyed {
-  sessionId: string;
-  revision: number;
+  readonly sessionId: string;
+  readonly revision: number;
 }
 
 declare const summarized: unique symbol;
@@ -164,8 +201,9 @@ declare const summarized: unique symbol;
  * `candidate` are the chain counts; ambiguous and coverage-blocked rows are not chains (Q-4) and
  * `timestampOnly` / `notCausal` relations are never counted at all (D7).
  *
- * Only `summarizeEvtxCorrelationStatus` makes one. A caller cannot build the object by hand, so
- * counts from an incomplete edge preview cannot reach the store.
+ * Only `summarizeEvtxCorrelationStatus` issues one. The brand makes a hand-written literal a type
+ * error, but a spread of an existing status keeps the brand, so the store also checks at runtime
+ * that it was issued by the summarizer and refuses any other object.
  */
 export type EvtxCorrelationStatus = Readonly<{
   exact: number;
@@ -175,6 +213,9 @@ export type EvtxCorrelationStatus = Readonly<{
   unplaced: number;
 }> &
   EvtxAnalysisKey & { readonly [summarized]: true };
+
+/** The statuses `summarizeEvtxCorrelationStatus` issued; the store refuses anything else. */
+const issuedStatuses = new WeakSet<object>();
 
 /**
  * Reduces the chain model to the status counts, or null when they would not be totals.
@@ -196,7 +237,7 @@ export function summarizeEvtxCorrelationStatus(
 ): EvtxCorrelationStatus | null {
   if (!model.edgeInputComplete) return null;
   if (!Number.isSafeInteger(totalUnplaced) || totalUnplaced < 0) return null;
-  return {
+  const status = Object.freeze({
     generation: key.generation,
     sessionId: key.sessionId,
     revision: key.revision,
@@ -204,7 +245,9 @@ export function summarizeEvtxCorrelationStatus(
     candidate: model.counts.candidate,
     ambiguous: model.counts.ambiguous,
     unplaced: totalUnplaced,
-  } as EvtxCorrelationStatus;
+  }) as unknown as EvtxCorrelationStatus;
+  issuedStatuses.add(status);
+  return status;
 }
 
 function sameAnalysis(a: EvtxAnalysisKey, b: EvtxAnalysisKey): boolean {
@@ -250,6 +293,22 @@ interface EvtxCorrelationStatusState {
 }
 
 /**
+ * The counts, only if they were built for the analysis session the workspace has on screen. The
+ * store already keeps them that way; the reader re-checks so a status can never outlive the
+ * session it names.
+ */
+export function currentCorrelationStatus(state: {
+  analysis: EvtxAnalysisKey | null;
+  status: EvtxCorrelationStatus | null;
+}): EvtxCorrelationStatus | null {
+  return state.status !== null &&
+    state.analysis !== null &&
+    sameAnalysis(state.status, state.analysis)
+    ? state.status
+    : null;
+}
+
+/**
  * Phase 10 publishes the chain counts here, through `summarizeEvtxCorrelationStatus`, once it
  * builds the chain model. The workspace names the analysis session on screen with `setAnalysis`
  * when it is ready and clears it at the start of every rebuild and on unmount.
@@ -274,7 +333,9 @@ export const useEvtxCorrelationStatusStore = create<EvtxCorrelationStatusState>(
     publish: (status) =>
       set((state) => {
         if (status === null) return { status: null };
-        return state.analysis !== null && sameAnalysis(status, state.analysis)
+        return issuedStatuses.has(status) &&
+          state.analysis !== null &&
+          sameAnalysis(status, state.analysis)
           ? { status }
           : {};
       }),

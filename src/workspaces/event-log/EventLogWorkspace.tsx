@@ -47,8 +47,8 @@ import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
 import {
   countTextLogSources,
-  hasReadAnything,
   loadedChannelCountFor,
+  readStateFor,
   summarizeVisibleRecords,
   useEvtxCorrelationStatusStore,
   useEvtxVisibleSummaryStore,
@@ -173,6 +173,8 @@ export function EvtxViewHost({
 
 interface EventLogAnalysisSnapshot {
   revision: number;
+  /** The load generation this input was snapshotted under, not the one current when it resolves. */
+  generation: number;
   readyAt: number;
   records: EvtxRecord[];
   entries: LogEntry[];
@@ -303,30 +305,32 @@ export function EventLogWorkspace() {
     () => countTextLogSources(scopedLogEntries, records),
     [scopedLogEntries, records],
   );
-  const readAnything = hasReadAnything({
-    sourceMode,
-    loadedChannelCount: loadedChannels.size,
-    recordCount: records.length,
-  });
+  const readState = useMemo(
+    () => readStateFor({ sourceMode, loadedChannelCount: loadedChannels.size, records }),
+    [sourceMode, loadedChannels, records],
+  );
   useEffect(() => {
     useEvtxVisibleSummaryStore
       .getState()
       .publish(
-        isLoading || !readAnything
+        isLoading || readState === "nothing"
           ? null
           : summarizeVisibleRecords(
               visibleRecords,
               {
-                events: records.length,
+                records: records.length,
                 channels: loadedChannelCount,
                 textLogs: textLogSourceCount,
+                // Files whose records are all text logs read no event: the event counts are
+                // left out of the summary (unknown), and only the text-log count is kept.
+                eventsRead: readState === "events",
               },
               loadGeneration,
             ),
       );
   }, [
     isLoading,
-    readAnything,
+    readState,
     visibleRecords,
     records.length,
     loadedChannelCount,
@@ -497,6 +501,7 @@ export function EventLogWorkspace() {
     setTimelinePending(true);
     pump.pending = {
       revision,
+      generation: useEvtxStore.getState().loadGeneration,
       readyAt: Date.now() + DIAGNOSIS_DEBOUNCE_MS,
       records: analysisRecords,
       entries: scopedLogEntries,
@@ -538,7 +543,7 @@ export function EventLogWorkspace() {
           }
           pump.publishedSessionId = result.status.sessionId;
           useEvtxCorrelationStatusStore.getState().setAnalysis({
-            generation: useEvtxStore.getState().loadGeneration,
+            generation: snapshot.generation,
             sessionId: result.status.sessionId,
             revision: result.status.revision,
           });

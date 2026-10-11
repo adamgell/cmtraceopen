@@ -147,12 +147,8 @@ describe("EventLogWorkspace status summary", () => {
 
     expect(visibleSummary()).toEqual({
       generation: useEvtxStore.getState().loadGeneration,
-      visible: 4,
-      loaded: 4,
-      channels: 1,
       textLogs: 0,
-      errors: 2,
-      warnings: 1,
+      events: { visible: 4, loaded: 4, channels: 1, errors: 2, warnings: 1 },
     });
   });
 
@@ -174,7 +170,7 @@ describe("EventLogWorkspace status summary", () => {
       timeWindow: state.timeWindow,
     });
     expect(gridRows).toHaveLength(1);
-    expect(visibleSummary()).toMatchObject({
+    expect(visibleSummary()?.events).toMatchObject({
       visible: gridRows.length,
       loaded: 4,
       errors: 1,
@@ -201,7 +197,7 @@ describe("EventLogWorkspace status summary", () => {
       });
       render(<EventLogWorkspace />);
 
-      expect(visibleSummary()).toMatchObject({ visible: 3, loaded: 3, channels: 1 });
+      expect(visibleSummary()?.events).toMatchObject({ visible: 3, loaded: 3, channels: 1 });
     });
 
     it("counts the channels whose load completed in live mode", () => {
@@ -211,7 +207,7 @@ describe("EventLogWorkspace status summary", () => {
       });
       render(<EventLogWorkspace />);
 
-      expect(visibleSummary()).toMatchObject({ channels: 3 });
+      expect(visibleSummary()?.events).toMatchObject({ channels: 3 });
     });
   });
 
@@ -245,7 +241,7 @@ describe("EventLogWorkspace status summary", () => {
       ]);
       render(<EventLogWorkspace />);
 
-      expect(visibleSummary()).toMatchObject({ textLogs: 2, channels: 1 });
+      expect(visibleSummary()).toMatchObject({ textLogs: 2, events: { channels: 1 } });
     });
   });
 
@@ -259,7 +255,7 @@ describe("EventLogWorkspace status summary", () => {
       expect(visibleSummary()).toBeNull();
 
       act(() => useEvtxStore.setState({ isLoading: false }));
-      expect(visibleSummary()).toMatchObject({ visible: 4, loaded: 4 });
+      expect(visibleSummary()?.events).toMatchObject({ visible: 4, loaded: 4 });
     });
 
     it("publishes nothing for a live load in which no channel completed", () => {
@@ -276,7 +272,7 @@ describe("EventLogWorkspace status summary", () => {
       expect(visibleSummary()).toBeNull();
 
       act(() => useEvtxStore.setState({ loadedChannels: new Set(["Application"]) }));
-      expect(visibleSummary()).toMatchObject({ visible: 0, loaded: 0, channels: 1 });
+      expect(visibleSummary()?.events).toMatchObject({ visible: 0, loaded: 0, channels: 1 });
     });
 
     it("publishes nothing for a files load that produced no records", () => {
@@ -291,11 +287,50 @@ describe("EventLogWorkspace status summary", () => {
       expect(visibleSummary()).toBeNull();
     });
 
-    it("does publish for a files source whose records are all archived text logs", () => {
+    it("publishes only the text-log count for a files source with no event record", () => {
+      // The files held no event record, so the event, channel, error and warning counts are
+      // unknown. Printing "0 channels" would read as "this source has no event channels".
       loadFiles([archivedTextLog("C:\\Evidence\\ime.log")]);
       render(<EventLogWorkspace />);
 
-      expect(visibleSummary()).toMatchObject({ visible: 1, channels: 0, textLogs: 1 });
+      expect(visibleSummary()).toEqual({
+        generation: useEvtxStore.getState().loadGeneration,
+        textLogs: 1,
+        events: null,
+      });
+    });
+
+    it("withholds the event counts for an archive whose evtx files failed beside a readable text log", () => {
+      useEvtxStore.setState({
+        records: [archivedTextLog("C:\\Evidence\\AgentExecutor.log")],
+        selectedChannels: new Set(["C:\\Evidence\\AgentExecutor.log"]),
+        coverageGaps: [
+          "C:\\Evidence\\System.evtx: file is corrupt",
+          "C:\\Evidence\\Application.evtx: file is corrupt",
+        ],
+      });
+      render(
+        <>
+          <EventLogWorkspace />
+          <StatusBar />
+        </>,
+      );
+
+      expect(visibleSummary()).toMatchObject({ textLogs: 1, events: null });
+      expect(screen.getByTestId("status-bar-left").textContent).toBe("Files · 1 text log");
+    });
+
+    it("publishes the event counts as soon as one event record is read beside the text logs", () => {
+      loadFiles([
+        archivedTextLog("C:\\Evidence\\ime.log"),
+        { ...record("Error", { channel: "System" }) },
+      ]);
+      render(<EventLogWorkspace />);
+
+      expect(visibleSummary()).toMatchObject({
+        textLogs: 1,
+        events: { visible: 2, loaded: 2, channels: 1, errors: 1 },
+      });
     });
   });
 
@@ -341,6 +376,64 @@ describe("EventLogWorkspace status summary", () => {
         sessionId: "session-7",
         revision: 3,
       });
+    });
+
+    it("names the session under the generation its input was snapshotted at, not the one current when the build resolves", async () => {
+      let resolveBuild: (value: never) => void = () => undefined;
+      vi.mocked(buildEventLogAnalysisSession).mockImplementationOnce(
+        () => new Promise((resolve) => (resolveBuild = resolve as typeof resolveBuild)),
+      );
+      render(<EventLogWorkspace />);
+      const snapshotGeneration = useEvtxStore.getState().loadGeneration;
+      await vi.waitFor(() => expect(buildEventLogAnalysisSession).toHaveBeenCalled());
+
+      // An open that fails early bumps the generation while the build is still running.
+      act(() => {
+        useEvtxStore.getState().supersedePendingLoad();
+      });
+      expect(useEvtxStore.getState().loadGeneration).toBe(snapshotGeneration + 1);
+      await act(async () => resolveBuild(sessionResult("session-7", 3) as never));
+
+      expect(correlation().analysis).toEqual({
+        generation: snapshotGeneration,
+        sessionId: "session-7",
+        revision: 3,
+      });
+    });
+
+    it("keeps the chain counts on the bar when a load is superseded without rebuilding anything", async () => {
+      vi.mocked(buildEventLogAnalysisSession).mockResolvedValueOnce(
+        sessionResult("session-7", 3) as never,
+      );
+      act(() => useEvtxLayoutStore.getState().setActiveView("correlation"));
+      render(
+        <>
+          <EventLogWorkspace />
+          <StatusBar />
+        </>,
+      );
+      await vi.waitFor(() => expect(correlation().analysis).not.toBeNull());
+      act(() =>
+        correlation().publish(
+          summarizeEvtxCorrelationStatus(complete, 4, correlation().analysis!),
+        ),
+      );
+      const left = () => screen.getByTestId("status-bar-left");
+      expect(left()).toHaveTextContent(
+        "Correlation · 3 chains · 2 exact, 1 candidate, 0 ambiguous · 4 not placed",
+      );
+
+      // openEventLogSources bumps the generation before it expands the source. A folder with no
+      // .evtx files then throws, and the records, the session and its counts stay as they were.
+      act(() => {
+        useEvtxStore.getState().supersedePendingLoad();
+      });
+
+      expect(correlation().analysis).not.toBeNull();
+      expect(correlation().status).not.toBeNull();
+      expect(left()).toHaveTextContent(
+        "Correlation · 3 chains · 2 exact, 1 candidate, 0 ambiguous · 4 not placed",
+      );
     });
 
     it("unnames the session at the start of a rebuild, so counts for it are dropped", async () => {

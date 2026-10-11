@@ -25,6 +25,7 @@ import { useEvtxStore } from "../../workspaces/event-log/evtx-store";
 import {
   countTextLogSources,
   loadedChannelCountFor,
+  readStateFor,
   summarizeEvtxCorrelationStatus,
   summarizeVisibleRecords,
   useEvtxCorrelationStatusStore,
@@ -101,20 +102,28 @@ function publishRows(
   logStoreFiles: string[] = [],
 ) {
   const { loadGeneration, sourceMode, loadedChannels, records } = useEvtxStore.getState();
+  const readState = readStateFor({
+    sourceMode,
+    loadedChannelCount: loadedChannels.size,
+    records,
+  });
   act(() =>
     useEvtxVisibleSummaryStore.getState().publish(
-      summarizeVisibleRecords(
-        visible,
-        {
-          events: loaded,
-          channels: loadedChannelCountFor({ sourceMode, loadedChannels, records }),
-          textLogs: countTextLogSources(
-            logStoreFiles.map((filePath) => ({ filePath })),
-            records,
+      readState === "nothing"
+        ? null
+        : summarizeVisibleRecords(
+            visible,
+            {
+              records: loaded,
+              channels: loadedChannelCountFor({ sourceMode, loadedChannels, records }),
+              textLogs: countTextLogSources(
+                logStoreFiles.map((filePath) => ({ filePath })),
+                records,
+              ),
+              eventsRead: readState === "events",
+            },
+            loadGeneration,
           ),
-        },
-        loadGeneration,
-      ),
     ),
   );
 }
@@ -289,6 +298,30 @@ describe("StatusBar Event Logs content", () => {
       expect(left()).toHaveTextContent(
         "Files · 1 channel · 1 text log · 2 events · 0 errors · 1 warning",
       );
+    });
+
+    it("leaves the event counts out when no event record was read, and keeps the text logs", () => {
+      // An evidence archive whose System.evtx and Application.evtx failed to read, beside one
+      // text log that did: no event record loaded, so channels, events, errors and warnings are
+      // unknown rather than zero.
+      const textLog: EvtxRecord = {
+        ...record("Information", "C:\\Evidence\\AgentExecutor.log"),
+        originKind: "log",
+        sourceLabel: "C:\\Evidence\\AgentExecutor.log",
+      };
+      useEvtxStore.setState({
+        sourceMode: "files",
+        records: [textLog],
+        coverageGaps: [
+          "C:\\Evidence\\System.evtx: file is corrupt",
+          "C:\\Evidence\\Application.evtx: file is corrupt",
+        ],
+      });
+      publishRows(useEvtxStore.getState().records);
+      render(<StatusBar />);
+
+      expect(left().textContent).toBe("Files · 1 text log");
+      expect(left()).not.toHaveTextContent(/channel|event|error|warning/);
     });
 
     it("draws every count in the numeric font with tabular figures", () => {
@@ -555,6 +588,24 @@ describe("StatusBar Event Logs content", () => {
       expect(right()).toHaveTextContent("Table view · Updated 08:00:09 UTC");
     });
 
+    it("stamps Updated for files that read text logs only: the load finished and produced them", () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-10T10:05:12Z"));
+      useEvtxStore.setState({ isLoading: true, sourceMode: "files", timeZoneMode: "utc" });
+      render(<StatusBar />);
+
+      const textLog: EvtxRecord = {
+        ...record("Information", "C:\\Evidence\\AgentExecutor.log"),
+        originKind: "log",
+        sourceLabel: "C:\\Evidence\\AgentExecutor.log",
+      };
+      act(() => useEvtxStore.setState({ records: [textLog], isLoading: false }));
+      publishRows(useEvtxStore.getState().records);
+
+      expect(left().textContent).toBe("Files · 1 text log");
+      expect(right()).toHaveTextContent("Table view · Updated 10:05:12 UTC");
+    });
+
     it("does not move Updated when a channel is cleared and the records shrink", () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(new Date("2026-10-10T14:32:05Z"));
@@ -774,7 +825,7 @@ describe("StatusBar Event Logs content", () => {
       }
     });
 
-    it("never shows counts published for another source", () => {
+    it("shows no counts at all for a new source until the workspace publishes for it", () => {
       loadLive();
       setLayoutView("correlation");
       publishCorrelation();
@@ -784,10 +835,27 @@ describe("StatusBar Event Logs content", () => {
       act(() =>
         useEvtxStore.setState((state) => ({ loadGeneration: state.loadGeneration + 1 })),
       );
-      // The rows are from the old source too, so the bar has nothing to count until the
-      // workspace publishes for the new one.
+      // The rows are from the old source, and the chain counts are only shown beside rows.
       expect(left()).toHaveTextContent(/^Live$/);
       expect(left()).not.toHaveTextContent(/chain/);
+    });
+
+    it("keeps the chain counts across a load generation bump that rebuilt nothing", () => {
+      loadLive();
+      setLayoutView("correlation");
+      publishCorrelation();
+      render(<StatusBar />);
+      expect(left()).toHaveTextContent(/^Correlation · 1 chain/);
+
+      // A refused or failed open (a folder with no .evtx files) bumps the generation and leaves
+      // the records, and so the analysis session and its counts, on screen. The workspace
+      // republishes its rows under the new generation; the session is unchanged.
+      act(() =>
+        useEvtxStore.setState((state) => ({ loadGeneration: state.loadGeneration + 1 })),
+      );
+      publishRows(useEvtxStore.getState().records);
+
+      expect(left()).toHaveTextContent(/^Correlation · 1 chain/);
     });
 
     it("never shows counts for an analysis session or revision that is no longer on screen", () => {
@@ -843,12 +911,33 @@ describe("Event Logs status helpers", () => {
       evtxStatusText(
         buildEvtxCountsSegments({
           sourceMode: "files",
-          rows: { channels: 12, textLogs: 3, visible: 12345, errors: 10, warnings: 2 },
+          rows: {
+            textLogs: 3,
+            events: { channels: 12, visible: 12345, loaded: 12345, errors: 10, warnings: 2 },
+          },
         }),
       ),
     ).toBe(
       `Files · 12 channels · 3 text logs · ${(12345).toLocaleString()} events · 10 errors · 2 warnings`,
     );
+  });
+
+  it("keeps only the known text-log count when no event record was read", () => {
+    expect(
+      evtxStatusText(
+        buildEvtxCountsSegments({ sourceMode: "files", rows: { textLogs: 2, events: null } }),
+      ),
+    ).toBe("Files · 2 text logs");
+    expect(
+      evtxStatusText(
+        buildEvtxCountsSegments({ sourceMode: "files", rows: { textLogs: 1, events: null } }),
+      ),
+    ).toBe("Files · 1 text log");
+    expect(
+      evtxStatusText(
+        buildEvtxCountsSegments({ sourceMode: "files", rows: { textLogs: 0, events: null } }),
+      ),
+    ).toBe("Files");
   });
 
   it("leaves every count out when no rows are published", () => {

@@ -51,7 +51,8 @@ import {
   type EvtxTimeZoneMode,
 } from "../../workspaces/event-log/evtx-time";
 import {
-  hasReadAnything,
+  currentCorrelationStatus,
+  readStateFor,
   useEvtxCorrelationStatusStore,
   useEvtxVisibleSummaryStore,
   valueForGeneration,
@@ -160,30 +161,36 @@ export interface EvtxStatusCounts {
   /**
    * The workspace's summary of the source on screen, or null while it is not published for it:
    * the workspace is still mounting, a query has just finished, or the read produced nothing.
-   * Every count is then left out rather than shown as zero or recounted here.
+   * Every count is then left out rather than shown as zero or recounted here. When a summary
+   * carries no event counts (files whose records are all text logs, so no event record was
+   * read), the channel, event, error and warning counts are left out the same way and only the
+   * text-log count, which is known, is kept.
    */
-  rows: Pick<
-    EvtxVisibleSummary,
-    "channels" | "textLogs" | "visible" | "errors" | "warnings"
-  > | null;
+  rows: Pick<EvtxVisibleSummary, "textLogs" | "events"> | null;
 }
 
-/** "{Live|Files} · {c} channels · {l} text logs · {n} events · {e} errors · {w} warnings". */
+/**
+ * "{Live|Files} · {c} channels · {l} text logs · {n} events · {e} errors · {w} warnings", with
+ * every count that is not known left out, never shown as zero.
+ */
 export function buildEvtxCountsSegments(
   counts: EvtxStatusCounts,
 ): EvtxStatusSegment[] {
   const { rows } = counts;
+  const mode: EvtxStatusSegment = [
+    { text: counts.sourceMode === "live" ? "Live" : "Files" },
+  ];
+  if (rows === null) return [mode];
+  if (rows.events === null) {
+    return rows.textLogs > 0 ? [mode, countRuns(rows.textLogs, "text log")] : [mode];
+  }
   return [
-    [{ text: counts.sourceMode === "live" ? "Live" : "Files" }],
-    ...(rows === null
-      ? []
-      : [
-          countRuns(rows.channels, "channel"),
-          countRuns(rows.textLogs, "text log"),
-          countRuns(rows.visible, "event"),
-          countRuns(rows.errors, "error"),
-          countRuns(rows.warnings, "warning"),
-        ]),
+    mode,
+    countRuns(rows.events.channels, "channel"),
+    countRuns(rows.textLogs, "text log"),
+    countRuns(rows.events.visible, "event"),
+    countRuns(rows.events.errors, "error"),
+    countRuns(rows.events.warnings, "warning"),
   ];
 }
 
@@ -337,6 +344,7 @@ export function StatusBar() {
   // generation it was computed under and is used only while that is still the current one.
   const evtxVisibleSummary = useEvtxVisibleSummaryStore((s) => s.summary);
   const evtxCorrelationStatus = useEvtxCorrelationStatusStore((s) => s.status);
+  const evtxAnalysis = useEvtxCorrelationStatusStore((s) => s.analysis);
 
   const securebootAnalysisState = useSecureBootStore((s) => s.analysisState);
   const securebootResult = useSecureBootStore((s) => s.result);
@@ -413,12 +421,14 @@ export function StatusBar() {
     observedRecordCountRef.current = evtxRecords.length;
     wasLoadingRef.current = evtxIsLoading;
     if (evtxIsLoading || (!grew && !loadFinished)) return;
+    // Files whose records are all text logs did read something: the load finished and produced
+    // them, even though no event record was read. Only a read of nothing is not an update.
     if (
-      !hasReadAnything({
+      readStateFor({
         sourceMode: evtxSourceMode,
         loadedChannelCount: evtxLoadedChannelCount,
-        recordCount: evtxRecords.length,
-      })
+        records: evtxRecords,
+      }) === "nothing"
     ) {
       return;
     }
@@ -704,18 +714,21 @@ export function StatusBar() {
       // and the grid"). The bar does not recount: it reads what the workspace computed, and only
       // while that was computed for the source on screen.
       const rows = valueForGeneration(evtxVisibleSummary, evtxLoadGeneration);
-      const correlation = valueForGeneration(
-        evtxCorrelationStatus,
-        evtxLoadGeneration,
-      );
+      // The chain counts belong to the analysis session the workspace has on screen. They are
+      // compared with that session, not with the load generation: a load that is refused or
+      // fails bumps the generation and leaves the session, and its counts, on screen.
+      const correlation = currentCorrelationStatus({
+        analysis: evtxAnalysis,
+        status: evtxCorrelationStatus,
+      });
       if (rows !== null && evtxLayoutView === "correlation" && correlation !== null) {
         leftSegments = buildEvtxCorrelationSegments(correlation);
       } else {
         leftSegments = buildEvtxCountsSegments({ sourceMode: evtxSourceMode, rows });
-        if (rows !== null && rows.visible !== rows.loaded) {
+        if (rows?.events != null && rows.events.visible !== rows.events.loaded) {
           // The chip row's "of {loaded}", for a filter that narrows the grid. It belongs to the
           // event count, so the Correlation variant, whose numbers are chains, does not carry it.
-          leftTitleNote = ` (${rows.loaded.toLocaleString()} loaded)`;
+          leftTitleNote = ` (${rows.events.loaded.toLocaleString()} loaded)`;
         }
       }
       // A read that produced nothing publishes no rows, and no update time is claimed for it.
