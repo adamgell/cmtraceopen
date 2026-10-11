@@ -730,6 +730,9 @@ export function EventLogWorkspace() {
             display: panels.insights ? "block" : "none",
             position: "relative",
             width: `${railWidth}px`,
+            // Same cap as the channel pane, so the main view always keeps room on a narrow window.
+            minWidth: 0,
+            maxWidth: "40%",
             flexShrink: 0,
             boxSizing: "border-box",
             borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,

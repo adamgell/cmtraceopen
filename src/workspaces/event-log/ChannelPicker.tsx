@@ -398,7 +398,12 @@ export function ChannelPicker() {
         position: "relative",
         boxSizing: "border-box",
         width: `${sidebarWidth}px`,
-        minWidth: `${MIN_SIDEBAR_WIDTH}px`,
+        // The pane cannot shrink on its own (flexShrink 0) and the body row clips, so on a narrow
+        // window a fixed width would squeeze the main view to nothing. Cap it at 40% of the row.
+        // The 200 to 500 drag range is enforced by the handle, so no CSS min-width is needed (a
+        // min-width would also override this cap). `aria-valuenow` keeps the requested width.
+        minWidth: 0,
+        maxWidth: "40%",
         borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
       }}
     >
