@@ -40,6 +40,8 @@ import {
   engineInputSha256,
   loadEngineReplies,
 } from "../fixtures/event-log-data";
+import { mergeDiagnosisCoverageGaps } from "../../src/workspaces/event-log/evtx-coverage";
+import type { EvtxCoverageGap, EvtxParseResult } from "../../src/workspaces/event-log/types";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.resolve(HERE, "..", "..", "screenshots");
@@ -54,18 +56,75 @@ async function dismissSplash(
 // Timestamps render in local time; pin the zone and locale so the PNGs do not depend on the host.
 test.use({ timezoneId: "UTC", locale: "en-US" });
 
+/** The one capture that shows the Insights coverage note (spec 8.13 item 2, Phase 4b #831). */
+const COVERAGE_NOTE_CAPTURE = "event-logs coverage note";
+
+/**
+ * A live Security refusal as `absorb_scan` files it once #931 lands (src-tauri/src/event_log/
+ * commands.rs): source = the channel, the reason from `describe_query_status` (live.rs).
+ */
+const LIVE_SECURITY_DENIED: EvtxCoverageGap = {
+  source: "Security",
+  kind: "accessDenied",
+  reason: "the Event Log service refused the channel query (Windows error 5: Access is denied)",
+};
+
+/**
+ * The coverage note capture's parse result: the fixture plus the live refusal, carried the way the
+ * backend carries a gap (a structured gap, its "source: reason" message and one parse error).
+ *
+ * Caveats, by design of a replayed capture:
+ * - a files load carrying a live-shape gap is a state the backend never produces; it is here so the
+ *   capture shows the spec sentence "{channel} channel not read." next to the fixture's own file
+ *   note ("Security.evtx not read.");
+ * - the replayed diagnosis was captured without this gap, so the coverage disclosure still counts
+ *   the fixture's gaps only.
+ */
+function withLiveSecurityRefusal(base: EvtxParseResult): EvtxParseResult {
+  return {
+    ...base,
+    parseErrors: base.parseErrors + 1,
+    errorMessages: [
+      `${LIVE_SECURITY_DENIED.source}: ${LIVE_SECURITY_DENIED.reason}`,
+      ...base.errorMessages,
+    ],
+    coverageGaps: [LIVE_SECURITY_DENIED, ...(base.coverageGaps ?? [])],
+  };
+}
+
 test.describe("event-logs screenshots", () => {
   let timelineGridName: string;
 
-  test.beforeEach(async ({ page }) => {
-    const parseResult = buildParseResult();
-    const replies = loadEngineReplies();
-    if (engineInputSha256(parseResult) !== replies.provenance.inputSha256) {
+  test.beforeEach(async ({ page }, testInfo) => {
+    const fixtureParseResult = buildParseResult();
+    const fixtureReplies = loadEngineReplies();
+    if (engineInputSha256(fixtureParseResult) !== fixtureReplies.provenance.inputSha256) {
       throw new Error(
         "[event-logs fixture] the dataset changed since the engine replies were captured. " +
           "Regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`.",
       );
     }
+    // Every capture but the coverage note one is served the fixture exactly as before.
+    const noteCapture = testInfo.title === COVERAGE_NOTE_CAPTURE;
+    const parseResult = noteCapture
+      ? withLiveSecurityRefusal(fixtureParseResult)
+      : fixtureParseResult;
+    // The diagnose check stays strict: for the note capture it expects exactly the gaps the UI
+    // derives from that parse result. The store's legacy strings are the gaps' own "source: reason"
+    // messages, which the merge drops as duplicates, so the error messages stand in for them.
+    const replies = noteCapture
+      ? {
+          ...fixtureReplies,
+          diagnoseCoverageGaps: mergeDiagnosisCoverageGaps(
+            parseResult.coverageGaps ?? [],
+            buildSourceManifest().coverage,
+            parseResult.errorMessages,
+            [],
+          ),
+        }
+      : fixtureReplies;
+    // The shim answers platformSupported: false, which hides the note; only this capture elevates.
+    const elevation = noteCapture ? { platformSupported: true, isElevated: false } : null;
     timelineGridName = `Event log timeline - ${parseResult.records.length} records`;
 
     // Same guard as e2e/fixtures/index.ts: nothing here may talk to a running backend.
@@ -74,8 +133,9 @@ test.describe("event-logs screenshots", () => {
     );
 
     await page.addInitScript(
-      ({ parseResult, replies, selections, manifest }) => {
+      ({ parseResult, replies, selections, manifest, elevation }) => {
         const overrides = window.__e2e_ipc_overrides__;
+        if (elevation) overrides["get_app_elevation_state"] = () => elevation;
         const same = (a: unknown, b: unknown): boolean =>
           JSON.stringify(a) === JSON.stringify(b);
         const stale = (command: string, detail: string): Error =>
@@ -185,6 +245,7 @@ test.describe("event-logs screenshots", () => {
         replies,
         selections: buildSourceSelections(),
         manifest: buildSourceManifest(),
+        elevation,
       },
     );
 
@@ -293,6 +354,26 @@ test.describe("event-logs screenshots", () => {
     await assertNoHostPaths(page);
     await page.screenshot({
       path: outPath("event-logs-insights.png"),
+      animations: "disabled",
+    });
+  });
+
+  test(COVERAGE_NOTE_CAPTURE, async ({ page }) => {
+    // The rail on its Insights tab, so the note shows and the grid banner does not. Two notes: the
+    // injected live refusal (the spec sentence) and the fixture's unreadable Security.evtx.
+    const note = page.getByText("Security channel not read. Findings may be incomplete.");
+    await expect(note).toBeVisible();
+    await expect(
+      page.getByText("Security.evtx not read. Findings may be incomplete."),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Elevate to read Security", exact: true }),
+    ).toBeVisible();
+    await expect(page.locator("[data-coverage-banner]")).toHaveCount(0);
+    await note.scrollIntoViewIfNeeded();
+    await assertNoHostPaths(page);
+    await page.screenshot({
+      path: outPath("event-logs-coverage-note.png"),
       animations: "disabled",
     });
   });
