@@ -61,6 +61,7 @@ import {
   observeComparisonProgress,
   publishComparisonUnavailable,
   publishFilesComparison,
+  type ChannelRead,
   type ComparisonVisibility,
 } from "./evtx-comparison";
 
@@ -442,13 +443,14 @@ let activeRequestId = "initial";
  */
 let lastTailAppendEpoch = 0;
 /**
- * When each loaded channel's current-period read was issued, taken immediately before its query is
- * invoked. A live window is evaluated by the service as the read begins, so a channel's current
- * period is the one that ends here. A stamp is written only when a current request merges the
- * channel's result, so a superseded load, which is never merged, cannot rewrite it, and comparison
- * reads, which never reach a merge, leave it alone.
+ * When each loaded channel's current-period read was issued (taken immediately before its query is
+ * invoked) and when it replied (taken as the invoke resolves). The service evaluates the window
+ * after the invoke, at a time this side does not observe, so the reply bounds it from above and the
+ * issue time from below. A stamp is written only when a current request merges the channel's
+ * result, so a superseded load, which is never merged, cannot rewrite it, and comparison reads,
+ * which never reach a merge, leave it alone.
  */
-const channelReadEpochs = new Map<string, number>();
+const channelReadEpochs = new Map<string, ChannelRead>();
 let tailGeneration = 0;
 let activeTailRequestId: string | null = null;
 let activeTailSourceRequestId: string | null = null;
@@ -1180,7 +1182,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         const mergeResult = (
           ch: string,
           reconciliation: StreamReconciliation,
-          readEpoch: number
+          read: ChannelRead
         ) => {
           if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
           const state = get();
@@ -1206,7 +1208,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           );
           if (channelHasUsableData) {
             newLoaded.add(ch);
-            channelReadEpochs.set(ch, readEpoch);
+            channelReadEpochs.set(ch, read);
           } else {
             newLoaded.delete(ch);
           }
@@ -1236,7 +1238,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
             resetStreamedRecords([ch], requestId);
             try {
-              const readEpoch = Date.now();
+              const issuedEpoch = Date.now();
               const result = await invokeEventQuery<EvtxParseResult>(
                 requestId,
                 remoteMachine,
@@ -1248,6 +1250,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
                   filterSnapshot.filterLevels
                 )
               );
+              const read: ChannelRead = { issuedEpoch, repliedEpoch: Date.now() };
               observeStreamReply(ch, requestId, { kind: "success" });
               if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
               await waitForStreamReconciliation(ch, requestId);
@@ -1260,7 +1263,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
                 AUTO_LOAD_MAX_EVENTS
               );
               if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-              mergeResult(ch, reconciliation, readEpoch);
+              mergeResult(ch, reconciliation, read);
               acknowledgeStreamedRecords(ch, requestId);
             } catch (e) {
               if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
@@ -1426,7 +1429,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       MAX_CONCURRENT_CHANNEL_QUERIES,
       async (ch) => {
         try {
-          const readEpoch = Date.now();
+          const issuedEpoch = Date.now();
           const result = await invokeEventQuery<EvtxParseResult>(
             requestId,
             remoteMachine,
@@ -1438,15 +1441,16 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
               filterSnapshot.filterLevels
             )
           );
+          const read: ChannelRead = { issuedEpoch, repliedEpoch: Date.now() };
           observeStreamReply(ch, requestId, { kind: "success" });
-          return { channel: ch, result, error: null as string | null, readEpoch };
+          return { channel: ch, result, error: null as string | null, read };
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           observeStreamReply(ch, requestId, { kind: "error", message });
           const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
           console.warn(`[evtx] Failed to query ${context}: ${message}`);
           if (!loadError) loadError = `${context}: ${message}`;
-          return { channel: ch, result: null, error: message, readEpoch: null };
+          return { channel: ch, result: null, error: message, read: null };
         }
       }
     );
@@ -1455,10 +1459,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     const eventCounts = new Map<string, number>();
     const processedChannels = new Set<string>();
     const channelUsability = new Map<string, boolean>();
-    const channelReads = new Map<string, number>();
+    const channelReads = new Map<string, ChannelRead>();
     const reportedGaps: string[] = [];
     const reportedDetails: EvtxCoverageGap[] = [];
-    for (const { channel, result, error, readEpoch } of results) {
+    for (const { channel, result, error, read } of results) {
       if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
       const context = remoteMachine ? `${remoteMachine}/${channel}` : channel;
       try {
@@ -1490,7 +1494,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           checked.coverageGaps.some((gap) => gap.kind === "cancelled")
         );
         channelUsability.set(channel, channelHasUsableData);
-        if (channelHasUsableData && readEpoch !== null) channelReads.set(channel, readEpoch);
+        if (channelHasUsableData && read !== null) channelReads.set(channel, read);
         acknowledgeStreamedRecords(channel, requestId);
       } catch (processingError) {
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
@@ -1510,7 +1514,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     const processedChannelNames = [...processedChannels];
     clearVisibleRequestPublication(requestId);
     // The request is still current: every iteration above checked, and nothing has awaited since.
-    for (const [channel, readEpoch] of channelReads) channelReadEpochs.set(channel, readEpoch);
+    for (const [channel, read] of channelReads) channelReadEpochs.set(channel, read);
     set((state) => {
       const merged = mergeRecordsPreservingSelection(
         state.records,
@@ -1625,10 +1629,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       MAX_CONCURRENT_CHANNEL_QUERIES,
       async (channel) => {
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) {
-          return { channel, result: null, error: null, stale: true, readEpoch: null };
+          return { channel, result: null, error: null, stale: true, read: null };
         }
         try {
-          const readEpoch = Date.now();
+          const issuedEpoch = Date.now();
           const result = await invokeEventQuery<EvtxParseResult>(
             requestId,
             remoteMachine,
@@ -1640,12 +1644,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
               filterSnapshot.filterLevels
             )
           );
+          const read: ChannelRead = { issuedEpoch, repliedEpoch: Date.now() };
           observeStreamReply(channel, requestId, { kind: "success" });
-          return { channel, result, error: null, stale: false, readEpoch };
+          return { channel, result, error: null, stale: false, read };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           observeStreamReply(channel, requestId, { kind: "error", message });
-          return { channel, result: null, error: message, stale: false, readEpoch: null };
+          return { channel, result: null, error: message, stale: false, read: null };
         }
       }
     );
@@ -1653,12 +1658,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     const recordsToMerge: EvtxRecord[] = [];
     const eventCounts = new Map<string, number>();
     const channelUsability = new Map<string, boolean>();
-    const channelReads = new Map<string, number>();
+    const channelReads = new Map<string, ChannelRead>();
     const reportedGaps: string[] = [];
     const reportedDetails: EvtxCoverageGap[] = [];
     let loadError: string | null = null;
 
-    for (const { channel, result, error, stale, readEpoch } of results) {
+    for (const { channel, result, error, stale, read } of results) {
       if (stale || !isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
       const context = remoteMachine ? `${remoteMachine}/${channel}` : channel;
       try {
@@ -1700,7 +1705,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           checked.coverageGaps.some((gap) => gap.kind === "cancelled")
         );
         channelUsability.set(channel, usable);
-        if (usable && readEpoch !== null) channelReads.set(channel, readEpoch);
+        if (usable && read !== null) channelReads.set(channel, read);
         acknowledgeStreamedRecords(channel, requestId);
       } catch (processingError) {
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
@@ -1725,7 +1730,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       [...channelUsability].filter(([, usable]) => usable).map(([channel]) => channel)
     );
     // The request is still current: every iteration above checked, and nothing has awaited since.
-    for (const [channel, readEpoch] of channelReads) channelReadEpochs.set(channel, readEpoch);
+    for (const [channel, read] of channelReads) channelReadEpochs.set(channel, read);
     const nextCoverageGaps = mergeCoverageGaps(finalState.coverageGaps, reportedGaps);
     const remoteRefreshFailed =
       remoteMachine !== null &&
@@ -2909,19 +2914,25 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
   );
 
   // Where the current period ends: the earliest instant a compared channel's current read was
-  // issued. A live window is evaluated as a read begins, so every compared channel's window ends at
-  // or after this, and the comparison's current period is the one they all cover. The workspace
-  // clock keeps moving after a load and is not used, and neither is the tail: it reads only events
-  // that have not happened yet, so what lies between a read and the tail's start is in neither the
-  // records nor a gap.
-  const readEpochs = new Map<string, number>();
+  // issued. The service evaluates a window after the invoke, at an instant this side does not
+  // observe, so each channel's window ends at or after its own issue time, and the part of the
+  // comparison's current period a later channel lacks is bounded below and above (see
+  // `channelStartGap`). The workspace clock keeps moving after a load and is not used, and neither
+  // is the tail: it reads only events that have not happened yet, so what lies between a read and
+  // the tail's start is in neither the records nor a gap.
+  const readEpochs = new Map<string, ChannelRead>();
   for (const channel of channels) {
-    const epoch = channelReadEpochs.get(channel);
-    if (epoch !== undefined && Number.isFinite(epoch)) readEpochs.set(channel, epoch);
+    const read = channelReadEpochs.get(channel);
+    if (read !== undefined && Number.isFinite(read.issuedEpoch) && Number.isFinite(read.repliedEpoch)) {
+      readEpochs.set(channel, read);
+    }
   }
   // Until every compared channel is stamped this only tells a window that has no previous period
   // from one that has; it is never the anchor of a published result.
-  const anchorEpoch = readEpochs.size > 0 ? Math.min(...readEpochs.values()) : nowEpoch;
+  const anchorEpoch =
+    readEpochs.size > 0
+      ? Math.min(...[...readEpochs.values()].map((read) => read.issuedEpoch))
+      : nowEpoch;
   // Before anything about completeness: a window with no previous period cannot be fixed by loading.
   const windowResult = computePriorWindow(state.timeWindow, anchorEpoch);
   if (windowResult.status === "unavailable") {
@@ -2963,10 +2974,10 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
   // but a ratio against a clean previous period would otherwise read as complete.
   const currentPeriodGaps = new Set<string>();
   const currentPeriodHoleChannels = new Set<string>();
-  for (const [channel, readEpoch] of readEpochs) {
-    const startGap = channelStartGap(channel, readEpoch, anchorEpoch, windowResult.prior.lengthMs);
+  for (const [channel, read] of readEpochs) {
+    const startGap = channelStartGap(channel, read, anchorEpoch, windowResult.prior.lengthMs);
     if (startGap !== null) {
-      currentPeriodGaps.add(startGap);
+      currentPeriodGaps.add(startGap.text);
       currentPeriodHoleChannels.add(channel);
     }
   }

@@ -970,7 +970,13 @@ describe("what fixes the anchor of a live comparison", () => {
     const outcome = settled();
     expect(outcome.status).toBe("partial");
     if (outcome.status !== "partial") return;
+    // The first four reads took 20 minutes, so the service may have evaluated any of their windows
+    // up to 20 minutes late; the fifth began 20 minutes after the anchor, which is certain.
     expect(outcome.result.gaps).toEqual([
+      ...["System", "Application", "Security", "Setup"].map(
+        (name) =>
+          `Current period: ${name} may be missing up to 20 min at the start of its current period: the service evaluated its window at some point during a read that took 20 min.`
+      ),
       `Current period: Operational was read at ${iso(ANCHOR + 20 * 60 * 1000)}, 20 min after the comparison anchor ${iso(ANCHOR)}, so the first 20 min of its current period is not covered.`,
     ]);
   });
@@ -985,6 +991,124 @@ describe("what fixes the anchor of a live comparison", () => {
     if (outcome.status === "complete") {
       expect(outcome.result.gaps).toEqual([]);
       expect(outcome.result.prior.anchorEpoch).toBe(ANCHOR);
+    }
+  });
+
+  /** One channel's load, `readMs` long on the frozen clock: issued at `at`, replied `readMs` later. */
+  async function loadWithReadOf(channel: string, at: number, readMs: number): Promise<void> {
+    vi.setSystemTime(at);
+    invoke.mockImplementation(async (_name: string, rawArgs: unknown) => {
+      vi.setSystemTime(at + readMs);
+      return streamedReply(rawArgs as QueryArgs, []);
+    });
+    await withClockRunning(useEvtxStore.getState().queryChannels([channel]));
+    installBridge();
+  }
+
+  it("states a possible gap for the anchoring channel when its own read was long", async () => {
+    // The anchor is where the read was issued; the service evaluated the window at some point
+    // during a 30 minute read, so up to 30 minutes of its start may be missing.
+    await loadWithReadOf("System", ANCHOR, 30 * 60 * 1000);
+    vi.setSystemTime(ANCHOR);
+    useEvtxStore.setState({ selectedChannels: new Set(["System"]) });
+
+    await compareAll(1);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    expect(outcome.result.prior.anchorEpoch).toBe(ANCHOR);
+    expect(outcome.result.gaps).toEqual([
+      "Current period: System may be missing up to 30 min at the start of its current period: the service evaluated its window at some point during a read that took 30 min.",
+    ]);
+    // The band cannot be ruled out, so a zero for the channel cannot be trusted either.
+    expect(outcome.result.channelsWithGaps).toEqual(["System"]);
+  });
+
+  it("bounds the evaluation of a refreshed channel the same way", async () => {
+    vi.setSystemTime(ANCHOR);
+    invoke.mockImplementation(async (_name: string, rawArgs: unknown) => {
+      vi.setSystemTime(ANCHOR + 30 * 60 * 1000);
+      return streamedReply(rawArgs as QueryArgs, []);
+    });
+    await withClockRunning(useEvtxStore.getState().refreshLoadedChannels());
+    installBridge();
+    vi.setSystemTime(ANCHOR);
+    useEvtxStore.setState({ selectedChannels: new Set(["System"]) });
+
+    await compareAll(1);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status === "partial") {
+      expect(outcome.result.gaps).toEqual([
+        "Current period: System may be missing up to 30 min at the start of its current period: the service evaluated its window at some point during a read that took 30 min.",
+      ]);
+    }
+  });
+
+  it("bounds the evaluation of an automatically loaded channel the same way", async () => {
+    await resetStore({ sourceMode: null, loadedChannels: new Set<string>(), channels: [] });
+    vi.setSystemTime(ANCHOR);
+    invoke.mockImplementation(async (name: string, rawArgs: unknown) => {
+      if (name === "evtx_enumerate_channels") return [liveInfo("Security")];
+      vi.setSystemTime(ANCHOR + 30 * 60 * 1000);
+      return streamedReply(rawArgs as QueryArgs, []);
+    });
+    await withClockRunning(useEvtxStore.getState().enumerateChannels());
+    installBridge();
+    vi.setSystemTime(ANCHOR);
+
+    await compareAll(1);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status === "partial") {
+      expect(outcome.result.gaps).toEqual([
+        "Current period: Security may be missing up to 30 min at the start of its current period: the service evaluated its window at some point during a read that took 30 min.",
+      ]);
+    }
+  });
+
+  it("leaves a short read on the anchoring channel complete", async () => {
+    await loadWithReadOf("System", ANCHOR, 5 * 60 * 1000);
+    vi.setSystemTime(ANCHOR);
+    useEvtxStore.setState({ selectedChannels: new Set(["System"]) });
+
+    await compareAll(1);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") expect(outcome.result.gaps).toEqual([]);
+  });
+
+  it("bounds a later channel from both sides: possible when only the reply is past the tolerance, certain when the issue is", async () => {
+    // One percent of 24 h is 14.4 minutes. System anchors; Application is issued 10 minutes later
+    // and replies at 30, so its missing start is between 10 and 30 minutes.
+    await loadWithReadOf("System", ANCHOR, 0);
+    await loadWithReadOf("Application", ANCHOR + 10 * 60 * 1000, 20 * 60 * 1000);
+    vi.setSystemTime(ANCHOR);
+    await compareAll(2);
+
+    const possible = settled();
+    expect(possible.status).toBe("partial");
+    if (possible.status === "partial") {
+      expect(possible.result.gaps).toEqual([
+        "Current period: Application may be missing up to 30 min at the start of its current period: the service evaluated its window at some point during a read that took 20 min.",
+      ]);
+    }
+
+    // Issued 20 minutes after the anchor: at least that much is missing, whatever the reply.
+    await loadWithReadOf("Application", ANCHOR + 20 * 60 * 1000, 30 * 60 * 1000);
+    vi.setSystemTime(ANCHOR);
+    await compareAll(2);
+
+    const certain = settled();
+    expect(certain.status).toBe("partial");
+    if (certain.status === "partial") {
+      expect(certain.result.gaps).toEqual([
+        `Current period: Application was read at ${iso(ANCHOR + 20 * 60 * 1000)}, 20 min after the comparison anchor ${iso(ANCHOR)}, so the first 20 min of its current period is not covered.`,
+      ]);
     }
   });
 

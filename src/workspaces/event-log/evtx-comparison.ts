@@ -64,9 +64,9 @@ export type PriorWindowResult =
  * The previous period for a current window, anchored at `anchorEpoch`.
  *
  * `anchorEpoch` is the instant the current window was measured from. For a live source that is the
- * instant its load evaluated the window, because the workspace's `nowEpoch` keeps moving after the
- * load; for loaded files it is the workspace's `nowEpoch`, the value `isWithinTimeWindow`
- * subtracts the window from. The current window owns `[anchor - length, ...)`. The service treats
+ * earliest instant a compared channel's current read was issued, because the workspace's `nowEpoch`
+ * keeps moving after the load; for loaded files it is the workspace's `nowEpoch`, the value
+ * `isWithinTimeWindow` subtracts the window from. The current window owns `[anchor - length, ...)`. The service treats
  * both `between` bounds as inclusive, so the previous period ends at `anchor - length - 1` ms;
  * ending it at `anchor - length` would count an event stamped on that exact millisecond in both
  * periods.
@@ -481,34 +481,67 @@ function limitGapLines(lines: readonly string[]): string[] {
 }
 
 /**
- * The share of the window a compared channel's current read may begin after the anchor before the
- * missing start is stated. The anchor is the earliest read among the compared channels, and a read
- * that waited its turn in the pool, or behind a slow enumeration, began later. Its own window then
- * starts later too, so the first part of the comparison's current period is not in what it loaded.
- * Under this share that band is a documented tolerance, in the same spirit as the sub-millisecond
- * sliver at the previous period's end: real, small, and not worth a gap on every comparison. Above
- * it the band is stated. Recorded for Adam as a policy choice (1% of the window).
+ * The share of the window the start of a channel's current period may be uncertain by before it is
+ * stated. The anchor is the earliest read among the compared channels, and a read that waited its
+ * turn in the pool, or behind a slow session, began later; the service also evaluates a window at
+ * some point after the invoke that this side does not observe. Either way the first part of the
+ * comparison's current period may not be in what the channel loaded. Under this share that band is
+ * a documented tolerance, in the same spirit as the sub-millisecond sliver at the previous period's
+ * end: real, small, and not worth a gap on every comparison. Above it the band is stated. Recorded
+ * for Adam as a policy choice (1% of the window).
  */
 const MAX_UNREPORTED_START_BAND_SHARE = 0.01;
 
 /**
- * What is missing from the start of one channel's current period, or null when it is within the
- * tolerance above.
+ * When a channel's current-period read was issued, and when its invoke resolved. The service
+ * evaluates the window at an instant between the two that is not observed, so they bound it.
+ */
+export interface ChannelRead {
+  issuedEpoch: number;
+  repliedEpoch: number;
+}
+
+export interface StartGap {
+  /** True when the band is certain; false when the evaluation instant leaves it only possible. */
+  definite: boolean;
+  text: string;
+}
+
+/**
+ * What may be missing from the start of one channel's current period, or null when it is within
+ * the tolerance above.
  *
- * The comparison's current period is `[anchor - length, anchor]`, anchored at the earliest read
- * among the compared channels. A channel read `readEpoch - anchorEpoch` later loaded
- * `[readEpoch - length, readEpoch]`, so the first part of the comparison's period is not in it. The
- * missing part is stated as at most the whole window.
+ * The comparison's current period is `[anchor - length, anchor]`, anchored at the earliest issue
+ * time among the compared channels. A channel's window starts `length` before the instant the
+ * service evaluated it, which is somewhere in `[issued, replied]`, so the part of the comparison's
+ * period it lacks is at least `issued - anchor` and at most `replied - anchor`; for the anchoring
+ * channel the least is nothing and the most is the length of its own read. An unknown instant is
+ * stated, never assumed to be the earliest:
+ * - the least exceeds the tolerance: the band is certain and stated as missing;
+ * - only the most exceeds it: the band is stated as possible;
+ * - the most is within it: nothing is stated.
+ * Either statement is capped at the whole window.
  */
 export function channelStartGap(
   channel: string,
-  readEpoch: number,
+  read: ChannelRead,
   anchorEpoch: number,
   lengthMs: number
-): string | null {
-  const band = readEpoch - anchorEpoch;
-  if (band <= lengthMs * MAX_UNREPORTED_START_BAND_SHARE) return null;
-  return `${channel} was read at ${isoOrUnknown(readEpoch)}, ${formatSpan(band)} after the comparison anchor ${isoOrUnknown(anchorEpoch)}, so the first ${formatSpan(Math.min(band, lengthMs))} of its current period is not covered.`;
+): StartGap | null {
+  const tolerance = lengthMs * MAX_UNREPORTED_START_BAND_SHARE;
+  const least = read.issuedEpoch - anchorEpoch;
+  const most = Math.max(read.repliedEpoch - anchorEpoch, least);
+  if (most <= tolerance) return null;
+  if (least > tolerance) {
+    return {
+      definite: true,
+      text: `${channel} was read at ${isoOrUnknown(read.issuedEpoch)}, ${formatSpan(least)} after the comparison anchor ${isoOrUnknown(anchorEpoch)}, so the first ${formatSpan(Math.min(least, lengthMs))} of its current period is not covered.`,
+    };
+  }
+  return {
+    definite: false,
+    text: `${channel} may be missing up to ${formatSpan(Math.min(most, lengthMs))} at the start of its current period: the service evaluated its window at some point during a read that took ${formatSpan(read.repliedEpoch - read.issuedEpoch)}.`,
+  };
 }
 
 /**

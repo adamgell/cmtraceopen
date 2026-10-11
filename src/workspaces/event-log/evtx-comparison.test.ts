@@ -399,30 +399,105 @@ describe("channelStartGap", () => {
   const LENGTH = EVTX_TIME_WINDOW_MS["24h"];
   const ONE_PERCENT = LENGTH / 100;
   const iso = (epoch: number) => new Date(epoch).toISOString();
+  /** A read that replied as soon as it was issued. */
+  const instant = (issuedEpoch: number) => ({ issuedEpoch, repliedEpoch: issuedEpoch });
 
   it("is silent for a channel read at the anchor, and up to one percent of the window after it", () => {
-    expect(channelStartGap("System", ANCHOR, ANCHOR, LENGTH)).toBeNull();
-    expect(channelStartGap("System", ANCHOR + ONE_PERCENT, ANCHOR, LENGTH)).toBeNull();
+    expect(channelStartGap("System", instant(ANCHOR), ANCHOR, LENGTH)).toBeNull();
+    expect(channelStartGap("System", instant(ANCHOR + ONE_PERCENT), ANCHOR, LENGTH)).toBeNull();
   });
 
-  it("states the missing start as soon as it exceeds one percent of the window", () => {
-    expect(channelStartGap("System", ANCHOR + ONE_PERCENT + 1, ANCHOR, LENGTH)).toBe(
-      `System was read at ${iso(ANCHOR + ONE_PERCENT + 1)}, 14 min after the comparison anchor ${iso(ANCHOR)}, so the first 14 min of its current period is not covered.`
-    );
+  it("states the missing start as soon as it certainly exceeds one percent of the window", () => {
+    expect(channelStartGap("System", instant(ANCHOR + ONE_PERCENT + 1), ANCHOR, LENGTH)).toEqual({
+      definite: true,
+      text: `System was read at ${iso(ANCHOR + ONE_PERCENT + 1)}, 14 min after the comparison anchor ${iso(ANCHOR)}, so the first 14 min of its current period is not covered.`,
+    });
   });
 
   it("reports at most the whole window as missing", () => {
-    const gapText = channelStartGap("System", ANCHOR + 10 * HOUR, ANCHOR, HOUR);
-    expect(gapText).toContain("10 h after the comparison anchor");
-    expect(gapText).toContain("so the first 1 h of its current period is not covered");
+    const gap = channelStartGap("System", instant(ANCHOR + 10 * HOUR), ANCHOR, HOUR);
+    expect(gap?.text).toContain("10 h after the comparison anchor");
+    expect(gap?.text).toContain("so the first 1 h of its current period is not covered");
   });
 
   it("scales the tolerance with the window", () => {
     // One percent of an hour is 36 seconds; of 30 days, 7.2 hours.
-    expect(channelStartGap("System", ANCHOR + 40_000, ANCHOR, HOUR)).not.toBeNull();
-    expect(channelStartGap("System", ANCHOR + 30_000, ANCHOR, HOUR)).toBeNull();
-    expect(channelStartGap("System", ANCHOR + 7 * HOUR, ANCHOR, EVTX_TIME_WINDOW_MS["30d"])).toBeNull();
-    expect(channelStartGap("System", ANCHOR + 8 * HOUR, ANCHOR, EVTX_TIME_WINDOW_MS["30d"])).not.toBeNull();
+    expect(channelStartGap("System", instant(ANCHOR + 40_000), ANCHOR, HOUR)).not.toBeNull();
+    expect(channelStartGap("System", instant(ANCHOR + 30_000), ANCHOR, HOUR)).toBeNull();
+    const month = EVTX_TIME_WINDOW_MS["30d"];
+    expect(channelStartGap("System", instant(ANCHOR + 7 * HOUR), ANCHOR, month)).toBeNull();
+    expect(channelStartGap("System", instant(ANCHOR + 8 * HOUR), ANCHOR, month)).not.toBeNull();
+  });
+
+  describe("when the instant the service evaluated the window is only bounded", () => {
+    it("states a possible gap for the anchoring channel when its read was long", () => {
+      // Issued at the anchor and replied 20 minutes later: the window may have been evaluated at
+      // any point in between, so up to 20 minutes of its start may be missing.
+      const gap = channelStartGap(
+        "Security",
+        { issuedEpoch: ANCHOR, repliedEpoch: ANCHOR + 20 * 60 * 1000 },
+        ANCHOR,
+        LENGTH
+      );
+      expect(gap).toEqual({
+        definite: false,
+        text: "Security may be missing up to 20 min at the start of its current period: the service evaluated its window at some point during a read that took 20 min.",
+      });
+    });
+
+    it("leaves a short read on the anchoring channel unremarked", () => {
+      const read = { issuedEpoch: ANCHOR, repliedEpoch: ANCHOR + ONE_PERCENT };
+      expect(channelStartGap("Security", read, ANCHOR, LENGTH)).toBeNull();
+      // A millisecond more and the most it could lack exceeds the tolerance.
+      expect(
+        channelStartGap("Security", { ...read, repliedEpoch: read.repliedEpoch + 1 }, ANCHOR, LENGTH)?.definite
+      ).toBe(false);
+    });
+
+    it("bounds a later channel from both sides: certain when the least exceeds, possible when only the most does", () => {
+      // Issued 10 minutes after the anchor (within the tolerance), replied 30 minutes after: the
+      // missing start is between 10 and 30 minutes.
+      const possible = channelStartGap(
+        "Application",
+        { issuedEpoch: ANCHOR + 10 * 60 * 1000, repliedEpoch: ANCHOR + 30 * 60 * 1000 },
+        ANCHOR,
+        LENGTH
+      );
+      expect(possible?.definite).toBe(false);
+      expect(possible?.text).toContain("may be missing up to 30 min");
+      expect(possible?.text).toContain("a read that took 20 min");
+
+      // Issued 20 minutes after the anchor: at least that much is missing, whatever the reply.
+      const certain = channelStartGap(
+        "Application",
+        { issuedEpoch: ANCHOR + 20 * 60 * 1000, repliedEpoch: ANCHOR + 50 * 60 * 1000 },
+        ANCHOR,
+        LENGTH
+      );
+      expect(certain?.definite).toBe(true);
+      expect(certain?.text).toContain("20 min after the comparison anchor");
+      expect(certain?.text).toContain("the first 20 min of its current period is not covered");
+    });
+
+    it("never lets a reply before the issue time shrink the band", () => {
+      const gap = channelStartGap(
+        "System",
+        { issuedEpoch: ANCHOR + 20 * 60 * 1000, repliedEpoch: ANCHOR },
+        ANCHOR,
+        LENGTH
+      );
+      expect(gap?.definite).toBe(true);
+    });
+
+    it("caps a possible gap at the whole window", () => {
+      const gap = channelStartGap(
+        "System",
+        { issuedEpoch: ANCHOR, repliedEpoch: ANCHOR + 10 * HOUR },
+        ANCHOR,
+        HOUR
+      );
+      expect(gap?.text).toContain("may be missing up to 1 h");
+    });
   });
 });
 
