@@ -29,6 +29,8 @@ import {
   ToggleButton,
   Tooltip,
   makeStyles,
+  mergeClasses,
+  shorthands,
   tokens,
 } from "@fluentui/react-components";
 import {
@@ -51,6 +53,7 @@ import {
   discoverMappedProperties,
   type EvtxColumnId,
 } from "./evtx-columns";
+import { useEvtxActiveTextColor } from "./evtx-active-state";
 import { EVTX_EXPORT_FORMATS } from "./evtx-export";
 import {
   EVTX_GROUP_LABELS,
@@ -102,11 +105,42 @@ const useStyles = makeStyles({
   // The tablist clips to its rounded corners, so the focus ring is drawn INSIDE each tab
   // (negative offset) instead of outside, where it would be cut off.
   layoutTab: {
+    backgroundColor: "transparent",
+    color: tokens.colorNeutralForeground2,
+    fontWeight: 400,
+    ":hover": { backgroundColor: tokens.colorNeutralBackground1Hover },
     ":focus-visible": {
       outlineStyle: "solid",
       outlineWidth: "2px",
       outlineColor: tokens.colorStrokeFocus2,
       outlineOffset: "-2px",
+    },
+  },
+  // Active states read their text color from --evtx-active-text, set on the bar from the theme:
+  // the brand foreground where it reaches 4.5:1 on the selected surface, black or white where not.
+  // Hover and pressed keep the selected surface (so the text contrast guarantee holds) and show
+  // the state through the border instead.
+  layoutTabActive: {
+    backgroundColor: tokens.colorNeutralBackground1Selected,
+    color: "var(--evtx-active-text)",
+    fontWeight: 600,
+    ":hover": {
+      backgroundColor: tokens.colorNeutralBackground1Selected,
+      color: "var(--evtx-active-text)",
+    },
+  },
+  toggleChecked: {
+    backgroundColor: tokens.colorNeutralBackground1Selected,
+    color: "var(--evtx-active-text)",
+    ":hover": {
+      backgroundColor: tokens.colorNeutralBackground1Selected,
+      color: "var(--evtx-active-text)",
+      ...shorthands.borderColor(tokens.colorNeutralStroke1Hover),
+    },
+    ":hover:active": {
+      backgroundColor: tokens.colorNeutralBackground1Selected,
+      color: "var(--evtx-active-text)",
+      ...shorthands.borderColor(tokens.colorNeutralStroke1Pressed),
     },
   },
   visuallyHidden: {
@@ -130,6 +164,7 @@ interface EvtxViewBarProps {
 
 export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
   const styles = useStyles();
+  const activeText = useEvtxActiveTextColor();
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
   const controlFontSize = `${Math.max(11, metrics.fontSize - 1)}px`;
@@ -310,6 +345,7 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
           flexWrap: "wrap",
           flexShrink: 0,
           fontSize: controlFontSize,
+          ["--evtx-active-text" as string]: activeText,
         }}
       >
         <div
@@ -335,7 +371,7 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
                   tabRefs.current[view] = element;
                 }}
                 id={evtxViewTabId(view)}
-                className={styles.layoutTab}
+                className={mergeClasses(styles.layoutTab, selected && styles.layoutTabActive)}
                 type="button"
                 role="tab"
                 aria-selected={selected}
@@ -355,13 +391,6 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
                   cursor: "pointer",
                   fontFamily: "inherit",
                   fontSize: controlFontSize,
-                  fontWeight: selected ? 600 : 400,
-                  backgroundColor: selected
-                    ? tokens.colorNeutralBackground1Selected
-                    : "transparent",
-                  color: selected
-                    ? tokens.colorBrandForeground1
-                    : tokens.colorNeutralForeground2,
                 }}
               >
                 <Icon fontSize={16} aria-hidden />
@@ -398,16 +427,8 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
               onClick={() => {
                 if (available) setPanel(id, !checked);
               }}
-              style={{
-                ...small,
-                fontWeight: checked ? 600 : 400,
-                ...(checked
-                  ? {
-                      backgroundColor: tokens.colorNeutralBackground1Selected,
-                      color: tokens.colorBrandForeground1,
-                    }
-                  : {}),
-              }}
+              className={checked ? styles.toggleChecked : undefined}
+              style={{ ...small, fontWeight: checked ? 600 : 400 }}
             >
               {label}
             </ToggleButton>
