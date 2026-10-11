@@ -1587,6 +1587,50 @@ mod tests {
         assert_eq!(super::simulated_bundle_io_stages_entered(), 1);
     }
 
+    /// #883: an unreadable Enrollments export is a coverage gap. It must not
+    /// surface as "zero enrollments" and trigger `enrollment-missing-on-joined`.
+    #[test]
+    fn an_unreadable_enrollments_export_does_not_raise_enrollment_missing_on_joined() {
+        let _env_guard = dsregcmd_test_env_lock()
+            .lock()
+            .expect("lock dsregcmd env guard");
+        let status = "\n AzureAdJoined : YES\n DomainJoined : NO\n TenantId : 11111111-2222-3333-4444-555555555555\n DeviceId : abcdefab-1111-2222-3333-abcdefabcdef\n";
+        let analyze = |export: &[u8]| {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let registry_dir = temp_dir.path().join("evidence").join("registry");
+            std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+            std::fs::write(registry_dir.join("enrollments.reg"), export).expect("write export");
+            let evidence =
+                super::load_bundle_evidence(temp_dir.path().to_str().expect("utf8 path"));
+            crate::dsregcmd::analyze_text_with_evidence(status, evidence, chrono::Utc::now())
+                .expect("analysis succeeds")
+        };
+        let missing = |result: &crate::dsregcmd::DsregcmdAnalysisResult| {
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "enrollment-missing-on-joined")
+        };
+
+        let unreadable = analyze(b"");
+        assert!(unreadable.enrollment_evidence.is_none());
+        assert!(!missing(&unreadable));
+
+        // A genuine header-only export with no enrollment subkeys is still
+        // negative evidence.
+        let genuine = analyze(
+            b"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n",
+        );
+        assert_eq!(
+            genuine
+                .enrollment_evidence
+                .as_ref()
+                .map(|e| e.enrollment_count),
+            Some(0)
+        );
+        assert!(missing(&genuine));
+    }
+
     #[test]
     fn simulated_stage_wait_fails_when_worker_exits_or_panics_before_entry() {
         for panics in [false, true] {
@@ -1700,6 +1744,86 @@ mod tests {
         assert!(
             result.event_log_analysis.is_some(),
             "expected event log analysis"
+        );
+    }
+
+    #[test]
+    fn bundle_analysis_links_event_log_entries_to_diagnostics_on_load() {
+        use crate::intune::apps::windows::ime::models::{
+            EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogCorrelationKind,
+            EventLogEntry, EventLogSeverity,
+        };
+
+        let _env_guard = dsregcmd_test_env_lock()
+            .lock()
+            .expect("lock dsregcmd env guard");
+        let bundle = build_dsregcmd_bundle_fixture();
+
+        // The bundle file holds no links (no app path writes any); the analyzer builds them at load.
+        let entry = |id: u64, message: &str| EventLogEntry {
+            id,
+            channel: EventLogChannel::SystemLog,
+            channel_display: "System".to_string(),
+            provider: "Synthetic".to_string(),
+            event_id: 100,
+            severity: EventLogSeverity::Error,
+            timestamp: "2026-01-01T00:00:00.000Z".to_string(),
+            computer: None,
+            message: message.to_string(),
+            correlation_activity_id: None,
+            source_file: "System.evtx".to_string(),
+        };
+        let old_bundle_events = EventLogAnalysis {
+            source_kind: EventLogAnalysisSource::Bundle,
+            entries: vec![
+                entry(0, "Join pending, status 0x801c03f2."),
+                entry(1, "Longer code 0x801c03f21 must not match."),
+            ],
+            channel_summaries: Vec::new(),
+            correlation_links: Vec::new(),
+            parsed_file_count: 1,
+            total_entry_count: 2,
+            error_entry_count: 2,
+            warning_entry_count: 0,
+            timestamp_bounds: None,
+            live_query: None,
+        };
+        write_bundle_json(
+            &bundle
+                .path()
+                .join("evidence")
+                .join("event-logs")
+                .join("dsregcmd-events.json"),
+            &old_bundle_events,
+        );
+
+        let result = super::analyze_dsregcmd_blocking(
+            DSREGCMD_SAMPLE,
+            Some(bundle.path().to_string_lossy().as_ref()),
+        )
+        .expect("analyze dsregcmd bundle fixture");
+
+        let diagnostic = result
+            .diagnostics
+            .iter()
+            .find(|d| d.id == "entra-sync-pending")
+            .expect("the sample's client error code fires entra-sync-pending");
+        assert_eq!(diagnostic.related_error_codes, vec!["0x801c03f2"]);
+
+        let links = &result
+            .event_log_analysis
+            .as_ref()
+            .expect("event log analysis loaded")
+            .correlation_links;
+        assert_eq!(links.len(), 1, "only the exact-code entry links: {links:?}");
+        assert_eq!(links[0].event_log_entry_id, 0);
+        assert_eq!(
+            links[0].linked_diagnostic_id.as_deref(),
+            Some("entra-sync-pending")
+        );
+        assert_eq!(
+            links[0].correlation_kind,
+            EventLogCorrelationKind::ErrorCodeMatch
         );
     }
 
