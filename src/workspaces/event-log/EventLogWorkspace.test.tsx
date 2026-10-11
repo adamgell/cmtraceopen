@@ -1181,6 +1181,74 @@ describe("EventLogWorkspace fixtures", () => {
       expect(screen.queryByRole("group", { name: "Level" })).toBeNull();
     });
 
+    it("keeps the rows mounted for a refetch after a first load that found nothing", async () => {
+      pendingQuery();
+      useEvtxStore.setState({
+        sourceMode: "live",
+        records: [],
+        channels: [{ name: "Application", eventCount: 0, sourceType: "live" }],
+        selectedChannels: new Set(["Application"]),
+        loadedChannels: new Set<string>(),
+        isLoading: true,
+      });
+      render(<EventLogWorkspace />);
+      expect(screen.getByText("Loading event logs...")).toBeInTheDocument();
+
+      // The first load completes: the channel is loaded and holds nothing in the window.
+      act(() => useEvtxStore.setState({ isLoading: false, loadedChannels: new Set(["Application"]) }));
+      const information = screen.getByRole("button", { name: "Toggle Information events" });
+      information.focus();
+
+      // The operator corrects the filter that found nothing: the refetch must not swap the view out.
+      fireEvent.click(information);
+      await waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(true));
+      expect(screen.queryByText("Loading event logs...")).toBeNull();
+      expect(screen.getByRole("button", { name: "Toggle Information events" })).toBe(information);
+      expect(information).toHaveFocus();
+    });
+
+    it("shows the first-load spinner when the source changes in one batch with isLoading", () => {
+      seedFixtureEvents();
+      render(<EventLogWorkspace />);
+      expect(screen.getByRole("group", { name: "Level" })).toBeInTheDocument();
+
+      // What a file parse does to the store at its start: no source and loading, in one set().
+      act(() =>
+        useEvtxStore.setState({
+          sourceMode: null,
+          records: [],
+          channels: [],
+          loadedChannels: new Set<string>(),
+          isLoading: true,
+        }),
+      );
+      expect(screen.getByText("Loading event logs...")).toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: "Level" })).toBeNull();
+    });
+
+    it("shows the first-load spinner when the machine changes in one batch with isLoading, then mounts", () => {
+      seedFixtureEvents();
+      render(<EventLogWorkspace />);
+      expect(screen.getByRole("group", { name: "Level" })).toBeInTheDocument();
+
+      act(() =>
+        useEvtxStore.setState({
+          remoteMachine: "SRV01",
+          records: [],
+          loadedChannels: new Set<string>(),
+          isLoading: true,
+        }),
+      );
+      expect(screen.getByText("Loading event logs...")).toBeInTheDocument();
+
+      act(() => useEvtxStore.setState({ isLoading: false, loadedChannels: new Set(["Application"]) }));
+      expect(screen.getByRole("group", { name: "Level" })).toBeInTheDocument();
+      // And the next refetch for this machine keeps it mounted.
+      act(() => useEvtxStore.setState({ isLoading: true, records: [], loadedChannels: new Set<string>() }));
+      expect(screen.queryByText("Loading event logs...")).toBeNull();
+      expect(screen.getByRole("group", { name: "Level" })).toHaveAttribute("aria-busy", "true");
+    });
+
     it("goes back to the first-load spinner once the source is reset", async () => {
       seedFixtureEvents();
       render(<EventLogWorkspace />);
