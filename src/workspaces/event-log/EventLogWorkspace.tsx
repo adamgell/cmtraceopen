@@ -72,7 +72,7 @@ const NOT_IMPLEMENTED = "Not implemented in this phase";
  * `keepAlive` entries stay mounted while another view is active (hidden, not unmounted), so
  * switching away and back keeps the component and the unified timeline's page cache.
  */
-interface EvtxViewEntry {
+export interface EvtxViewEntry {
   keepAlive: boolean;
   render: () => ReactNode;
 }
@@ -113,6 +113,56 @@ function RegionPlaceholder({ title, loading }: { title: string; loading?: boolea
     >
       <strong style={{ color: tokens.colorNeutralForeground2 }}>{title}</strong>
       {loading ? "..." : `: ${NOT_IMPLEMENTED}.`}
+    </div>
+  );
+}
+
+/**
+ * The tabpanel the Layout tablist controls. Each view renders inside its own Suspense boundary, so
+ * a lazily loaded view shows a fallback here while the tablist and the other regions stay mounted.
+ */
+export function EvtxViewHost({
+  views,
+  activeView,
+}: {
+  views: Record<EvtxViewId, EvtxViewEntry>;
+  activeView: EvtxViewId;
+}) {
+  return (
+    <div
+      role="tabpanel"
+      id={EVTX_VIEW_PANEL_ID}
+      aria-labelledby={evtxViewTabId(activeView)}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+    >
+      {(Object.keys(views) as EvtxViewId[]).map((view) => {
+        const entry = views[view];
+        const active = view === activeView;
+        if (!active && !entry.keepAlive) return null;
+        return (
+          <div
+            key={view}
+            data-evtx-view={view}
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: active ? "flex" : "none",
+              flexDirection: "column",
+              overflow: "hidden",
+            }}
+          >
+            <Suspense fallback={<RegionPlaceholder title="Loading view" loading />}>
+              {entry.render()}
+            </Suspense>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -671,41 +721,7 @@ export function EventLogWorkspace() {
             backgroundColor: tokens.colorNeutralBackground1,
           }}
         >
-          <div
-            role="tabpanel"
-            id={EVTX_VIEW_PANEL_ID}
-            aria-labelledby={evtxViewTabId(activeView)}
-            style={{
-              flex: 1,
-              minHeight: 0,
-              display: "flex",
-              flexDirection: "column",
-              overflow: "hidden",
-            }}
-          >
-            {(Object.keys(views) as EvtxViewId[]).map((view) => {
-              const entry = views[view];
-              const active = view === activeView;
-              if (!active && !entry.keepAlive) return null;
-              return (
-                <div
-                  key={view}
-                  data-evtx-view={view}
-                  style={{
-                    flex: 1,
-                    minHeight: 0,
-                    display: active ? "flex" : "none",
-                    flexDirection: "column",
-                    overflow: "hidden",
-                  }}
-                >
-                  <Suspense fallback={<RegionPlaceholder title="Loading view" loading />}>
-                    {entry.render()}
-                  </Suspense>
-                </div>
-              );
-            })}
-          </div>
+          <EvtxViewHost views={views} activeView={activeView} />
 
           {/* Hidden, not unmounted, so the dock's future state survives a toggle. */}
           <div
