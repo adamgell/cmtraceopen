@@ -346,7 +346,7 @@ describe("event-viewer shared font metrics", () => {
     expect(providerDisclosure).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("keeps row, virtualizer, pickers, filter, and detail metrics aligned at persisted limits", () => {
+  it("keeps row, virtualizer, pickers, filter, and detail metrics aligned at persisted limits", async () => {
     seedEventLog();
     useEvtxStore.setState({ groupBy: ["level"] });
 
@@ -374,13 +374,19 @@ describe("event-viewer shared font metrics", () => {
     channel.unmount();
 
     const filter = render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    // Spec 7.1: level toggles are f - 2, the other filter controls f - 1.
     expect(screen.getByRole("button", { name: "Toggle Critical events" }).style.fontSize).toBe(
+      `${Math.max(10, smallList.fontSize - 2)}px`
+    );
+    expect(screen.getByRole("textbox", { name: "Search events" }).style.fontSize).toBe(
       `${Math.max(11, smallList.fontSize - 1)}px`
     );
-    expect(screen.getByPlaceholderText("Event IDs (comma sep.)").style.fontSize).toBe(
+    fireEvent.click(screen.getByRole("button", { name: /^More filters/ }));
+    const smallPopover = within(await screen.findByRole("dialog", { name: "More filters" }));
+    expect(smallPopover.getByPlaceholderText("Event IDs (comma sep.)").style.fontSize).toBe(
       `${Math.max(11, smallList.fontSize - 1)}px`
     );
-    expect(screen.getAllByRole("combobox")[0].style.fontSize).toBe(
+    expect(smallPopover.getAllByRole("combobox")[0].style.fontSize).toBe(
       `${Math.max(11, smallList.fontSize - 1)}px`
     );
     filter.unmount();
@@ -437,12 +443,17 @@ describe("event-viewer shared font metrics", () => {
 
     const filterLarge = render(<EvtxFilterBar nowEpoch={Date.now()} />);
     expect(screen.getByRole("button", { name: "Toggle Critical events" }).style.fontSize).toBe(
+      `${Math.max(10, largeList.fontSize - 2)}px`
+    );
+    expect(screen.getByRole("textbox", { name: "Search events" }).style.fontSize).toBe(
       `${Math.max(11, largeList.fontSize - 1)}px`
     );
-    expect(screen.getByPlaceholderText("Event IDs (comma sep.)").style.fontSize).toBe(
+    fireEvent.click(screen.getByRole("button", { name: /^More filters/ }));
+    const largePopover = within(await screen.findByRole("dialog", { name: "More filters" }));
+    expect(largePopover.getByPlaceholderText("Event IDs (comma sep.)").style.fontSize).toBe(
       `${Math.max(11, largeList.fontSize - 1)}px`
     );
-    expect(screen.getAllByRole("combobox")[0].style.fontSize).toBe(
+    expect(largePopover.getAllByRole("combobox")[0].style.fontSize).toBe(
       `${Math.max(11, largeList.fontSize - 1)}px`
     );
     filterLarge.unmount();
@@ -530,7 +541,7 @@ describe("event-viewer shared font metrics", () => {
     expect(channelInput.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
     expect(channelRow.style.height).toBe(`${largeList.rowHeight}px`);
     expect(filter.getByRole("button", { name: "Toggle Critical events" })).toBe(filterButton);
-    expect(filterButton.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE - 1}px`);
+    expect(filterButton.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE - 2}px`);
     expect(recordGridRows(timeline.container)[0]).toBe(recordRow);
     expect(recordRow.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
     expect(recordRow.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
@@ -1054,7 +1065,7 @@ describe("EventLogWorkspace fixtures", () => {
     expect(errorToggle).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("identifies invalid ordinary and quick Event ID filters", () => {
+  it("identifies invalid ordinary and quick Event ID filters", async () => {
     seedFixtureEvents();
     useEvtxStore.setState((state) => ({
       filterEventIds: "1000,broken",
@@ -1065,6 +1076,9 @@ describe("EventLogWorkspace fixtures", () => {
       },
     }));
     render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    // Event IDs and the quick filter live in the More filters popover, one open away.
+    fireEvent.click(screen.getByRole("button", { name: /^More filters/ }));
+    await screen.findByRole("dialog", { name: "More filters" });
 
     const eventIds = screen.getByRole("textbox", { name: "Event IDs" });
     expect(eventIds).toHaveAttribute("aria-invalid", "true");
@@ -1086,9 +1100,11 @@ describe("EventLogWorkspace fixtures", () => {
     expect(screen.queryByRole("alert", { name: "Invalid quick Event IDs" })).toBeNull();
   });
 
-  it("names the sort-direction action that the button will perform", () => {
+  it("names the sort-direction action that the button will perform", async () => {
     seedFixtureEvents();
     render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    fireEvent.click(screen.getByRole("button", { name: /^More filters/ }));
+    await screen.findByRole("dialog", { name: "More filters" });
 
     const changeToDescending = screen.getByTitle(
       "Change sort direction to descending",
