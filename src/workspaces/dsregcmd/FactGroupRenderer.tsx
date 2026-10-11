@@ -1,6 +1,13 @@
 import { tokens } from "@fluentui/react-components";
 import type { FactGroup } from "./dsregcmd-formatters";
 
+/** The rows of a group the page shows; the navigation's Facts count uses the same rule. */
+export function getVisibleFactRows(group: FactGroup, showNotReported: boolean) {
+  return showNotReported
+    ? group.rows
+    : group.rows.filter((row) => row.isNotReported !== true);
+}
+
 export function FactsTable({
   group,
   showNotReported,
@@ -8,9 +15,7 @@ export function FactsTable({
   group: FactGroup;
   showNotReported: boolean;
 }) {
-  const visibleRows = showNotReported
-    ? group.rows
-    : group.rows.filter((row) => row.isNotReported !== true);
+  const visibleRows = getVisibleFactRows(group, showNotReported);
   const hiddenCount = group.rows.length - visibleRows.length;
 
   return (

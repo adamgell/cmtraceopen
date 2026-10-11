@@ -153,6 +153,7 @@ describe("dsregcmd-store", () => {
           evidenceFilePath: null,
           rawLineCount: 10,
           rawCharCount: 200,
+          capturedAt: null,
         }
       );
 
