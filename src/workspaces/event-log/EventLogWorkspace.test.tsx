@@ -83,8 +83,13 @@ function configureInvoke() {
   });
 }
 
+// Captured so a test can stream record batches the way the backend does.
+const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => undefined),
+  listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
+    listeners.set(name, handler);
+    return Promise.resolve(() => undefined);
+  }),
 }));
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({
@@ -154,8 +159,9 @@ import {
   MIN_LOG_LIST_FONT_SIZE,
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
+import { deferred } from "../../test-utils/deferred";
 import { EVTX_LEVELS } from "./evtx-filter";
-import { useEvtxStore } from "./evtx-store";
+import { sourceKeyOf, useEvtxStore } from "./evtx-store";
 import { defaultColumnConfig, visibleColumns } from "./evtx-columns";
 import { EventLogWorkspace } from "./EventLogWorkspace";
 import { ChannelPicker } from "./ChannelPicker";
@@ -774,6 +780,8 @@ function seedFixtureEvents() {
       },
     ],
     sourceMode: "live",
+    // A live source whose first load has completed (the store records this as a load ends).
+    completedSourceKey: sourceKeyOf({ sourceMode: "live", remoteMachine: null, sourcePaths: [] }),
     isLoading: false,
     loadError: null,
     coverageGaps: [],
@@ -1167,6 +1175,79 @@ describe("EventLogWorkspace fixtures", () => {
       expect(screen.getByRole("dialog", { name: "More filters" })).toBeInTheDocument();
       expect(screen.getByRole("textbox", { name: "Event IDs" })).toBe(eventIds);
       expect(eventIds).toHaveFocus();
+    });
+
+    it("never brings the full-screen spinner back when a change made during the first live load is replayed", async () => {
+      // A real first load: Application streams in and finishes while System is still reading, the
+      // operator widens the window from the enabled Time window, and the load then ends. The replay
+      // starts in the same tick the load ends, and the rows must stay mounted through it.
+      const release = deferred<void>();
+      let released = false;
+      const streamed = (args: { requestId: string; channels: string[] }) => {
+        const channel = args.channels[0];
+        listeners.get("evtx-record-batch")?.({
+          payload: {
+            requestId: args.requestId,
+            channel,
+            sequence: 0,
+            records: [{ ...RECORD, id: 1, eventRecordId: 1, channel }],
+          },
+        });
+        listeners.get("evtx-record-stream-complete")?.({
+          payload: { requestId: args.requestId, channel, sequenceCount: 1, totalRecords: 1 },
+        });
+        return {
+          records: [],
+          channels: [{ name: channel, eventCount: 1, sourceType: "live" as const }],
+          totalRecords: 1,
+          parseErrors: 0,
+          errorMessages: [],
+        };
+      };
+      invoke.mockImplementation(async (command: string, args: { requestId: string; channels: string[] }) => {
+        if (command === "load_markers") return null;
+        if (command === "evtx_enumerate_channels") {
+          return ["Application", "System"].map((name) => ({
+            name,
+            eventCount: 1,
+            sourceType: "live" as const,
+            enabledState: "enabled" as const,
+          }));
+        }
+        if (command !== "evtx_query_channels") return undefined;
+        const reply = streamed(args);
+        if (args.channels[0] === "System" && !released) await release.promise;
+        return reply;
+      });
+
+      render(<EventLogWorkspace />);
+      act(() => {
+        void useEvtxStore.getState().enumerateChannels();
+      });
+      // Application's records have landed, so the rows are mounted while System is still reading.
+      const group = await screen.findByRole("group", { name: "Level" });
+      expect(useEvtxStore.getState().isLoading).toBe(true);
+
+      let spinnerSeen = false;
+      const observer = new MutationObserver(() => {
+        if (document.body.textContent?.includes("Loading event logs...")) spinnerSeen = true;
+      });
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Time window" }));
+      fireEvent.click(await screen.findByRole("option", { name: "Last 7 days" }));
+      expect(useEvtxStore.getState().timeWindow).toBe("7d");
+
+      released = true;
+      release.resolve();
+      await waitFor(() =>
+        expect(invoke.mock.calls.filter(([name]) => name === "evtx_query_channels")).toHaveLength(4),
+      );
+      await waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+      observer.disconnect();
+
+      expect(spinnerSeen).toBe(false);
+      expect(screen.getByRole("group", { name: "Level" })).toBe(group);
     });
 
     it("still shows the full-screen spinner on a source's first load", () => {

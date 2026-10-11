@@ -14,7 +14,7 @@ import {
   type EventLogAnalysisSessionStatus,
   type EventLogAnalysisTimelinePage,
 } from "../../lib/commands";
-import { useEvtxStore } from "./evtx-store";
+import { sourceKeyOf, useEvtxStore } from "./evtx-store";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import { getLogListMetrics } from "../../lib/log-accessibility";
@@ -520,19 +520,14 @@ export function EventLogWorkspace() {
   // reloads the loaded channels) keeps the view bar, filter row, chip row, channel pane and rail
   // mounted, so the control that was just used keeps its focus, an open popover stays open, and the
   // filter row shows its own busy state. That holds when the first load found nothing, which is
-  // when the operator is most likely to widen a filter. A source is its mode, machine and paths;
-  // `sourceMode === null` is no source (reset, or a file parse that has not finished). The state is
-  // adjusted while rendering, not in an effect, so a source that changes in one batch with
-  // `isLoading` shows the spinner on that very render.
+  // when the operator is most likely to widen a filter. The store records which source a completed
+  // load belonged to, in the same tick the load ends, so a replayed change that starts reading
+  // straight away cannot be rendered before it is known that the first load finished.
   const remoteMachine = useEvtxStore((s) => s.remoteMachine);
   const sourcePaths = useEvtxStore((s) => s.sourcePaths);
-  const sourceKey =
-    sourceMode === null ? null : [sourceMode, remoteMachine ?? "", ...sourcePaths].join("\u0000");
-  const [loadedSourceKey, setLoadedSourceKey] = useState<string | null>(null);
-  if (sourceKey === null ? loadedSourceKey !== null : !isLoading && loadedSourceKey !== sourceKey) {
-    setLoadedSourceKey(sourceKey);
-  }
-  const firstLoadDone = sourceKey !== null && loadedSourceKey === sourceKey;
+  const completedSourceKey = useEvtxStore((s) => s.completedSourceKey);
+  const sourceKey = sourceKeyOf({ sourceMode, remoteMachine, sourcePaths });
+  const firstLoadDone = sourceKey !== null && completedSourceKey === sourceKey;
 
   const hasData =
     scopedLogEntries.length > 0 ||

@@ -330,7 +330,9 @@ describe("time window", () => {
   it("stays enabled while events load: the store queues a change made during a load", () => {
     // Disabling it would drop keyboard focus from the control just used, since the rows now stay
     // mounted through a refetch. A change made during a load is replayed when the load ends
-    // (evtx-store-server-filter.test.ts).
+    // (evtx-store-server-filter.test.ts), with one exception: if the operator stops that load, the
+    // change is not replayed and the criteria go back to those the read used, so the control and
+    // the data never disagree (evtx-store-replay.test.ts).
     seed({ sourceMode: "live", timeWindow: "24h", isLoading: true });
     render(<EvtxFilterBar nowEpoch={0} />);
     expect(screen.getByRole("combobox", { name: "Time window" })).toBeEnabled();
@@ -540,6 +542,40 @@ describe("More filters", () => {
 
       act(() => useEvtxStore.getState().setFilterEventIds(""));
       expect(eventIds).toHaveValue("");
+    });
+
+    it("resyncs the visible field to the list a Stop restored, even while it has focus", async () => {
+      // Event IDs committed while a load runs are put back by a Stop, in the update that ends the
+      // load. The draft must show the restored list, and it is the field the operator is in.
+      seed({ filterEventIds: "7036" });
+      render(<EvtxFilterBar nowEpoch={0} />);
+      const eventIds = within(await openPopover()).getByRole("textbox", { name: "Event IDs" });
+      eventIds.focus();
+      fireEvent.change(eventIds, { target: { value: "7036,7040" } });
+      fireEvent.keyDown(eventIds, { key: "Enter" });
+      expect(useEvtxStore.getState().filterEventIds).toBe("7036,7040");
+      expect(eventIds).toHaveValue("7036,7040");
+
+      // What the store's settle step writes: the criteria the read used, nothing else.
+      act(() => useEvtxStore.setState({ filterEventIds: "7036" }));
+
+      expect(eventIds).toHaveValue("7036");
+      expect(eventIds).toHaveFocus();
+    });
+
+    it("also resyncs a half-typed draft when a Stop restores the list under it", async () => {
+      seed({ filterEventIds: "" });
+      render(<EvtxFilterBar nowEpoch={0} />);
+      const eventIds = within(await openPopover()).getByRole("textbox", { name: "Event IDs" });
+      eventIds.focus();
+      fireEvent.change(eventIds, { target: { value: "4624" } });
+      fireEvent.keyDown(eventIds, { key: "Enter" });
+      fireEvent.change(eventIds, { target: { value: "4624,46" } });
+
+      act(() => useEvtxStore.setState({ filterEventIds: "" }));
+
+      expect(eventIds).toHaveValue("");
+      expect(eventIds).toHaveFocus();
     });
 
     it("keeps the popover open and sends one query on commit in live mode", async () => {
