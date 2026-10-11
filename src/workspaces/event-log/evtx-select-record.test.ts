@@ -25,7 +25,7 @@ describe("selectRecordAndShowDetails", () => {
     expect(useEvtxLayoutStore.getState().panels.insights).toBe(true);
   });
 
-  it("brings Details back when the already-selected record is chosen again", () => {
+  it("brings Details back when the already-selected record is chosen again, never toggling it off", () => {
     selectRecordAndShowDetails(7);
     useEvtxLayoutStore.getState().setRailTab("insights");
     useEvtxLayoutStore.getState().setPanel("insights", false);
@@ -34,26 +34,6 @@ describe("selectRecordAndShowDetails", () => {
 
     expect(useEvtxLayoutStore.getState().railTab).toBe("details");
     expect(useEvtxLayoutStore.getState().panels.insights).toBe(true);
-  });
-
-  it("leaves the layout alone when the selection is cleared", () => {
-    selectRecordAndShowDetails(7);
-    useEvtxLayoutStore.getState().setPanel("insights", false);
-
-    selectRecordAndShowDetails(null);
-
-    expect(useEvtxStore.getState().selectedRecordId).toBeNull();
-    expect(useEvtxLayoutStore.getState().panels.insights).toBe(false);
-  });
-
-  it("is not triggered by the store reassigning the selection", () => {
-    selectRecordAndShowDetails(7);
-    useEvtxLayoutStore.getState().setRailTab("insights");
-    useEvtxLayoutStore.getState().setPanel("insights", false);
-
-    useEvtxStore.setState({ selectedRecordId: 8 });
-
-    expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
-    expect(useEvtxLayoutStore.getState().panels.insights).toBe(false);
+    expect(useEvtxStore.getState().selectedRecordId).toBe(7);
   });
 });

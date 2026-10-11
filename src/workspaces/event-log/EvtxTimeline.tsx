@@ -365,10 +365,12 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
 
       setActiveRowIndex(nextIndex);
       const row = rows[nextIndex];
-      if (row?.kind === "record") selectRecordAndShowDetails(row.record.id);
+      // A selection move, not a row click: Details follows if it is the active tab, but the rail
+      // is neither switched nor reopened (spec section 9).
+      if (row?.kind === "record") setSelectedRecordId(row.record.id);
       focusRow(nextIndex);
     },
-    [activeRowIndex, focusRow, groupBy.length, rows, toggleGroup]
+    [activeRowIndex, focusRow, groupBy.length, rows, setSelectedRecordId, toggleGroup]
   );
 
   if (records.length === 0) {

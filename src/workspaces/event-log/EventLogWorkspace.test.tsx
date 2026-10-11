@@ -1143,6 +1143,55 @@ describe("EventLogWorkspace fixtures", () => {
     expect(useEvtxLayoutStore.getState().railTab).toBe("details");
   });
 
+  it("re-clicking the selected row keeps it selected and brings Details back, from Insights and from a hidden rail", () => {
+    seedFixtureEvents();
+    render(<EventLogWorkspace />);
+    const rail = document.querySelector<HTMLElement>('[data-evtx-region="rail"]');
+    const firstRow = () => recordGridRows(document.body)[0]!;
+
+    fireEvent.click(firstRow());
+    const selectedId = useEvtxStore.getState().selectedRecordId;
+    expect(selectedId).not.toBeNull();
+
+    act(() => useEvtxLayoutStore.getState().setRailTab("insights"));
+    fireEvent.click(firstRow());
+    expect(useEvtxStore.getState().selectedRecordId).toBe(selectedId);
+    expect(useEvtxLayoutStore.getState().railTab).toBe("details");
+
+    act(() => {
+      useEvtxLayoutStore.getState().setRailTab("insights");
+      useEvtxLayoutStore.getState().setPanel("insights", false);
+    });
+    expect(rail).not.toBeVisible();
+    fireEvent.keyDown(firstRow(), { key: "Enter" });
+    expect(useEvtxStore.getState().selectedRecordId).toBe(selectedId);
+    expect(useEvtxLayoutStore.getState().railTab).toBe("details");
+    expect(rail).toBeVisible();
+  });
+
+  it("moves the selection with the arrow keys without switching the rail tab or reopening a hidden rail", () => {
+    seedFixtureEvents();
+    const [only] = useEvtxStore.getState().records;
+    useEvtxStore.setState({
+      records: [only, { ...only, id: only.id + 1, eventRecordId: only.eventRecordId + 1 }],
+    });
+    render(<EventLogWorkspace />);
+    fireEvent.click(recordGridRows(document.body)[0]!);
+    const first = useEvtxStore.getState().selectedRecordId;
+    act(() => {
+      useEvtxLayoutStore.getState().setRailTab("insights");
+      useEvtxLayoutStore.getState().setPanel("insights", false);
+    });
+
+    const row = recordGridRows(document.body)[0]!;
+    row.focus();
+    fireEvent.keyDown(row, { key: "ArrowDown" });
+
+    expect(useEvtxStore.getState().selectedRecordId).not.toBe(first);
+    expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
+    expect(useEvtxLayoutStore.getState().panels.insights).toBe(false);
+  });
+
   // The export control has two asynchronous phases before an abort controller exists: the save
   // dialog, and the session the dialog's answer unlocks. These tests drive the real control so the
   // guard is judged by what an operator can make happen, not by reading the ref.

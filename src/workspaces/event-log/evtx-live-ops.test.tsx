@@ -15,6 +15,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 const { useEvtxStore } = await import("./evtx-store");
+const { sanitizeLayout, useEvtxLayoutStore } = await import("./evtx-layout-store");
+const { selectRecordAndShowDetails } = await import("./evtx-select-record");
 const { ChannelPicker } = await import("./ChannelPicker");
 const { AboutDialog } = await import("../../components/dialogs/AboutDialog");
 const { useUiStore } = await import("../../stores/ui-store");
@@ -54,6 +56,7 @@ describe("event-log live operations", () => {
   beforeEach(() => {
     invoke.mockReset();
     useUiStore.setState(useUiStore.getInitialState(), true);
+    useEvtxLayoutStore.setState(sanitizeLayout(undefined));
     useEvtxStore.setState({
       sourceMode: "live",
       remoteMachine: null,
@@ -605,6 +608,31 @@ describe("event-log live operations", () => {
     });
 
     expect(useEvtxStore.getState().records.map((record) => record.eventRecordId)).toContain(12);
+  });
+
+  it("does not reopen a closed rail when a live tail batch renumbers the selection", async () => {
+    await useEvtxStore.getState().startLiveTail();
+    const handler = listeners.get("evtx-tail-batch");
+    const requestId = useEvtxStore.getState().tailRequestId;
+    const batch = (sequence: number, records: EvtxRecord[]) =>
+      handler?.({
+        payload: { requestId, channel: "Application", sequence, mode: "subscription", records, coverageGaps: [] },
+      });
+    batch(0, [tailRecord(20), tailRecord(30)]);
+    const selected = useEvtxStore.getState().records.find((record) => record.eventRecordId === 30)!;
+    selectRecordAndShowDetails(selected.id);
+
+    // The user goes back to Insights and hides the rail; a batch then sorts a record before it.
+    useEvtxLayoutStore.getState().setRailTab("insights");
+    useEvtxLayoutStore.getState().setPanel("insights", false);
+    const before = selected.id;
+    batch(1, [tailRecord(10)]);
+
+    const after = useEvtxStore.getState();
+    expect(after.records.find((record) => record.id === after.selectedRecordId)?.eventRecordId).toBe(30);
+    expect(after.selectedRecordId).not.toBe(before);
+    expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
+    expect(useEvtxLayoutStore.getState().panels.insights).toBe(false);
   });
 
   it("records final sequence gaps reported when stopping a live tail", async () => {
