@@ -841,7 +841,7 @@ mod tests {
     #[test]
     fn timestamped_fallback_and_complete_subsystem_records_keep_their_semantics() {
         let (entries, errors) = parse_ime_entries(
-            "2026-10-11 12:00:00 error happened\nordinary text",
+            "2026-10-11 12:00:00 error: expected token <![LOG[\nordinary text",
             "AgentExecutor.log",
         );
         assert_eq!(errors, 1);
@@ -851,6 +851,7 @@ mod tests {
             Some("2026-10-11 12:00:00")
         );
         assert_eq!(entries[0].severity, Severity::Error);
+        assert_eq!(entries[0].message, "error: expected token <![LOG[");
         assert_eq!(
             entries[1].tags.as_deref(),
             Some(&[UNPARSED_IME_TAG.to_string()][..])
