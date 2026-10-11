@@ -160,12 +160,12 @@ export function ChannelPicker() {
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   // On a narrow window the workspace caps this pane below `sidebarWidth`; the handle reports and
   // steps from the width actually rendered, and its maximum never exceeds the cap.
-  const paneRef = useRef<HTMLDivElement | null>(null);
+  const { ref: paneRef, ...paneMeasure } = useRowCappedSize(2);
   const resizeRange = effectiveResizeRange(
     sidebarWidth,
     MIN_SIDEBAR_WIDTH,
     MAX_SIDEBAR_WIDTH,
-    useRowCappedSize(paneRef, 2),
+    paneMeasure,
   );
 
   useEffect(() => {

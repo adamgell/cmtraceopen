@@ -4,7 +4,7 @@
  * requested width, so the pane renders narrower than the stored value. The resize handle must
  * report and step from what is actually on screen, and its maximum must not exceed the cap.
  */
-import { useLayoutEffect, useState, type RefObject } from "react";
+import { useLayoutEffect, useState } from "react";
 
 export interface RowCappedSize {
   /** Rendered width in px, or 0 when not laid out (hidden, or no layout engine). */
@@ -14,27 +14,35 @@ export interface RowCappedSize {
 }
 
 /**
- * @param ref the sized element
- * @param rowLevelsUp how many parents above `ref` the body row is (the channel pane sits inside
- *   its region wrapper, so 2; the rail is the row's own child, so 1)
+ * @param rowLevelsUp how many parents above the element the body row is (the channel pane sits
+ *   inside its region wrapper, so 2; the rail is the row's own child, so 1)
  * @param share the row share used by the CSS cap
+ * @returns a CALLBACK ref to attach to the sized element, plus its measurements. A callback ref
+ *   follows the element's real mount: when the layout subtree unmounts and remounts (through the
+ *   spinner or the source picker) the new element is attached and measured, which an effect on a
+ *   stable ref object would miss.
  */
 export function useRowCappedSize(
-  ref: RefObject<HTMLElement | null>,
   rowLevelsUp: number,
   share = 0.4,
-): RowCappedSize {
+): RowCappedSize & { ref: (element: HTMLElement | null) => void } {
+  const [element, setElement] = useState<HTMLElement | null>(null);
   const [size, setSize] = useState<RowCappedSize>({ rendered: 0, cap: 0 });
 
   useLayoutEffect(() => {
-    const element = ref.current;
-    if (!element) return;
+    if (!element) {
+      setSize((previous) => (previous.rendered === 0 && previous.cap === 0 ? previous : { rendered: 0, cap: 0 }));
+      return;
+    }
     let row: HTMLElement | null = element;
     for (let level = 0; level < rowLevelsUp && row; level += 1) row = row.parentElement;
 
+    // Both numbers come from the same fractional source (getBoundingClientRect) and the same
+    // rounding (floor), so a binding cap always renders at exactly `cap`: rounding one and
+    // flooring the other made them differ by 1 px on 2 of 5 row widths.
     const read = () => {
-      const rendered = Math.round(element.getBoundingClientRect().width);
-      const cap = row ? Math.floor(row.clientWidth * share) : 0;
+      const rendered = Math.floor(element.getBoundingClientRect().width);
+      const cap = row ? Math.floor(row.getBoundingClientRect().width * share) : 0;
       setSize((previous) =>
         previous.rendered === rendered && previous.cap === cap ? previous : { rendered, cap },
       );
@@ -49,9 +57,9 @@ export function useRowCappedSize(
     observer.observe(element);
     if (row) observer.observe(row);
     return () => observer.disconnect();
-  }, [ref, rowLevelsUp, share]);
+  }, [element, rowLevelsUp, share]);
 
-  return size;
+  return { ...size, ref: setElement };
 }
 
 /** The handle's value and bounds for a column with a nominal range and a measured cap. */
@@ -62,11 +70,11 @@ export function effectiveResizeRange(
   { rendered, cap }: RowCappedSize,
 ): { value: number; min: number; max: number } {
   const effectiveMax = cap > 0 ? Math.min(max, cap) : max;
-  return {
-    value: rendered > 0 ? rendered : requested,
-    min: Math.min(min, effectiveMax),
-    max: effectiveMax,
-  };
+  const effectiveMin = Math.min(min, effectiveMax);
+  // The reported value is always inside the reported range, so aria-valuenow can never exceed
+  // aria-valuemax (nor fall below aria-valuemin) whatever the measurements say.
+  const value = Math.max(effectiveMin, Math.min(rendered > 0 ? rendered : requested, effectiveMax));
+  return { value, min: effectiveMin, max: effectiveMax };
 }
 
 /**

@@ -142,6 +142,55 @@ describe("EventLogWorkspace three-column shell", () => {
     }
   });
 
+  it("keeps the rail value in range on a fractional cap and never overwrites the stored width", () => {
+    useEvtxLayoutStore.getState().setRailWidth(480);
+    const restore = stubLayout({ "evtx-insights-rail": 401.6 }, 1004);
+    try {
+      render(<EventLogWorkspace />);
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      const handle = screen.getByRole("separator", { name: "Resize insights rail", hidden: true });
+      expect(Number(handle.getAttribute("aria-valuemax"))).toBe(401);
+      expect(Number(handle.getAttribute("aria-valuenow"))).toBeLessThanOrEqual(401);
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      fireEvent.keyDown(handle, { key: "End" });
+      // A leftward drag grows the rail; it cannot pass the cap either.
+      fireEvent.pointerDown(handle, { clientX: 700, button: 0, isPrimary: true, pointerId: 1 });
+      fireEvent.pointerMove(handle, { clientX: 500, buttons: 1, pointerId: 1 });
+      fireEvent.pointerUp(handle, { pointerId: 1 });
+      expect(useEvtxLayoutStore.getState().railWidth).toBe(480);
+    } finally {
+      restore();
+    }
+  });
+
+  it("measures the rail after the first-open path (source picker, then load)", () => {
+    // The rail ships unavailable; show it through the store, as Phase 4 will.
+    useEvtxLayoutStore.setState({ panels: { channels: true, insights: true, dock: false } });
+    useEvtxStore.setState({ records: [], channels: [], sourceMode: null, loadedChannels: new Set() });
+    const restore = stubLayout({ "evtx-insights-rail": 240 }, 600);
+    try {
+      render(<EventLogWorkspace />);
+      // Nothing loaded: the source picker renders and the rail does not exist yet.
+      expect(region("rail")).toBeNull();
+      act(() => {
+        useEvtxStore.setState({
+          records: [RECORD],
+          channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+          selectedChannels: new Set(["Application"]),
+          loadedChannels: new Set(["Application"]),
+          sourceMode: "files",
+        });
+      });
+      const handle = screen.getByRole("separator", { name: "Resize insights rail" });
+      expect(handle).toHaveAttribute("aria-valuenow", "240");
+      expect(handle).toHaveAttribute("aria-valuemax", "240");
+    } finally {
+      restore();
+    }
+  });
+
   it("hides and shows the channel pane without discarding its state", () => {
     render(<EventLogWorkspace />);
     const search = screen.getByTestId("channel-picker");

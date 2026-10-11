@@ -21,9 +21,10 @@ export interface LayoutStub {
 }
 
 /**
- * jsdom does no layout. Stubs `getBoundingClientRect().width` for elements by id and a single
- * `clientWidth` for every element, so measurement hooks see a laid-out page. Call the result to
- * restore; `set` changes the widths, as a window resize would.
+ * jsdom does no layout. Stubs `getBoundingClientRect().width`: elements whose id is in
+ * `renderedWidths` get that (fractional) width and every other element, which includes the body
+ * row, gets `rowWidth`. Call the result to restore; `set` changes the widths, as a window resize
+ * would.
  */
 export function stubLayout(initialWidths: Record<string, number>, initialClientWidth: number): LayoutStub {
   let renderedWidths = initialWidths;
@@ -32,7 +33,7 @@ export function stubLayout(initialWidths: Record<string, number>, initialClientW
   const originalRect = proto.getBoundingClientRect;
   const originalClient = Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth");
   proto.getBoundingClientRect = function getBoundingClientRect(this: HTMLElement) {
-    const width = renderedWidths[this.id] ?? 0;
+    const width = renderedWidths[this.id] ?? clientWidth;
     return { width, height: 0, top: 0, left: 0, right: width, bottom: 0, x: 0, y: 0, toJSON() {} };
   };
   Object.defineProperty(Element.prototype, "clientWidth", {

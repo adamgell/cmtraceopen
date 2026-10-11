@@ -114,4 +114,43 @@ describe("channel pane resize handle", () => {
     expect(pane.style.maxWidth).toBe("");
     expect(pane).toHaveStyle({ width: "250px", minWidth: "0px", flexShrink: "1" });
   });
+
+  it("never reports a value above the maximum on a fractional cap, and a capped resize never writes", () => {
+    // Widen the stored width to 500 on a wide row, then narrow the row to 1004 px: the CSS cap is
+    // 401.6 px and the pane renders 401.6 px. Both must round the same way.
+    const restore = stubLayout({ "evtx-channel-pane": 250 }, 1440);
+    try {
+      render(<ChannelPicker />);
+      const handle = screen.getByRole("separator", { name: "Resize channel pane" });
+      const pane = requireElement(handle.parentElement, "the channel pane");
+      fireEvent.keyDown(handle, { key: "End" });
+      expect(pane).toHaveStyle({ width: "500px" });
+
+      restore.set({ "evtx-channel-pane": 401.6 }, 1004);
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      const now = Number(handle.getAttribute("aria-valuenow"));
+      const max = Number(handle.getAttribute("aria-valuemax"));
+      expect(max).toBe(401);
+      expect(now).toBeLessThanOrEqual(max);
+      expect(now).toBe(401);
+
+      fireEvent.keyDown(handle, { key: "ArrowRight" });
+      fireEvent.keyDown(handle, { key: "End" });
+      fireEvent.pointerDown(handle, { clientX: 400, button: 0, isPrimary: true, pointerId: 1 });
+      fireEvent.pointerMove(handle, { clientX: 520, buttons: 1, pointerId: 1 });
+      fireEvent.pointerUp(handle, { pointerId: 1 });
+      // None of them can change the visible width, so the stored 500 px survives.
+      expect(pane).toHaveStyle({ width: "500px" });
+
+      restore.set({ "evtx-channel-pane": 500 }, 1440);
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      expect(handle).toHaveAttribute("aria-valuenow", "500");
+    } finally {
+      restore();
+    }
+  });
 });
