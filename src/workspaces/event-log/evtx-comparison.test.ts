@@ -268,6 +268,11 @@ describe("createAggregator", () => {
   });
 });
 
+/** The parts of a comparison result the current side is counted from. */
+function basisOf(prior: PriorWindow, comparedChannels: string[] = [], channelsWithGaps: string[] = []) {
+  return { prior, comparedChannels, channelsWithGaps };
+}
+
 describe("countCurrentPeriod", () => {
   it("counts [anchor - length, anchor] and meets the previous period without overlap or gap", () => {
     const prior = priorFor("24h");
@@ -280,7 +285,7 @@ describe("countCurrentPeriod", () => {
       record({ timestampEpoch: ANCHOR + 1 }),
     ];
 
-    const current = countCurrentPeriod(records, prior, visibility());
+    const current = countCurrentPeriod(records, basisOf(prior), visibility());
     expect(current.counts.total).toBe(3);
     expect(current.counts.levels.Error).toBe(2);
     expect(current.outsideWindowRecords).toBe(2);
@@ -301,7 +306,7 @@ describe("countCurrentPeriod", () => {
       record({ timestampEpoch: loadAnchor - HOUR }),
       record({ timestampEpoch: loadAnchor + HOUR }),
     ];
-    expect(countCurrentPeriod(records, result.prior, visibility()).counts.total).toBe(1);
+    expect(countCurrentPeriod(records, basisOf(result.prior), visibility()).counts.total).toBe(1);
   });
 
   it("uses the same visibility rules as the previous period", () => {
@@ -312,10 +317,69 @@ describe("countCurrentPeriod", () => {
     ];
     const current = countCurrentPeriod(
       records,
-      prior,
+      basisOf(prior),
       visibility({ filterLevels: new Set<EvtxLevel>(["Error"]) })
     );
     expect(current.counts.total).toBe(1);
+  });
+
+  describe("channels with no events", () => {
+    const prior = () => priorFor("24h");
+    const inCurrent = (channel: string, overrides: Partial<EvtxRecord> = {}) =>
+      record({ channel, timestampEpoch: ANCHOR - HOUR, ...overrides });
+
+    it("records a compared channel read without a hole as 0, and leaves an uncompared one absent", () => {
+      const current = countCurrentPeriod(
+        [inCurrent("System")],
+        basisOf(prior(), ["System", "Setup"]),
+        visibility({ selectedChannels: new Set(["System", "Setup", "Security"]) })
+      );
+      expect(current.counts.channels.get("System")).toBe(1);
+      expect(current.counts.channels.get("Setup")).toBe(0);
+      expect(current.counts.channels.has("Security")).toBe(false);
+    });
+
+    it("leaves a channel with a hole absent, however few events it showed", () => {
+      const current = countCurrentPeriod(
+        [inCurrent("System")],
+        basisOf(prior(), ["System", "Setup"], ["Setup"]),
+        visibility({ selectedChannels: new Set(["System", "Setup"]) })
+      );
+      expect(current.counts.channels.has("Setup")).toBe(false);
+      expect(current.counts.channels.get("System")).toBe(1);
+    });
+
+    it("leaves a channel absent when one of its visible events could not be placed in time", () => {
+      const current = countCurrentPeriod(
+        [inCurrent("Setup", { timestampEpoch: 0 })],
+        basisOf(prior(), ["Setup"]),
+        visibility({ selectedChannels: new Set(["Setup"]) })
+      );
+      expect(current.counts.channels.has("Setup")).toBe(false);
+    });
+
+    it("zero-fills from the result the comparison published, in both modes", () => {
+      const p = prior();
+      // Files: Setup reaches the anchor, holds nothing in the current period, and is clean.
+      const files = compareLoadedFiles({
+        records: [
+          record({ channel: "Setup", sourceLabel: "Setup.evtx", timestampEpoch: p.fromMs - HOUR }),
+          record({ channel: "Setup", sourceLabel: "Setup.evtx", timestampEpoch: ANCHOR + 1 }),
+        ],
+        window: "24h",
+        anchorEpoch: ANCHOR,
+        visibility: visibility({ selectedChannels: new Set(["Setup"]) }),
+        coverageDetails: [],
+        sourceCoverage: [],
+      });
+      expect(files.status).toBe("complete");
+      if (files.status === "complete") {
+        expect(files.result.comparedChannels).toEqual(["Setup"]);
+        expect(files.result.channelsWithGaps).toEqual([]);
+        const current = countCurrentPeriod([], files.result, visibility());
+        expect(current.counts.channels.get("Setup")).toBe(0);
+      }
+    });
   });
 });
 
@@ -720,6 +784,25 @@ describe("compareLoadedFiles", () => {
       ...overrides,
     });
 
+    it("publishes the channels compared and those a hole or a short capture leaves untrustworthy", () => {
+      const prior = priorFor();
+      const records = [
+        ...coveringRecords(prior),
+        record({ channel: "Application", sourceLabel: "Application.evtx", timestampEpoch: prior.fromMs - HOUR }),
+        record({ channel: "Application", sourceLabel: "Application.evtx", timestampEpoch: ANCHOR - 10 * HOUR }),
+      ];
+      const outcome = compareLoadedFiles(
+        input(records, {
+          coverageDetails: [chunkGap()],
+        })
+      );
+      expect(outcome.status).toBe("partial");
+      if (outcome.status !== "partial") return;
+      expect(outcome.result.comparedChannels).toEqual(["System", "Application"]);
+      // System has a damaged chunk; Application's capture stops 10 h short of the anchor.
+      expect(outcome.result.channelsWithGaps).toEqual(["System", "Application"]);
+    });
+
     it("makes the comparison partial for a damaged chunk inside the previous period", () => {
       const prior = priorFor();
       const outcome = compareLoadedFiles(
@@ -774,6 +857,11 @@ describe("compareLoadedFiles", () => {
         input(coveringRecords(prior), { coverageDetails: [chunkGap({ source: "Lost.evtx" })] })
       );
       expect(outcome.status).toBe("partial");
+      // It might hold any compared channel, so none of their zeros can be trusted.
+      if (outcome.status === "partial") {
+        expect(outcome.result.channelsWithGaps).toEqual(outcome.result.comparedChannels);
+        expect(outcome.result.channelsWithGaps).toEqual(["System"]);
+      }
     });
 
     it("ignores a provider-description gap unless a criterion reads the message", () => {
@@ -963,6 +1051,7 @@ describe("a live comparison", () => {
       anchorEpoch: ANCHOR,
       remote: false,
       notes: [],
+      currentPeriodHoleChannels: [],
       currentPeriodGaps: [],
       channels,
       visibility: visibility(),
@@ -1186,6 +1275,35 @@ describe("a live comparison", () => {
     expect(outcome.result.counts.channels.get("System")).toBe(2);
     expect(outcome.result.counts.channels.get("Application")).toBe(0);
     expect(outcome.result.notes).toEqual([]);
+  });
+
+  it("publishes the channels compared and those whose zero cannot be trusted", () => {
+    const session = begin({
+      channels: ["System", "Application"],
+      currentPeriodGaps: ["Application: 3 events could not be read and are missing from this view"],
+      currentPeriodHoleChannels: ["Application"],
+    });
+    deliver(session, "System", systemEvents(1));
+    deliver(session, "Application", []);
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    expect(outcome.result.comparedChannels).toEqual(["System", "Application"]);
+    expect(outcome.result.channelsWithGaps).toEqual(["Application"]);
+  });
+
+  it("counts a channel whose stream lost a batch among those whose zero cannot be trusted", () => {
+    const session = begin({ channels: ["System", "Application"] });
+    batch(session, "System", 0, systemEvents(1));
+    terminal(session, "System", 2, 2);
+    session.replied("System", reply(2));
+    vi.runAllTimers();
+    deliver(session, "Application", []);
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status === "partial") {
+      expect(outcome.result.channelsWithGaps).toEqual(["System"]);
+    }
   });
 
   it("carries the caller's notes after the remote one, without calling any of them a gap", () => {
@@ -1595,6 +1713,7 @@ describe("a live comparison", () => {
         anchorEpoch: ANCHOR,
         remote: false,
         notes: [],
+        currentPeriodHoleChannels: [],
         currentPeriodGaps: [],
         channels,
         visibility: visibility(),
@@ -1612,6 +1731,7 @@ describe("a live comparison", () => {
         anchorEpoch: ANCHOR,
         remote: false,
         notes: [],
+        currentPeriodHoleChannels: [],
         currentPeriodGaps: [],
         channels: [],
         visibility: visibility(),
@@ -1675,6 +1795,7 @@ describe("publishing a files comparison", () => {
       anchorEpoch: ANCHOR,
       remote: false,
       notes: [],
+      currentPeriodHoleChannels: [],
       currentPeriodGaps: [],
       channels: ["System"],
       visibility: visibility(),

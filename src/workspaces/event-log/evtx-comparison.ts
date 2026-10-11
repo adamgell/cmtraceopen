@@ -245,6 +245,12 @@ export function createAggregator(
   };
 }
 
+/** What `countCurrentPeriod` needs of a comparison result. */
+export type CurrentPeriodBasis = Pick<
+  ComparisonResult,
+  "prior" | "comparedChannels" | "channelsWithGaps"
+>;
+
 /**
  * The events of the CURRENT period that the view shows, counted the way the previous period is.
  *
@@ -252,18 +258,31 @@ export function createAggregator(
  * ratio needs both sides over periods that meet exactly; counting the current side from the grid's
  * window, measured from a clock that has since moved, would shift it away from the previous period
  * and read as a decline that never happened.
+ *
+ * Every compared channel with no event in the period is recorded as 0 only when it was read without
+ * a hole and holds nothing that could not be placed in time, the rule the previous period follows;
+ * otherwise it is absent, so a read zero differs from an unknown count.
  */
 export function countCurrentPeriod(
   records: readonly EvtxRecord[],
-  prior: PriorWindow,
+  basis: CurrentPeriodBasis,
   visibility: ComparisonVisibility
 ): ComparisonTally {
+  const { prior } = basis;
   const aggregator = createAggregator(
     { fromMs: prior.anchorEpoch - prior.lengthMs, toMs: prior.anchorEpoch },
     visibility
   );
   aggregator.add(records);
-  return aggregator.finish();
+  const tally = aggregator.finish();
+  const withGaps = new Set(basis.channelsWithGaps);
+  const channels = new Map(tally.counts.channels);
+  for (const channel of basis.comparedChannels) {
+    if (!channels.has(channel) && !withGaps.has(channel) && !tally.unplacedChannels.has(channel)) {
+      channels.set(channel, 0);
+    }
+  }
+  return { ...tally, counts: { ...tally.counts, channels } };
 }
 
 export type ComparisonMode = "files" | "live";
@@ -296,6 +315,14 @@ export interface ComparisonResult {
    * channel that was read in full and held no events is present with a count of 0.
    */
   unreadChannels: string[];
+  /** The channels compared, in order: those selected and loaded (live) or with a capture (files). */
+  comparedChannels: string[];
+  /**
+   * Compared channels with a hole somewhere in what was read, in either period, or an event that
+   * could not be placed in time. A count of 0 for one of these cannot be trusted, so
+   * `countCurrentPeriod` leaves it absent.
+   */
+  channelsWithGaps: string[];
 }
 
 export type ComparisonUnavailableReason =
@@ -577,6 +604,16 @@ export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutco
       .filter((capture) => gapSources.has(capture.source))
       .map((capture) => capture.channel)
   );
+  const comparedChannels = [...new Set(coverage.captures.map((capture) => capture.channel))];
+  // A capture that stops before the anchor leaves the end of the current period unread too.
+  const shortChannels = new Set(shortCaptures.map((capture) => capture.channel));
+  const channelsWithGaps = comparedChannels.filter(
+    (channel) =>
+      holeInAnUnplacedSource ||
+      channelsWithAHole.has(channel) ||
+      shortChannels.has(channel) ||
+      tally.unplacedChannels.has(channel)
+  );
   for (const capture of coverage.captures) {
     if (
       !counted.has(capture.channel) &&
@@ -600,6 +637,8 @@ export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutco
       notes: [],
       unplacedRecords: tally.unplacedRecords,
       unreadChannels: [],
+      comparedChannels,
+      channelsWithGaps,
     },
   };
 }
@@ -707,6 +746,8 @@ export interface LiveComparisonInput {
    * period it is compared with is not.
    */
   currentPeriodGaps: readonly string[];
+  /** The compared channels those gaps concern, whose current count of 0 cannot be trusted. */
+  currentPeriodHoleChannels: readonly string[];
   /** Stops the backend read for a comparison that is cancelled or superseded before it settles. */
   cancelQuery: (requestId: string) => void;
 }
@@ -745,6 +786,7 @@ interface ActiveSession {
   prior: PriorWindow;
   notes: string[];
   currentPeriodGaps: string[];
+  currentPeriodHoleChannels: Set<string>;
   /** Whether provider-description gaps can change a count, fixed when the comparison starts. */
   providerGapsMatter: boolean;
   channels: string[];
@@ -859,6 +901,13 @@ function finishIfSettled(session: ActiveSession): void {
     }
   }
 
+  const channelsWithGaps = session.channels.filter(
+    (channel) =>
+      (session.streams.get(channel)?.gaps.length ?? 0) > 0 ||
+      session.currentPeriodHoleChannels.has(channel) ||
+      tally.unplacedChannels.has(channel)
+  );
+
   const outcome: ComparisonOutcome =
     unreadChannels.length === session.channels.length
       ? { status: "unavailable", reason: "queryFailed", detail: channelGaps.join(" ") }
@@ -874,6 +923,8 @@ function finishIfSettled(session: ActiveSession): void {
             notes: session.notes,
             unplacedRecords: tally.unplacedRecords,
             unreadChannels,
+            comparedChannels: session.channels,
+            channelsWithGaps,
           },
         };
 
@@ -961,6 +1012,7 @@ export function beginLiveComparison(input: LiveComparisonInput): LiveComparisonS
       ...input.notes,
     ],
     currentPeriodGaps: [...input.currentPeriodGaps],
+    currentPeriodHoleChannels: new Set(input.currentPeriodHoleChannels),
     providerGapsMatter: messageTextCriterionActive(input.visibility),
     channels,
     streams: new Map(

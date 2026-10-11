@@ -320,6 +320,7 @@ describe("routing comparison batches", () => {
       remote: false,
       notes: [],
       currentPeriodGaps: [],
+      currentPeriodHoleChannels: [],
       channels: ["System"],
       visibility: sharedVisibility,
       cancelQuery: vi.fn(),
@@ -1306,7 +1307,7 @@ describe("the anchor of a live comparison", () => {
       expect(useEvtxStore.getState().records).toContain(tailEvent);
       const current = countCurrentPeriod(
         useEvtxStore.getState().records,
-        outcome.result.prior,
+        outcome.result,
         {
           selectedChannels: useEvtxStore.getState().selectedChannels,
           filterLevels: useEvtxStore.getState().filterLevels,
@@ -1394,6 +1395,17 @@ describe("the current period's own gaps", () => {
 
     expect(outcome.status).toBe("complete");
     if (outcome.status === "complete") expect(outcome.result.gaps).toEqual([]);
+  });
+
+  it("publishes the compared channels, and marks a channel with a reported hole as untrustworthy at zero", async () => {
+    await resetStore({ coverageDetails: [renderGap] });
+
+    const outcome = await compareAndSettle();
+
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    expect(outcome.result.comparedChannels).toEqual(["System", "Application"]);
+    expect(outcome.result.channelsWithGaps).toEqual(["System"]);
   });
 
   it("does not count a gap that belongs to a channel the comparison does not read", async () => {

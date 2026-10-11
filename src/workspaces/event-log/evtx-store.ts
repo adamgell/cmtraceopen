@@ -2960,17 +2960,23 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
   // What is short in the current period of the channels compared. These do not stop a comparison,
   // but a ratio against a clean previous period would otherwise read as complete.
   const currentPeriodGaps = new Set<string>();
+  const currentPeriodHoleChannels = new Set<string>();
   for (const [channel, readEpoch] of readEpochs) {
     const startGap = channelStartGap(channel, readEpoch, anchorEpoch, windowResult.prior.lengthMs);
-    if (startGap !== null) currentPeriodGaps.add(startGap);
+    if (startGap !== null) {
+      currentPeriodGaps.add(startGap);
+      currentPeriodHoleChannels.add(channel);
+    }
   }
   const textCriterion = messageTextCriterionActive(visibility);
   for (const detail of state.coverageDetails) {
     if (detail.kind === "provider" && !textCriterion) continue;
-    if (
-      channels.some((channel) => coverageBelongsToChannel(detail.source, channel, state.remoteMachine))
-    ) {
+    const concerned = channels.filter((channel) =>
+      coverageBelongsToChannel(detail.source, channel, state.remoteMachine)
+    );
+    if (concerned.length > 0) {
       currentPeriodGaps.add(formatCoverageGap(detail));
+      for (const channel of concerned) currentPeriodHoleChannels.add(channel);
     }
   }
   // Tail gaps are not among these: the comparison never counts the tail's events, so what the tail
@@ -2988,6 +2994,7 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
     remote: state.remoteMachine !== null,
     notes,
     currentPeriodGaps: [...currentPeriodGaps],
+    currentPeriodHoleChannels: [...currentPeriodHoleChannels],
     channels,
     visibility,
     cancelQuery: (requestId) => {
