@@ -27,8 +27,11 @@ import {
   type ChannelTreeNode,
 } from "./evtx-channel-order";
 import {
+  APP_SERVICES_GROUP,
   NO_CHANNEL_STATS,
+  WINDOWS_LOGS_GROUP,
   buildChannelPaneModel,
+  defaultExpandedGroups,
   scaleActivityBars,
   summarizeLogSources,
   type ChannelPaneModel,
@@ -53,8 +56,6 @@ const SPARKLINE_HEIGHT = 18;
 /** Horizontal units per bin in the sparkline's viewBox; the bar is one unit narrower. */
 const SPARKLINE_BIN_UNITS = 4;
 const MAX_CORRELATING_SOURCES = 50;
-const WINDOWS_LOGS_KEY = "Windows Logs";
-const APP_SERVICES_KEY = "AppServices";
 
 /**
  * Shown where a channel has no count. U+2014, which spec 8.6 writes for an unreadable channel's
@@ -235,7 +236,10 @@ export function ChannelPicker() {
   const currentPlatform = useUiStore((s) => s.currentPlatform);
 
   const [search, setSearch] = useState("");
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set([WINDOWS_LOGS_KEY]));
+  // What the operator opened or closed by hand. Everything else follows the data: see below.
+  const [toggledGroups, setToggledGroups] = useState<ReadonlyMap<string, boolean>>(
+    () => new Map(),
+  );
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
 
   useEffect(() => {
@@ -369,12 +373,24 @@ export function ChannelPicker() {
       ? 0
       : [...selectedChannels].filter((ch) => !loadedChannels.has(ch)).length;
 
+  // A group starts open when a loaded channel in it holds events, so the rows the operator came
+  // for are showing, and the rest stay closed. A group the operator toggled keeps their choice
+  // however the data changes afterwards.
+  const defaultExpanded = useMemo(() => defaultExpandedGroups(model), [model]);
+  const defaultExpandedRef = useRef(defaultExpanded);
+  defaultExpandedRef.current = defaultExpanded;
+  const expanded = useMemo(() => {
+    const open = new Set(defaultExpanded);
+    for (const [key, isOpen] of toggledGroups) {
+      if (isOpen) open.add(key);
+      else open.delete(key);
+    }
+    return open;
+  }, [defaultExpanded, toggledGroups]);
   const toggleExpand = useCallback((key: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
+    setToggledGroups((prev) => {
+      const wasOpen = prev.get(key) ?? defaultExpandedRef.current.has(key);
+      return new Map(prev).set(key, !wasOpen);
     });
   }, []);
 
@@ -671,15 +687,15 @@ export function ChannelPicker() {
             <>
               {/* Windows Logs */}
               <GroupRow
-                groupKey={WINDOWS_LOGS_KEY}
+                groupKey={WINDOWS_LOGS_GROUP}
                 label="Windows Logs"
-                expanded={expanded.has(WINDOWS_LOGS_KEY)}
+                expanded={expanded.has(WINDOWS_LOGS_GROUP)}
                 onToggle={toggleExpand}
                 depth={0}
                 count={model.tree.windowsLogs.length}
                 metrics={rowMetrics}
               />
-              {expanded.has(WINDOWS_LOGS_KEY) &&
+              {expanded.has(WINDOWS_LOGS_GROUP) &&
                 model.tree.windowsLogs.map((ch) => (
                   <ChannelRow
                     key={ch.name}
@@ -695,15 +711,15 @@ export function ChannelPicker() {
 
               {/* Applications and Services Logs */}
               <GroupRow
-                groupKey={APP_SERVICES_KEY}
+                groupKey={APP_SERVICES_GROUP}
                 label="Applications and Services Logs"
-                expanded={expanded.has(APP_SERVICES_KEY)}
+                expanded={expanded.has(APP_SERVICES_GROUP)}
                 onToggle={toggleExpand}
                 depth={0}
                 count={countChannelLeaves(model.tree.serviceTree)}
                 metrics={rowMetrics}
               />
-              {expanded.has(APP_SERVICES_KEY) && (
+              {expanded.has(APP_SERVICES_GROUP) && (
                 <TreeNodeView
                   node={model.tree.serviceTree}
                   depth={1}

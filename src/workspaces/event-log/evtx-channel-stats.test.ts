@@ -3,6 +3,7 @@ import {
   CHANNEL_ACTIVITY_BINS,
   buildChannelPaneModel,
   computeChannelStats,
+  defaultExpandedGroups,
   recordTimestampMs,
   scaleActivityBars,
   summarizeLogSources,
@@ -572,5 +573,74 @@ describe("summarizeLogSources", () => {
   it("returns nothing for no entries and a placeholder for a path with no name", () => {
     expect(summarizeLogSources([])).toEqual([]);
     expect(summarizeLogSources([{ filePath: "" }])[0].label).toBe("Unnamed source");
+  });
+});
+
+describe("defaultExpandedGroups", () => {
+  const model = (over: Partial<ChannelPaneInput>) =>
+    buildChannelPaneModel(
+      paneInput({
+        channels: [
+          live("System"),
+          live("Contoso-AAD/Operational"),
+          live("Contoso-AAD/Admin"),
+          live("Fabrikam-Other/Operational"),
+        ],
+        ...over,
+      }),
+    );
+
+  it("always opens Windows Logs and nothing else when no channel holds events", () => {
+    expect([...defaultExpandedGroups(model({}))]).toEqual(["Windows Logs"]);
+  });
+
+  it("opens each group on the path to a loaded channel that has records, and only those", () => {
+    const open = defaultExpandedGroups(
+      model({
+        loadedChannels: new Set(["Contoso-AAD/Operational", "Fabrikam-Other/Operational"]),
+        records: [record("Contoso-AAD/Operational", NOW - HOUR)],
+      }),
+    );
+    expect(open.has("Windows Logs")).toBe(true);
+    expect(open.has("AppServices")).toBe(true);
+    // The folder that holds the channel with records is open ...
+    expect(open.has("Contoso-AAD")).toBe(true);
+    // ... a sibling folder whose channel was loaded but holds nothing is not.
+    expect(open.has("Fabrikam-Other")).toBe(false);
+  });
+
+  it("does not open a group for a channel that is loaded and empty, or not read", () => {
+    const open = defaultExpandedGroups(
+      model({
+        loadedChannels: new Set(["Contoso-AAD/Operational"]),
+        legacyCoverage: ["Fabrikam-Other/Operational: not read (denied)"],
+      }),
+    );
+    expect(open.has("AppServices")).toBe(false);
+    expect(open.has("Contoso-AAD")).toBe(false);
+  });
+
+  it("does not open a group for a row that shows no numbers, whatever records the store holds", () => {
+    // A channel the service reports as switched off and nobody loaded shows a dash, so there is
+    // nothing in its group to come for.
+    const open = defaultExpandedGroups(
+      model({
+        channels: [live("Contoso-AAD/Operational", { enabledState: "disabled" })],
+        isSwitchedOff: (channel) => channel.enabledState === "disabled",
+        records: [record("Contoso-AAD/Operational", NOW - HOUR)],
+      }),
+    );
+    expect(open.has("AppServices")).toBe(false);
+  });
+
+  it("counts a partial channel that kept records", () => {
+    const open = defaultExpandedGroups(
+      model({
+        loadedChannels: new Set(["Contoso-AAD/Admin"]),
+        records: [record("Contoso-AAD/Admin", NOW - HOUR)],
+        coverageDetails: [gap("Contoso-AAD/Admin", "record", "record 7 could not be decoded")],
+      }),
+    );
+    expect(open.has("Contoso-AAD")).toBe(true);
   });
 });

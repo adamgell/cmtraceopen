@@ -10,7 +10,12 @@
  * never a channel with zero events; a number is shown only for a channel that was actually read;
  * a partial read is never reported as complete.
  */
-import { buildChannelTree, orderChannelNames, type ChannelTree } from "./evtx-channel-order";
+import {
+  buildChannelTree,
+  orderChannelNames,
+  type ChannelTree,
+  type ChannelTreeNode,
+} from "./evtx-channel-order";
 import {
   EVTX_TIME_WINDOW_MS,
   type EvtxChannelInfo,
@@ -488,4 +493,39 @@ export function summarizeLogSources(
       entries: count,
     }))
     .sort((a, b) => a.label.localeCompare(b.label) || a.path.localeCompare(b.path));
+}
+
+// ── Which groups start open ─────────────────────────────────────────────────
+
+/** Group keys of the two top-level headers; nested folders use `fullPath || name`. */
+export const WINDOWS_LOGS_GROUP = "Windows Logs";
+export const APP_SERVICES_GROUP = "AppServices";
+
+/**
+ * The groups that start open: Windows Logs, and every group on the path to a channel that was
+ * acquired and holds events. A group that only holds channels nobody loaded, channels that came
+ * back empty, or channels that could not be read stays closed, so opening the pane does not unfold
+ * the hundreds of service channels a live machine lists. A group the operator opened or closed
+ * keeps that choice; this is only the starting point.
+ */
+export function defaultExpandedGroups(
+  model: Pick<ChannelPaneModel, "tree" | "rows">
+): Set<string> {
+  const open = new Set([WINDOWS_LOGS_GROUP]);
+  const holdsEvents = (name: string) => {
+    const row = model.rows.get(name);
+    return (
+      row !== undefined && (row.state === "read" || row.state === "partial") && row.stats.total > 0
+    );
+  };
+  const visit = (node: ChannelTreeNode<EvtxChannelInfo>): boolean => {
+    let found = node.channel !== null && holdsEvents(node.channel.name);
+    for (const child of node.children.values()) {
+      if (visit(child)) found = true;
+    }
+    if (found && node !== model.tree.serviceTree) open.add(node.fullPath || node.name);
+    return found;
+  };
+  if (visit(model.tree.serviceTree)) open.add(APP_SERVICES_GROUP);
+  return open;
 }

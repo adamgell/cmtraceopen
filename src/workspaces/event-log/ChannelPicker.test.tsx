@@ -441,6 +441,77 @@ describe("the channel pane header and rows", () => {
   });
 });
 
+describe("which groups start open", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    resetPane({
+      channels: [
+        channel("System", "enabled"),
+        channel("Contoso-AAD/Operational", "enabled"),
+        channel("Fabrikam-Other/Operational", "enabled"),
+      ],
+      loadedChannels: new Set(["System", "Contoso-AAD/Operational", "Fabrikam-Other/Operational"]),
+      records: [evtxRecord("Contoso-AAD/Operational", NOW - HOUR)],
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  const rowExists = (name: string) =>
+    document.querySelector(`[data-channel-row="${name}"]`) !== null;
+
+  it("opens the groups on the path to a loaded channel that holds events and leaves the rest closed", () => {
+    render(<ChannelPicker />);
+    expect(rowExists("Contoso-AAD/Operational")).toBe(true);
+    expect(screen.getByRole("button", { name: "Collapse Applications and Services Logs" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collapse Contoso-AAD" })).toBeInTheDocument();
+    // Loaded but empty: its group stays closed, so its channel is not listed.
+    expect(screen.getByRole("button", { name: "Expand Fabrikam-Other" })).toBeInTheDocument();
+    expect(rowExists("Fabrikam-Other/Operational")).toBe(false);
+  });
+
+  it("opens nothing beyond Windows Logs when no channel holds events", () => {
+    useEvtxStore.setState({ records: [] });
+    render(<ChannelPicker />);
+    expect(screen.getByRole("button", { name: "Collapse Windows Logs" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Expand Applications and Services Logs" }),
+    ).toBeInTheDocument();
+    expect(rowExists("Contoso-AAD/Operational")).toBe(false);
+  });
+
+  it("opens a group when its first events arrive, but not one the operator closed", () => {
+    useEvtxStore.setState({ records: [] });
+    render(<ChannelPicker />);
+    expect(rowExists("Contoso-AAD/Operational")).toBe(false);
+
+    act(() =>
+      useEvtxStore.setState({ records: [evtxRecord("Contoso-AAD/Operational", NOW - HOUR)] }),
+    );
+    expect(rowExists("Contoso-AAD/Operational")).toBe(true);
+
+    // Close the group by hand, then let more events arrive: the choice holds.
+    fireEvent.click(screen.getByRole("button", { name: "Collapse Contoso-AAD" }));
+    expect(rowExists("Contoso-AAD/Operational")).toBe(false);
+    act(() =>
+      useEvtxStore.setState({
+        records: [
+          evtxRecord("Contoso-AAD/Operational", NOW - HOUR),
+          evtxRecord("Contoso-AAD/Operational", NOW - 2 * HOUR),
+        ],
+      }),
+    );
+    expect(rowExists("Contoso-AAD/Operational")).toBe(false);
+
+    // A group opened by hand stays open when the data would not have opened it.
+    fireEvent.click(screen.getByRole("button", { name: "Expand Fabrikam-Other" }));
+    expect(rowExists("Fabrikam-Other/Operational")).toBe(true);
+  });
+});
+
 describe("channels that could not be read are coverage gaps", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -891,11 +962,10 @@ describe("contrast of everything the pane renders", () => {
     (_id, theme) => {
       populate();
       useUiStore.setState({ themeId: theme.id });
-      // Expand the service tree so a nested channel is measured too.
       const { container } = render(<ChannelPicker />);
-      fireEvent.click(
-        screen.getByRole("button", { name: "Expand Applications and Services Logs" }),
-      );
+      // The service tree is open by default because a loaded channel in it holds events, so its
+      // nested row is measured too.
+      expect(paneRow("Microsoft-Windows-AAD/Operational")).toBeInTheDocument();
 
       const pairs = measurePane(container, theme);
       // The scenario must actually exercise selected, unselected, gap and live rows.
