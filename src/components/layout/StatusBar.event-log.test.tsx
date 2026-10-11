@@ -23,6 +23,7 @@ import {
 } from "../../workspaces/event-log/evtx-layout-store";
 import { useEvtxStore } from "../../workspaces/event-log/evtx-store";
 import {
+  countTextLogSources,
   loadedChannelCountFor,
   summarizeEvtxCorrelationStatus,
   summarizeVisibleRecords,
@@ -44,7 +45,6 @@ import {
   StatusBar,
   buildEvtxCorrelationSegments,
   buildEvtxCountsSegments,
-  countTextLogFiles,
   evtxStatusText,
 } from "./StatusBar";
 
@@ -78,24 +78,6 @@ function channelInfo(name: string): EvtxChannelInfo {
   };
 }
 
-function logEntry(id: number, filePath: string) {
-  return {
-    id,
-    lineNumber: id,
-    message: `line ${id}`,
-    component: null,
-    timestamp: null,
-    timestampDisplay: null,
-    severity: "Info" as const,
-    thread: null,
-    threadDisplay: null,
-    sourceFile: null,
-    format: "Timestamped" as const,
-    filePath,
-    timezoneOffset: null,
-  };
-}
-
 function resetStores() {
   localStorage.clear();
   useUiStore.setState(useUiStore.getInitialState(), true);
@@ -103,7 +85,7 @@ function resetStores() {
   useEvtxStore.getState().reset();
   useEvtxLayoutStore.setState(sanitizeLayout(undefined));
   useLogStore.getState().clear();
-  useEvtxCorrelationStatusStore.setState({ status: null });
+  useEvtxCorrelationStatusStore.setState({ analysis: null, status: null });
   useEvtxVisibleSummaryStore.setState({ summary: null });
 }
 
@@ -112,7 +94,12 @@ function resetStores() {
  * `loaded` defaults to the same (nothing filtered out), and the channel count is derived from the
  * evtx store's current state the way the workspace derives it.
  */
-function publishRows(visible: EvtxRecord[], loaded = visible.length) {
+function publishRows(
+  visible: EvtxRecord[],
+  loaded = visible.length,
+  /** Log-store files the workspace correlates; archived text-log records are added to them. */
+  logStoreFiles: string[] = [],
+) {
   const { loadGeneration, sourceMode, loadedChannels, records } = useEvtxStore.getState();
   act(() =>
     useEvtxVisibleSummaryStore.getState().publish(
@@ -121,11 +108,37 @@ function publishRows(visible: EvtxRecord[], loaded = visible.length) {
         {
           events: loaded,
           channels: loadedChannelCountFor({ sourceMode, loadedChannels, records }),
+          textLogs: countTextLogSources(
+            logStoreFiles.map((filePath) => ({ filePath })),
+            records,
+          ),
         },
         loadGeneration,
       ),
     ),
   );
+}
+
+/** Counts built the only way they can be: through the summarizer, for a named session. */
+function correlationStatus(
+  counts: { exact: number; candidate: number; ambiguous: number; unplaced: number },
+  analysis = { generation: useEvtxStore.getState().loadGeneration, sessionId: "session-1", revision: 1 },
+) {
+  const status = summarizeEvtxCorrelationStatus(
+    {
+      counts: {
+        exact: counts.exact,
+        candidate: counts.candidate,
+        ambiguous: counts.ambiguous,
+        coverageBlocked: 0,
+      },
+      edgeInputComplete: true,
+    },
+    counts.unplaced,
+    analysis,
+  );
+  if (status === null) throw new Error("expected correlation counts");
+  return status;
 }
 
 function setLayoutView(view: EvtxViewId) {
@@ -189,15 +202,10 @@ describe("StatusBar Event Logs content", () => {
         loadedChannels: new Set(["Application", "System"]),
         records,
       });
-      publishRows(records);
-      useLogStore.setState({
-        entries: [
-          logEntry(1, "C:\\Logs\\IntuneManagementExtension.log"),
-          logEntry(2, "C:\\Logs\\IntuneManagementExtension.log"),
-          logEntry(3, "C:\\Logs\\AgentExecutor.log"),
-        ],
-        sourceOpenMode: "merged",
-      });
+      publishRows(records, undefined, [
+        "C:\\Logs\\IntuneManagementExtension.log",
+        "C:\\Logs\\AgentExecutor.log",
+      ]);
       render(<StatusBar />);
 
       expect(left()).toHaveTextContent(
@@ -224,14 +232,18 @@ describe("StatusBar Event Logs content", () => {
           record("Information", "Setup"),
           // An archived text log is a row in the grid but not a channel: the archive reader sets
           // its channel to the log's source label.
-          { ...record("Information", "C:\\Evidence\\AgentExecutor.log"), originKind: "log" },
+          {
+            ...record("Information", "C:\\Evidence\\AgentExecutor.log"),
+            originKind: "log",
+            sourceLabel: "C:\\Evidence\\AgentExecutor.log",
+          },
         ],
       });
       publishRows(useEvtxStore.getState().records);
       render(<StatusBar />);
 
       expect(left()).toHaveTextContent(
-        "Files · 2 channels · 0 text logs · 4 events · 0 errors · 1 warning",
+        "Files · 2 channels · 1 text log · 4 events · 0 errors · 1 warning",
       );
     });
 
@@ -242,11 +254,7 @@ describe("StatusBar Event Logs content", () => {
         loadedChannels: new Set(["System"]),
         records,
       });
-      publishRows(records);
-      useLogStore.setState({
-        entries: [logEntry(1, "C:\\Logs\\only.log")],
-        sourceOpenMode: "merged",
-      });
+      publishRows(records, undefined, ["C:\\Logs\\only.log"]);
       render(<StatusBar />);
 
       expect(left()).toHaveTextContent(
@@ -267,26 +275,20 @@ describe("StatusBar Event Logs content", () => {
       expect(left()).toHaveTextContent(/3 events · 2 errors · 0 warnings/);
     });
 
-    it("scopes text logs to the active source the way the workspace does", () => {
-      const records = [record("Information")];
-      useEvtxStore.setState({
-        sourceMode: "live",
-        loadedChannels: new Set(["System"]),
-        records,
-      });
+    it("counts an archived text log as a text log, not as a channel", () => {
+      const archivedLog: EvtxRecord = {
+        ...record("Information", "C:\\Evidence\\AgentExecutor.log"),
+        originKind: "log",
+        sourceLabel: "C:\\Evidence\\AgentExecutor.log",
+      };
+      const records = [record("Warning", "System"), archivedLog];
+      useEvtxStore.setState({ sourceMode: "files", records });
       publishRows(records);
-      useLogStore.setState({
-        entries: [
-          logEntry(1, "C:\\Logs\\Intune\\a.log"),
-          logEntry(2, "C:\\Logs\\Intune\\b.log"),
-          logEntry(3, "C:\\Logs\\Other\\c.log"),
-        ],
-        sourceOpenMode: "single-file",
-        activeSource: { kind: "folder", path: "C:\\Logs\\Intune" },
-      });
       render(<StatusBar />);
 
-      expect(left()).toHaveTextContent(/2 text logs/);
+      expect(left()).toHaveTextContent(
+        "Files · 1 channel · 1 text log · 2 events · 0 errors · 1 warning",
+      );
     });
 
     it("draws every count in the numeric font with tabular figures", () => {
@@ -387,8 +389,8 @@ describe("StatusBar Event Logs content", () => {
       });
       render(<StatusBar />);
 
-      expect(left()).toHaveTextContent(/^Live · 0 text logs$/);
-      expect(left()).not.toHaveTextContent(/channel|event|error|warning/);
+      expect(left()).toHaveTextContent(/^Live$/);
+      expect(left()).not.toHaveTextContent(/channel|text log|event|error|warning/);
     });
 
     it("never shows a summary published for another source", () => {
@@ -407,7 +409,7 @@ describe("StatusBar Event Logs content", () => {
       act(() =>
         useEvtxStore.setState((state) => ({ loadGeneration: state.loadGeneration + 1 })),
       );
-      expect(left()).toHaveTextContent(/^Live · 0 text logs$/);
+      expect(left()).toHaveTextContent(/^Live$/);
 
       publishRows(records);
       expect(left()).toHaveTextContent(/1 event · 1 error/);
@@ -466,6 +468,7 @@ describe("StatusBar Event Logs content", () => {
           records: [record("Error")],
         });
       });
+      publishRows(useEvtxStore.getState().records);
 
       expect(right()).toHaveTextContent("Table view · Updated 14:32:05 UTC");
       // The time is a number the operator compares against, so it is set in the numeric font.
@@ -485,6 +488,7 @@ describe("StatusBar Event Logs content", () => {
           records: [record("Error")],
         });
       });
+      publishRows(useEvtxStore.getState().records);
       expect(right()).toHaveTextContent(/Updated 14:32:05 UTC/);
 
       vi.setSystemTime(new Date("2026-10-10T14:33:41Z"));
@@ -493,6 +497,7 @@ describe("StatusBar Event Logs content", () => {
           records: [...state.records, record("Warning")],
         })),
       );
+      publishRows(useEvtxStore.getState().records);
 
       expect(right()).toHaveTextContent(/Updated 14:33:41 UTC/);
     });
@@ -509,6 +514,7 @@ describe("StatusBar Event Logs content", () => {
           records: [record("Error")],
         });
       });
+      publishRows(useEvtxStore.getState().records);
 
       vi.setSystemTime(new Date("2026-10-10T15:00:00Z"));
       setLayoutView("charts");
@@ -522,6 +528,7 @@ describe("StatusBar Event Logs content", () => {
         loadedChannels: new Set(["System"]),
         records: [record("Error")],
       });
+      publishRows(useEvtxStore.getState().records);
       render(<StatusBar />);
 
       // That time was never observed, so it is not invented.
@@ -543,8 +550,66 @@ describe("StatusBar Event Logs content", () => {
 
       vi.setSystemTime(new Date("2026-10-10T08:00:09Z"));
       act(() => useEvtxStore.setState({ isLoading: false }));
+      publishRows(useEvtxStore.getState().records);
 
       expect(right()).toHaveTextContent("Table view · Updated 08:00:09 UTC");
+    });
+
+    it("does not move Updated when a channel is cleared and the records shrink", () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-10T14:32:05Z"));
+      render(<StatusBar />);
+      act(() => {
+        useEvtxStore.setState({
+          sourceMode: "live",
+          timeZoneMode: "utc",
+          loadedChannels: new Set(["System", "Application"]),
+          records: [record("Error", "System"), record("Warning", "Application")],
+        });
+      });
+      publishRows(useEvtxStore.getState().records);
+      expect(right()).toHaveTextContent(/Updated 14:32:05 UTC/);
+
+      // clearChannel removes the channel's records and its loaded flag. It is not a load.
+      vi.setSystemTime(new Date("2026-10-10T14:45:00Z"));
+      act(() =>
+        useEvtxStore.setState((state) => ({
+          loadedChannels: new Set(["System"]),
+          records: state.records.filter((r) => r.channel === "System"),
+        })),
+      );
+      publishRows(useEvtxStore.getState().records);
+
+      expect(right()).toHaveTextContent("Table view · Updated 14:32:05 UTC");
+    });
+
+    describe.each([
+      [
+        "live",
+        { sourceMode: "live" as const, loadedChannels: new Set<string>(), records: [] },
+      ],
+      [
+        "files",
+        { sourceMode: "files" as const, loadedChannels: new Set<string>(), records: [] },
+      ],
+    ])("a %s load that read nothing", (_mode, loaded) => {
+      it("shows no counts and claims no update time", () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-10-10T10:05:12Z"));
+        useEvtxStore.setState({ isLoading: true, sourceMode: loaded.sourceMode, timeZoneMode: "utc" });
+        render(<StatusBar />);
+
+        // Every channel query was refused, or the files held no events: the load ends with nothing.
+        act(() => useEvtxStore.setState({ ...loaded, isLoading: false }));
+
+        // The workspace publishes no summary for it, so no zero reads as a clean result.
+        expect(left().textContent).toBe(loaded.sourceMode === "live" ? "Live" : "Files");
+        expect(right()).toHaveTextContent(/^Table view$/);
+
+        // Not merely hidden: even if a summary were published, no update time was ever stamped.
+        publishRows([]);
+        expect(right()).toHaveTextContent(/^Table view$/);
+      });
     });
   });
 
@@ -592,15 +657,16 @@ describe("StatusBar Event Logs content", () => {
       };
     }
 
+    /** The workspace names the session on screen, then the chain builder publishes for it. */
     function publishCorrelation(
       counts = { exact: 1, candidate: 0, ambiguous: 0, unplaced: 0 },
+      analysis = { generation: useEvtxStore.getState().loadGeneration, sessionId: "session-1", revision: 1 },
     ) {
-      act(() =>
-        useEvtxCorrelationStatusStore.getState().publish({
-          generation: useEvtxStore.getState().loadGeneration,
-          ...counts,
-        }),
-      );
+      act(() => {
+        const store = useEvtxCorrelationStatusStore.getState();
+        store.setAnalysis(analysis);
+        store.publish(correlationStatus(counts, analysis));
+      });
     }
 
     function loadLive() {
@@ -632,16 +698,23 @@ describe("StatusBar Event Logs content", () => {
         coverageBlocked: 1,
       });
 
-      const generation = useEvtxStore.getState().loadGeneration;
-      const status = summarizeEvtxCorrelationStatus(model, 4, generation);
+      const analysis = {
+        generation: useEvtxStore.getState().loadGeneration,
+        sessionId: "session-1",
+        revision: 1,
+      };
+      const status = summarizeEvtxCorrelationStatus(model, 4, analysis);
       expect(status).toEqual({
-        generation,
+        ...analysis,
         exact: 1,
         candidate: 1,
         ambiguous: 1,
         unplaced: 4,
       });
-      act(() => useEvtxCorrelationStatusStore.getState().publish(status));
+      act(() => {
+        useEvtxCorrelationStatusStore.getState().setAnalysis(analysis);
+        useEvtxCorrelationStatusStore.getState().publish(status);
+      });
       render(<StatusBar />);
 
       expect(left()).toHaveTextContent(
@@ -654,26 +727,18 @@ describe("StatusBar Event Logs content", () => {
     it("counts only exact and candidate rows as chains", () => {
       expect(
         evtxStatusText(
-          buildEvtxCorrelationSegments({
-            generation: 0,
-            exact: 3,
-            candidate: 2,
-            ambiguous: 7,
-            unplaced: 0,
-          }),
+          buildEvtxCorrelationSegments(
+            correlationStatus({ exact: 3, candidate: 2, ambiguous: 7, unplaced: 0 }),
+          ),
         ),
       ).toBe(
         "Correlation · 5 chains · 3 exact, 2 candidate, 7 ambiguous · 0 not placed",
       );
       expect(
         evtxStatusText(
-          buildEvtxCorrelationSegments({
-            generation: 0,
-            exact: 1,
-            candidate: 0,
-            ambiguous: 0,
-            unplaced: 1,
-          }),
+          buildEvtxCorrelationSegments(
+            correlationStatus({ exact: 1, candidate: 0, ambiguous: 0, unplaced: 1 }),
+          ),
         ),
       ).toMatch(/^Correlation · 1 chain · /);
     });
@@ -721,31 +786,64 @@ describe("StatusBar Event Logs content", () => {
       );
       // The rows are from the old source too, so the bar has nothing to count until the
       // workspace publishes for the new one.
-      expect(left()).toHaveTextContent(/^Live · 0 text logs$/);
+      expect(left()).toHaveTextContent(/^Live$/);
       expect(left()).not.toHaveTextContent(/chain/);
+    });
+
+    it("never shows counts for an analysis session or revision that is no longer on screen", () => {
+      const session1 = { generation: useEvtxStore.getState().loadGeneration, sessionId: "session-1", revision: 1 };
+      const session1Rebuilt = { ...session1, revision: 2 };
+      loadLive();
+      setLayoutView("correlation");
+      publishCorrelation(undefined, session1);
+      render(<StatusBar />);
+      expect(left()).toHaveTextContent(/^Correlation · 1 chain/);
+
+      // The workspace rebuilt the analysis: the old counts leave at once ...
+      act(() => useEvtxCorrelationStatusStore.getState().setAnalysis(session1Rebuilt));
+      expect(left()).toHaveTextContent(/^Live · 1 channel · /);
+      expect(left()).not.toHaveTextContent(/chain/);
+
+      // ... and work that finishes late for the old revision cannot bring them back.
+      act(() =>
+        useEvtxCorrelationStatusStore
+          .getState()
+          .publish(correlationStatus({ exact: 9, candidate: 0, ambiguous: 0, unplaced: 0 }, session1)),
+      );
+      expect(left()).not.toHaveTextContent(/chain/);
+
+      act(() =>
+        useEvtxCorrelationStatusStore
+          .getState()
+          .publish(correlationStatus({ exact: 2, candidate: 0, ambiguous: 0, unplaced: 0 }, session1Rebuilt)),
+      );
+      expect(left()).toHaveTextContent(/^Correlation · 2 chains/);
+    });
+
+    it("does not attach the loaded-events note to the chain counts", () => {
+      loadLive();
+      // A filter narrows the grid to 1 of 5 loaded events.
+      publishRows([record("Error")], 5);
+      setLayoutView("correlation");
+      publishCorrelation();
+      render(<StatusBar />);
+
+      expect(left()).toHaveTextContent(/^Correlation · 1 chain/);
+      expect(left().getAttribute("title")).not.toMatch(/loaded/);
+
+      setLayoutView("table");
+      expect(left().getAttribute("title")).toMatch(/\(5 loaded\)$/);
     });
   });
 });
 
 describe("Event Logs status helpers", () => {
-  it("counts distinct log files, not lines", () => {
-    expect(
-      countTextLogFiles([
-        { filePath: "a.log" },
-        { filePath: "a.log" },
-        { filePath: "b.log" },
-      ]),
-    ).toBe(2);
-    expect(countTextLogFiles([])).toBe(0);
-  });
-
   it("builds the left text from the spec format", () => {
     expect(
       evtxStatusText(
         buildEvtxCountsSegments({
           sourceMode: "files",
-          textLogs: 3,
-          rows: { channels: 12, visible: 12345, errors: 10, warnings: 2 },
+          rows: { channels: 12, textLogs: 3, visible: 12345, errors: 10, warnings: 2 },
         }),
       ),
     ).toBe(
@@ -753,15 +851,11 @@ describe("Event Logs status helpers", () => {
     );
   });
 
-  it("leaves the channel and event counts out when no rows are published", () => {
+  it("leaves every count out when no rows are published", () => {
     expect(
       evtxStatusText(
-        buildEvtxCountsSegments({
-          sourceMode: "live",
-          textLogs: 0,
-          rows: null,
-        }),
+        buildEvtxCountsSegments({ sourceMode: "live", rows: null }),
       ),
-    ).toBe("Live · 0 text logs");
+    ).toBe("Live");
   });
 });

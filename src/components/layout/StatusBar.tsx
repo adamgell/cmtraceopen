@@ -51,13 +51,13 @@ import {
   type EvtxTimeZoneMode,
 } from "../../workspaces/event-log/evtx-time";
 import {
+  hasReadAnything,
   useEvtxCorrelationStatusStore,
   useEvtxVisibleSummaryStore,
   valueForGeneration,
   type EvtxCorrelationStatus,
   type EvtxVisibleSummary,
 } from "../../workspaces/event-log/evtx-status-summary";
-import { scopeLogEntries } from "../../workspaces/event-log/unified-timeline";
 import { useSecureBootStore } from "../../workspaces/secureboot/secureboot-store";
 import { getWorkspace } from "../../workspaces/registry";
 import type { WorkspaceDefinition } from "../../workspaces/types";
@@ -155,38 +155,34 @@ function countRuns(count: number, singular: string, plural = `${singular}s`) {
   ] satisfies EvtxStatusSegment;
 }
 
-/** Distinct source files among the text-log entries the workspace correlates. */
-export function countTextLogFiles(
-  entries: readonly { filePath: string }[],
-): number {
-  return new Set(entries.map((entry) => entry.filePath)).size;
-}
-
 export interface EvtxStatusCounts {
   sourceMode: Exclude<EvtxSourceMode, null>;
-  textLogs: number;
   /**
-   * The workspace's summary of the source on screen, or null while it is not published for it
-   * (the workspace is still mounting, or a query has just finished). The channel and event counts
-   * are then left out rather than shown as zero or recounted here.
+   * The workspace's summary of the source on screen, or null while it is not published for it:
+   * the workspace is still mounting, a query has just finished, or the read produced nothing.
+   * Every count is then left out rather than shown as zero or recounted here.
    */
-  rows: Pick<EvtxVisibleSummary, "channels" | "visible" | "errors" | "warnings"> | null;
+  rows: Pick<
+    EvtxVisibleSummary,
+    "channels" | "textLogs" | "visible" | "errors" | "warnings"
+  > | null;
 }
 
 /** "{Live|Files} · {c} channels · {l} text logs · {n} events · {e} errors · {w} warnings". */
 export function buildEvtxCountsSegments(
   counts: EvtxStatusCounts,
 ): EvtxStatusSegment[] {
+  const { rows } = counts;
   return [
     [{ text: counts.sourceMode === "live" ? "Live" : "Files" }],
-    ...(counts.rows === null ? [] : [countRuns(counts.rows.channels, "channel")]),
-    countRuns(counts.textLogs, "text log"),
-    ...(counts.rows === null
+    ...(rows === null
       ? []
       : [
-          countRuns(counts.rows.visible, "event"),
-          countRuns(counts.rows.errors, "error"),
-          countRuns(counts.rows.warnings, "warning"),
+          countRuns(rows.channels, "channel"),
+          countRuns(rows.textLogs, "text log"),
+          countRuns(rows.visible, "event"),
+          countRuns(rows.errors, "error"),
+          countRuns(rows.warnings, "warning"),
         ]),
   ];
 }
@@ -333,6 +329,7 @@ export function StatusBar() {
   const evtxRecords = useEvtxStore((s) => s.records);
   const evtxSourceMode = useEvtxStore((s) => s.sourceMode);
   const evtxIsLoading = useEvtxStore((s) => s.isLoading);
+  const evtxLoadedChannelCount = useEvtxStore((s) => s.loadedChannels.size);
   const evtxTimeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const evtxLoadGeneration = useEvtxStore((s) => s.loadGeneration);
   const evtxLayoutView = useEvtxLayoutStore((s) => s.activeView);
@@ -340,7 +337,6 @@ export function StatusBar() {
   // generation it was computed under and is used only while that is still the current one.
   const evtxVisibleSummary = useEvtxVisibleSummaryStore((s) => s.summary);
   const evtxCorrelationStatus = useEvtxCorrelationStatusStore((s) => s.status);
-  const currentPlatform = useUiStore((s) => s.currentPlatform);
 
   const securebootAnalysisState = useSecureBootStore((s) => s.analysisState);
   const securebootResult = useSecureBootStore((s) => s.result);
@@ -401,40 +397,33 @@ export function StatusBar() {
     return null;
   }, [entries, filteredIds, selectedId]);
 
-  // The text logs Event Logs correlates are the log store's entries after the same scoping the
-  // workspace applies before it builds the analysis session.
-  const evtxTextLogCount = useMemo(
-    () =>
-      activeView === "event-log"
-        ? countTextLogFiles(
-            scopeLogEntries(
-              entries,
-              activeSource,
-              sourceOpenMode,
-              currentPlatform,
-            ),
-          )
-        : 0,
-    [activeView, entries, activeSource, sourceOpenMode, currentPlatform],
-  );
-
   // "Updated" is the last load or tail append the status bar observed. The store keeps no
   // wall-clock stamp. AppShell renders the bar unconditionally, so it stays mounted across
-  // workspace switches and sees every settled change to the loaded records. Records that were
-  // already loaded when the bar mounted get no stamp: that time was not observed, so it is left
-  // out rather than guessed. (A remount would restart the stamp the same way.)
+  // workspace switches and sees every settled change to the loaded records. A load that read
+  // nothing is not an update, and neither is a shrinking record set (clearing a channel): only a
+  // finished load or a record set that grew counts. Records that were already loaded when the bar
+  // mounted get no stamp: that time was not observed, so it is left out rather than guessed. (A
+  // remount would restart the stamp the same way.)
   const [evtxUpdatedAt, setEvtxUpdatedAt] = useState<number | null>(null);
-  const observedRecordsRef = useRef(evtxRecords);
+  const observedRecordCountRef = useRef(evtxRecords.length);
   const wasLoadingRef = useRef(evtxIsLoading);
   useEffect(() => {
-    const recordsChanged = observedRecordsRef.current !== evtxRecords;
+    const grew = evtxRecords.length > observedRecordCountRef.current;
     const loadFinished = wasLoadingRef.current && !evtxIsLoading;
-    observedRecordsRef.current = evtxRecords;
+    observedRecordCountRef.current = evtxRecords.length;
     wasLoadingRef.current = evtxIsLoading;
-    if (evtxIsLoading || (!recordsChanged && !loadFinished)) return;
-    if (evtxSourceMode !== "live" && evtxSourceMode !== "files") return;
+    if (evtxIsLoading || (!grew && !loadFinished)) return;
+    if (
+      !hasReadAnything({
+        sourceMode: evtxSourceMode,
+        loadedChannelCount: evtxLoadedChannelCount,
+        recordCount: evtxRecords.length,
+      })
+    ) {
+      return;
+    }
     setEvtxUpdatedAt(Date.now());
-  }, [evtxRecords, evtxIsLoading, evtxSourceMode]);
+  }, [evtxRecords, evtxIsLoading, evtxSourceMode, evtxLoadedChannelCount]);
 
   let elapsedText = "";
   if (activeView === "log" && selectedId !== null && entries.length > 0) {
@@ -719,21 +708,20 @@ export function StatusBar() {
         evtxCorrelationStatus,
         evtxLoadGeneration,
       );
-      leftSegments =
-        evtxLayoutView === "correlation" && correlation !== null
-          ? buildEvtxCorrelationSegments(correlation)
-          : buildEvtxCountsSegments({
-              sourceMode: evtxSourceMode,
-              textLogs: evtxTextLogCount,
-              rows,
-            });
-      if (rows !== null && rows.visible !== rows.loaded) {
-        // The chip row's "of {loaded}", for a filter that narrows the grid.
-        leftTitleNote = ` (${rows.loaded.toLocaleString()} loaded)`;
+      if (rows !== null && evtxLayoutView === "correlation" && correlation !== null) {
+        leftSegments = buildEvtxCorrelationSegments(correlation);
+      } else {
+        leftSegments = buildEvtxCountsSegments({ sourceMode: evtxSourceMode, rows });
+        if (rows !== null && rows.visible !== rows.loaded) {
+          // The chip row's "of {loaded}", for a filter that narrows the grid. It belongs to the
+          // event count, so the Correlation variant, whose numbers are chains, does not carry it.
+          leftTitleNote = ` (${rows.loaded.toLocaleString()} loaded)`;
+        }
       }
+      // A read that produced nothing publishes no rows, and no update time is claimed for it.
       rightSegments = [
         [{ text: `${EVTX_VIEW_LABELS[evtxLayoutView]} view` }],
-        ...(evtxUpdatedAt === null
+        ...(evtxUpdatedAt === null || rows === null
           ? []
           : [
               [

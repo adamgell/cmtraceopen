@@ -45,6 +45,8 @@ import { selectVisibleRecords } from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
 import {
+  countTextLogSources,
+  hasReadAnything,
   loadedChannelCountFor,
   summarizeVisibleRecords,
   useEvtxCorrelationStatusStore,
@@ -286,31 +288,54 @@ export function EventLogWorkspace() {
   // The global status bar shows the grid's own counts (spec 8.14), so the workspace publishes a
   // summary of `visibleRecords` above instead of the bar running a second pass. The summary is
   // keyed by the store's load generation, which every new load, refresh, source change and reset
-  // bumps, so the bar never shows it against another source. It is cleared while a query runs
-  // (`visibleRecords` is empty then, and "0 events" must not read as a result) and on unmount.
+  // bumps, so the bar never shows it against another source. Nothing is published while a query
+  // runs (`visibleRecords` is empty then) or when the read produced nothing (a refused or failed
+  // load): "0 events, 0 errors" would read as a clean result, and those counts are unknown. The
+  // summary is cleared on unmount.
   const loadGeneration = useEvtxStore((s) => s.loadGeneration);
   const loadedChannels = useEvtxStore((s) => s.loadedChannels);
   const loadedChannelCount = useMemo(
     () => loadedChannelCountFor({ sourceMode, loadedChannels, records }),
     [sourceMode, loadedChannels, records],
   );
+  const textLogSourceCount = useMemo(
+    () => countTextLogSources(scopedLogEntries, records),
+    [scopedLogEntries, records],
+  );
+  const readAnything = hasReadAnything({
+    sourceMode,
+    loadedChannelCount: loadedChannels.size,
+    recordCount: records.length,
+  });
   useEffect(() => {
     useEvtxVisibleSummaryStore
       .getState()
       .publish(
-        isLoading
+        isLoading || !readAnything
           ? null
           : summarizeVisibleRecords(
               visibleRecords,
-              { events: records.length, channels: loadedChannelCount },
+              {
+                events: records.length,
+                channels: loadedChannelCount,
+                textLogs: textLogSourceCount,
+              },
               loadGeneration,
             ),
       );
-  }, [isLoading, visibleRecords, records.length, loadedChannelCount, loadGeneration]);
+  }, [
+    isLoading,
+    readAnything,
+    visibleRecords,
+    records.length,
+    loadedChannelCount,
+    textLogSourceCount,
+    loadGeneration,
+  ]);
   useEffect(
     () => () => {
       useEvtxVisibleSummaryStore.getState().publish(null);
-      useEvtxCorrelationStatusStore.getState().publish(null);
+      useEvtxCorrelationStatusStore.getState().setAnalysis(null);
     },
     [],
   );
@@ -441,8 +466,9 @@ export function EventLogWorkspace() {
     setInitialTimelinePage(null);
     setTimelineError(null);
     // Chain counts come from the analysis session just discarded. Phase 10 publishes the next
-    // ones through evtx-status-summary once it has built the chain model.
-    useEvtxCorrelationStatusStore.getState().publish(null);
+    // ones through evtx-status-summary once it has built the chain model; until the new session
+    // is named below, the store holds none.
+    useEvtxCorrelationStatusStore.getState().setAnalysis(null);
 
     if (isLoading) {
       setTimelinePending(true);
@@ -501,6 +527,11 @@ export function EventLogWorkspace() {
             return;
           }
           pump.publishedSessionId = result.status.sessionId;
+          useEvtxCorrelationStatusStore.getState().setAnalysis({
+            generation: useEvtxStore.getState().loadGeneration,
+            sessionId: result.status.sessionId,
+            revision: result.status.revision,
+          });
           setAnalysisStatus(result.status);
           setInitialTimelinePage(result.initialPage);
           setDiagnosis(result.diagnosis);
