@@ -1,6 +1,5 @@
 import {
   lazy,
-  Suspense,
   useCallback,
   useMemo,
   useRef,
@@ -548,9 +547,10 @@ export function EventLogWorkspace() {
   const chartMetrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
   const chartChannelOrder = useMemo(() => channels.map((c) => c.name), [channels]);
   const chartHideRules = useMemo(() => [quickFilter], [quickFilter]);
-  // Chains come from the first timeline page and its bounded edge preview, so
-  // `edgeInputComplete` tells the Charts tile when the count is a loaded subset.
-  const chartChains = useMemo(
+  // Phase 10c replaces this with the shared chain model. Until then the Charts chains KPI builds
+  // its own from the first timeline page and its bounded edge preview, only while Charts is
+  // active, so `edgeInputComplete` tells the tile when the count is a loaded subset.
+  const chartsViewChains = useMemo(
     () =>
       activeView === "charts" && initialTimelinePage
         ? buildCorrelationChains({
@@ -563,19 +563,17 @@ export function EventLogWorkspace() {
     [activeView, initialTimelinePage],
   );
   const renderChartsView = () => (
-    <Suspense fallback={<RegionPlaceholder title="Charts view loading" />}>
-      <EvtxChartsView
-        records={visibleRecords}
-        chains={chartChains}
-        hideRules={chartHideRules}
-        channelOrder={chartChannelOrder}
-        timeZoneMode={timeZoneMode}
-        loadedChannelCount={channels.length}
-        textLogCount={analysisStatus?.logItems ?? 0}
-        metrics={chartMetrics}
-        visualTokens={visualTokens}
+    <EvtxChartsView
+      records={visibleRecords}
+      chains={chartsViewChains}
+      hideRules={chartHideRules}
+      channelOrder={chartChannelOrder}
+      timeZoneMode={timeZoneMode}
+      loadedChannelCount={channels.length}
+      textLogCount={analysisStatus?.logItems ?? 0}
+      metrics={chartMetrics}
+      visualTokens={visualTokens}
       />
-    </Suspense>
   );
 
   const views: Record<EvtxViewId, EvtxViewEntry> = {
