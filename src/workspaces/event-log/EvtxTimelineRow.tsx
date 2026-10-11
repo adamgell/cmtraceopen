@@ -5,7 +5,6 @@ import {
   ChevronUp12Regular,
   Link12Regular,
   Link16Regular,
-  Search12Regular,
 } from "@fluentui/react-icons";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
@@ -90,7 +89,7 @@ export interface EvtxRowPalette {
   background: string;
   /** Primary text: ID, channel, message, and the text of tinted and selected rows. */
   ink: string;
-  /** Time, provider, optional columns, and the quick-filter match icon. */
+  /** Time, provider and the optional columns. */
   secondary: string;
   /** The links cell. */
   link: string;
@@ -100,6 +99,12 @@ export interface EvtxRowPalette {
   swatchOutline: string | null;
   /** The 3 px selection inset; null when the row is not selected. */
   selectionInset: string | null;
+  /**
+   * The quick-filter highlight's outline and underline. It is the row's primary text color, so it
+   * is as far from the row's own background as the text is (4.5:1 or better) whatever the tint,
+   * and the highlight draws no fill, so it can never be taken for a tint or the selection.
+   */
+  highlight: string;
 }
 
 /**
@@ -129,6 +134,7 @@ export function buildEvtxRowPalette(
       icon: levelVisual.selectedIconColor,
       swatchOutline: visual.markOutline("selected"),
       selectionInset: visual.selection.border,
+      highlight: ink,
     };
   }
   // Plain levels take `colorNeutralBackground1` as their row background; the others are tinted.
@@ -143,6 +149,7 @@ export function buildEvtxRowPalette(
       icon: levelVisual.iconColor,
       swatchOutline: visual.markOutline(level),
       selectionInset: null,
+      highlight: ink,
     };
   }
   return {
@@ -153,6 +160,7 @@ export function buildEvtxRowPalette(
     icon: levelVisual.iconColor,
     swatchOutline: null,
     selectionInset: null,
+    highlight: levelVisual.rowText,
   };
 }
 
@@ -174,10 +182,32 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * The quick-filter highlight, drawn from the row's own colors.
+ *
+ * The browser's default `mark` paints yellow with black text, which is invisible on the classic
+ * Warning row (#FFFF00) and close to the light theme's Warning tint. This keeps the row's text
+ * color, draws no fill, and marks the term with a 1 px outline and a 2 px underline in the row's
+ * primary text color, both of which survive forced colors.
+ */
+function highlightStyle(color: string): CSSProperties {
+  return {
+    backgroundColor: "transparent",
+    color: "inherit",
+    outline: `1px solid ${color}`,
+    borderRadius: "2px",
+    textDecorationLine: "underline",
+    textDecorationColor: color,
+    textDecorationThickness: "2px",
+    textUnderlineOffset: "2px",
+  };
+}
+
 function highlightValue(
   value: string,
   terms: readonly string[],
-  caseSensitive: boolean
+  caseSensitive: boolean,
+  markStyle: CSSProperties
 ) {
   if (terms.length === 0) return value;
   const pattern = terms.map(escapeRegExp).join("|");
@@ -189,7 +219,7 @@ function highlightValue(
     // quick-filter regular expression never matched.
     const matched = index % 2 === 1;
     return matched ? (
-      <mark key={`${part}-${index}`} aria-label="Quick-filter match">
+      <mark key={`${part}-${index}`} aria-label="Quick-filter match" style={markStyle}>
         {part}
       </mark>
     ) : (
@@ -203,7 +233,10 @@ function highlightValue(
  *
  * The table row no longer carries them (spec 8.7: the row keeps only the marker color in its left
  * slot, and the `t` and `b` keys); this is the pointer route to the same two actions.
- * `variant` is the one value the Details pane passes, kept so that call is unchanged.
+ *
+ * `variant` does nothing: the timeline variant it once selected is gone. It stays only so the
+ * Details pane's call is unchanged while Phase 4 (#830) rewrites that file. Phase 4 removes the
+ * prop and the call-site attribute together.
  */
 export function EvtxMarkerControls({
   record,
@@ -331,7 +364,6 @@ export interface EvtxTimelineRowProps {
   dataIndex: number;
   isSelected: boolean;
   fontSize: number;
-  smallFontSize: number;
   monoFontSize: number;
   lineHeight: string;
   /** `getLogListMetrics(...).rowHeight`: the row's border-box height (spec D1). */
@@ -372,7 +404,6 @@ export const EvtxTimelineRow = memo(
       dataIndex,
       isSelected,
       fontSize,
-      smallFontSize,
       monoFontSize,
       lineHeight,
       rowHeight,
@@ -417,6 +448,7 @@ export const EvtxTimelineRow = memo(
       filterMatch ? "Quick-filter match" : null,
       markerAddressable ? null : "Markers unavailable: EventRecordID is missing",
     ].filter(Boolean).join("; ");
+    const markStyle = highlightStyle(palette.highlight);
     const LevelIcon = visual.levels[record.level].GridIcon;
     const hasLinks = linkCount !== undefined && Number.isInteger(linkCount) && linkCount > 0;
     return (
@@ -437,7 +469,6 @@ export const EvtxTimelineRow = memo(
         aria-description={ariaDescription}
         tabIndex={tabIndex}
         onKeyDown={(e) => {
-          if (e.target instanceof HTMLButtonElement) return;
           const hasShortcutModifier =
             e.ctrlKey || e.altKey || e.shiftKey || e.metaKey;
           if (e.key === "Enter" || e.key === " ") {
@@ -497,7 +528,12 @@ export const EvtxTimelineRow = memo(
           } as const;
           const text = (display: string) =>
             highlightEnabled
-              ? highlightValue(display, highlightTerms, quickFilter?.caseSensitive ?? false)
+              ? highlightValue(
+                  display,
+                  highlightTerms,
+                  quickFilter?.caseSensitive ?? false,
+                  markStyle
+                )
               : display;
 
           if (column.id === "level") {
@@ -623,9 +659,10 @@ export const EvtxTimelineRow = memo(
               };
               break;
             default:
+              // Grid text is the font size (D1, 7.1), with the numeric face for numeric columns.
               cellStyle = {
                 ...(NUMERIC_EXTRA_COLUMNS.has(column.id) ? NUMERIC : null),
-                fontSize: `${smallFontSize}px`,
+                fontSize: `${fontSize}px`,
                 color: palette.secondary,
               };
           }
@@ -641,30 +678,23 @@ export const EvtxTimelineRow = memo(
             </div>
           );
         })}
-        {filterMatch && (
-          // The match marker costs no column. The highlight shows where a term matched in a
-          // visible cell; this is the only sign when it matched in a column that is hidden, in
-          // EventData, in the `Microsoft-Windows-` prefix the channel cell does not show, or when
-          // highlighting is off. It sits in the row's right padding, and the row's own
-          // aria-description ("Quick-filter match") is what assistive technology reads.
+        {isSelected && (
+          // Forced colors (a Windows contrast theme) replaces the background and drops the inset
+          // box-shadow, which would leave nothing to show the row is selected. A transparent
+          // outline is drawn in the system color there, and is invisible otherwise. It is its own
+          // element so it does not replace the row's focus ring, which an outline on the row
+          // itself would.
           <span
             aria-hidden="true"
-            data-evtx-filter-match-label="true"
-            title="Matches the quick filter"
+            data-evtx-selected-cue="true"
             style={{
               position: "absolute",
-              top: 0,
-              right: 0,
-              bottom: 0,
-              width: `${ROW_PADDING_X}px`,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: palette.secondary,
+              inset: 0,
+              pointerEvents: "none",
+              outline: "2px solid transparent",
+              outlineOffset: "-2px",
             }}
-          >
-            <Search12Regular />
-          </span>
+          />
         )}
       </div>
     );

@@ -24,7 +24,7 @@ import {
 } from "./evtx-filter";
 import type { EvtxRecord, EvtxLevel } from "./types";
 import { visibleColumns } from "./evtx-columns";
-import { EvtxTimelineHeader, EvtxTimelineRow } from "./EvtxTimelineRow";
+import { evtxRowMinWidth, EvtxTimelineHeader, EvtxTimelineRow } from "./EvtxTimelineRow";
 
 const LEVEL_ORDER: Record<EvtxLevel, number> = {
   Critical: 0,
@@ -401,8 +401,8 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
   const grid = (
     <div
       ref={parentRef}
-      // Rows contain real marker buttons. A grid permits those controls inside a gridcell while a
-      // treegrid also carries the grouped rows' hierarchy and disclosure state.
+      // One tab stop, roving across the rows, and arrow-key navigation between them: the grid
+      // pattern. A treegrid adds the grouped rows' hierarchy and disclosure state.
       role={groupBy.length > 0 ? "treegrid" : "grid"}
       tabIndex={-1}
       onKeyDown={handleKeyDown}
@@ -476,6 +476,9 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                     // it, so positioning a header absolutely applied that offset a second time and
                     // took it out of flow, letting the rows beneath slide up into its place.
                     width: "100%",
+                    // As wide as the record rows, so the band spans every column when the grid
+                    // is narrower than they are and scrolls sideways.
+                    minWidth: `${evtxRowMinWidth(columnConfig, columns)}px`,
                     display: "flex",
                     alignItems: "center",
                     paddingLeft: `${8 + row.depth * 16}px`,
@@ -523,7 +526,6 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                 dataIndex={virtualRow.index}
                 isSelected={selectedRecordId === record.id}
                 fontSize={fontSize}
-                smallFontSize={smallFontSize}
                 monoFontSize={monoFontSize}
                 lineHeight={lineHeight}
                 rowHeight={metrics.rowHeight}

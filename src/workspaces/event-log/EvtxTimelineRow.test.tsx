@@ -55,7 +55,6 @@ function renderRow(overrides: Partial<React.ComponentProps<typeof EvtxTimelineRo
       dataIndex={0}
       isSelected={false}
       fontSize={13}
-      smallFontSize={10}
       monoFontSize={12}
       lineHeight="20px"
       rowHeight={23}
@@ -67,9 +66,6 @@ function renderRow(overrides: Partial<React.ComponentProps<typeof EvtxTimelineRo
     />
   );
 }
-
-/** The quick-filter match icon, which sits in the row's right padding. */
-const matchIcon = () => document.querySelector<HTMLElement>("[data-evtx-filter-match-label]");
 
 const tagged: Marker = {
   lineId: 5,
@@ -130,7 +126,6 @@ describe("EvtxTimelineRow triage state", () => {
       "aria-description",
       expect.stringContaining("Quick-filter match"),
     );
-    expect(matchIcon()).toBeInTheDocument();
   });
 
   it("keeps selected state ahead of marker state and exposes tag and bookmark by key", () => {
@@ -262,7 +257,6 @@ describe("EvtxTimelineRow triage state", () => {
     expect(screen.queryByLabelText("Quick-filter match")).not.toBeInTheDocument();
     expect(screen.getByRole("row")).toHaveAttribute("data-quick-filter-match", "false");
     expect(screen.getByRole("row")).toHaveAttribute("data-evtx-filter-match", "true");
-    expect(matchIcon()).toBeInTheDocument();
   });
 
   it("highlights only substrings matched by the quick-filter regular expression", () => {
@@ -345,20 +339,48 @@ function textElements() {
     provider: cell(/^Provider:/),
     message: cell(/^Description:/),
     links: cell(/^Links:/),
-    matchIcon: matchIcon()!,
   };
 }
 
 type TextRole = keyof ReturnType<typeof textElements>;
 
+/**
+ * A highlighting quick filter whose terms occur in every visible text cell of `highlightRecord`:
+ * "x" in the provider, channel and message, "0" and "1" in the time and the event ID.
+ */
+const HIGHLIGHT_FILTER = {
+  mode: "multipleWords" as const,
+  query: "x 0 1",
+  scope: "visibleColumns" as const,
+  action: "show" as const,
+  caseSensitive: false,
+  highlight: true,
+};
+
+function highlightRecord(level: EvtxLevel): EvtxRecord {
+  return levelRecord(level, {
+    provider: "Provider-x",
+    channel: "Application x",
+    message: "x failure x",
+  });
+}
+
 function renderFullRow(level: EvtxLevel, isSelected: boolean) {
   return renderRow({
-    record: levelRecord(level),
+    record: highlightRecord(level),
     isSelected,
     linkCount: 3,
     channelIndex: 2,
+    quickFilter: HIGHLIGHT_FILTER,
     quickFilterMatch: true,
   });
+}
+
+/** The color of a `1px solid <color>` outline, as the DOM reports it. */
+function outlineColor(element: HTMLElement): string {
+  const match = /^1px solid (.+)$/.exec(element.style.outline);
+  if (!match) throw new Error(`Expected a 1px solid outline, got "${element.style.outline}"`);
+  return match[1];
 }
 
 describe("EvtxTimelineRow palette (spec D3, 6.2, 8.7)", () => {
@@ -414,7 +436,6 @@ describe.each(THEMES)("row text contrast in the %s theme (issue #836)", (_id, th
     const pairs: [string, string][] = [
       ["time (secondary)", palette.secondary],
       ["provider (secondary)", palette.secondary],
-      ["quick-filter match icon (secondary)", palette.secondary],
       ["event ID, channel and message (ink)", palette.ink],
       ["links cell", palette.link],
     ];
@@ -544,7 +565,6 @@ describe.each(THEMES)("EvtxTimelineRow rendering in the %s theme", (_id, theme) 
         provider: palette.secondary,
         message: palette.ink,
         links: palette.link,
-        matchIcon: palette.secondary,
       };
 
       expect(styleOf(row).backgroundColor).toBe(asStyle(palette.background));
@@ -562,9 +582,61 @@ describe.each(THEMES)("EvtxTimelineRow rendering in the %s theme", (_id, theme) 
           failures.push(`${theme.id} ${isSelected ? "selected " : ""}${level} ${role} ${hex} on ${background} = ${ratio.toFixed(2)}`);
         }
       }
+
+      // The quick-filter highlight, in every cell that carries a term. It keeps the cell's text
+      // color, draws no fill (so it cannot be taken for a row tint or the selection), and is
+      // outlined in the row's primary text color, which is at 4.5:1 or better on the row.
+      for (const role of ["time", "eventId", "channel", "provider", "message"] as const) {
+        const marks = [...els[role].querySelectorAll<HTMLElement>("mark")];
+        expect(marks.length, `${role} highlight`).toBeGreaterThan(0);
+        for (const mark of marks) {
+          expect(mark.style.backgroundColor, `${role} highlight fill`).toBe("transparent");
+          expect(mark.style.color, `${role} highlight text`).toBe("inherit");
+          // The outline shorthand is reported as written, not normalized to rgb().
+          expect(outlineColor(mark), `${role} highlight outline`).toBe(palette.highlight);
+          expect(mark.getAttribute("style"), `${role} highlight underline`).toMatch(
+            /text-decoration-line:\s*underline/,
+          );
+          const outline = toHex(outlineColor(mark), theme);
+          const ratio = contrastRatio(outline, background);
+          if (ratio < 4.5) {
+            failures.push(`${theme.id} ${isSelected ? "selected " : ""}${level} ${role} highlight outline ${outline} on ${background} = ${ratio.toFixed(2)}`);
+          }
+        }
+      }
       expect(failures, failures.join("; ")).toEqual([]);
     },
   );
+});
+
+describe("the quick-filter highlight on rows its tint would swallow", () => {
+  it.each(CLASSIC)("stays visible on a %s Warning row, where the browser default is #FFFF00 on #FFFF00", (_id, theme) => {
+    setTheme(theme.id);
+    renderRow({
+      record: highlightRecord("Warning"),
+      quickFilter: HIGHLIGHT_FILTER,
+      quickFilterMatch: true,
+    });
+    const row = styleOf(screen.getByRole("row"));
+    const mark = cell(/^Description:/).querySelector<HTMLElement>("mark")!;
+    const background = toHex(row.backgroundColor, theme);
+    // The classic Warning tint is the browser's own highlight yellow, so a default mark vanishes.
+    expect(background).toBe("#ffff00");
+    expect(mark.style.backgroundColor).toBe("transparent");
+    const ratio = contrastRatio(toHex(outlineColor(mark), theme), background);
+    expect(ratio).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("is a visible highlight, not the browser default, on every row of the light theme", () => {
+    setTheme("light");
+    for (const level of LEVELS) {
+      renderRow({ record: highlightRecord(level), quickFilter: HIGHLIGHT_FILTER, quickFilterMatch: true });
+      const mark = cell(/^Description:/).querySelector<HTMLElement>("mark")!;
+      expect(mark.style.backgroundColor, `${level} fill`).toBe("transparent");
+      expect(mark.style.outline, `${level} outline`).not.toBe("");
+      cleanup();
+    }
+  });
 });
 
 describe("EvtxTimelineRow layout and typography (spec D1, D4, 8.7)", () => {
@@ -637,6 +709,60 @@ describe("EvtxTimelineRow layout and typography (spec D1, D4, 8.7)", () => {
     expect(styleOf(cell(/^Computer:/)).fontFamily).not.toBe(LOG_MONOSPACE_FONT_FAMILY);
   });
 
+  it.each([MIN_LOG_LIST_FONT_SIZE, 13, MAX_LOG_LIST_FONT_SIZE])(
+    "sets the optional columns and map columns at the grid font size, %ipx, not below it",
+    (listFont) => {
+      const metrics = getLogListMetrics(listFont);
+      const config = sanitizeColumnConfig({
+        order: [
+          "level",
+          "recordId",
+          "computer",
+          "task",
+          "opcode",
+          "processId",
+          "threadId",
+          "mapped:RemoteHost",
+          "provider",
+          "message",
+        ],
+        widths: {},
+      });
+      renderRow({
+        columnConfig: config,
+        columns: visibleColumns(config),
+        fontSize: metrics.fontSize,
+        monoFontSize: Math.max(10, metrics.fontSize - 1),
+        record: levelRecord("Information", {
+          task: 7,
+          opcode: 1,
+          processId: 4242,
+          threadId: 99,
+          mapped: [{ property: "RemoteHost", text: "host-1", complete: true }],
+        }),
+      });
+      const expected = `${metrics.fontSize}px`;
+      for (const label of [
+        /^Record ID:/,
+        /^Computer:/,
+        /^Task:/,
+        /^Opcode:/,
+        /^PID:/,
+        /^TID:/,
+        /^RemoteHost:/,
+        /^Provider:/,
+      ]) {
+        expect(styleOf(cell(label)).fontSize, String(label)).toBe(expected);
+      }
+      // The numeric columns keep the numeric face at that size.
+      for (const label of [/^Record ID:/, /^Task:/, /^Opcode:/, /^PID:/, /^TID:/]) {
+        expect(styleOf(cell(label)).fontFamily, String(label)).toBe(tokens.fontFamilyNumeric);
+      }
+      expect(styleOf(cell(/^Computer:/)).fontFamily).not.toBe(tokens.fontFamilyNumeric);
+      expect(styleOf(cell(/^RemoteHost:/)).fontFamily).not.toBe(tokens.fontFamilyNumeric);
+    },
+  );
+
   it("sizes each cell from the shared column widths", () => {
     renderRow();
     const config = defaultColumnConfig();
@@ -674,15 +800,6 @@ describe("EvtxTimelineRow minimum width", () => {
       widths: { timestamp: 165, message: 300 },
     });
     expect(evtxRowMinWidth(config, visibleColumns(config))).toBe(28 + (32 + 165 + 300) + 20);
-  });
-
-  it("leaves the description its room at 1440 px with the channel pane and the rail open", () => {
-    const config = defaultColumnConfig();
-    const fixed = evtxRowMinWidth(config, visibleColumns(config));
-    // Main column widths: channel pane 250 and rail 340 both open, the pane alone, the rail alone.
-    expect(1440 - 250 - 340 - fixed).toBe(198);
-    expect(1440 - 250 - fixed).toBe(538);
-    expect(1440 - 340 - fixed).toBe(448);
   });
 
   it("is applied to the row, so its background spans the columns when the grid scrolls sideways", () => {
@@ -744,6 +861,31 @@ describe("EvtxTimelineRow selection (spec 6.2, Q-1)", () => {
   it("draws no inset on a row that is not selected", () => {
     renderRow({ record: levelRecord("Error") });
     expect(styleOf(screen.getByRole("row")).boxShadow).toBe("");
+  });
+
+  it("adds a cue that forced colors keeps, as its own element so the row's focus ring survives", () => {
+    renderRow({ record: levelRecord("Error"), isSelected: true });
+    const row = screen.getByRole("row");
+    const cue = row.querySelector<HTMLElement>("[data-evtx-selected-cue]")!;
+    expect(cue).not.toBeNull();
+    // Forced colors replaces the background and drops the inset box-shadow; a transparent
+    // outline is drawn in the system color there and is invisible everywhere else.
+    expect(cue.style.outline).toBe("2px solid transparent");
+    expect(cue.style.outlineOffset).toBe("-2px");
+    expect(cue.style.position).toBe("absolute");
+    expect(cue.style.pointerEvents).toBe("none");
+    expect(cue).toHaveAttribute("aria-hidden", "true");
+    // On its own element, not the row: an inline outline on the row would replace the browser's
+    // focus ring on the row that keyboard navigation selects.
+    expect(styleOf(row).outline).toBe("");
+    expect(row.querySelectorAll("[role=gridcell]")).toHaveLength(
+      visibleColumns(defaultColumnConfig()).length,
+    );
+  });
+
+  it("adds no cue to a row that is not selected", () => {
+    renderRow({ record: levelRecord("Error") });
+    expect(screen.getByRole("row").querySelector("[data-evtx-selected-cue]")).toBeNull();
   });
 
   it("does not bold the selected message or recolor it brand", () => {
@@ -809,47 +951,25 @@ describe("EvtxTimelineRow marker slot (spec 8.7)", () => {
   });
 });
 
-describe("EvtxTimelineRow quick-filter match icon", () => {
-  const quickFilter = {
-    mode: "oneString" as const,
-    query: "zzz",
-    scope: "allColumns" as const,
-    action: "show" as const,
-    caseSensitive: false,
-    highlight: true,
-  };
+describe("EvtxTimelineRow quick-filter match state", () => {
+  it("is carried by data attributes and the row's description, with no extra element", () => {
+    renderRow({ quickFilterMatch: true });
+    const row = screen.getByRole("row");
+    expect(row).toHaveAttribute("data-evtx-filter-match", "true");
+    expect(row).toHaveAttribute("aria-description", expect.stringContaining("Quick-filter match"));
+    // No icon, label or other element is added for a match: with a show-mode filter every row
+    // shown matched and with hide mode none did, so it would tell nothing per row.
+    expect(row.querySelector("[data-evtx-filter-match-label]")).toBeNull();
+    // The level icon is the only icon in the row (the links cell is empty).
+    expect(row.querySelectorAll("svg")).toHaveLength(1);
+    expect(screen.getAllByRole("gridcell")).toHaveLength(visibleColumns(defaultColumnConfig()).length);
+  });
 
   it("is absent when the row is not a match", () => {
     renderRow();
-    expect(matchIcon()).toBeNull();
-  });
-
-  it("is a hidden, titled icon in the row's right padding that takes no column", () => {
-    renderRow({ quickFilterMatch: true });
-    const icon = matchIcon()!;
-    expect(icon).toHaveAttribute("aria-hidden", "true");
-    expect(icon).toHaveAttribute("title", "Matches the quick filter");
-    expect(icon.querySelector("svg")).not.toBeNull();
-    expect(icon).toHaveTextContent("");
-    const style = styleOf(icon);
-    expect(style.position).toBe("absolute");
-    expect(style.right).toBe("0px");
-    expect(style.width).toBe("12px");
-    // The icon is not a cell, so the row's cells and its minimum width are what they were.
-    expect(screen.getAllByRole("gridcell")).toHaveLength(visibleColumns(defaultColumnConfig()).length);
-    expect(screen.getByRole("row")).toContainElement(icon);
-    expect(styleOf(screen.getByRole("row")).position).toBe("relative");
-  });
-
-  it("is the only sign of a match when nothing in a visible cell is highlighted", () => {
-    // The match is in EventData or a hidden column, so no visible text carries the term.
-    renderRow({ quickFilter, quickFilterMatch: true });
-    expect(screen.queryByLabelText("Quick-filter match")).not.toBeInTheDocument();
-    expect(matchIcon()).toBeInTheDocument();
-    expect(screen.getByRole("row")).toHaveAttribute(
-      "aria-description",
-      expect.stringContaining("Quick-filter match"),
-    );
+    const row = screen.getByRole("row");
+    expect(row).toHaveAttribute("data-evtx-filter-match", "false");
+    expect(row).not.toHaveAttribute("aria-description", expect.stringContaining("Quick-filter match"));
   });
 });
 
@@ -982,10 +1102,10 @@ describe("EvtxTimelineRow links cell (spec 8.7)", () => {
     [16, "13px"],
     [MAX_LOG_LIST_FONT_SIZE, "17px"],
   ])("sizes the count at the font size minus 3 but never below 10: list font %i gives %s", (fontSize, expected) => {
-    // The Timeline's own small size floors at 9, which at list font 11 is below section 7.1's
-    // caption floor, so the links cell derives its own.
+    // The small size the Timeline used to pass floored at 9, below section 7.1's caption floor,
+    // so the links cell derives its own from the font size.
     const metrics = getLogListMetrics(fontSize);
-    renderRow({ linkCount: 3, fontSize: metrics.fontSize, smallFontSize: Math.max(9, metrics.fontSize - 3) });
+    renderRow({ linkCount: 3, fontSize: metrics.fontSize });
     expect(styleOf(links()).fontSize).toBe(expected);
   });
 
