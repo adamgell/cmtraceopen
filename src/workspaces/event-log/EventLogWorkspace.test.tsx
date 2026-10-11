@@ -146,6 +146,7 @@ import {
   MIN_LOG_DETAILS_FONT_SIZE,
   MIN_LOG_LIST_FONT_SIZE,
 } from "../../lib/log-accessibility";
+import { useMarkerStore } from "../../stores/marker-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore } from "./evtx-store";
 import { defaultColumnConfig, visibleColumns } from "./evtx-columns";
@@ -293,6 +294,48 @@ describe("event-viewer shared font metrics", () => {
     expect(flatRow).not.toHaveAttribute("aria-level");
     expect(flatCells).toHaveLength(columnCount);
     expect(flatRow.firstElementChild).toBe(flatCells[0]);
+  });
+
+  it("keeps tagging and bookmarking reachable by key and from the Details pane, with no button on the row", () => {
+    seedEventLog();
+    useEvtxStore.setState({ groupBy: [] });
+    useMarkerStore.setState({ markersByFile: new Map() });
+
+    try {
+      const view = render(
+        <>
+          <EvtxTimeline />
+          <EvtxDetailPane />
+        </>
+      );
+      const row = recordGridRows(view.container)[0];
+      expect(within(row).queryAllByRole("button")).toHaveLength(0);
+      expect(row).not.toHaveAttribute("data-marker-category");
+
+      // The Details pane's button is the pointer route.
+      fireEvent.click(screen.getByRole("button", { name: "Tag event" }));
+      expect(screen.getByRole("button", { name: "Remove event tag" })).toHaveAttribute(
+        "aria-pressed",
+        "true"
+      );
+      // The row shows the marker in its left slot and in its description, with no button.
+      expect(row).toHaveAttribute("data-marker-category");
+      expect(row.style.borderLeft).toMatch(/^4px solid /);
+      expect(row).toHaveAttribute("aria-description", expect.stringContaining("Tagged"));
+
+      // The b key on the focused row is the keyboard route; it replaces the tag with a bookmark.
+      fireEvent.keyDown(row, { key: "b" });
+      expect(screen.getByRole("button", { name: "Remove bookmark" })).toHaveAttribute(
+        "aria-pressed",
+        "true"
+      );
+      expect(row).toHaveAttribute("data-marker-category", "bookmark");
+      fireEvent.keyDown(row, { key: "t" });
+      expect(screen.getByRole("button", { name: "Remove event tag" })).toBeInTheDocument();
+      expect(within(row).queryAllByRole("button")).toHaveLength(0);
+    } finally {
+      useMarkerStore.setState({ markersByFile: new Map() });
+    }
   });
 
   it("names channel-folder disclosure and selection controls", () => {
