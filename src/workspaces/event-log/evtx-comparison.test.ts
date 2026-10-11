@@ -5,6 +5,7 @@ import {
   checkFilesCoverage,
   compareLoadedFiles,
   computePriorWindow,
+  countCurrentPeriod,
   createAggregator,
   eventIdentityKey,
   getComparisonState,
@@ -263,6 +264,57 @@ describe("createAggregator", () => {
     expect([...seen].some((value) => (value as { rawXml?: string }).rawXml !== undefined)).toBe(
       false
     );
+  });
+});
+
+describe("countCurrentPeriod", () => {
+  it("counts [anchor - length, anchor] and meets the previous period without overlap or gap", () => {
+    const prior = priorFor("24h");
+    const lengthMs = EVTX_TIME_WINDOW_MS["24h"];
+    const records = [
+      record({ timestampEpoch: ANCHOR - lengthMs - 1 }),
+      record({ timestampEpoch: ANCHOR - lengthMs }),
+      record({ timestampEpoch: ANCHOR - 1, level: "Error" }),
+      record({ timestampEpoch: ANCHOR, level: "Error" }),
+      record({ timestampEpoch: ANCHOR + 1 }),
+    ];
+
+    const current = countCurrentPeriod(records, prior, visibility());
+    expect(current.counts.total).toBe(3);
+    expect(current.counts.levels.Error).toBe(2);
+    expect(current.outsideWindowRecords).toBe(2);
+
+    // Every record lands in exactly one of the two periods, or in neither beyond their outer ends.
+    const aggregator = createAggregator(prior, visibility());
+    aggregator.add(records);
+    expect(aggregator.finish().counts.total + current.counts.total).toBe(4);
+  });
+
+  it("follows the comparison's anchor and not the clock the grid measures from", () => {
+    // A load three hours before `now`: the current period ends there, so events after it are not
+    // counted and the previous period still meets it.
+    const loadAnchor = ANCHOR - 3 * HOUR;
+    const result = computePriorWindow("24h", loadAnchor);
+    if (result.status !== "available") throw new Error("expected an available prior window");
+    const records = [
+      record({ timestampEpoch: loadAnchor - HOUR }),
+      record({ timestampEpoch: loadAnchor + HOUR }),
+    ];
+    expect(countCurrentPeriod(records, result.prior, visibility()).counts.total).toBe(1);
+  });
+
+  it("uses the same visibility rules as the previous period", () => {
+    const prior = priorFor("24h");
+    const records = [
+      record({ timestampEpoch: ANCHOR - HOUR, level: "Error" }),
+      record({ timestampEpoch: ANCHOR - HOUR, level: "Warning" }),
+    ];
+    const current = countCurrentPeriod(
+      records,
+      prior,
+      visibility({ filterLevels: new Set<EvtxLevel>(["Error"]) })
+    );
+    expect(current.counts.total).toBe(1);
   });
 });
 

@@ -36,9 +36,11 @@ export interface PriorWindow {
   window: ComparableWindow;
   lengthMs: number;
   /**
-   * The instant the current window was measured from. The current window begins at
-   * `anchorEpoch - lengthMs`, so a consumer whose own anchor differs is looking at a different
-   * current window than this comparison was made against.
+   * The instant the current window was measured from, and where the current period ends. The
+   * current period is `[anchorEpoch - lengthMs, anchorEpoch]`. For a live source it is the start of
+   * the load the data came from, not the workspace clock, so it does not equal `nowEpoch`; a
+   * consumer must count its current side over this period (`countCurrentPeriod`) and not over a
+   * window measured from `nowEpoch`, or the two sides stop meeting.
    */
   anchorEpoch: number;
   /** Inclusive epoch-millisecond bounds. */
@@ -194,7 +196,7 @@ function emptyLevels(): Record<EvtxLevel, number> {
  * something outside its bounds into a visible fault instead of a quiet miscount.
  */
 export function createAggregator(
-  prior: PriorWindow,
+  period: { fromMs: number; toMs: number },
   visibility: ComparisonVisibility
 ): ComparisonAggregator {
   let total = 0;
@@ -212,7 +214,7 @@ export function createAggregator(
           !Object.prototype.hasOwnProperty.call(levels, candidate.level)
         ) {
           unplacedRecords++;
-        } else if (candidate.timestampEpoch < prior.fromMs || candidate.timestampEpoch > prior.toMs) {
+        } else if (candidate.timestampEpoch < period.fromMs || candidate.timestampEpoch > period.toMs) {
           outsideWindowRecords++;
         } else {
           total++;
@@ -235,6 +237,27 @@ export function createAggregator(
       };
     },
   };
+}
+
+/**
+ * The events of the CURRENT period that the view shows, counted the way the previous period is.
+ *
+ * The current period is `[anchor - length, anchor]` for the anchor the comparison was made at. A
+ * ratio needs both sides over periods that meet exactly; counting the current side from the grid's
+ * window, measured from a clock that has since moved, would shift it away from the previous period
+ * and read as a decline that never happened.
+ */
+export function countCurrentPeriod(
+  records: readonly EvtxRecord[],
+  prior: PriorWindow,
+  visibility: ComparisonVisibility
+): ComparisonTally {
+  const aggregator = createAggregator(
+    { fromMs: prior.anchorEpoch - prior.lengthMs, toMs: prior.anchorEpoch },
+    visibility
+  );
+  aggregator.add(records);
+  return aggregator.finish();
 }
 
 export type ComparisonMode = "files" | "live";

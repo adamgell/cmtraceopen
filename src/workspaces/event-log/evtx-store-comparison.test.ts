@@ -599,6 +599,86 @@ describe("when the current period is not fully loaded", () => {
     expect(queryCommandCalls()).toBe(0);
   });
 
+  it("is not moved by a stopped load of a channel the comparison leaves out", async () => {
+    // System and Application were read three hours ago. A Load of Security then began and was
+    // stopped; following the advice to deselect Security must not make the older, untouched
+    // channels look three hours short of an anchor that load set.
+    const earlier = Date.now() - 3 * HOUR;
+    invoke.mockReset();
+    invoke.mockImplementation(async (_name: string, rawArgs: unknown) =>
+      streamedReply(rawArgs as QueryArgs, [record("Security"), record("Security")], [
+        {
+          source: "Security",
+          kind: "cancelled",
+          reason: "operator stopped the load after 2 events were fetched (the channel may hold more)",
+        },
+      ])
+    );
+    resetStore({
+      channels: [liveInfo("System"), liveInfo("Application"), liveInfo("Security")],
+      selectedChannels: new Set(["System", "Application", "Security"]),
+      loadedChannels: new Set(["System", "Application"]),
+    });
+    noteChannelRead(["System", "Application"], earlier);
+    await useEvtxStore.getState().queryChannels(["Security"]);
+    installBridge();
+    useEvtxStore.getState().setSelectedChannels(new Set(["System", "Application"]));
+
+    const run = comparePreviousPeriod(Date.now());
+    await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
+    for (const query of comparisonQueries()) {
+      complete(query.args.channels[0], 0, 0, query.args.requestId);
+      query.resolve(reply(0));
+    }
+    await run;
+
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") {
+      expect(outcome.result.prior.anchorEpoch).toBe(earlier);
+      expect(outcome.result.gaps).toEqual([]);
+    }
+  });
+
+  it("treats the channels of one load as read together, even when the pool starts the last one later", async () => {
+    // Five channels through a pool of four: the fifth starts only when a read finishes, later than
+    // the first four. They are one load, so none of them is short of the others' anchor.
+    const names = ["System", "Application", "Security", "Setup", "Operational"];
+    invoke.mockReset();
+    invoke.mockImplementation(async (_name: string, rawArgs: unknown) => {
+      const args = rawArgs as QueryArgs;
+      if (args.channels[0] !== "Operational") {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      return streamedReply(args, []);
+    });
+    resetStore({
+      channels: names.map(liveInfo),
+      selectedChannels: new Set(names),
+      loadedChannels: new Set<string>(),
+    });
+    await useEvtxStore.getState().queryChannels(names);
+    expect([...useEvtxStore.getState().loadedChannels].sort()).toEqual([...names].sort());
+    installBridge();
+
+    const run = comparePreviousPeriod(Date.now());
+    const handled = new Set<PendingQuery>();
+    await vi.waitFor(() => {
+      for (const query of comparisonQueries()) {
+        if (handled.has(query)) continue;
+        handled.add(query);
+        complete(query.args.channels[0], 0, 0, query.args.requestId);
+        query.resolve(reply(0));
+      }
+      expect(handled.size).toBe(names.length);
+    });
+    await run;
+
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") expect(outcome.result.gaps).toEqual([]);
+  });
+
   it("is unavailable for a channel the automatic load cut off at its bound", async () => {
     await autoLoadSecurity(AUTO_LOAD_MAX_EVENTS);
     expect(useEvtxStore.getState().loadedChannels.has("Security")).toBe(true);

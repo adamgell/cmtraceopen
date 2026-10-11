@@ -430,16 +430,20 @@ let requestGeneration = 0;
 let activeRequestId = "initial";
 
 /**
- * When the newest load began. A live window is evaluated by the service as each channel's read
- * starts, so a load's current period is the one that ends here, and a comparison is anchored here
- * rather than at the workspace clock, which keeps moving after the load. Channels read later in
- * the same load have their windows evaluated up to a few minutes after this instant (a read waits
- * its turn in the pool); that start-side sliver is not reported.
+ * When each request began, for the most recent few. A live window is evaluated by the service as a
+ * channel's read starts, so the current period of everything a load read ends at that load's start.
+ * Channels read later in the same load (a read waits its turn in the pool) have their windows
+ * evaluated up to a few minutes after it; that start-side sliver is not reported.
  */
-let loadAnchorEpoch = 0;
+const requestStartEpochs = new Map<string, number>();
+const MAX_REMEMBERED_REQUEST_STARTS = 32;
 /** When the live tail last appended a batch; 0 until one has, and cleared by the next load. */
 let lastTailAppendEpoch = 0;
-/** When each channel's current-period read was issued. Comparison reads are not recorded. */
+/**
+ * Where each channel's current period ends: the start of the load that last read it. Comparison
+ * reads are not recorded, and a load of other channels leaves these alone, so a comparison is
+ * anchored by the loads its own channels came from and not by one that added nothing to it.
+ */
 const channelReadEpochs = new Map<string, number>();
 
 /**
@@ -546,7 +550,11 @@ function beginRequest(): string {
   activeTailSourceRequestId = null;
   activeTailChannels = new Set<string>();
   activeRequestId = `event-log-${++requestGeneration}`;
-  loadAnchorEpoch = Date.now();
+  requestStartEpochs.set(activeRequestId, Date.now());
+  if (requestStartEpochs.size > MAX_REMEMBERED_REQUEST_STARTS) {
+    const oldest = requestStartEpochs.keys().next();
+    if (!oldest.done) requestStartEpochs.delete(oldest.value);
+  }
   lastTailAppendEpoch = 0;
   // A new request supersedes every stale tail cleanup represented above. Remove its old failure
   // records before clearing the gap-owner index, otherwise a later stop completion can retain
@@ -616,7 +624,9 @@ function invokeEventQuery<T>(
   filter: EventQueryFilterSubset
 ): Promise<T> {
   // A comparison reads the previous period; it says nothing about how far the current one reaches.
-  if (!isComparisonRequestId(requestId)) noteChannelRead(channels);
+  if (!isComparisonRequestId(requestId)) {
+    noteChannelRead(channels, requestStartEpochs.get(requestId));
+  }
   if (remoteMachine) {
     return invoke<T>("evtx_query_remote_channels", {
       machine: remoteMachine,
@@ -2795,9 +2805,10 @@ export async function cancelActiveLoad(): Promise<void> {
  *
  * Files are compared from the records already loaded, when they cover the previous period.
  * `nowEpoch` is the workspace's clock, the instant `isWithinTimeWindow` measures the window from,
- * and is used only for files. A live source is anchored where its current period actually ends: the
- * instant the newest load began, or the latest live-tail batch after it. The workspace clock keeps
- * moving after a load, and a criterion change hours later must not move the comparison with it.
+ * and is used only for files. A live source is anchored where its current period actually ends:
+ * the start of the latest load any compared channel came from, or the latest live-tail batch after
+ * it. The workspace clock keeps moving after a load, and a criterion change hours later must not
+ * move the comparison with it; neither does a load of a channel the comparison does not include.
  *
  * A live source is queried again, once per loaded selected channel, with the view's own pushed-down
  * criteria and an explicit `between` window, under a request ID of its own: the events stream into
@@ -2840,9 +2851,22 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
     return;
   }
 
-  // Where the current period ends. A running tail has extended it to its latest batch.
-  const tailRunning = state.tailRequestId !== null && lastTailAppendEpoch > loadAnchorEpoch;
-  const anchorEpoch = tailRunning ? lastTailAppendEpoch : loadAnchorEpoch;
+  // Only channels the current view was counted from: a selected channel that was never loaded has
+  // no current events, and counting its previous period would compare unlike sets.
+  const channels = [...state.selectedChannels].filter((channel) =>
+    state.loadedChannels.has(channel)
+  );
+
+  // Where the current period ends: the latest load any compared channel came from, extended to the
+  // latest batch while a tail is running. The workspace clock keeps moving after a load and is not
+  // used. A channel whose read time is unknown is reported below and does not set the anchor.
+  const readEpochs = channels.flatMap((channel) => {
+    const epoch = channelReadEpochs.get(channel);
+    return epoch !== undefined && Number.isFinite(epoch) ? [epoch] : [];
+  });
+  const loadAnchor = readEpochs.length > 0 ? Math.max(...readEpochs) : nowEpoch;
+  const tailRunning = state.tailRequestId !== null && lastTailAppendEpoch > loadAnchor;
+  const anchorEpoch = tailRunning ? lastTailAppendEpoch : loadAnchor;
   // Before anything about completeness: a window with no previous period cannot be fixed by loading.
   const windowResult = computePriorWindow(state.timeWindow, anchorEpoch);
   if (windowResult.status === "unavailable") {
@@ -2885,12 +2909,6 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
     );
     return;
   }
-
-  // Only channels the current view was counted from: a selected channel that was never loaded has
-  // no current events, and counting its previous period would compare unlike sets.
-  const channels = [...state.selectedChannels].filter((channel) =>
-    state.loadedChannels.has(channel)
-  );
 
   // What is short in the current period of the channels compared. These do not stop a comparison,
   // but a ratio against a clean previous period would otherwise read as complete.
