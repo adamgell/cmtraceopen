@@ -635,8 +635,16 @@ describe("the quick-filter highlight on rows its tint would swallow", () => {
     const marks = [...document.querySelectorAll<HTMLElement>("mark")];
     expect(marks.length).toBeGreaterThan(0);
     for (const mark of marks) {
-      const attribute = mark.getAttribute("style") ?? "";
-      expect(attribute).not.toMatch(/(^|;\s*)(padding|margin|border)(-[a-z]+)?:/);
+      const properties = (mark.getAttribute("style") ?? "")
+        .split(";")
+        .map((declaration) => declaration.split(":")[0].trim())
+        .filter(Boolean);
+      // A rounded corner takes no space; padding, margin and a border would.
+      expect(
+        properties.filter(
+          (property) => /^(padding|margin|border)/.test(property) && property !== "border-radius",
+        ),
+      ).toEqual([]);
       expect(mark.style.outlineOffset).toBe("-1px");
     }
   });
