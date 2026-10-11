@@ -74,6 +74,16 @@ describe("channel pane resize handle", () => {
       expect(handle).toHaveAttribute("aria-valuenow", "200");
       fireEvent.keyDown(handle, { key: "End" });
       expect(handle).toHaveAttribute("aria-valuenow", "200");
+      // Neither changed the visible pane, so the requested 250 px must survive.
+      const pane = requireElement(handle.parentElement, "the channel pane");
+      expect(pane).toHaveStyle({ width: "250px" });
+      // The row widens: the pane returns to the requested width.
+      restore.set({ "evtx-channel-pane": 250 }, 1440);
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      expect(handle).toHaveAttribute("aria-valuenow", "250");
+      expect(handle).toHaveAttribute("aria-valuemax", "500");
     } finally {
       restore();
     }

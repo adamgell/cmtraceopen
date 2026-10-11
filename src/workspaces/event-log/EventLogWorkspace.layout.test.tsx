@@ -125,6 +125,18 @@ describe("EventLogWorkspace three-column shell", () => {
       expect(handle).toHaveAttribute("aria-valuenow", "240");
       expect(handle).toHaveAttribute("aria-valuemax", "240");
       expect(handle).toHaveAttribute("aria-valuemin", "240");
+      // Neither a key step nor End changes the visible rail, so the requested 340 px survives.
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      fireEvent.keyDown(handle, { key: "End" });
+      expect(useEvtxLayoutStore.getState().railWidth).toBe(340);
+      expect(handle).toHaveAttribute("aria-valuenow", "240");
+      // The row widens: the rail returns to the requested width.
+      restore.set({ "evtx-insights-rail": 340 }, 1440);
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      expect(handle).toHaveAttribute("aria-valuenow", "340");
+      expect(handle).toHaveAttribute("aria-valuemax", "480");
     } finally {
       restore();
     }
@@ -152,6 +164,26 @@ describe("EventLogWorkspace three-column shell", () => {
     act(() => useEvtxLayoutStore.getState().setDockHeight(5000));
     expect(region("dock")).toBe(dock);
     expect(dock).toHaveStyle({ height: "450px" });
+  });
+
+  it("keeps the stored dock height when the viewport caps it and a resize changes nothing", () => {
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 400 });
+    try {
+      render(<EventLogWorkspace />);
+      // 50vh of 400 px is 200 px: the stored 210 px renders as 200 px.
+      expect(requireRegion("dock")).toHaveStyle({ height: "200px" });
+      const handle = screen.getByRole("separator", { name: "Resize correlation dock", hidden: true });
+      fireEvent.keyDown(handle, { key: "ArrowUp" });
+      fireEvent.keyDown(handle, { key: "End" });
+      expect(useEvtxLayoutStore.getState().dockHeight).toBe(210);
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      expect(requireRegion("dock")).toHaveStyle({ height: "210px" });
+    } finally {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+    }
   });
 
   it("resizes the hidden rail from its separator, clamped to 280 through 480", () => {

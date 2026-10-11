@@ -16,7 +16,7 @@ import { useModalOwnership } from "../../hooks/use-modal-ownership";
 import { useUiStore } from "../../stores/ui-store";
 import { cancelActiveLoad, channelCanHoldEvents, useEvtxStore } from "./evtx-store";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
-import { effectiveResizeRange, useRowCappedSize } from "./use-row-capped-size";
+import { effectiveResizeRange, proposeResize, useRowCappedSize } from "./use-row-capped-size";
 import type { EvtxChannelInfo } from "./types";
 
 // ── Tree data structure ─────────────────────────────────────────────────────
@@ -607,9 +607,12 @@ export function ChannelPicker() {
         min={resizeRange.min}
         max={resizeRange.max}
         direction={1}
-        onChange={(next) =>
-          setSidebarWidth(Math.max(MIN_SIDEBAR_WIDTH, Math.min(next, MAX_SIDEBAR_WIDTH)))
-        }
+        onChange={(next) => {
+          // Only an interaction that changes the visible width may change the stored one; while
+          // the cap binds, a proposal equal to the rendered width must not overwrite the request.
+          const proposed = proposeResize(next, resizeRange);
+          if (proposed !== null) setSidebarWidth(proposed);
+        }}
       />
     </div>
   );

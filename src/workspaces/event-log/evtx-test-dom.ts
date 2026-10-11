@@ -13,11 +13,21 @@ export function requireSelector<T extends Element = HTMLElement>(selector: strin
   return requireElement(document.querySelector<T>(selector), `an element matching ${selector}`);
 }
 
+export interface LayoutStub {
+  /** Restores the real layout methods. */
+  (): void;
+  /** Changes the stubbed widths (the next measurement sees them). */
+  set(renderedWidths: Record<string, number>, clientWidth: number): void;
+}
+
 /**
  * jsdom does no layout. Stubs `getBoundingClientRect().width` for elements by id and a single
- * `clientWidth` for every element, so measurement hooks see a laid-out page. Returns a restore.
+ * `clientWidth` for every element, so measurement hooks see a laid-out page. Call the result to
+ * restore; `set` changes the widths, as a window resize would.
  */
-export function stubLayout(renderedWidths: Record<string, number>, clientWidth: number): () => void {
+export function stubLayout(initialWidths: Record<string, number>, initialClientWidth: number): LayoutStub {
+  let renderedWidths = initialWidths;
+  let clientWidth = initialClientWidth;
   const proto = HTMLElement.prototype;
   const originalRect = proto.getBoundingClientRect;
   const originalClient = Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth");
@@ -29,9 +39,15 @@ export function stubLayout(renderedWidths: Record<string, number>, clientWidth: 
     configurable: true,
     get: () => clientWidth,
   });
-  return () => {
+  const restore = () => {
     proto.getBoundingClientRect = originalRect;
     if (originalClient) Object.defineProperty(Element.prototype, "clientWidth", originalClient);
     else delete (Element.prototype as unknown as Record<string, unknown>).clientWidth;
   };
+  return Object.assign(restore, {
+    set(widths: Record<string, number>, client: number) {
+      renderedWidths = widths;
+      clientWidth = client;
+    },
+  });
 }

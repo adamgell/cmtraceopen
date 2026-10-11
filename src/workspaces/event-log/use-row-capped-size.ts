@@ -68,3 +68,18 @@ export function effectiveResizeRange(
     max: effectiveMax,
   };
 }
+
+/**
+ * The width to store for a proposed resize, or null when the proposal cannot change what is on
+ * screen. While a cap binds, the rendered width is below the stored (requested) width; clamping a
+ * proposal into the effective range and finding it equal to the rendered width means the visible
+ * pane would not move, so the stored preference must be left alone (the pane returns to it when
+ * the window widens again).
+ */
+export function proposeResize(
+  next: number,
+  range: { value: number; min: number; max: number },
+): number | null {
+  const clamped = Math.max(range.min, Math.min(next, range.max));
+  return clamped === range.value ? null : clamped;
+}
