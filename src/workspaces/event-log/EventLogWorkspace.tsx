@@ -22,6 +22,7 @@ import type { LogEntry } from "../../types/log";
 import { SourcePicker } from "./SourcePicker";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxFilterBar } from "./EvtxFilterBar";
+import { EvtxFilterChips } from "./EvtxFilterChips";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import { EvtxTimeline } from "./EvtxTimeline";
@@ -597,6 +598,7 @@ export function EventLogWorkspace() {
       {isLoading && <ProgressBar style={{ width: "100%", flexShrink: 0 }} />}
       <EvtxViewBar nowEpoch={nowEpoch} />
       <EvtxFilterBar nowEpoch={nowEpoch} />
+      <EvtxFilterChips visibleCount={visibleRecords.length} loadedCount={records.length} />
       <EvtxCoverageBanner />
       <EventDiagnosisPanel summary={diagnosis} />
 

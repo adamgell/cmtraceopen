@@ -1065,6 +1065,23 @@ describe("EventLogWorkspace fixtures", () => {
     expect(errorToggle).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("mounts the chip row under the filter row with the workspace's visible and loaded counts", () => {
+    seedFixtureEvents();
+    useEvtxStore.setState({ filterSearch: "no event says this" });
+    render(<EventLogWorkspace />);
+
+    const filterRow = document.querySelector("[data-evtx-region='filter-row']")!;
+    const chipRow = document.querySelector("[data-evtx-region='chip-row']")!;
+    expect(screen.getByRole("button", { name: "Remove Search: no event says this" })).toBeInTheDocument();
+    // Directly after the filter row, above the body.
+    expect(filterRow.nextElementSibling).toBe(chipRow);
+    // The search removes the only loaded event from view: 0 shown of 1 loaded, not a bare 0.
+    expect(chipRow.querySelector("[data-evtx-filter-count]")?.textContent).toBe("Showing 0 of 1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
+    expect(document.querySelector("[data-evtx-region='chip-row']")).toBeNull();
+  });
+
   it("identifies invalid ordinary and quick Event ID filters", async () => {
     seedFixtureEvents();
     useEvtxStore.setState((state) => ({
