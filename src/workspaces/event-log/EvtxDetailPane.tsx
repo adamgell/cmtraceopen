@@ -31,7 +31,8 @@ import {
   evtxRailTabId,
   useEvtxLayoutStore,
 } from "./evtx-layout-store";
-import { sortRecords } from "./evtx-filter";
+import { renderedRecords, sortForGrid } from "./evtx-row-order";
+import { useRailTextColors } from "./evtx-rail-text";
 import {
   buildSameIdSeries,
   findRecordById,
@@ -115,6 +116,9 @@ export function EvtxDetailPane({
   const timeWindow = useEvtxStore((s) => s.timeWindow);
   const sortField = useEvtxStore((s) => s.sortField);
   const sortDirection = useEvtxStore((s) => s.sortDirection);
+  const groupBy = useEvtxStore((s) => s.groupBy);
+  const collapsedGroups = useEvtxStore((s) => s.collapsedGroups);
+  const railText = useRailTextColors();
   const setRailTab = useEvtxLayoutStore((s) => s.setRailTab);
   const visuals = useEvtxVisualTokens();
   const logListFontSize = useUiStore((s) => s.logListFontSize);
@@ -135,20 +139,34 @@ export function EvtxDetailPane({
     () => findRecordById(records, selectedRecordId),
     [records, selectedRecordId],
   );
-  // The grid's own order, so Previous and Next walk the rows the way they read.
+  // The grid's rendered row order (sorted, grouped, collapsed groups skipped), so Previous and Next
+  // walk the rows the way they read. Memoized: `visibleRecords` is the rail's debounced set.
   const ordered = useMemo(
-    () => (visibleRecords.length > 0 ? sortRecords(visibleRecords, sortField, sortDirection) : NO_RECORDS),
-    [visibleRecords, sortField, sortDirection],
+    () =>
+      visibleRecords.length > 0
+        ? renderedRecords(
+            sortForGrid(visibleRecords, sortField, sortDirection),
+            groupBy,
+            collapsedGroups,
+            timeZoneMode,
+          )
+        : NO_RECORDS,
+    [visibleRecords, sortField, sortDirection, groupBy, collapsedGroups, timeZoneMode],
   );
-  const previousId = neighborRecordId(ordered, selectedRecordId, -1);
-  const nextId = neighborRecordId(ordered, selectedRecordId, 1);
+  const { previousId, nextId } = useMemo(
+    () => ({
+      previousId: neighborRecordId(ordered, selectedRecordId, -1),
+      nextId: neighborRecordId(ordered, selectedRecordId, 1),
+    }),
+    [ordered, selectedRecordId],
+  );
   const sameId = useMemo(
     () => (record && visibleRecords.length > 0 ? buildSameIdSeries(visibleRecords, record) : null),
     [record, visibleRecords],
   );
   const finding = useMemo(
-    () => (record ? findingForRecord(findings, record) : null),
-    [record, findings],
+    () => (record ? findingForRecord(findings, record, records) : null),
+    [record, findings, records],
   );
   /**
    * The text an operator is reading here: the message and the event data, which
@@ -219,7 +237,7 @@ export function EvtxDetailPane({
         aria-label="Event log details"
         style={{
           padding: "16px",
-          color: tokens.colorNeutralForeground4,
+          color: railText.secondary,
           fontSize: `${fontSize}px`,
           fontFamily: LOG_UI_FONT_FAMILY,
           textAlign: "center",
@@ -272,7 +290,7 @@ export function EvtxDetailPane({
   const sectionHeading = {
     fontSize: `${labelFontSize}px`,
     fontWeight: 600,
-    color: tokens.colorNeutralForeground3,
+    color: railText.secondary,
     textTransform: "uppercase" as const,
     marginBottom: "4px",
   };
@@ -309,7 +327,7 @@ export function EvtxDetailPane({
             fontSize: `${listFontSize + 1}px`,
             fontWeight: 600,
             whiteSpace: "nowrap",
-            color: tokens.colorNeutralForeground1,
+            color: railText.primary,
           }}
         >
           Event {record.eventId}
@@ -329,7 +347,7 @@ export function EvtxDetailPane({
           appearance="subtle"
           icon={<ArrowUp16Regular />}
           aria-label="Previous event"
-          disabled={previousId === null}
+          disabledFocusable={previousId === null}
           onClick={() => previousId !== null && setSelectedRecordId(previousId)}
           style={{ minWidth: "24px", width: "24px", height: "24px", padding: 0 }}
         />
@@ -338,7 +356,7 @@ export function EvtxDetailPane({
           appearance="subtle"
           icon={<ArrowDown16Regular />}
           aria-label="Next event"
-          disabled={nextId === null}
+          disabledFocusable={nextId === null}
           onClick={() => nextId !== null && setSelectedRecordId(nextId)}
           style={{ minWidth: "24px", width: "24px", height: "24px", padding: 0 }}
         />
@@ -386,6 +404,7 @@ export function EvtxDetailPane({
             id={detailSubTabId(tab)}
             value={tab}
             aria-controls={detailSubPanelId(tab)}
+            style={subTab === tab ? { color: railText.primary } : undefined}
           >
             {tab === "details" ? "Details" : "XML"}
           </Tab>
@@ -419,7 +438,7 @@ export function EvtxDetailPane({
               border: `1px solid ${tokens.colorNeutralStroke2}`,
               padding: "8px",
               borderRadius: "4px",
-              color: tokens.colorNeutralForeground1,
+              color: railText.primary,
             }}
           >
             {record.rawXml}
@@ -434,7 +453,7 @@ export function EvtxDetailPane({
                   lineHeight: 1.4,
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
-                  color: tokens.colorNeutralForeground1,
+                  color: railText.primary,
                   flexShrink: 0,
                 }}
               >
@@ -445,7 +464,7 @@ export function EvtxDetailPane({
             <div
               style={{
                 fontSize: `${Math.max(10, listFontSize - 2)}px`,
-                color: tokens.colorNeutralForeground3,
+                color: railText.secondary,
               }}
             >
               <span style={{ fontFamily: tokens.fontFamilyNumeric }}>
@@ -470,7 +489,7 @@ export function EvtxDetailPane({
                   <span
                     title={definition.title}
                     style={{
-                      color: tokens.colorNeutralForeground1,
+                      color: railText.primary,
                       wordBreak: "break-all",
                       fontFamily: definition.mono
                         ? LOG_MONOSPACE_FONT_FAMILY
@@ -517,7 +536,7 @@ export function EvtxDetailPane({
                       ) : (
                         // Not silence: the code is real, the database just cannot
                         // explain it, and the operator needs to see that difference.
-                        <span style={{ color: tokens.colorNeutralForeground3 }}>
+                        <span style={{ color: railText.secondary }}>
                           Not in the error database
                         </span>
                       )}
@@ -563,9 +582,9 @@ export function EvtxDetailPane({
                     .filter(([, value]) => value)
                     .map(([label, value]) => (
                       <div key={label} style={{ display: "contents" }}>
-                        <span style={{ color: tokens.colorNeutralForeground3 }}>{label}</span>
+                        <span style={{ color: railText.secondary }}>{label}</span>
                         <span
-                          style={{ color: tokens.colorNeutralForeground1, wordBreak: "break-all" }}
+                          style={{ color: railText.primary, wordBreak: "break-all" }}
                         >
                           {value}
                         </span>
@@ -597,7 +616,7 @@ export function EvtxDetailPane({
                           style={{
                             padding: "4px 8px 4px 0",
                             fontWeight: 600,
-                            color: tokens.colorNeutralForeground3,
+                            color: railText.secondary,
                             verticalAlign: "top",
                             whiteSpace: "nowrap",
                             width: "1%",
@@ -608,7 +627,7 @@ export function EvtxDetailPane({
                         <td
                           style={{
                             padding: "4px 0",
-                            color: tokens.colorNeutralForeground1,
+                            color: railText.primary,
                             wordBreak: "break-all",
                           }}
                         >
@@ -647,10 +666,11 @@ export function EvtxDetailPane({
                 }}
               >
                 <div style={sectionHeading}>
-                  Same ID in{" "}
+                  {/* The series counts the visible events (every filter), so the heading says so. */}
+                  Same ID in visible events
                   {timeWindow === "all"
-                    ? "the loaded events"
-                    : `the ${EVTX_TIME_WINDOW_LABELS[timeWindow].toLowerCase()}`}
+                    ? ""
+                    : `, ${EVTX_TIME_WINDOW_LABELS[timeWindow].toLowerCase()}`}
                 </div>
                 {sameId.bins.length > 0 && (
                   <Sparkline bins={sameId.bins} color={visuals.singleSeries} />
@@ -724,7 +744,7 @@ export function EvtxDetailPane({
                 gap: "16px",
                 flexWrap: "wrap",
                 fontSize: `${monoFontSize}px`,
-                color: tokens.colorNeutralForeground3,
+                color: railText.secondary,
                 flexShrink: 0,
               }}
             >
@@ -772,7 +792,7 @@ export function EvtxDetailPane({
                       fontFamily: LOG_MONOSPACE_FONT_FAMILY,
                     }}
                   >
-                    <span style={{ minWidth: "110px", color: tokens.colorNeutralForeground3 }}>
+                    <span style={{ minWidth: "110px", color: railText.secondary }}>
                       {column.property}
                     </span>
                     <span
@@ -783,8 +803,8 @@ export function EvtxDetailPane({
                       }
                       style={{
                         color: column.complete
-                          ? tokens.colorNeutralForeground1
-                          : tokens.colorPaletteMarigoldForeground1,
+                          ? railText.primary
+                          : visuals.levels.Warning.textColor,
                       }}
                     >
                       {column.text}

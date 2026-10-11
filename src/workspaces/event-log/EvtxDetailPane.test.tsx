@@ -390,12 +390,15 @@ describe("EvtxDetailPane rail extras", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Next event" }));
     expect(useEvtxStore.getState().selectedRecordId).toBe(2);
-    expect(screen.getByRole("button", { name: "Next event" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next event" })).toHaveAttribute("aria-disabled", "true");
 
     fireEvent.click(screen.getByRole("button", { name: "Previous event" }));
     fireEvent.click(screen.getByRole("button", { name: "Previous event" }));
     expect(useEvtxStore.getState().selectedRecordId).toBe(0);
-    expect(screen.getByRole("button", { name: "Previous event" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Previous event" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   it("follows the grid's sort direction", () => {
@@ -408,8 +411,61 @@ describe("EvtxDetailPane rail extras", () => {
 
   it("disables both when the selection is not among the visible records", () => {
     render(<EvtxDetailPane visibleRecords={[records[0]]} />);
-    expect(screen.getByRole("button", { name: "Next event" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Previous event" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next event" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Previous event" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("keeps focus on the button that disables itself at the end of the list", () => {
+    render(<EvtxDetailPane visibleRecords={records} />);
+    const next = screen.getByRole("button", { name: "Next event" });
+    next.focus();
+
+    fireEvent.click(next);
+
+    expect(useEvtxStore.getState().selectedRecordId).toBe(2);
+    expect(next).toHaveAttribute("aria-disabled", "true");
+    expect(next).toHaveFocus();
+    // A disabled-but-focusable button does nothing when activated again.
+    fireEvent.click(next);
+    expect(useEvtxStore.getState().selectedRecordId).toBe(2);
+  });
+
+  it("walks the rendered rows: grouped, with the records of a collapsed group skipped", () => {
+    // Providers by time: P0 (0), Q (1), P0 (2), Q (3). Grouped by provider: P0 [0, 2], Q [1, 3].
+    const mixed = [
+      rec(0, { provider: "P0" }),
+      rec(1, { provider: "Q" }),
+      rec(2, { provider: "P0" }),
+      rec(3, { provider: "Q" }),
+    ];
+    useEvtxStore.setState({ records: mixed, selectedRecordId: 0, groupBy: ["provider"] });
+    const { rerender } = render(<EvtxDetailPane visibleRecords={mixed} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Next event" }));
+    expect(useEvtxStore.getState().selectedRecordId).toBe(2);
+    fireEvent.click(screen.getByRole("button", { name: "Next event" }));
+    // Time order would say record 3; the grid renders Q's group after P0's, so this is record 1.
+    expect(useEvtxStore.getState().selectedRecordId).toBe(1);
+
+    // Collapse Q: its records have no rows, so Next stops after P0's.
+    act(() =>
+      useEvtxStore.setState({
+        collapsedGroups: new Set(["/provider=Q"]),
+        selectedRecordId: 2,
+      }),
+    );
+    rerender(<EvtxDetailPane visibleRecords={mixed} />);
+    expect(screen.getByRole("button", { name: "Next event" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    // Expanded again, Next continues into the second group.
+    act(() => useEvtxStore.setState({ collapsedGroups: new Set() }));
+    rerender(<EvtxDetailPane visibleRecords={mixed} />);
+    expect(screen.getByRole("button", { name: "Next event" })).not.toHaveAttribute("aria-disabled");
   });
 
   it("sizes the header buttons at 24 px", () => {
@@ -426,7 +482,8 @@ describe("EvtxDetailPane rail extras", () => {
     render(<EvtxDetailPane visibleRecords={withBad} />);
 
     const card = screen.getByRole("group", { name: "Same ID" });
-    expect(card).toHaveTextContent("Same ID in the loaded events");
+    expect(card).toHaveTextContent("Same ID in visible events");
+    expect(card).not.toHaveTextContent(/visible events,/);
     expect(card).toHaveTextContent("4 occurrences");
     expect(card).toHaveTextContent("first 2026-08-22 12:00:00.000");
     const svg = card.querySelector("svg") as SVGElement;
@@ -437,11 +494,25 @@ describe("EvtxDetailPane rail extras", () => {
     expect(svg.querySelectorAll("rect")).toHaveLength(3);
   });
 
+  it("counts only the visible records: a filter that hides same-ID records lowers the count", () => {
+    const all = [rec(0), rec(1, { level: "Error" }), rec(2, { level: "Error" })];
+    useEvtxStore.setState({ records: all });
+    const { rerender } = render(<EvtxDetailPane visibleRecords={all} />);
+    expect(screen.getByRole("group", { name: "Same ID" })).toHaveTextContent("3 occurrences");
+
+    // The level filter hides the first record, so the pane receives the narrower visible set.
+    rerender(<EvtxDetailPane visibleRecords={all.slice(1)} />);
+    expect(screen.getByRole("group", { name: "Same ID" })).toHaveTextContent("2 occurrences");
+    expect(screen.getByRole("group", { name: "Same ID" })).toHaveTextContent(
+      "Same ID in visible events",
+    );
+  });
+
   it("names the time window the card covers", () => {
     useEvtxStore.setState({ timeWindow: "24h" });
     render(<EvtxDetailPane visibleRecords={records} />);
     expect(screen.getByRole("group", { name: "Same ID" })).toHaveTextContent(
-      "Same ID in the last 24 hours",
+      "Same ID in visible events, last 24 hours",
     );
   });
 
@@ -464,15 +535,17 @@ describe("EvtxDetailPane rail extras", () => {
     confidence: "high",
     title: "Enrollment failed",
     summary: "s",
+    // The shape the UI receives over IPC: the display projection redacts the machine and source.
     evidence: [
       {
         kind: "event",
         value: {
-          source: "Application.evtx",
+          source: "[path:9f3e]",
           provider: "Example Provider",
           eventId: 100,
           recordId: 501,
           channel: "Application",
+          machine: "[host:ab12cd]",
         },
       },
     ],
@@ -486,6 +559,14 @@ describe("EvtxDetailPane rail extras", () => {
 
     act(() => useEvtxStore.setState({ selectedRecordId: 2 }));
     rerender(<EvtxDetailPane visibleRecords={records} findings={[finding]} />);
+    expect(screen.queryByRole("button", { name: /Part of finding/ })).toBeNull();
+  });
+
+  it("shows no callout when two loaded records from different machines match the evidence", () => {
+    const twin = rec(1, { id: 9, computer: "OTHER-PC", sourceLabel: "Other.evtx", eventRecordId: 501 });
+    const both = [...records, twin];
+    useEvtxStore.setState({ records: both, selectedRecordId: 1 });
+    render(<EvtxDetailPane visibleRecords={both} findings={[finding]} />);
     expect(screen.queryByRole("button", { name: /Part of finding/ })).toBeNull();
   });
 

@@ -29,6 +29,7 @@ import {
   type EvtxRailTabId,
 } from "./evtx-layout-store";
 import { findRecordById, formatCount } from "./evtx-insights-data";
+import { useRailTextColors } from "./evtx-rail-text";
 import { useEvtxStore } from "./evtx-store";
 import type { DiagnosisFinding, DiagnosisSummary, EvtxRecord } from "./types";
 
@@ -62,7 +63,7 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debounced;
 }
 
-function Count({ value, size }: { value: number; size: number }) {
+function Count({ value, size, color }: { value: number; size: number; color: string }) {
   return (
     <span
       style={{
@@ -70,7 +71,7 @@ function Count({ value, size }: { value: number; size: number }) {
         fontSize: `${size}px`,
         fontWeight: 400,
         fontFamily: tokens.fontFamilyNumeric,
-        color: tokens.colorNeutralForeground3,
+        color,
       }}
     >
       {formatCount(value)}
@@ -93,6 +94,7 @@ export function EvtxInsightsRail({
     () => findRecordById(storeRecords, selectedRecordId)?.eventId ?? null,
     [storeRecords, selectedRecordId],
   );
+  const railText = useRailTextColors();
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const countSize = useMemo(
     () => Math.max(10, getLogListMetrics(logListFontSize).fontSize - 1),
@@ -115,29 +117,43 @@ export function EvtxInsightsRail({
 
   // The diagnosis is cleared while it rebuilds. Keep showing the previous build, marked as
   // updating, so the reader's place survives a live-tail batch; drop it on failure or no input.
-  const lastSummaryRef = useRef<DiagnosisSummary | null>(null);
-  if (summary) lastSummaryRef.current = summary;
-  if (error || (!summary && !pending)) lastSummaryRef.current = null;
-  const shownSummary = summary ?? (pending && !error ? lastSummaryRef.current : null);
+  // The visible-event count is stored WITH the summary, so the scope line states the scope the
+  // shown numbers were built from, never the new count beside old numbers.
+  const lastBuildRef = useRef<{ summary: DiagnosisSummary; scopeCount: number } | null>(null);
+  if (summary && lastBuildRef.current?.summary !== summary) {
+    lastBuildRef.current = { summary, scopeCount: records.length };
+  }
+  if (error || (!summary && !pending)) lastBuildRef.current = null;
+  const shown = summary || (pending && !error) ? lastBuildRef.current : null;
+  const shownSummary = shown?.summary ?? null;
 
-  // Record-derived cards are skipped while the rail cannot be seen and debounced during a tail.
+  // Record-derived cards are skipped while the rail cannot be seen. Everything derived from the
+  // records (cards, Details order, Same ID series) follows the debounced set (spec section 11).
   const insightsActive = railVisible && activeTab === "insights";
   const debouncedRecords = useDebouncedValue(records, INSIGHTS_DEBOUNCE_MS);
   const cardRecords = insightsActive ? debouncedRecords : NO_RECORDS;
 
+  // A finding from the previous build is not evidence for the records now shown, so the Details
+  // callout waits for the new build.
   const findings = useMemo(
-    () => (shownSummary ? sortFindings(actionableFindings(shownSummary.findings)) : NO_FINDINGS),
-    [shownSummary],
+    () =>
+      shownSummary && !pending
+        ? sortFindings(actionableFindings(shownSummary.findings))
+        : NO_FINDINGS,
+    [shownSummary, pending],
   );
 
   const insightsScrollRef = useRef<HTMLDivElement>(null);
   const savedScrollRef = useRef(0);
+  // Hiding the panel (another tab, or the rail toggle) drops its scroll offset in a browser, so the
+  // saved offset is put back when it is shown again.
   useLayoutEffect(() => {
     const element = insightsScrollRef.current;
-    if (activeTab === "insights" && element) element.scrollTop = savedScrollRef.current;
-  }, [activeTab]);
+    if (insightsActive && element) element.scrollTop = savedScrollRef.current;
+  }, [insightsActive]);
 
-  const actionableCount = shownSummary?.overview.actionableFindingCount ?? null;
+  // No count while a rebuild is pending: the old count would read as the new build's.
+  const actionableCount = pending ? null : (shownSummary?.overview.actionableFindingCount ?? null);
   const labels: Record<EvtxRailTabId, ReactNode> = {
     insights: (
       <>
@@ -146,7 +162,7 @@ export function EvtxInsightsRail({
           // The space keeps the accessible name "Insights 3" rather than "Insights3".
           <>
             {" "}
-            <Count value={actionableCount} size={countSize} />
+            <Count value={actionableCount} size={countSize} color={railText.secondary} />
           </>
         )}
       </>
@@ -169,7 +185,13 @@ export function EvtxInsightsRail({
         }}
       >
         {RAIL_TABS.map((tab) => (
-          <Tab key={tab} id={evtxRailTabId(tab)} value={tab} aria-controls={evtxRailPanelId(tab)}>
+          <Tab
+            key={tab}
+            id={evtxRailTabId(tab)}
+            value={tab}
+            aria-controls={evtxRailPanelId(tab)}
+            style={activeTab === tab ? { color: railText.primary } : undefined}
+          >
             {labels[tab]}
           </Tab>
         ))}
@@ -197,6 +219,7 @@ export function EvtxInsightsRail({
           records={cardRecords.length > 0 ? cardRecords : undefined}
           updating={pending}
           error={error}
+          scopeCount={shown?.scopeCount ?? null}
         />
       </div>
       {activeTab === "details" && (
@@ -206,7 +229,7 @@ export function EvtxInsightsRail({
           aria-labelledby={evtxRailTabId("details")}
           style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
         >
-          <EvtxDetailPane visibleRecords={records} findings={findings} />
+          <EvtxDetailPane visibleRecords={debouncedRecords} findings={findings} />
         </div>
       )}
     </div>

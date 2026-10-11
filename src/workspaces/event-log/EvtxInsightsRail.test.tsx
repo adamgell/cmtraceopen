@@ -207,6 +207,66 @@ describe("EvtxInsightsRail", () => {
       expect(useEvtxLayoutStore.getState().railTab).toBe("details");
     });
 
+    it("restores the Insights scroll offset after the rail is hidden and shown again", () => {
+      render(<EvtxInsightsRail summary={withGap} records={[RECORD]} />);
+      const panel = document.getElementById(evtxRailPanelId("insights")) as HTMLElement;
+      panel.scrollTop = 180;
+      fireEvent.scroll(panel);
+
+      act(() => useEvtxLayoutStore.getState().setPanel("insights", false));
+      // A browser drops the offset of a hidden element; jsdom does not, so do it here.
+      panel.scrollTop = 0;
+      act(() => useEvtxLayoutStore.getState().setPanel("insights", true));
+
+      expect(panel.scrollTop).toBe(180);
+    });
+
+    it("states the scope the shown build was made from while a rebuild is pending", () => {
+      const { rerender } = render(<EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />);
+      const three = [RECORD, { ...RECORD, id: 2 }, { ...RECORD, id: 3 }];
+      rerender(<EvtxInsightsRail summary={null} records={three} pending />);
+
+      const section = screen.getByLabelText("Operational diagnosis");
+      expect(section).toHaveTextContent("Scoped to 1 visible event");
+      expect(section).not.toHaveTextContent("Scoped to 3");
+
+      rerender(<EvtxInsightsRail summary={{ ...SUMMARY }} records={three} />);
+      expect(screen.getByLabelText("Operational diagnosis")).toHaveTextContent(
+        "Scoped to 3 visible events",
+      );
+    });
+
+    it("suppresses the Details callout while a rebuild is pending", () => {
+      const evidenceSummary: DiagnosisSummary = {
+        ...SUMMARY,
+        findings: [
+          {
+            ...SUMMARY.findings[0],
+            evidence: [
+              {
+                kind: "event",
+                value: {
+                  source: "[path:1]",
+                  provider: RECORD.provider,
+                  eventId: RECORD.eventId,
+                  recordId: RECORD.eventRecordId,
+                  channel: RECORD.channel,
+                  machine: "[host:1]",
+                },
+              },
+            ],
+          },
+        ],
+      };
+      useEvtxStore.setState({ selectedRecordId: RECORD.id });
+      useEvtxLayoutStore.setState({ railTab: "details" });
+      const { rerender } = render(<EvtxInsightsRail summary={evidenceSummary} records={[RECORD]} />);
+      expect(screen.getByRole("button", { name: /Part of finding/ })).toBeInTheDocument();
+
+      rerender(<EvtxInsightsRail summary={null} records={[RECORD]} pending />);
+      expect(screen.queryByRole("button", { name: /Part of finding/ })).toBeNull();
+    });
+
     it("keeps the open disclosures and the scroll position across a row click and back", () => {
       render(<EvtxInsightsRail summary={withGap} records={[RECORD]} />);
       fireEvent.click(screen.getByText(/Coverage gaps/, { selector: "summary" }));
@@ -232,16 +292,24 @@ describe("EvtxInsightsRail", () => {
 
       expect(screen.getByText("Enrollment failed")).toBeInTheDocument();
       expect(screen.getByRole("status")).toHaveTextContent("Updating diagnosis...");
-      expect(tab("Insights 1")).toBeInTheDocument();
+      // The previous build's count is not shown as the new build's.
+      expect(tab("Insights")).toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Insights 1" })).toBeNull();
       expect(screen.getByRole("region", { name: "Level mix" })).toBeInTheDocument();
     });
 
     it("drops the previous diagnosis once the build fails, and says so", () => {
       const { rerender } = render(<EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />);
-      rerender(<EvtxInsightsRail summary={null} records={[RECORD]} error="boom" />);
+      rerender(
+        <EvtxInsightsRail
+          summary={null}
+          records={[RECORD]}
+          error="Operational diagnosis could not be built: boom"
+        />,
+      );
 
       expect(screen.queryByText("Enrollment failed")).toBeNull();
-      expect(screen.getByRole("status")).toHaveTextContent("Diagnosis could not be built: boom");
+      expect(screen.getByRole("status")).toHaveTextContent(/^Diagnosis could not be built\.$/);
     });
 
     it("says there is nothing to diagnose when there is no input and no build running", () => {

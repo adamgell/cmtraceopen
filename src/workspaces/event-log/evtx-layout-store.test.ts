@@ -9,7 +9,6 @@ import {
   MIN_RAIL_WIDTH,
   clampDockHeight,
   maxDockHeightFor,
-  migrateLayout,
   sanitizeLayout,
   useEvtxLayoutStore,
   type EvtxViewId,
@@ -148,52 +147,42 @@ describe("evtx-layout-store", () => {
     expect(useEvtxLayoutStore.getState().railWidth).toBe(DEFAULT_RAIL_WIDTH);
   });
 
-  describe("version 2 migration", () => {
-    const stored = (insights: boolean) => ({
+  describe("persist version 2", () => {
+    const stored = (insights: boolean, dock = false) => ({
       activeView: "grouped",
-      panels: { channels: false, insights, dock: false },
+      panels: { channels: false, insights, dock },
       railTab: "details",
       railWidth: 400,
       dockHeight: 250,
     });
 
-    it("turns a version 1 Insights false, which the user never chose, into the new default", async () => {
+    it("discards a version 1 envelope: the layout resets to the defaults, Insights on", async () => {
       await rehydrateFrom(stored(false), 1);
       const state = useEvtxLayoutStore.getState();
-      expect(state.panels).toEqual({ channels: false, insights: true, dock: false });
-      // Everything else the user did choose is kept.
-      expect(state.activeView).toBe("grouped");
-      expect(state.railWidth).toBe(400);
+      expect(state.panels).toEqual({ channels: true, insights: true, dock: false });
+      expect(state.activeView).toBe("table");
+      expect(state.railWidth).toBe(DEFAULT_RAIL_WIDTH);
     });
 
     it("keeps a version 2 Insights false, which is the user's own choice", async () => {
       await rehydrateFrom(stored(false), 2);
       expect(useEvtxLayoutStore.getState().panels.insights).toBe(false);
+      expect(useEvtxLayoutStore.getState().activeView).toBe("grouped");
     });
 
-    it("keeps the dock unavailable through the migration", async () => {
-      await rehydrateFrom({ ...stored(false), panels: { channels: true, insights: false, dock: true } }, 1);
-      expect(useEvtxLayoutStore.getState().panels).toEqual({
-        channels: true,
-        insights: true,
-        dock: false,
-      });
-    });
-
-    it("migrates a version 1 envelope with no panels object", () => {
-      expect(migrateLayout({ activeView: "table" }, 1)).toEqual({
-        activeView: "table",
-        panels: { insights: true },
-      });
-      expect(migrateLayout(null, 1)).toBeNull();
+    it("keeps the dock unavailable, whatever the envelope says", async () => {
+      await rehydrateFrom(stored(true, true), 2);
+      expect(useEvtxLayoutStore.getState().panels.dock).toBe(false);
+      await rehydrateFrom(stored(true, true), 1);
+      expect(useEvtxLayoutStore.getState().panels.dock).toBe(false);
     });
   });
 
-  // Guard for the enable-and-migrate rule (see EVTX_PANELS_AVAILABLE). A user who last ran a build
+  // Guard for the enable-and-bump rule (see EVTX_PANELS_AVAILABLE). A user who last ran a build
   // where a panel was off holds a persisted `false`. If a phase flips that panel's default without
-  // bumping the persist version and migrating, this fails: the user would stay on `false` and
-  // never see the new panel.
-  it("keeps a persisted false equal to the default for every panel (flip a default only with a migrate)", async () => {
+  // bumping the persist version, this fails: the user would stay on `false` and never see the
+  // new panel.
+  it("keeps a persisted false equal to the default for every panel (flip a default only with a version bump)", async () => {
     await rehydrateFrom(
       { panels: { channels: true, insights: false, dock: false } },
       1,

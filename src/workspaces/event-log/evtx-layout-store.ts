@@ -59,8 +59,9 @@ export const MAX_DOCK_HEIGHT_RATIO = 0.5;
  * Which panels have content to show. The correlation dock (Phase 11) is not built yet, so its
  * toggle is disabled and a persisted `true` is forced back to `false` on rehydration. The phase
  * that enables a panel must flip it here AND in `DEFAULT_PANELS`, and must bump the persist
- * `version` and migrate a persisted `false` to the new default; otherwise users who already hold
- * `false` never see the new panel. Phase 4 did this for Insights (version 2, `migrateLayout`).
+ * `version`: an envelope written under an older version is discarded, so the stored layout resets
+ * to the defaults and a user who holds `false` still sees the new panel. There is deliberately no
+ * `migrate`: no released build wrote the older versions. Phase 4 did this for Insights (version 2).
  */
 export const EVTX_PANELS_AVAILABLE: EvtxPanels = {
   channels: true,
@@ -72,23 +73,6 @@ const DEFAULT_PANELS: EvtxPanels = { channels: true, insights: true, dock: false
 
 /** Persist version of the layout envelope. 2: the Insights rail shipped and defaults on. */
 export const EVTX_LAYOUT_VERSION = 2;
-
-/**
- * Brings an older persisted envelope forward. Under version 1 Insights was unavailable, so every
- * stored envelope holds `panels.insights === false` that the user never chose; it becomes the new
- * default. A version 2 envelope is the user's own choice and is left alone.
- */
-export function migrateLayout(persisted: unknown, version: number): unknown {
-  if (version >= EVTX_LAYOUT_VERSION || !persisted || typeof persisted !== "object") {
-    return persisted;
-  }
-  const source = persisted as Record<string, unknown>;
-  const panels =
-    source.panels && typeof source.panels === "object"
-      ? (source.panels as Record<string, unknown>)
-      : {};
-  return { ...source, panels: { ...panels, insights: DEFAULT_PANELS.insights } };
-}
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
   const number = typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -181,7 +165,6 @@ export const useEvtxLayoutStore = create<EvtxLayoutState>()(
     {
       name: EVTX_LAYOUT_STORAGE_KEY,
       version: EVTX_LAYOUT_VERSION,
-      migrate: migrateLayout,
       partialize: (state): EvtxPersistedLayout => ({
         activeView: state.activeView,
         panels: state.panels,

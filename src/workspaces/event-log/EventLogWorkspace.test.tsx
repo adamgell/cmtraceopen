@@ -1198,6 +1198,27 @@ describe("EventLogWorkspace fixtures", () => {
     expect(useEvtxLayoutStore.getState().panels.insights).toBe(false);
   });
 
+  it("scrolls a selection made outside the grid into view, but not when a live-tail renumber only changes the ids", () => {
+    seedFixtureEvents();
+    const [only] = useEvtxStore.getState().records;
+    const two = [only, { ...only, id: only.id + 1, eventRecordId: only.eventRecordId + 1 }];
+    useEvtxStore.setState({ records: two, selectedRecordId: null });
+    render(<EventLogWorkspace />);
+
+    // Previous and Next select from outside the grid: the row is brought into view.
+    virtualizerState.scrollToIndex.mockClear();
+    act(() => useEvtxStore.getState().setSelectedRecordId(1));
+    expect(virtualizerState.scrollToIndex).toHaveBeenCalledTimes(1);
+
+    // A tail batch with an older record renumbers every id; the selected record is the same
+    // record at a new id, so nothing scrolls.
+    virtualizerState.scrollToIndex.mockClear();
+    const older = { ...only, eventRecordId: only.eventRecordId - 10, timestampEpoch: only.timestampEpoch - 1000 };
+    const renumbered = [older, only, two[1]].map((record, index) => ({ ...record, id: index }));
+    act(() => useEvtxStore.setState({ records: renumbered, selectedRecordId: 2 }));
+    expect(virtualizerState.scrollToIndex).not.toHaveBeenCalled();
+  });
+
   // The export control has two asynchronous phases before an abort controller exists: the save
   // dialog, and the session the dialog's answer unlocks. These tests drive the real control so the
   // guard is judged by what an operator can make happen, not by reading the ref.

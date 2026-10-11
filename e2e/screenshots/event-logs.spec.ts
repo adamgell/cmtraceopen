@@ -242,20 +242,26 @@ test.describe("event-logs screenshots", () => {
   });
 
   test("event-logs selected record", async ({ page }) => {
-    const grid = page.getByRole("grid", { name: timelineGridName });
-    // Newest first, the first Error record (MsiInstaller 11708) is the 39th row, below the fold of
-    // a virtualized list, so scroll it into the rendered window before clicking.
-    await grid.evaluate((el) => {
-      el.scrollTop = 36 * 36;
+    // Select a record that IS finding evidence, so the Details callout shows: the DeviceManagement
+    // 404 at record 89131, the first piece of evidence of the top finding. The engine's evidence is
+    // the redacted display projection (machine as a [host:...] token, source as the file path), and
+    // the callout matches on event ID, provider, channel and record ID, so this record matches
+    // uniquely. It goes through the same action a row click calls, and the grid scrolls the row
+    // into view.
+    await page.evaluate(async () => {
+      const { useEvtxStore } = await import("/src/workspaces/event-log/evtx-store.ts");
+      const { selectRecordAndShowDetails } = await import(
+        "/src/workspaces/event-log/evtx-select-record.ts"
+      );
+      const record = useEvtxStore
+        .getState()
+        .records.find((candidate) => candidate.eventRecordId === 89131 && candidate.eventId === 404);
+      if (!record) throw new Error("fixture record 404 / 89131 is not loaded");
+      selectRecordAndShowDetails(record.id);
     });
-    const row = grid
-      .getByRole("row")
-      .filter({ hasText: "Installation failed." })
-      .first();
-    await row.click();
-    await expect(
-      page.getByRole("region", { name: "Event log details" }),
-    ).toContainText("Installation failed.");
+    const detail = page.getByRole("region", { name: "Event log details" });
+    await expect(detail).toContainText("Command failure status");
+    await expect(detail.getByRole("button", { name: /Part of finding/ })).toBeVisible();
     await assertNoHostPaths(page);
     await page.screenshot({
       path: outPath("event-logs-selected.png"),
@@ -265,7 +271,9 @@ test.describe("event-logs screenshots", () => {
 
   test("event-logs insights lower cards", async ({ page }) => {
     // The finding cards fill the top of the rail; scroll the panel to its end so the coverage
-    // disclosure, level mix, top event IDs and correlation summary are reviewable.
+    // disclosure, level mix and top event IDs are reviewable. The correlation summary card does
+    // not appear here: this fixture yields no correlation edges, so it waits for Phase 10's
+    // fixture edges (#839).
     const panel = page.locator("#evtx-rail-panel-insights");
     await expect(panel).toBeVisible();
     await panel.evaluate((el) => {

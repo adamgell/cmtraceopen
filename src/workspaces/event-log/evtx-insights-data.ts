@@ -180,29 +180,67 @@ export function eventEvidenceLabel(
 }
 
 /**
- * The first finding (in the order given) whose event evidence names `record`. The match needs the
- * event ID and provider, and a record identity: a record the provider never numbered cannot be
- * matched, because two different events would then look the same. A channel or machine on the
- * evidence must agree with the record.
+ * True for a redaction token such as `[host:ab12]`. The diagnosis the UI receives over IPC is the
+ * redacted display projection, so a machine name and often a source arrive as tokens that cannot
+ * be compared with the record's own values.
+ */
+export function isRedactionToken(value: string): boolean {
+  return /^\[[^\]]*\]$/.test(value.trim());
+}
+
+/** The record's identity text in the engine's order, or null when the provider never numbered it. */
+function recordIdentityText(record: EvtxRecord): string | null {
+  if (hasRecordIdText(record.eventRecordIdText)) return record.eventRecordIdText;
+  return record.eventRecordId !== 0 ? String(record.eventRecordId) : null;
+}
+
+/**
+ * Whether event evidence names `record`. Matched on the fields that survive redaction: event ID,
+ * provider, channel, and the record identity in the engine's `stable_id` order (non-zero
+ * `recordIdText`, then `fallbackIdentity`, then non-zero `recordId`). A `fallbackIdentity` is a hash
+ * the record cannot reproduce, so evidence identified only that way never matches. Machine and
+ * source are compared only when they are not redaction tokens.
+ */
+export function evidenceMatchesRecord(
+  value: DiagnosisEventEvidence,
+  record: EvtxRecord,
+): boolean {
+  if (value.eventId !== record.eventId || value.provider !== record.provider) return false;
+  if (value.channel && !isRedactionToken(value.channel) && value.channel !== record.channel) {
+    return false;
+  }
+  if (value.machine && !isRedactionToken(value.machine) && value.machine !== record.computer) {
+    return false;
+  }
+  if (value.source && !isRedactionToken(value.source) && value.source !== record.sourceLabel) {
+    return false;
+  }
+  const own = recordIdentityText(record);
+  if (own === null) return false;
+  if (hasRecordIdText(value.recordIdText)) return value.recordIdText === own;
+  if (value.fallbackIdentity) return false;
+  return value.recordId !== 0 && String(value.recordId) === own;
+}
+
+/**
+ * The first finding (in the order given) whose event evidence names `record`, and only when that
+ * evidence names exactly one of the `loaded` records. Several candidates (two archives from
+ * different machines sharing channel, provider, ID and record ID) or none means no match: the UI
+ * never guesses which record a finding means.
  */
 export function findingForRecord(
   findings: readonly DiagnosisFinding[],
   record: EvtxRecord,
+  loaded: readonly EvtxRecord[],
 ): DiagnosisFinding | null {
-  const recordIdText = record.eventRecordIdText;
-  const recordHasIdentity = hasRecordIdText(recordIdText) || record.eventRecordId !== 0;
-  if (!recordHasIdentity) return null;
   for (const finding of findings) {
     for (const evidence of finding.evidence) {
-      if (evidence.kind !== "event") continue;
-      const value = evidence.value;
-      if (value.eventId !== record.eventId || value.provider !== record.provider) continue;
-      if (value.channel && value.channel !== record.channel) continue;
-      if (value.machine && value.machine !== record.computer) continue;
-      const sameRecord = hasRecordIdText(value.recordIdText)
-        ? value.recordIdText === (recordIdText ?? String(record.eventRecordId))
-        : value.recordId !== 0 && value.recordId === record.eventRecordId;
-      if (sameRecord) return finding;
+      if (evidence.kind !== "event" || !evidenceMatchesRecord(evidence.value, record)) continue;
+      let candidates = 0;
+      for (const other of loaded) {
+        if (evidenceMatchesRecord(evidence.value, other) && ++candidates > 1) break;
+      }
+      if (candidates === 1) return finding;
     }
   }
   return null;

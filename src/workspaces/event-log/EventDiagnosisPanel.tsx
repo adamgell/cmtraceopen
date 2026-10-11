@@ -14,11 +14,12 @@
  * - "{n} nearby, not linked": Phase 10c (Chains tab data).
  * - The coverage note with its Elevate action: Phase 4b.
  */
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { memo, useId, useMemo, useState, type ReactNode } from "react";
 import { tokens } from "@fluentui/react-components";
 import { LOG_MONOSPACE_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
+import { useRailTextColors } from "./evtx-rail-text";
 import {
   correlationBreakdown,
   eventEvidenceLabel,
@@ -82,6 +83,12 @@ interface EventDiagnosisPanelProps {
   updating?: boolean;
   /** Why the last build failed, when it did. */
   error?: string | null;
+  /**
+   * How many visible events the shown summary was built from. While a rebuild is pending this is
+   * the previous build's count, so the scope line never pairs a new count with old numbers.
+   * Defaults to `records.length`.
+   */
+  scopeCount?: number | null;
 }
 
 interface GroupedCoverageGap {
@@ -407,52 +414,52 @@ function OverviewBlock({
   updating: boolean;
   sizes: RailSizes;
 }) {
+  const railText = useRailTextColors();
   return (
     <div style={{ display: "grid", gap: "4px" }}>
       {updating && (
         <div
           role="status"
-          style={{ fontSize: `${sizes.caption}px`, color: tokens.colorNeutralForeground3 }}
+          style={{ fontSize: `${sizes.caption}px`, color: railText.secondary }}
         >
           Updating diagnosis...
         </div>
       )}
+      {/* Everything below is the previous build while one is pending, so it is dimmed and marked
+          busy like the finding cards, and its scope line states the scope it was built from. */}
       <div
-        style={{
-          fontSize: `${sizes.caption}px`,
-          fontWeight: 700,
-          letterSpacing: "0.08em",
-          textTransform: "uppercase",
-          color: tokens.colorNeutralForeground3,
-        }}
+        aria-busy={updating || undefined}
+        style={{ display: "grid", gap: "4px", opacity: updating ? 0.6 : 1 }}
       >
-        {OUTCOME_LABELS[overview.outcome]}
-      </div>
-      <div
-        style={{
-          fontSize: `${sizes.f}px`,
-          fontWeight: 600,
-          color: tokens.colorNeutralForeground1,
-        }}
-      >
-        {overview.headline}
-      </div>
-      <div
-        data-testid="overview-counts"
-        style={{ fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground3 }}
-      >
-        <Count value={overview.actionableFindingCount} />{" "}
-        {overview.actionableFindingCount === 1 ? "actionable finding" : "actionable findings"},{" "}
-        <Count value={overview.coverageGapCount} />{" "}
-        {overview.coverageGapCount === 1 ? "source coverage gap" : "source coverage gaps"}
-      </div>
-      {scopeCount !== null && (
         <div
-          style={{ fontSize: `${sizes.caption}px`, color: tokens.colorNeutralForeground3 }}
+          style={{
+            fontSize: `${sizes.caption}px`,
+            fontWeight: 700,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            color: railText.secondary,
+          }}
         >
-          Scoped to <Count value={scopeCount} /> visible {scopeCount === 1 ? "event" : "events"}
+          {OUTCOME_LABELS[overview.outcome]}
         </div>
-      )}
+        <div style={{ fontSize: `${sizes.f}px`, fontWeight: 600, color: railText.primary }}>
+          {overview.headline}
+        </div>
+        <div
+          data-testid="overview-counts"
+          style={{ fontSize: `${sizes.small}px`, color: railText.secondary }}
+        >
+          <Count value={overview.actionableFindingCount} />{" "}
+          {overview.actionableFindingCount === 1 ? "actionable finding" : "actionable findings"},{" "}
+          <Count value={overview.coverageGapCount} />{" "}
+          {overview.coverageGapCount === 1 ? "source coverage gap" : "source coverage gaps"}
+        </div>
+        {scopeCount !== null && (
+          <div style={{ fontSize: `${sizes.caption}px`, color: railText.secondary }}>
+            Scoped to <Count value={scopeCount} /> visible {scopeCount === 1 ? "event" : "events"}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -563,7 +570,6 @@ function TopEventIdsCard({
           <li
             key={entry.eventId}
             data-event-id={entry.eventId}
-            aria-label={`${entry.eventId}: ${formatCount(entry.count)} ${entry.count === 1 ? "event" : "events"}`}
             style={{
               display: "grid",
               gridTemplateColumns: "40px 1fr 30px",
@@ -573,7 +579,6 @@ function TopEventIdsCard({
             }}
           >
             <span
-              aria-hidden="true"
               style={{
                 fontFamily: tokens.fontFamilyNumeric,
                 fontWeight: 700,
@@ -582,7 +587,7 @@ function TopEventIdsCard({
             >
               {entry.eventId}
             </span>
-            {/* Single-series bars (spec 6.3): the count is the text form. */}
+            {/* Single-series bars (spec 6.3): only the bar is hidden; the ID and the count are text. */}
             <span
               aria-hidden="true"
               style={{
@@ -593,7 +598,6 @@ function TopEventIdsCard({
               }}
             />
             <span
-              aria-hidden="true"
               style={{
                 fontFamily: tokens.fontFamilyNumeric,
                 textAlign: "right",
@@ -708,8 +712,9 @@ function OmittedRows({
   singular: string;
   sizes: RailSizes;
 }) {
+  const railText = useRailTextColors();
   return count > 0 ? (
-    <span style={{ fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground3 }}>
+    <span style={{ fontSize: `${sizes.small}px`, color: railText.secondary }}>
       {omittedLabel(count, singular)}
     </span>
   ) : null;
@@ -771,13 +776,15 @@ function Disclosure({
   );
 }
 
-export function EventDiagnosisPanel({
+export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
   summary,
   records,
   updating = false,
   error = null,
+  scopeCount,
 }: EventDiagnosisPanelProps) {
   const sizes = useRailSizes();
+  const railText = useRailTextColors();
   const visuals = useEvtxVisualTokens();
   const [coverageOpen, setCoverageOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -807,8 +814,10 @@ export function EventDiagnosisPanel({
   );
 
   if (!summary) {
+    // The workspace's alert banner carries the full error text; repeating it here would stack two
+    // prefixes on one message.
     const message = error
-      ? `Diagnosis could not be built: ${error}`
+      ? "Diagnosis could not be built."
       : updating
         ? "Updating diagnosis..."
         : "There are no events or text logs to diagnose.";
@@ -819,7 +828,7 @@ export function EventDiagnosisPanel({
       >
         <div
           role="status"
-          style={{ fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground3 }}
+          style={{ fontSize: `${sizes.small}px`, color: railText.secondary }}
         >
           {message}
         </div>
@@ -853,7 +862,7 @@ export function EventDiagnosisPanel({
     >
       <OverviewBlock
         overview={summary.overview}
-        scopeCount={records ? records.length : null}
+        scopeCount={scopeCount !== undefined ? scopeCount : records ? records.length : null}
         updating={updating}
         sizes={sizes}
       />
@@ -934,4 +943,4 @@ export function EventDiagnosisPanel({
       )}
     </section>
   );
-}
+});

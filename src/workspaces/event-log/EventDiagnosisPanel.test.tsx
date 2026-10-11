@@ -1,5 +1,8 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getThemeById } from "../../lib/themes";
+import { useUiStore } from "../../stores/ui-store";
+import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
 import { DETAIL_RENDER_CAP, OUTCOME_LABELS, EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import type {
   DiagnosisCorrelationEdge,
@@ -530,15 +533,35 @@ describe("EventDiagnosisPanel", () => {
       expect(within(top).queryAllByRole("button")).toHaveLength(0);
     });
 
-    it("draws the bars in the single-series color and gives each row a text form", () => {
+    it("draws the bars in exactly the single-series color, not a level color", () => {
+      render(<EventDiagnosisPanel summary={summary} records={records} />);
+      const visuals = buildEvtxVisualTokens(getThemeById(useUiStore.getState().themeId));
+      const resolved = (color: string) => {
+        const probe = document.createElement("span");
+        probe.style.backgroundColor = color;
+        return probe.style.backgroundColor;
+      };
+      const top = screen.getByRole("region", { name: "Top event IDs" });
+      const bars = Array.from(top.querySelectorAll<HTMLElement>("span[style*='height: 10px']"));
+      expect(bars).toHaveLength(3);
+      for (const bar of bars) {
+        expect(bar.style.backgroundColor).toBe(resolved(visuals.singleSeries));
+        expect(bar.style.backgroundColor).not.toBe(resolved(visuals.levels.Error.barColor));
+        expect(bar.style.backgroundColor).not.toBe(resolved(visuals.levels.Warning.barColor));
+      }
+    });
+
+    it("renders each ID and count as text and hides only the bar", () => {
       render(<EventDiagnosisPanel summary={summary} records={records} />);
       const top = screen.getByRole("region", { name: "Top event IDs" });
       const row = within(top).getAllByRole("listitem")[0];
-      expect(row).toHaveAttribute("aria-label", "100: 3 events");
-      const bar = row.querySelector("span[style*='height: 10px']") as HTMLElement;
-      expect(bar.style.backgroundColor).not.toBe("");
-      expect(bar.style.backgroundColor).not.toContain("var(--colorPalette");
-      expect(within(top).getAllByRole("listitem")[1]).toHaveAttribute("aria-label", "200: 1 event");
+      expect(row).not.toHaveAttribute("aria-label");
+      const [id, bar, count] = Array.from(row.children);
+      expect(id).toHaveTextContent("100");
+      expect(count).toHaveTextContent("3");
+      expect(id).not.toHaveAttribute("aria-hidden");
+      expect(count).not.toHaveAttribute("aria-hidden");
+      expect(bar).toHaveAttribute("aria-hidden", "true");
     });
 
     it("keeps only the seven most frequent IDs", () => {
@@ -713,11 +736,18 @@ describe("EventDiagnosisPanel", () => {
       expect(screen.queryByText("No actionable findings.")).toBeNull();
     });
 
-    it("says a build failed, with its reason, and not that nothing is available yet", () => {
-      render(<EventDiagnosisPanel summary={null} records={records} error="engine unavailable" />);
-      expect(screen.getByRole("status")).toHaveTextContent(
-        "Diagnosis could not be built: engine unavailable",
+    it("says a build failed without repeating the workspace banner's prefixed message", () => {
+      render(
+        <EventDiagnosisPanel
+          summary={null}
+          records={records}
+          error="Operational diagnosis could not be built: engine unavailable"
+        />,
       );
+      const status = screen.getByRole("status");
+      expect(status).toHaveTextContent(/^Diagnosis could not be built\.$/);
+      expect(status).not.toHaveTextContent("Operational");
+      expect(status).not.toHaveTextContent("engine unavailable");
       expect(screen.queryByText(/not available yet/)).toBeNull();
     });
 
@@ -739,6 +769,9 @@ describe("EventDiagnosisPanel", () => {
       fireEvent.click(screen.getByRole("button", { name: "+1 more check" }));
 
       rerender(<EventDiagnosisPanel summary={many} records={records} updating />);
+      // The overview from the previous build is dimmed and busy, like the cards.
+      expect(screen.getByTestId("overview-counts").parentElement).toHaveAttribute("aria-busy", "true");
+      expect(screen.getByTestId("overview-counts").parentElement).toHaveStyle({ opacity: "0.6" });
 
       expect(disclosure(/Coverage gaps/)).toHaveProperty("open", true);
       expect(disclosure("Show diagnosis details")).toHaveProperty("open", true);
@@ -749,6 +782,18 @@ describe("EventDiagnosisPanel", () => {
       rerender(<EventDiagnosisPanel summary={many} records={records} />);
       expect(screen.queryByRole("status")).toBeNull();
       expect(disclosure(/Coverage gaps/)).toHaveProperty("open", true);
+    });
+  });
+
+  describe("scope line", () => {
+    it("states the scope the shown summary was built from, not the new record count", () => {
+      const three = [record(1, 1, "Error"), record(2, 1, "Error"), record(3, 1, "Error")];
+      render(
+        <EventDiagnosisPanel summary={summary} records={three} scopeCount={2} updating />,
+      );
+      const section = screen.getByLabelText("Operational diagnosis");
+      expect(section).toHaveTextContent("Scoped to 2 visible events");
+      expect(section).not.toHaveTextContent("Scoped to 3");
     });
   });
 

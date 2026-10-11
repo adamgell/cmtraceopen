@@ -6,6 +6,7 @@ import {
   findRecordById,
   findingForRecord,
   formatCount,
+  isRedactionToken,
   neighborRecordId,
   summarizeRecords,
 } from "./evtx-insights-data";
@@ -130,27 +131,68 @@ function findingWith(...refs: ReturnType<typeof evidence>[]): DiagnosisFinding {
 
 describe("findingForRecord", () => {
   const selected = record(1);
+  const loaded = [selected, record(2)];
   it("matches event evidence on ID, provider and record", () => {
     const finding = findingWith(evidence({}));
-    expect(findingForRecord([finding], selected)).toBe(finding);
+    expect(findingForRecord([finding], selected, loaded)).toBe(finding);
   });
-  it("does not match a different record, provider, channel or machine", () => {
-    for (const overrides of [
-      { recordId: 5 },
-      { provider: "Q" },
-      { channel: "System" },
-      { machine: "PC-2" },
-    ]) {
-      expect(findingForRecord([findingWith(evidence(overrides))], selected)).toBeNull();
+  it("does not match a different record, provider or channel", () => {
+    for (const overrides of [{ recordId: 5 }, { provider: "Q" }, { channel: "System" }]) {
+      expect(findingForRecord([findingWith(evidence(overrides))], selected, loaded)).toBeNull();
     }
   });
-  it("prefers the record id text, and never matches an unnumbered record", () => {
+  it("matches IPC-shaped evidence: a redacted machine and a redacted source are not compared", () => {
+    const ipc = findingWith(evidence({ machine: "[host:ab12cd]", source: "[path:9f3e]" }));
+    expect(findingForRecord([ipc], selected, loaded)).toBe(ipc);
+  });
+  it("compares a machine or source only when it is a raw value", () => {
+    expect(
+      findingForRecord([findingWith(evidence({ machine: "PC-2" }))], selected, loaded),
+    ).toBeNull();
+    expect(
+      findingForRecord([findingWith(evidence({ source: "b.evtx" }))], selected, loaded),
+    ).toBeNull();
+    const raw = findingWith(evidence({ machine: "PC-1", source: "a.evtx" }));
+    expect(findingForRecord([raw], selected, loaded)).toBe(raw);
+  });
+  it("shows no match when two loaded records from different machines share every matched field", () => {
+    const twin = record(2, { computer: "PC-2", sourceLabel: "b.evtx", eventRecordId: 1001 });
+    const ipc = findingWith(evidence({ machine: "[host:ab12cd]", source: "[path:9f3e]" }));
+    expect(findingForRecord([ipc], selected, [selected, twin])).toBeNull();
+    expect(findingForRecord([ipc], twin, [selected, twin])).toBeNull();
+    // A raw machine tells them apart again.
+    const raw = findingWith(evidence({ machine: "PC-1", source: "[path:9f3e]" }));
+    expect(findingForRecord([raw], selected, [selected, twin])).toBe(raw);
+    expect(findingForRecord([raw], twin, [selected, twin])).toBeNull();
+  });
+  it("prefers the record id text, and never matches an unnumbered record or a fallback identity", () => {
     const withText = record(1, { eventRecordIdText: "88456" });
     expect(
-      findingForRecord([findingWith(evidence({ recordIdText: "88456", recordId: 7 }))], withText),
+      findingForRecord(
+        [findingWith(evidence({ recordIdText: "88456", recordId: 7 }))],
+        withText,
+        [withText],
+      ),
     ).not.toBeNull();
     const unnumbered = record(1, { eventRecordId: 0 });
-    expect(findingForRecord([findingWith(evidence({ recordId: 0 }))], unnumbered)).toBeNull();
+    expect(
+      findingForRecord([findingWith(evidence({ recordId: 0 }))], unnumbered, [unnumbered]),
+    ).toBeNull();
+    expect(
+      findingForRecord(
+        [findingWith(evidence({ recordId: 0, fallbackIdentity: "abcdef" }))],
+        selected,
+        loaded,
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("isRedactionToken", () => {
+  it("recognizes a bracketed token and nothing else", () => {
+    expect(isRedactionToken("[host:ab12]")).toBe(true);
+    expect(isRedactionToken("PC-1")).toBe(false);
+    expect(isRedactionToken("C:\\x\\[a].evtx")).toBe(false);
   });
 });
 

@@ -39,6 +39,7 @@ import { EventLogWorkspace, EvtxViewHost, type EvtxViewEntry } from "./EventLogW
 import { EvtxViewBar } from "./EvtxViewBar";
 import {
   EVTX_LAYOUT_STORAGE_KEY,
+  EVTX_LAYOUT_VERSION,
   EVTX_VIEW_PANEL_ID,
   sanitizeLayout,
   useEvtxLayoutStore,
@@ -145,7 +146,7 @@ describe("EventLogWorkspace three-column shell", () => {
     localStorage.setItem(
       EVTX_LAYOUT_STORAGE_KEY,
       JSON.stringify({
-        version: 1,
+        version: EVTX_LAYOUT_VERSION,
         state: {
           activeView: "charts",
           panels: { channels: false, insights: true, dock: true },
@@ -162,7 +163,7 @@ describe("EventLogWorkspace three-column shell", () => {
     expect(region("channels")).not.toBeVisible();
     expect(region("rail")).toHaveStyle({ width: "400px" });
     expect(region("dock")).toHaveStyle({ height: "250px" });
-    // The rail is on in a version 1 envelope too (migrated); the dock has no content yet.
+    // The dock has no content yet, so it stays hidden whatever the envelope says.
     expect(region("rail")).toBeVisible();
     expect(region("dock")).not.toBeVisible();
   });
