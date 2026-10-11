@@ -778,7 +778,7 @@ export const EvtxTimelineHeader = forwardRef<HTMLDivElement, EvtxTimelineHeaderP
               {column.id === "links" ? (
                 <Link16Regular />
               ) : (
-                <span style={{ minWidth: 0, ...TRUNCATE }}>{column.label}</span>
+                <span style={{ minWidth: 0, ...TRUNCATE }}>{column.headerLabel ?? column.label}</span>
               )}
               {column.id === "timestamp" && sortField === "time" && (
                 <SortChevron data-evtx-sort-direction={sortDirection} style={{ flex: "none" }} />

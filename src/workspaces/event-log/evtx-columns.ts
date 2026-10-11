@@ -94,6 +94,11 @@ export function availableColumns(
 export interface EvtxColumnSpec {
   id: EvtxColumnId;
   label: string;
+  /**
+   * The table header's text when `label` does not fit the column's default width. `label` stays
+   * the name used by the chooser and by each cell's accessible name.
+   */
+  headerLabel?: string;
   /** Default width in pixels, or null for the column that absorbs remaining space. */
   defaultWidth: number | null;
   /** Shown when no configuration has been saved. */
@@ -109,7 +114,8 @@ export interface EvtxColumnSpec {
 export const EVTX_COLUMNS: EvtxColumnSpec[] = [
   { id: "level", label: "Level", defaultWidth: 32, defaultVisible: true },
   { id: "timestamp", label: "Event Time", defaultWidth: 154, defaultVisible: true },
-  { id: "eventId", label: "Event ID", defaultWidth: 52, defaultVisible: true },
+  // "Event ID" in 600 weight is wider than the 52 px column and ellipsized in the header.
+  { id: "eventId", label: "Event ID", headerLabel: "ID", defaultWidth: 52, defaultVisible: true },
   { id: "recordId", label: "Record ID", defaultWidth: 70, defaultVisible: false },
   { id: "channel", label: "Channel", defaultWidth: 120, defaultVisible: true },
   { id: "provider", label: "Provider", defaultWidth: 162, defaultVisible: true },

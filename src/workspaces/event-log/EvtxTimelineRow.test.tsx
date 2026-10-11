@@ -1211,6 +1211,10 @@ describe("EvtxTimelineHeader (spec 8.7)", () => {
     );
     expect(ids).toEqual(visibleColumns(defaultColumnConfig()).map((c) => c.id));
     expect(headerCell("timestamp")).toHaveTextContent("Event Time");
+    // "Event ID" does not fit 52 px in 600 weight, so the header says "ID" and keeps the full
+    // name as its tooltip; the cells and the chooser still use "Event ID".
+    expect(headerCell("eventId")).toHaveTextContent(/^ID$/);
+    expect(headerCell("eventId")).toHaveAttribute("title", "Event ID");
     expect(headerCell("provider")).toHaveTextContent("Provider");
     expect(headerCell("message")).toHaveTextContent("Description");
   });

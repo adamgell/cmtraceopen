@@ -295,6 +295,19 @@ describe("default column widths (spec 8.7)", () => {
   });
 });
 
+describe("column header labels", () => {
+  it("gives the Event ID column a short header and no other column one", () => {
+    expect(
+      EVTX_COLUMNS.filter((column) => column.headerLabel !== undefined).map((column) => [
+        column.id,
+        column.headerLabel,
+      ]),
+    ).toEqual([["eventId", "ID"]]);
+    // The cells, the chooser and quick filter use the full label.
+    expect(columnSpec("eventId").label).toBe("Event ID");
+  });
+});
+
 describe("the links column", () => {
   it("is shown by default, after the unbounded description", () => {
     expect(defaultColumnConfig().order).toEqual([
