@@ -374,6 +374,80 @@ describe("buildChannelPaneModel", () => {
     expect(model.readCount).toBe(1);
   });
 
+  describe("which gaps make a read partial", () => {
+    const loaded = (coverageDetails: EvtxCoverageGap[], legacyCoverage: string[] = []) =>
+      buildChannelPaneModel(
+        paneInput({
+          channels: [live("Application")],
+          loadedChannels: new Set(["Application"]),
+          records: [record("Application", NOW - HOUR)],
+          coverageDetails,
+          legacyCoverage,
+        }),
+      ).rows.get("Application")?.state;
+
+    it.each(["chunk", "record", "xml", "limit", "limitReached", "cancelled"] as const)(
+      "treats a %s gap as events that may be missing",
+      (kind) => {
+        expect(loaded([gap("Application", kind, "some events may be missing")])).toBe("partial");
+      },
+    );
+
+    it("does not call a read partial because a provider message could not be formatted", () => {
+      // The record is kept and its raw data is shown, so every event is there. This gap is common
+      // on a real machine (missing publisher metadata) and must not label most channels partial.
+      const providerGap = gap(
+        "Application",
+        "provider",
+        "provider message for Contoso could not be rendered at EvtOpenPublisherMetadata (Windows error 2); raw event data is shown instead",
+      );
+      expect(loaded([providerGap])).toBe("read");
+      // The legacy string the backend writes for the same gap is not a second opinion.
+      expect(loaded([providerGap], [`Application: ${providerGap.reason}`])).toBe("read");
+    });
+
+    it("recognizes the legacy twin of a file gap whose structured form carries a record location", () => {
+      const fileGap: EvtxCoverageGap = {
+        source: "C:\\logs\\Application.evtx",
+        kind: "provider",
+        reason: "provider message for Contoso could not be rendered",
+        eventRecordId: 7,
+      };
+      const model = buildChannelPaneModel(
+        paneInput({
+          sourceMode: "files",
+          timeWindow: "all",
+          channels: [file("Application")],
+          records: [record("Application", NOW - HOUR)],
+          coverageDetails: [fileGap],
+          // The Rust formatter writes "source: reason", the TypeScript one adds " record 7".
+          legacyCoverage: [
+            "C:\\logs\\Application.evtx: provider message for Contoso could not be rendered",
+            "C:\\logs\\Application.evtx record 7: provider message for Contoso could not be rendered",
+          ],
+        }),
+      );
+      expect(model.rows.get("Application")?.state).toBe("read");
+    });
+
+    it("keeps a legacy-only shortfall, which no structured gap explains, as partial", () => {
+      expect(loaded([], ["Application: live stream batch 3 was not received"])).toBe("partial");
+    });
+
+    it("reads a channel the parser reports as empty as a real zero", () => {
+      const model = buildChannelPaneModel(
+        paneInput({
+          sourceMode: "files",
+          timeWindow: "all",
+          channels: [file("Application")],
+          coverageDetails: [gap("C:\\logs\\Application.evtx", "empty", "the file holds no events")],
+        }),
+      );
+      expect(model.rows.get("Application")).toMatchObject({ state: "read", stats: { total: 0 } });
+      expect(model.rows.get("Application")?.reasons).toEqual([]);
+    });
+  });
+
   it("marks a stopped load that kept some records as partial and one that kept none as not read", () => {
     const stopped = gap("System", "cancelled", "operator stopped the load");
     const withRecords = buildChannelPaneModel(

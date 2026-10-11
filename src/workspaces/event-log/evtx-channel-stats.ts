@@ -315,9 +315,7 @@ interface ChannelGap {
 }
 
 /**
- * Kinds that mean the whole source could not be read. The rest (record, chunk, xml, provider,
- * limit, limitReached, cancelled) leave part of a source readable. `empty` says the source holds
- * nothing and blocks nothing.
+ * Kinds that mean the whole source could not be read. The rest leave part of a source readable.
  */
 const BLOCKING_KINDS: ReadonlySet<EvtxCoverageGapKind> = new Set([
   "accessDenied",
@@ -340,9 +338,31 @@ function isDenied(gap: ChannelGap): boolean {
   return gap.kind === "accessDenied" || DENIED_REASON.test(gap.reason);
 }
 
+/**
+ * Kinds that leave every event in place, so they do not make a read partial. `provider` is a
+ * message that could not be formatted (the record is kept and its raw data is shown), which is
+ * common on a real machine with missing publisher metadata; `empty` says the source holds nothing,
+ * and a channel read as empty is a real zero. Every other kind, and a legacy string that has no
+ * structured twin, says events may be missing.
+ */
+const COMPLETE_DESPITE_KINDS: ReadonlySet<EvtxCoverageGapKind> = new Set(["provider", "empty"]);
+
+function isIncomplete(gap: ChannelGap): boolean {
+  return gap.kind === null || !COMPLETE_DESPITE_KINDS.has(gap.kind);
+}
+
 function isBlocking(gap: ChannelGap): boolean {
   if (gap.kind === null) return /\bnot read\b/i.test(gap.reason) || isDenied(gap);
   return BLOCKING_KINDS.has(gap.kind) || isDenied(gap);
+}
+
+/**
+ * What a structured gap and the legacy string written for it have in common. The two are formatted
+ * differently (the string may carry " chunk N" or " record N" after the source, or the Rust
+ * formatter may omit it), so the source is compared without its location.
+ */
+function twinKey(gap: ChannelGap): string {
+  return `${gap.source.replace(LOCATION_SUFFIX, "").trim()}\u0000${gap.reason.trim()}`;
 }
 
 function legacyGap(text: string): ChannelGap {
@@ -491,11 +511,17 @@ export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel
   const { channels, loadedChannels, remoteMachine, sourceMode } = input;
   const { span, byChannel } = computeChannelStats(input.records, input);
 
-  const gaps: ChannelGap[] = [
+  const structured: ChannelGap[] = [
     ...input.coverageDetails.map(({ source, kind, reason }) => ({ source, kind, reason })),
     ...input.manifestCoverage.map(({ path, kind, reason }) => ({ source: path, kind, reason })),
-    ...input.legacyCoverage.map(legacyGap),
   ];
+  // A legacy string repeats a structured gap; it counts only when nothing structured says the same,
+  // as for a thrown query, which leaves no structured gap at all.
+  const structuredKeys = new Set(structured.map(twinKey));
+  const gaps = [
+    ...structured,
+    ...input.legacyCoverage.map(legacyGap).filter((gap) => !structuredKeys.has(twinKey(gap))),
+  ].filter(isIncomplete);
   const index = indexGaps(gaps, remoteMachine);
 
   const known = new Set(channels.map((channel) => channel.name.toLowerCase()));
