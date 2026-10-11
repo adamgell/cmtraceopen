@@ -11,7 +11,7 @@
  * The Tauri bridge is mocked because the store imports it at module scope.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { EVTX_LEVELS } from "./evtx-filter";
+import { EVTX_LEVELS, levelsFilteredAtSource } from "./evtx-filter";
 import type { EvtxLevel } from "./types";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -26,7 +26,11 @@ const { serverFilterKey, useEvtxStore } = await import("./evtx-store");
 const levels = (...names: EvtxLevel[]) => new Set<EvtxLevel>(names);
 const ALL = () => levels(...EVTX_LEVELS);
 
-type QueryArgs = { channels: string[]; filter: { levels?: number[]; eventIds?: unknown[]; time?: unknown } };
+type QueryArgs = {
+  channels: string[];
+  maxEvents: number | null;
+  filter: { levels?: number[]; eventIds?: unknown[]; time?: unknown };
+};
 const queries = () =>
   invoke.mock.calls
     .filter(([name]) => name === "evtx_query_channels")
@@ -63,8 +67,29 @@ describe("serverFilterKey", () => {
     );
   });
 
-  it("ignores an invalid Event ID list, which the service is never sent", () => {
-    expect(serverFilterKey("24h", "4624,abc", ALL())).toBe(serverFilterKey("24h", "", ALL()));
+  it("keys an invalid Event ID list apart from none, because the refetch then reads nothing", () => {
+    // buildServerFilter drops an invalid list, but the refetch sends maxEvents 0 for it: the request
+    // is part of the key, not only the filter. "4624,abc" returns no records; "" returns the window.
+    expect(serverFilterKey("24h", "4624,abc", ALL())).not.toBe(serverFilterKey("24h", "", ALL()));
+    expect(serverFilterKey("24h", "4624,abc", ALL())).not.toBe(serverFilterKey("24h", "  ", ALL()));
+    expect(serverFilterKey("24h", "4624,abc", ALL())).not.toBe(serverFilterKey("24h", "4624", ALL()));
+    // Two invalid lists are the same zero-limit request.
+    expect(serverFilterKey("24h", "4624,abc", ALL())).toBe(serverFilterKey("24h", "zzz", ALL()));
+  });
+});
+
+describe("levelsFilteredAtSource and the request the store builds", () => {
+  const SUBSETS = Array.from({ length: 2 ** EVTX_LEVELS.length }, (_, mask) =>
+    levels(...EVTX_LEVELS.filter((_level, index) => (mask >> index) & 1)),
+  );
+
+  it("agree on whether a level predicate is sent, for every level subset", () => {
+    // The store keeps its own copy of the rule (buildServerFilter); the filter row's unknown counts
+    // use this one. Until Phase 6a merges them, this pins the two together.
+    for (const subset of SUBSETS) {
+      const sent = JSON.parse(serverFilterKey("all", "", subset)).filter.levels !== undefined;
+      expect(levelsFilteredAtSource(subset), [...subset].join(",") || "(none)").toBe(sent);
+    }
   });
 });
 
@@ -125,10 +150,41 @@ describe("a live refetch only when the server filter changes", () => {
     expect(queries()[0].filter.eventIds).toEqual([{ kind: "single", id: 4624 }]);
   });
 
-  it("does not refetch for an invalid Event ID list, which the service is never sent", async () => {
+  it("refetches for an invalid Event ID list, which reads nothing (maxEvents 0)", async () => {
     useEvtxStore.getState().setFilterEventIds("4624,abc");
     await settle();
-    expect(queries()).toHaveLength(0);
+    expect(queries()).toHaveLength(1);
+    expect(queries()[0].maxEvents).toBe(0);
+    expect(queries()[0].filter.eventIds).toBeUndefined();
+  });
+
+  it("refetches again when a saved invalid list is cleared, so a read capped at zero is not left on screen", async () => {
+    // A filter saved before Event IDs were committed on Enter can hold a list like "4624;4625".
+    useEvtxStore.setState({ filterEventIds: "4624" });
+    useEvtxStore.getState().setBeforeLoadCriteria({
+      levels: [...EVTX_LEVELS],
+      eventIds: "4624;4625",
+      timeWindow: "24h",
+    });
+    await settle();
+    expect(queries()).toHaveLength(1);
+    expect(queries()[0].maxEvents).toBe(0);
+
+    // The zero-limit read came back empty with the channel loaded, then the operator removes the
+    // list's chip.
+    useEvtxStore.setState({ isLoading: false, loadedChannels: new Set(["Application"]) });
+    useEvtxStore.getState().setFilterEventIds("");
+    await settle();
+    expect(queries()).toHaveLength(2);
+    expect(queries()[1].maxEvents).not.toBe(0);
+  });
+
+  it("refetches when an invalid list is replaced by a valid one", async () => {
+    useEvtxStore.setState({ filterEventIds: "4624,abc" });
+    useEvtxStore.getState().setFilterEventIds("4624");
+    await settle();
+    expect(queries()).toHaveLength(1);
+    expect(queries()[0].filter.eventIds).toEqual([{ kind: "single", id: 4624 }]);
   });
 
   it("refetches for a changed window and not for the same one", async () => {

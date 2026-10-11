@@ -703,13 +703,17 @@ function buildServerFilter(
 }
 
 /**
- * One string per distinct request the service would receive for these before-load criteria.
+ * One string per distinct refetch request: the filter the service is sent and how many events the
+ * refetch asks for.
  *
  * A refetch empties the records and reloads every loaded channel, so the setters below refetch only
  * when this key changes. While Information is selected the level predicate is never sent, so a
- * toggle changes nothing the service sees and the criterion is just a local filter. Exported so the
- * filter row can say which toggles reload. Levels are sorted: the same set in another insertion
- * order is the same request.
+ * toggle changes nothing the service sees and the criterion is just a local filter. The request has
+ * a second part that the filter does not carry: an invalid Event ID list is dropped from the filter,
+ * yet the refetch sends maxEvents 0 for it and reads nothing. So an invalid list is keyed apart from
+ * no list; otherwise clearing one would look like no change and leave an empty read on screen.
+ * Exported so the filter row can say which toggles reload. Levels are sorted: the same set in
+ * another insertion order is the same request.
  */
 export function serverFilterKey(
   timeWindow: EvtxTimeWindow,
@@ -717,7 +721,10 @@ export function serverFilterKey(
   filterLevels: Set<EvtxLevel>
 ): string {
   const filter = buildServerFilter(timeWindow, filterEventIds, filterLevels);
-  return JSON.stringify({ ...filter, levels: filter.levels && [...filter.levels].sort() });
+  return JSON.stringify({
+    filter: { ...filter, levels: filter.levels && [...filter.levels].sort() },
+    readsNothing: hasInvalidEventIdFilter(filterEventIds),
+  });
 }
 function hasInvalidEventIdFilter(raw: string): boolean {
   const trimmed = raw.trim();

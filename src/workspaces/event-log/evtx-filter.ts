@@ -68,8 +68,12 @@ export function countByLevel(records: readonly EvtxRecord[]): Record<EvtxLevel, 
  *
  * Information is a raw-level domain with no upper bound (6..254), and the XPath compiler caps its OR
  * expressions, so any selection that includes Information is evaluated locally instead. Only a
- * strict subset without Information is pushed down. The live query builds its filter from this same
- * function, so the rule cannot drift from the counts that depend on it.
+ * strict subset without Information is pushed down.
+ *
+ * `evtx-store.ts` keeps its own copy of this predicate in `buildServerFilter`; it does not call this
+ * function. The filter row's unknown counts depend on this one, so `evtx-store-server-filter.test.ts`
+ * pins the two together for every level subset. Merging them is a store change that belongs to
+ * Phase 6a (#834).
  */
 export function levelsFilteredAtSource(levels: ReadonlySet<EvtxLevel>): boolean {
   return levels.size > 0 && levels.size < EVTX_LEVELS.length && !levels.has("Information");
