@@ -832,7 +832,7 @@ describe("gaps that reach no row", () => {
     expect(screen.queryByText(/could not be attributed/)).not.toBeInTheDocument();
   });
 
-  it("says some gaps could not be attributed, and lists them, instead of claiming k of k", () => {
+  it("prints no read ratio while a gap is unattributed, and says how many are", () => {
     useEvtxStore.setState({
       coverageDetails: [
         gapRecord("<coverage>", "limit", "4096 further coverage gaps were coalesced"),
@@ -840,15 +840,61 @@ describe("gaps that reach no row", () => {
       ],
     });
     render(<ChannelPicker />);
-    expect(
-      screen.getByText("1 of 1 read \u00B7 some gaps could not be attributed"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("1 channel \u00B7 2 not attributed to a channel")).toBeInTheDocument();
+    // No "k of k read", and the window label gives way to the disclosure.
+    expect(screen.queryByText(/\d+ of \d+ read/)).not.toBeInTheDocument();
     expect(screen.queryByText("1 of 1 read \u00B7 all-time activity")).not.toBeInTheDocument();
     const disclosure = screen.getByText(/2 gaps could not be attributed to a channel/);
     expect(disclosure).toHaveTextContent("<coverage>: 4096 further coverage gaps were coalesced");
     expect(disclosure).toHaveTextContent("C:\\logs\\Sys*.evtx: no files matched the pattern");
     // The wildcard is not a row.
     expect(document.querySelectorAll("[data-channel-row]")).toHaveLength(1);
+  });
+
+  it("counts a repeated gap once, and lists at most five reasons before 'and N more'", () => {
+    useEvtxStore.setState({
+      coverageGaps: Array.from({ length: 7 }, (_, i) => `Elsewhere${i}: not read (gone)`),
+      tailCoverageGaps: ["Elsewhere0: not read (gone)"],
+    });
+    render(<ChannelPicker />);
+    expect(screen.getByText("1 channel \u00B7 7 not attributed to a channel")).toBeInTheDocument();
+    const disclosure = screen.getByText(/7 gaps could not be attributed to a channel/);
+    expect(disclosure.textContent).toContain("Elsewhere4: not read (gone)");
+    expect(disclosure.textContent).not.toContain("Elsewhere5: not read (gone)");
+    expect(disclosure.textContent).toMatch(/ and 2 more\.$/);
+  });
+
+  it("speaks no digest in the disclosure, and keeps it in the header's tooltip", () => {
+    const digest = "b".repeat(64);
+    useEvtxStore.setState({
+      coverageDetails: [
+        gapRecord("C:\\cases\\bundle.zip::logs/Odd.cab", "file", `could not be parsed (sha256:${digest})`),
+      ],
+    });
+    render(<ChannelPicker />);
+    const disclosure = screen.getByText(/1 gap could not be attributed to a channel/);
+    expect(disclosure.textContent).not.toContain(digest);
+    const header = screen.getByText("1 channel \u00B7 1 not attributed to a channel");
+    expect(header.getAttribute("title")).toContain(digest);
+  });
+
+  it("keeps the activity label for an archive whose only gaps are about inventory members", () => {
+    // A registry hive and a trace file can never be channels, so their gaps are not unattributed.
+    const reg = "C:\\cases\\bundle.zip::logs/Profile.reg";
+    const etl = "C:\\cases\\bundle.zip::logs/Boot.etl";
+    useEvtxStore.setState({
+      archiveMembers: [
+        { path: reg, kind: "registry", outcome: "unsupported" },
+        { path: etl, kind: "binary", outcome: "unsupported" },
+      ],
+      coverageDetails: [
+        gapRecord(reg, "unsupported", "registry hives are listed but not parsed"),
+        gapRecord(etl, "unsupported", "binary members are listed but not parsed"),
+      ],
+    });
+    render(<ChannelPicker />);
+    expect(screen.getByText("1 of 1 read \u00B7 all-time activity")).toBeInTheDocument();
+    expect(screen.queryByText(/not attributed/)).not.toBeInTheDocument();
   });
 
   it("lists a member the archive skipped for a limit as a row, not as an unattributed gap", () => {

@@ -933,7 +933,7 @@ describe("text logs from archives", () => {
 
   it("does not change an event channel's color index", () => {
     // The member label begins "C:\\", so it sorts ahead of every Microsoft-* service channel: were
-    // it ordered with the channels it would push this one from index 3 to 4.
+    // it ordered with the channels it would push this one from index 1 to 2.
     const AAD = "Microsoft-Windows-AAD/Operational";
     const input = (channels: EvtxChannelInfo[], records: EvtxRecord[]) =>
       paneInput({ sourceMode: "files", timeWindow: "all", channels, records });
@@ -1189,5 +1189,197 @@ describe("sources no listed channel came from", () => {
     );
     expect(built.rows.get("System")?.state).toBe("partial");
     expect(built.unattributed.count).toBe(0);
+  });
+});
+
+describe("sources the backend accepts, mirrored", () => {
+  const VSS = "\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1\\Windows\\System32\\winevt\\Logs\\Security.evtx";
+  const filesInput = (over: Partial<ChannelPaneInput>) =>
+    paneInput({
+      sourceMode: "files",
+      timeWindow: "all",
+      channels: [file("System")],
+      records: [record("System", NOW - HOUR)],
+      ...over,
+    });
+
+  it("lists a shadow copy a non-elevated process was refused as needs elevation", () => {
+    // The "?" of the \\?\ prefix is not a wildcard: a VSS path is a file.
+    const built = buildChannelPaneModel(
+      filesInput({
+        manifestCoverage: [
+          { kind: "accessDenied", path: VSS, reason: "VSS event-log sources require an elevated process" },
+        ],
+      }),
+    );
+    expect(built.rows.get("Security")).toMatchObject({ state: "needsElevation", selectable: false });
+    expect(built.unattributed.count).toBe(0);
+    expect(built.totalCount).toBe(2);
+  });
+
+  it("lists a shadow copy an elevated process could not parse as not read", () => {
+    const built = buildChannelPaneModel(
+      filesInput({ coverageDetails: [gap(VSS, "file", "the file could not be parsed")] }),
+    );
+    expect(built.rows.get("Security")).toMatchObject({ state: "notRead", selectable: false });
+    expect(built.unattributed.count).toBe(0);
+  });
+
+  it("reads a shadow copy path with forward slashes and any case the same way", () => {
+    const path = VSS.replace(/\\/g, "/").toUpperCase();
+    const built = buildChannelPaneModel(
+      filesInput({ coverageDetails: [gap(path, "file", "the file could not be parsed")] }),
+    );
+    expect(built.unattributed.count).toBe(0);
+    expect(built.totalCount).toBe(2);
+  });
+
+  it("does not take a path that merely starts like a shadow copy for one", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        coverageDetails: [
+          gap(
+            "\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopyX\\Logs\\Sys*.evtx",
+            "missing",
+            "no files matched the pattern",
+          ),
+        ],
+      }),
+    );
+    expect(built.totalCount).toBe(1);
+    expect(built.unattributed.count).toBe(1);
+  });
+
+  it("strips the long-path prefix before looking for a wildcard", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        coverageDetails: [
+          gap("\\\\?\\C:\\logs\\Security.evtx", "accessDenied", "denied"),
+          gap("\\\\?\\C:\\logs\\Sys*.evtx", "missing", "no files matched the pattern"),
+        ],
+      }),
+    );
+    expect(built.rows.get("Security")?.state).toBe("needsElevation");
+    expect(built.unattributed.reasons).toEqual([
+      "\\\\?\\C:\\logs\\Sys*.evtx: no files matched the pattern",
+    ]);
+  });
+
+  it("counts a bracket as a wildcard, as the backend does", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        coverageDetails: [gap("C:\\logs\\Sys[t]em.evtx", "missing", "no files matched the pattern")],
+      }),
+    );
+    expect(built.totalCount).toBe(1);
+    expect(built.channels.map((channel) => channel.name)).toEqual(["System"]);
+    expect(built.unattributed.count).toBe(1);
+  });
+
+  it("lists the other names the backend opens as event logs: .evtx~ and .evtx.bak", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        coverageDetails: [
+          gap("C:\\logs\\Application.evtx~", "file", "the file could not be parsed"),
+          gap("C:\\logs\\Setup.evtx.bak", "file", "the file could not be parsed"),
+        ],
+      }),
+    );
+    expect(built.rows.get("Application.evtx~")).toMatchObject({ state: "notRead", selectable: false });
+    expect(built.rows.get("Setup.evtx.bak")).toMatchObject({ state: "notRead", selectable: false });
+    expect(built.unattributed.count).toBe(0);
+  });
+
+  it("does not take a name that only resembles an event log for one", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        coverageDetails: [
+          gap("C:\\logs\\System.evtxx", "file", "the file could not be parsed"),
+          gap("C:\\logs\\evtx", "file", "the file could not be parsed"),
+        ],
+      }),
+    );
+    expect(built.totalCount).toBe(1);
+    expect(built.unattributed.count).toBe(2);
+  });
+
+  it("rejects an archive member whose stem is empty, as is_evtx_name does", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        coverageDetails: [gap("C:\\cases\\bundle.zip::logs/.evtx.1", "file", "could not be parsed")],
+      }),
+    );
+    expect(built.totalCount).toBe(1);
+    expect(built.unattributed.count).toBe(1);
+  });
+});
+
+describe("what the header counts as unattributed", () => {
+  const filesInput = (over: Partial<ChannelPaneInput>) =>
+    paneInput({
+      sourceMode: "files",
+      timeWindow: "all",
+      channels: [file("System")],
+      records: [record("System", NOW - HOUR)],
+      ...over,
+    });
+
+  it("is not triggered by an archive member that is only inventory", () => {
+    // A registry hive and a trace file can never be channels. Their gaps stay in the banner.
+    const reg = "C:\\cases\\bundle.zip::logs/Profile.reg";
+    const etl = "C:\\cases\\bundle.zip::logs/Boot.etl";
+    const built = buildChannelPaneModel(
+      filesInput({
+        archiveMembers: [
+          { path: reg, kind: "registry" },
+          { path: etl, kind: "binary" },
+        ],
+        coverageDetails: [
+          gap(reg, "unsupported", "registry hives are listed but not parsed"),
+          gap(etl, "unsupported", "binary members are listed but not parsed"),
+        ],
+      }),
+    );
+    expect(built.unattributed).toEqual({ count: 0, reasons: [] });
+    expect(built.totalCount).toBe(1);
+  });
+
+  it("still counts a gap about a member the open did not list at all", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        coverageDetails: [
+          gap("C:\\cases\\bundle.zip::logs/Boot.etl", "unsupported", "binary members are listed but not parsed"),
+        ],
+      }),
+    );
+    expect(built.unattributed.count).toBe(1);
+  });
+
+  it("counts each distinct gap once, whichever lists carry it", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        coverageDetails: [gap("<coverage>", "limit", "4096 further coverage gaps were coalesced")],
+        legacyCoverage: [
+          "<coverage>: 4096 further coverage gaps were coalesced",
+          "<live tail coverage>: 40 tail coverage gaps were coalesced",
+        ],
+        tailCoverage: ["<live tail coverage>: 40 tail coverage gaps were coalesced"],
+      }),
+    );
+    expect(built.unattributed.count).toBe(2);
+    expect(built.unattributed.reasons).toEqual([
+      "<coverage>: 4096 further coverage gaps were coalesced",
+      "<live tail coverage>: 40 tail coverage gaps were coalesced",
+    ]);
+  });
+
+  it("keeps every distinct reason for the pane to cap", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        legacyCoverage: Array.from({ length: 7 }, (_, i) => `Elsewhere${i}: not read (gone)`),
+      }),
+    );
+    expect(built.unattributed.count).toBe(7);
+    expect(built.unattributed.reasons).toHaveLength(7);
   });
 });

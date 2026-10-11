@@ -12,6 +12,7 @@
  */
 import {
   buildChannelTree,
+  isEvtxMemberName,
   orderChannelNames,
   textLogChannelNames,
   type ChannelTree,
@@ -272,13 +273,25 @@ function legacyGap(text: string): ChannelGap {
 }
 
 const EVTX_EXTENSION = /\.evtx$/i;
-// A rotated log, which `is_evtx_name` in archive.rs accepts: System.evtx.1
-const EVTX_ROTATION = /\.evtx\.\d+$/i;
 
 /**
- * The name a gap's file would carry as a channel, or null when the source is not a single .evtx
- * file. Used only to name a row for a file that never opened; which channel a gap belongs to is
+ * Whether the backend would open a file source as an event log: `is_evtx_candidate` in parser.rs,
+ * which takes ".evtx", any name containing ".evtx." (a rotation, ".evtx.bak") and ".evtx~".
+ */
+function isEvtxFileName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.endsWith(".evtx") || lower.includes(".evtx.") || lower.endsWith(".evtx~");
+}
+
+/**
+ * The name a gap's file would carry as a channel, or null when the source is not a single event
+ * log file. Used only to name a row for a file that never opened; which channel a gap belongs to is
  * decided by the source path, never by this name.
+ *
+ * It accepts what the backend accepts. A file on disk follows `is_evtx_candidate` (so System.evtx~
+ * and System.evtx.bak are event logs); a member of an archive, named "{archive}::{member}", follows
+ * `is_evtx_name` (".evtx", or ".evtx.N" with a stem). A name the backend accepts but that is not a
+ * plain ".evtx" keeps its whole file name, because the suffix says which file it is.
  */
 function evtxStem(source: string): string | null {
   // The member of an archive follows "::", so "bundle.zip::System.evtx" is named System.
@@ -289,8 +302,8 @@ function evtxStem(source: string): string | null {
     member === -1 ? -1 : member + 1,
   );
   const basename = source.slice(cut + 1).trim();
-  if (EVTX_ROTATION.test(basename)) return basename;
-  if (!EVTX_EXTENSION.test(basename)) return null;
+  if (!(member === -1 ? isEvtxFileName(basename) : isEvtxMemberName(basename))) return null;
+  if (!EVTX_EXTENSION.test(basename)) return basename;
   // Event Viewer writes a "/" in a channel name as "%4" in the file name.
   return basename.replace(EVTX_EXTENSION, "").replace(/%4/g, "/") || basename;
 }
@@ -399,7 +412,9 @@ export interface ChannelPaneModel {
   /**
    * Gaps that say something is missing and belong to no row: a coalesced summary
    * (`<coverage>`, `<archive coverage>`, `<live tail coverage>`), a wildcard that matched nothing,
-   * a folder, a string with no source. The header must not claim "k of k read" while any exist.
+   * a folder, a string with no source. `reasons` holds each distinct one once, with its source, and
+   * `count` is how many there are. The header prints no "k of k read" while any exist. An archive
+   * member that is only inventory (a .reg, an .etl) is not here: it can never be a channel.
    */
   unattributed: { count: number; reasons: string[] };
   span: ChannelActivitySpan | null;
@@ -474,9 +489,27 @@ function listChannel(listed: Map<string, ListedChannel>, channel: EvtxChannelInf
   }
 }
 
-// A wildcard that matched nothing is reported under the pattern, which is no file's path.
-const GLOB_CHARACTERS = /[*?]/;
-const MAX_UNATTRIBUTED_REASONS = 5;
+/** `is_vss_path` in parser.rs: a shadow copy opened through its GLOBALROOT device path. */
+function isVssPath(path: string): boolean {
+  const prefix = "\\\\?\\globalroot\\device\\harddiskvolumeshadowcopy";
+  const normalized = path.replace(/\//g, "\\").toLowerCase();
+  if (!normalized.startsWith(prefix)) return false;
+  const rest = normalized.slice(prefix.length);
+  const digits = /^[0-9]*/.exec(rest)?.[0].length ?? 0;
+  return digits > 0 && (rest.length === digits || rest[digits] === "\\");
+}
+
+/**
+ * `is_wildcard_source` in parser.rs. A wildcard that matched nothing is reported under the pattern,
+ * which is no file's path. A shadow copy is never a pattern, although its "\\?\" prefix holds a
+ * "?": it is a file, and it can fail to open like any other. The "\\?\" long-path prefix is not
+ * part of the pattern, and "[" is.
+ */
+function isWildcardSource(source: string): boolean {
+  if (isVssPath(source)) return false;
+  const pattern = source.startsWith("\\\\?\\") ? source.slice(4) : source;
+  return /[*?[]/.test(pattern);
+}
 
 /**
  * Builds the rows, order and counts the pane renders.
@@ -562,11 +595,20 @@ export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel
     if (list === undefined) strays.set(gap.source, [gap]);
     else list.push(gap);
   }
+  // A member the open listed as neither EVTX nor text (a registry hive, a trace, a web page) is
+  // inventory: it can never be a channel, so a gap about it is no gap in any channel's coverage. It
+  // stays in the coverage banner and the diagnosis input.
+  const inventoryOnly = new Set(
+    input.archiveMembers
+      .filter((member) => member.kind === "registry" || member.kind === "binary")
+      .map((member) => member.path)
+  );
   const takenNames = new Set([...listed.keys()].map((name) => name.toLowerCase()));
   const unopened: EvtxChannelInfo[] = [];
   const unattributed: ChannelGap[] = [];
   for (const [source, sourceGaps] of strays) {
-    const stem = GLOB_CHARACTERS.test(source) ? null : evtxStem(source);
+    if (inventoryOnly.has(source)) continue;
+    const stem = isWildcardSource(source) ? null : evtxStem(source);
     if (stem === null) {
       unattributed.push(...sourceGaps);
       continue;
@@ -626,20 +668,22 @@ export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel
     order,
     rows,
     textLogs,
-    unattributed: {
-      count: unattributed.length,
-      reasons: [
-        ...new Set(
-          unattributed.map((gap) =>
-            gap.source === "" ? gap.reason.trim() : `${gap.source}: ${gap.reason.trim()}`
-          )
-        ),
-      ].slice(0, MAX_UNATTRIBUTED_REASONS),
-    },
+    unattributed: unattributedSummary(unattributed),
     span,
     readCount,
     totalCount: allChannels.length,
   };
+}
+
+function unattributedSummary(gaps: readonly ChannelGap[]): { count: number; reasons: string[] } {
+  const reasons = [
+    ...new Set(
+      gaps.map((gap) =>
+        gap.source === "" ? gap.reason.trim() : `${gap.source}: ${gap.reason.trim()}`
+      )
+    ),
+  ];
+  return { count: reasons.length, reasons };
 }
 
 /** The member a text-log channel label names: "bundle.zip::logs/app.log" is app.log. */

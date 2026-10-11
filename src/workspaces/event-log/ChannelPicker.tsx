@@ -58,6 +58,8 @@ const SPARKLINE_HEIGHT = 18;
 /** Horizontal units per bin in the sparkline's viewBox; the bar is one unit narrower. */
 const SPARKLINE_BIN_UNITS = 4;
 const MAX_CORRELATING_SOURCES = 50;
+/** Reasons a header disclosure lists, in text and in its tooltip, before "and N more". */
+const MAX_DISCLOSED_REASONS = 5;
 
 /**
  * Shown where a channel has no count. U+2014, which spec 8.6 writes for an unreadable channel's
@@ -398,12 +400,20 @@ export function ChannelPicker() {
     [metrics.fontSize, metrics.rowHeight, captionFontSize, groupFontSize],
   );
   const windowLabel = WINDOW_ACTIVITY_LABELS[timeWindow];
-  // Gaps that name no row cannot be counted in any row, so the header says so instead of claiming
-  // that everything listed was read.
-  const hasUnattributed = model.unattributed.count > 0;
-  const unattributedSentence = `${model.unattributed.count} ${
-    model.unattributed.count === 1 ? "gap" : "gaps"
-  } could not be attributed to a channel: ${model.unattributed.reasons.map(speakable).join("; ")}.`;
+  // Gaps that name no row cannot be counted in any row, so while any exist the header prints no
+  // "k of k read": it says how many channels are listed and how many gaps belong to none of them.
+  const unattributedCount = model.unattributed.count;
+  const hasUnattributed = unattributedCount > 0;
+  const channelsLabel = `${model.totalCount} ${model.totalCount === 1 ? "channel" : "channels"}`;
+  const unattributedNote = `${unattributedCount} not attributed to a channel`;
+  const shownReasons = model.unattributed.reasons.slice(0, MAX_DISCLOSED_REASONS);
+  const moreReasons = unattributedCount - shownReasons.length;
+  const reasonList = (format: (reason: string) => string) =>
+    `${shownReasons.map(format).join("; ")}${moreReasons > 0 ? ` and ${moreReasons} more` : ""}`;
+  // Spoken text never reads out a digest; the tooltip keeps the reasons as the backend wrote them.
+  const unattributedSentence = `${unattributedCount} ${
+    unattributedCount === 1 ? "gap" : "gaps"
+  } could not be attributed to a channel: ${reasonList(speakable)}.`;
 
   const unloadedSelectedCount =
     sourceMode !== "live"
@@ -483,7 +493,7 @@ export function ChannelPicker() {
           <span
             title={
               hasUnattributed
-                ? `${model.readCount} of ${model.totalCount} channels read. ${unattributedSentence}`
+                ? `${channelsLabel}. ${unattributedNote}: ${reasonList((reason) => reason)}.`
                 : `${model.readCount} of ${model.totalCount} channels read`
             }
             style={{
@@ -498,7 +508,7 @@ export function ChannelPicker() {
             }}
           >
             {hasUnattributed
-              ? `${model.readCount} of ${model.totalCount} read \u00B7 some gaps could not be attributed`
+              ? `${channelsLabel} \u00B7 ${unattributedNote}`
               : `${model.readCount} of ${model.totalCount} read \u00B7 ${windowLabel} activity`}
           </span>
           {hasUnattributed && (
@@ -1346,9 +1356,11 @@ const ChannelRow = memo(function ChannelRow({
 
 /**
  * A text log an archive reader listed as a channel (a .log inside a .zip). It is not an event
- * channel, so it has no swatch, no activity chart, no error and warning counts and no read state:
- * only its name and how many entries it holds. Its checkbox stays, because the selection is what
- * gates whether the records are shown at all.
+ * channel, so it has no swatch, no activity chart, no error and warning counts and no event read
+ * state: only its name and how many entries it holds. It does keep its coverage. A member cut off
+ * at the archive's line limit, or with lines that would not parse, says "partial" with the reason;
+ * one nothing was kept from says "not read" with a dash, never a zero. Its checkbox stays, because
+ * the selection is what gates whether the records are shown at all.
  */
 const TextLogRow = memo(function TextLogRow({
   row,
