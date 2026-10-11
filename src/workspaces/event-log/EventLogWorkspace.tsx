@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useMemo,
   useRef,
@@ -43,6 +45,8 @@ import {
 import { selectVisibleRecords } from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
+import { buildCorrelationChains } from "./evtx-correlation-chains";
+import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 import type {
   DiagnosisSummary,
   EvtxCoverageGap,
@@ -52,6 +56,9 @@ import {
   buildEventLogAnalysisSession,
   EventLogAnalysisCancelled,
 } from "./event-analysis-session";
+
+// The chart library stays out of the initial bundle (spec 8.10).
+const EvtxChartsView = lazy(() => import("./EvtxChartsView"));
 
 const DEFAULT_DETAIL_HEIGHT = 300;
 const MIN_DETAIL_HEIGHT = 100;
@@ -528,11 +535,46 @@ export function EventLogWorkspace() {
     </>
   );
 
+  const visualTokens = useEvtxVisualTokens();
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const chartMetrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
+  const chartChannelOrder = useMemo(() => channels.map((c) => c.name), [channels]);
+  const chartHideRules = useMemo(() => [quickFilter], [quickFilter]);
+  // Chains come from the first timeline page and its bounded edge preview, so
+  // `edgeInputComplete` tells the Charts tile when the count is a loaded subset.
+  const chartChains = useMemo(
+    () =>
+      activeView === "charts" && initialTimelinePage
+        ? buildCorrelationChains({
+            items: initialTimelinePage.items,
+            timelineEdges: initialTimelinePage.edgesPreview,
+            totalTimelineEdges: initialTimelinePage.totalEdges,
+            findings: [],
+          })
+        : null,
+    [activeView, initialTimelinePage],
+  );
+  const renderChartsView = () => (
+    <Suspense fallback={<RegionPlaceholder title="Charts view loading" />}>
+      <EvtxChartsView
+        records={visibleRecords}
+        chains={chartChains}
+        hideRules={chartHideRules}
+        channelOrder={chartChannelOrder}
+        timeZoneMode={timeZoneMode}
+        loadedChannelCount={channels.length}
+        textLogCount={analysisStatus?.logItems ?? 0}
+        metrics={chartMetrics}
+        visualTokens={visualTokens}
+      />
+    </Suspense>
+  );
+
   const views: Record<EvtxViewId, EvtxViewEntry> = {
     table: { keepAlive: true, render: renderTableView },
     grouped: { keepAlive: false, render: () => <ViewPlaceholder view="grouped" /> },
     timeline: { keepAlive: false, render: () => <ViewPlaceholder view="timeline" /> },
-    charts: { keepAlive: false, render: () => <ViewPlaceholder view="charts" /> },
+    charts: { keepAlive: false, render: renderChartsView },
     correlation: { keepAlive: false, render: () => <ViewPlaceholder view="correlation" /> },
   };
 

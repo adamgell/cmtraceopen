@@ -125,7 +125,7 @@ describe("EventLogWorkspace three-column shell", () => {
 
   it("shows a placeholder for views that are not built yet, behind the same tablist", () => {
     render(<EventLogWorkspace />);
-    for (const name of ["Grouped", "Timeline", "Charts", "Correlation"]) {
+    for (const name of ["Grouped", "Timeline", "Correlation"]) {
       fireEvent.click(screen.getByRole("tab", { name }));
       expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
       expect(screen.getByRole("tab", { name })).toHaveAttribute("aria-selected", "true");
@@ -133,6 +133,15 @@ describe("EventLogWorkspace three-column shell", () => {
       expect(screen.getAllByText(/Not implemented in this phase/).length).toBeGreaterThan(0);
       expect(screen.getByTestId("records-table")).not.toBeVisible();
     }
+  });
+
+  it("loads the Charts view lazily behind the same tablist", async () => {
+    render(<EventLogWorkspace />);
+    fireEvent.click(screen.getByRole("tab", { name: "Charts" }));
+    expect(screen.getByRole("tab", { name: "Charts" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByTestId("evtx-charts-view")).toBeVisible();
+    expect(screen.getAllByRole("figure")).toHaveLength(4);
+    expect(screen.getByTestId("records-table")).not.toBeVisible();
   });
 
   it("keeps selection and filters when switching views and returning to the table", () => {

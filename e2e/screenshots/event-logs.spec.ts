@@ -262,4 +262,21 @@ test.describe("event-logs screenshots", () => {
       animations: "disabled",
     });
   });
+
+  test("event-logs charts view", async ({ page }) => {
+    // Taller than the other captures so all four figures are in frame.
+    await page.setViewportSize({ width: 1440, height: 1040 });
+    await page.getByRole("tab", { name: "Charts" }).click();
+    await expect(page.getByRole("figure", { name: /^Events by channel/ })).toBeVisible({
+      timeout: 15_000,
+    });
+    // Chart data is debounced; wait for the settled KPI grid and all four figures.
+    await expect(page.getByRole("figure")).toHaveCount(4);
+    await expect(page.getByTestId("kpi-value-events")).not.toHaveText("0");
+    await assertNoHostPaths(page);
+    await page.screenshot({
+      path: outPath("event-logs-charts.png"),
+      animations: "disabled",
+    });
+  });
 });
