@@ -6,6 +6,13 @@ import {
   getVerdictTone,
   sortDiagnostics,
 } from "./dsregcmd-verdict";
+import {
+  buildAnalysisResult,
+  buildDerived,
+  buildDiagnostic,
+  buildEnrollmentEntry,
+  buildFacts,
+} from "./dsregcmd-test-builders";
 import type {
   DsregcmdAnalysisResult,
   DsregcmdDiagnosticInsight,
@@ -25,7 +32,8 @@ interface FixtureOptions {
   joinType?: DsregcmdJoinType;
   mdmUrl?: string | null;
   mdmComplianceUrl?: string | null;
-  mdmEnrolled?: boolean;
+  /** Registry-confirmed enrollment; null (the default) is "unknown". */
+  mdmEnrolled?: boolean | null;
   diagnostics?: Array<{ id: string; severity: DsregcmdSeverity; title?: string }>;
   enrollments?: Array<Partial<DsregcmdEnrollmentEntry>> | null;
   taskGuids?: string[] | null;
@@ -36,33 +44,30 @@ function makeResult(options: FixtureOptions = {}): DsregcmdAnalysisResult {
     joinType = "EntraIdJoined",
     mdmUrl = null,
     mdmComplianceUrl = null,
-    mdmEnrolled,
+    mdmEnrolled = null,
     diagnostics = [],
     enrollments = null,
     taskGuids = null,
   } = options;
 
-  return {
-    facts: { managementDetails: { mdmUrl, mdmComplianceUrl } },
-    derived: { joinType, ...(mdmEnrolled === undefined ? {} : { mdmEnrolled }) },
-    diagnostics: diagnostics.map(
-      ({ id, severity, title }) =>
-        ({ id, severity, title: title ?? `Title of ${id}` }) as DsregcmdDiagnosticInsight,
+  return buildAnalysisResult({
+    facts: buildFacts({ mdmUrl, mdmComplianceUrl }),
+    derived: buildDerived({
+      joinType,
+      mdmEnrolled,
+      mdmUrlsPresent: mdmUrl !== null || mdmComplianceUrl !== null ? true : null,
+    }),
+    diagnostics: diagnostics.map(({ id, severity, title }) =>
+      buildDiagnostic({ id, severity, title: title ?? `Title of ${id}` }),
     ),
     enrollmentEvidence: enrollments
       ? {
           enrollmentCount: enrollments.length,
-          enrollments: enrollments.map((entry) => ({
-            guid: null,
-            upn: null,
-            providerId: null,
-            enrollmentState: null,
-            ...entry,
-          })),
+          enrollments: enrollments.map((entry) => buildEnrollmentEntry(entry)),
         }
       : null,
     scheduledTaskEvidence: taskGuids ? { enterpriseMgmtGuids: taskGuids } : null,
-  } as unknown as DsregcmdAnalysisResult;
+  });
 }
 
 const GUID = "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}";
@@ -141,12 +146,8 @@ describe("getMdmState", () => {
     });
   });
 
-  it("reports Enrolled (registry) from the GUID cross-reference without the diagnostic", () => {
-    const result = makeResult({
-      enrollments: [{ guid: GUID, enrollmentState: 1 }],
-      taskGuids: [GUID],
-    });
-    expect(getMdmState(result).kind).toBe("enrolled-registry");
+  it("reports Enrolled (registry) from registry-confirmed mdmEnrolled without the diagnostic", () => {
+    expect(getMdmState(makeResult({ mdmEnrolled: true })).kind).toBe("enrolled-registry");
   });
 
   it.each([
@@ -154,15 +155,9 @@ describe("getMdmState", () => {
     ["only the MDM URL", URL_A, null],
     ["only the compliance URL", null, URL_B],
   ])(
-    "still reports Enrolled (registry) from the cross-reference with %s present",
+    "still reports Enrolled (registry) when mdmEnrolled is true with %s present",
     (_name, mdmUrl, mdmComplianceUrl) => {
-      const result = makeResult({
-        mdmUrl,
-        mdmComplianceUrl,
-        mdmEnrolled: true,
-        enrollments: [{ guid: GUID, enrollmentState: 1 }],
-        taskGuids: [GUID],
-      });
+      const result = makeResult({ mdmUrl, mdmComplianceUrl, mdmEnrolled: true });
       expect(getMdmState(result)).toEqual({
         kind: "enrolled-registry",
         label: "Enrolled (registry)",
@@ -171,46 +166,23 @@ describe("getMdmState", () => {
     },
   );
 
-  it("matches GUIDs case-insensitively", () => {
-    const result = makeResult({
-      enrollments: [{ guid: GUID.toLowerCase(), enrollmentState: 1 }],
-      taskGuids: [GUID],
-    });
-    expect(getMdmState(result).kind).toBe("enrolled-registry");
-  });
-
-  it("matches when any one of several enrollments qualifies", () => {
-    const result = makeResult({
-      enrollments: [
-        { guid: "{11111111-1111-1111-1111-111111111111}", enrollmentState: 1 },
-        { guid: GUID, enrollmentState: 1 },
-      ],
-      taskGuids: ["{22222222-2222-2222-2222-222222222222}", GUID],
-    });
-    expect(getMdmState(result).kind).toBe("enrolled-registry");
-  });
-
-  it.each([
-    ["enrollment state is not 1", [{ guid: GUID, enrollmentState: 2 }], [GUID]],
-    ["enrollment state is null", [{ guid: GUID, enrollmentState: null }], [GUID]],
-    ["enrollment guid is null", [{ guid: null, enrollmentState: 1 }], [GUID]],
-    ["guid is not among the task guids", [{ guid: GUID, enrollmentState: 1 }], ["{99999999-8888-7777-6666-555555555555}"]],
-    ["there are no task guids", [{ guid: GUID, enrollmentState: 1 }], []],
-  ])("does not cross-reference when %s", (_name, enrollments, taskGuids) => {
-    const result = makeResult({ enrollments, taskGuids });
-    expect(getMdmState(result).kind).toBe("no-urls");
-  });
-
-  it("does not cross-reference without scheduled task evidence", () => {
+  // The parser owns the cross-reference (apply_enrollment_cross_reference), so
+  // raw evidence beside an unknown mdmEnrolled is not re-derived here.
+  it("does not re-derive enrollment from raw evidence when mdmEnrolled is null", () => {
     const result = makeResult({
       enrollments: [{ guid: GUID, enrollmentState: 1 }],
-      taskGuids: null,
+      taskGuids: [GUID],
     });
     expect(getMdmState(result).kind).toBe("no-urls");
   });
 
-  it("does not cross-reference without enrollment evidence", () => {
-    expect(getMdmState(makeResult({ taskGuids: [GUID] })).kind).toBe("no-urls");
+  it("does not report Enrolled (registry) when mdmEnrolled is false", () => {
+    expect(getMdmState(makeResult({ mdmEnrolled: false })).kind).toBe("no-urls");
+  });
+
+  it("reports URLs present, never No enrollment, when URLs are shown and the registry is unknown (#883)", () => {
+    const result = makeResult({ mdmUrl: URL_A, mdmComplianceUrl: URL_B, mdmEnrolled: null });
+    expect(getMdmState(result).kind).toBe("urls-present");
   });
 
   it("reports No enrollment (registry) when enrollment-missing-on-joined is present", () => {
@@ -263,11 +235,10 @@ describe("getMdmState", () => {
       expect(getMdmState(result).kind).toBe("enrolled-registry");
     });
 
-    it("Enrolled (cross-reference) beats No enrollment", () => {
+    it("Enrolled (mdmEnrolled) beats No enrollment", () => {
       const result = makeResult({
         diagnostics: [{ id: "enrollment-missing-on-joined", severity: "Warning" }],
-        enrollments: [{ guid: GUID, enrollmentState: 1 }],
-        taskGuids: [GUID],
+        mdmEnrolled: true,
       });
       expect(getMdmState(result).kind).toBe("enrolled-registry");
     });
@@ -306,15 +277,9 @@ describe("getVerdictHeadline", () => {
     ["only the MDM URL", URL_A, null],
     ["only the compliance URL", null, URL_B],
   ])(
-    "uses the registry-confirmed clause from the cross-reference with %s present",
+    "uses the registry-confirmed clause when mdmEnrolled is true with %s present",
     (_name, mdmUrl, mdmComplianceUrl) => {
-      const result = makeResult({
-        mdmUrl,
-        mdmComplianceUrl,
-        mdmEnrolled: true,
-        enrollments: [{ guid: GUID, enrollmentState: 1 }],
-        taskGuids: [GUID],
-      });
+      const result = makeResult({ mdmUrl, mdmComplianceUrl, mdmEnrolled: true });
       expect(getVerdictHeadline(result)).toBe(
         `${JOIN_CLAUSES.EntraIdJoined} \u00b7 MDM enrollment confirmed in registry`,
       );
@@ -439,8 +404,8 @@ describe("getTopIssueLine", () => {
 });
 
 describe("sortDiagnostics", () => {
-  const diagnostic = (id: string, severity: DsregcmdSeverity) =>
-    ({ id, severity }) as DsregcmdDiagnosticInsight;
+  const diagnostic = (id: string, severity: DsregcmdSeverity): DsregcmdDiagnosticInsight =>
+    buildDiagnostic({ id, severity });
 
   it("orders Error, then Warning, then Info, stable within a severity", () => {
     const source = [

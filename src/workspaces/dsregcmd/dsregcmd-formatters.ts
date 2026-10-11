@@ -479,30 +479,40 @@ export function getDisplayConfidenceAssessment(
   };
 }
 
+/**
+ * "MDM visibility" is what dsregcmd shows about management. URL presence comes
+ * from `mdmUrlsPresent`; `mdmEnrolled` is the registry-confirmed answer and
+ * takes precedence only when it is an affirmative finding of no enrollment.
+ */
 export function toneForMdmVisibility(
   derived: DsregcmdAnalysisResult["derived"],
 ): FactRow["tone"] {
-  if (derived.mdmEnrolled === true) {
+  // `false` is an affirmative registry finding of no enrollment; `null` is
+  // "could not be determined" and must stay neutral rather than claim a problem.
+  if (derived.mdmEnrolled === false) {
+    return "warn";
+  }
+  if (derived.mdmUrlsPresent === true) {
     return derived.missingMdm || derived.missingComplianceUrl
       ? "neutral"
       : "good";
   }
-
-  // `false` is an affirmative finding of no enrollment; `null` is "could not
-  // be determined" and must stay neutral rather than claim a problem.
-  return derived.mdmEnrolled === false ? "warn" : "neutral";
+  return derived.mdmEnrolled === true ? "good" : "neutral";
 }
 
 export function getMdmVisibilityLabel(
   derived: DsregcmdAnalysisResult["derived"],
 ): string {
-  if (derived.mdmEnrolled === true) {
+  if (derived.mdmEnrolled === false) {
+    return "Not enrolled";
+  }
+  if (derived.mdmUrlsPresent === true) {
     return derived.missingMdm || derived.missingComplianceUrl
       ? "Partial"
       : "Present";
   }
-
-  return derived.mdmEnrolled === false ? "Not enrolled" : "Unknown";
+  // Enrollment confirmed in the registry although dsregcmd shows no URLs.
+  return derived.mdmEnrolled === true ? "Registry only" : "Unknown";
 }
 
 export function getNgcReadinessValue(

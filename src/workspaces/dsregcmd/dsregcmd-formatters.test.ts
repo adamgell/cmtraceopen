@@ -7,33 +7,43 @@ import {
 } from "./dsregcmd-formatters";
 import type { DsregcmdAnalysisResult, DsregcmdSeverity } from "./types";
 
+import { buildDerived } from "./dsregcmd-test-builders";
+
 type MdmDerived = Pick<
   DsregcmdAnalysisResult["derived"],
-  "mdmEnrolled" | "missingMdm" | "missingComplianceUrl"
+  "mdmEnrolled" | "mdmUrlsPresent" | "missingMdm" | "missingComplianceUrl"
 >;
 
 const mdmDerived = (overrides: Partial<MdmDerived>) =>
-  ({
+  buildDerived({
     mdmEnrolled: null,
+    mdmUrlsPresent: null,
     missingMdm: false,
     missingComplianceUrl: false,
     ...overrides,
-  }) as DsregcmdAnalysisResult["derived"];
+  });
 
-/// The sidebar and the facts panel must tell the same story for every
-/// `mdmEnrolled` value. `false` is not "Unknown": it means the analysis
-/// affirmatively found no enrollment, which deserves a warning tone.
+/// The sidebar and the facts panel must tell the same story. URL presence reads
+/// `mdmUrlsPresent`; `mdmEnrolled` is registry-confirmed. `false` is not
+/// "Unknown": the enrollments registry was read and is empty, which deserves a
+/// warning tone, and it outranks URL presence.
 describe("MDM visibility", () => {
-  it("reports Present and good when enrolled with both URLs", () => {
-    const derived = mdmDerived({ mdmEnrolled: true });
+  it("reports Present and good when URLs are shown and enrollment is confirmed", () => {
+    const derived = mdmDerived({ mdmEnrolled: true, mdmUrlsPresent: true });
     expect(getMdmVisibilityLabel(derived)).toBe("Present");
     expect(toneForMdmVisibility(derived)).toBe("good");
   });
 
-  it("reports Partial and neutral when enrolled but a URL is missing", () => {
-    const missingMdm = mdmDerived({ mdmEnrolled: true, missingMdm: true });
+  it("reports Present and good when URLs are shown and the registry is unknown", () => {
+    const derived = mdmDerived({ mdmUrlsPresent: true });
+    expect(getMdmVisibilityLabel(derived)).toBe("Present");
+    expect(toneForMdmVisibility(derived)).toBe("good");
+  });
+
+  it("reports Partial and neutral when URLs are shown but one is missing", () => {
+    const missingMdm = mdmDerived({ mdmUrlsPresent: true, missingMdm: true });
     const missingCompliance = mdmDerived({
-      mdmEnrolled: true,
+      mdmUrlsPresent: true,
       missingComplianceUrl: true,
     });
     expect(getMdmVisibilityLabel(missingMdm)).toBe("Partial");
@@ -42,14 +52,23 @@ describe("MDM visibility", () => {
     expect(toneForMdmVisibility(missingCompliance)).toBe("neutral");
   });
 
-  it("reports Not enrolled and warn when enrollment is affirmatively absent", () => {
-    const derived = mdmDerived({ mdmEnrolled: false });
-    expect(getMdmVisibilityLabel(derived)).toBe("Not enrolled");
-    expect(toneForMdmVisibility(derived)).toBe("warn");
+  it("reports Not enrolled and warn when the registry was read and is empty, even with URLs", () => {
+    const withUrls = mdmDerived({ mdmEnrolled: false, mdmUrlsPresent: true });
+    const withoutUrls = mdmDerived({ mdmEnrolled: false });
+    for (const derived of [withUrls, withoutUrls]) {
+      expect(getMdmVisibilityLabel(derived)).toBe("Not enrolled");
+      expect(toneForMdmVisibility(derived)).toBe("warn");
+    }
   });
 
-  it("keeps Unknown and neutral when enrollment could not be determined", () => {
-    const derived = mdmDerived({ mdmEnrolled: null });
+  it("reports Registry only and good when enrollment is confirmed without URLs", () => {
+    const derived = mdmDerived({ mdmEnrolled: true });
+    expect(getMdmVisibilityLabel(derived)).toBe("Registry only");
+    expect(toneForMdmVisibility(derived)).toBe("good");
+  });
+
+  it("keeps Unknown and neutral when neither URLs nor enrollment are known", () => {
+    const derived = mdmDerived({});
     expect(getMdmVisibilityLabel(derived)).toBe("Unknown");
     expect(toneForMdmVisibility(derived)).toBe("neutral");
   });

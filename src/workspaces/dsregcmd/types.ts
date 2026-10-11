@@ -184,7 +184,14 @@ export interface DsregcmdDerived {
   phaseSummary: string;
   captureConfidence: DsregcmdCaptureConfidence;
   captureConfidenceReason: string;
+  /**
+   * Registry-confirmed enrollment: true on a matched enrollment, false only
+   * when the enrollments registry was read and is empty, null when the registry
+   * evidence is missing or unreadable. URL presence never sets it.
+   */
   mdmEnrolled: boolean | null;
+  /** true when dsregcmd shows an MdmUrl or MdmComplianceUrl, null when it does not. */
+  mdmUrlsPresent: boolean | null;
   missingMdm: boolean | null;
   complianceUrlPresent: boolean | null;
   missingComplianceUrl: boolean | null;

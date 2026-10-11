@@ -238,6 +238,7 @@ function analysisResult(): DsregcmdAnalysisResult {
       captureConfidence: "high",
       captureConfidenceReason: "Live capture includes dsregcmd and registry evidence.",
       mdmEnrolled: true,
+      mdmUrlsPresent: true,
       missingMdm: false,
       complianceUrlPresent: true,
       missingComplianceUrl: false,
@@ -332,9 +333,13 @@ function sourceContext(): DsregcmdSourceContext {
   };
 }
 
-function seedReady(mdmEnrolled: boolean | null = true) {
+function seedReady(
+  mdmEnrolled: boolean | null = true,
+  mdmUrlsPresent: boolean | null = true,
+) {
   const result = analysisResult();
   result.derived.mdmEnrolled = mdmEnrolled;
+  result.derived.mdmUrlsPresent = mdmUrlsPresent;
   useDsregcmdStore
     .getState()
     .setResults("AzureAdJoined : YES", result, sourceContext());
@@ -355,12 +360,14 @@ const NO_HEADER_BUTTONS = /^(Capture|Paste|Open (Text File|Evidence Folder))/;
 
 describe("DsregcmdWorkspace fixtures", () => {
   it.each([
-    { mdmEnrolled: false, label: "Not enrolled" },
-    { mdmEnrolled: null, label: "Unknown" },
+    { mdmEnrolled: false, mdmUrlsPresent: true, label: "Not enrolled" },
+    { mdmEnrolled: null, mdmUrlsPresent: true, label: "Present" },
+    { mdmEnrolled: true, mdmUrlsPresent: null, label: "Registry only" },
+    { mdmEnrolled: null, mdmUrlsPresent: null, label: "Unknown" },
   ])(
-    "shows $label on sidebar and MDM Signals card when mdmEnrolled is $mdmEnrolled",
-    ({ mdmEnrolled, label }) => {
-      seedReady(mdmEnrolled);
+    "shows $label on sidebar and MDM Signals card when mdmEnrolled is $mdmEnrolled and mdmUrlsPresent is $mdmUrlsPresent",
+    ({ mdmEnrolled, mdmUrlsPresent, label }) => {
+      seedReady(mdmEnrolled, mdmUrlsPresent);
       render(
         <>
           <DsregcmdSidebar />
