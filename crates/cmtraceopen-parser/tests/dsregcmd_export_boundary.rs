@@ -372,3 +372,87 @@ fn collect_strings(value: &Value, path: String, out: &mut Vec<(String, String)>)
         _ => {}
     }
 }
+
+/// Raw token syntax cannot exempt an occurrence of a classified identity.
+#[test]
+fn raw_token_lookalikes_are_scrubbed_through_every_public_export() {
+    let raw_message = "seen at [host:deadbeefdeadbeef] here";
+    let capture = STATUS_CAPTURE.replace(ON_PREM_DOMAIN, "deadbeef").replace(
+        "AADSTS50126 Invalid username or password for adele.vance@contoso.onmicrosoft.com",
+        raw_message,
+    );
+    assert!(capture.contains("DomainName : deadbeef"));
+    assert!(capture.contains(&format!("Server Message : {raw_message}")));
+    let analyses = [
+        analyze_text(&capture, Utc::now()).expect("capture parses"),
+        analyze_text_with_evidence(&capture, DsregcmdBundleEvidence::default(), Utc::now())
+            .expect("capture with evidence parses"),
+    ];
+    for analysis in analyses {
+        let domain = analysis
+            .facts
+            .tenant_details
+            .domain_name
+            .as_deref()
+            .unwrap();
+        assert!(
+            domain.starts_with("[tenant:"),
+            "classified domain: {domain}"
+        );
+        let expected = format!("seen at [host:{domain}{domain}] here");
+        assert_eq!(
+            analysis.facts.registration.server_message.as_deref(),
+            Some(expected.as_str())
+        );
+        let published = serde_json::to_string(&analysis).expect("export serializes");
+        assert!(
+            !published.contains("deadbeef"),
+            "raw lookalike survived: {published}"
+        );
+        let status = redacted_status_text(&capture);
+        assert!(
+            status.contains(&format!("Server Message : {expected}")),
+            "{status}"
+        );
+        assert!(
+            !status.contains("deadbeef"),
+            "raw lookalike survived: {status}"
+        );
+    }
+}
+
+/// Equal token bytes can have different origins in one exported message.
+#[test]
+fn generated_tokens_survive_beside_identical_raw_lookalikes() {
+    let shaped = cmtraceopen_parser::intune::apps::windows::common::redact_text(
+        "ComputerName=fixture-device",
+    );
+    let token = shaped.strip_prefix("ComputerName=").unwrap();
+    assert!(token.starts_with("[host:"));
+    let message = format!("é {token}; ComputerName=fixture-device; host τέλος");
+    let capture = STATUS_CAPTURE.replace(ON_PREM_DOMAIN, "host").replace(
+        "AADSTS50126 Invalid username or password for adele.vance@contoso.onmicrosoft.com",
+        &message,
+    );
+    for analysis in [
+        analyze_text(&capture, Utc::now()).expect("capture parses"),
+        analyze_text_with_evidence(&capture, DsregcmdBundleEvidence::default(), Utc::now())
+            .expect("capture with evidence parses"),
+    ] {
+        let domain = analysis
+            .facts
+            .tenant_details
+            .domain_name
+            .as_deref()
+            .unwrap();
+        let raw = token.replacen("host", domain, 1);
+        let expected = format!("é {raw}; ComputerName={token}; {domain} τέλος");
+        assert_eq!(
+            analysis.facts.registration.server_message.as_deref(),
+            Some(expected.as_str())
+        );
+        let published = serde_json::to_string(&analysis).expect("export serializes");
+        assert!(!published.contains("fixture-device"));
+        assert!(redacted_status_text(&capture).contains(&format!("Server Message : {expected}")));
+    }
+}
