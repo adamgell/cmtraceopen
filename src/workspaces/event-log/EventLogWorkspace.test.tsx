@@ -156,6 +156,7 @@ import { EvtxDetailPane } from "./EvtxDetailPane";
 import { EvtxFilterBar } from "./EvtxFilterBar";
 import { EvtxViewBar } from "./EvtxViewBar";
 import { EvtxTimeline } from "./EvtxTimeline";
+import { evtxRowMinWidth } from "./EvtxTimelineRow";
 import { SourcePicker } from "./SourcePicker";
 import {
   MAX_EXPORT_CHUNK_BYTES,
@@ -336,6 +337,23 @@ describe("event-viewer shared font metrics", () => {
     } finally {
       useMarkerStore.setState({ markersByFile: new Map() });
     }
+  });
+
+  it("gives group header rows the record rows' minimum width, so the band spans every column", () => {
+    seedEventLog();
+    useEvtxStore.setState({ groupBy: ["level"] });
+    const minWidth = `${evtxRowMinWidth(
+      defaultColumnConfig(),
+      visibleColumns(defaultColumnConfig())
+    )}px`;
+
+    const view = render(<EvtxTimeline />);
+    const [groupRow, recordRow] = view.getAllByRole("row");
+    expect(groupRow).toHaveAttribute("aria-expanded");
+    expect(groupRow.style.minWidth).toBe(minWidth);
+    expect(recordRow.style.minWidth).toBe(minWidth);
+    expect(minWidth).toBe("652px");
+    view.unmount();
   });
 
   it("names channel-folder disclosure and selection controls", () => {
