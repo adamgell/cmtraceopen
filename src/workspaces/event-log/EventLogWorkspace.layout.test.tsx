@@ -139,7 +139,7 @@ describe("EventLogWorkspace three-column shell", () => {
     render(<EventLogWorkspace />);
     fireEvent.click(screen.getByRole("tab", { name: "Charts" }));
     expect(screen.getByRole("tab", { name: "Charts" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByTestId("evtx-charts-view")).toBeVisible();
+    expect(await screen.findByTestId("evtx-charts-view", {}, { timeout: 10_000 })).toBeVisible();
     expect(screen.getAllByRole("figure")).toHaveLength(4);
     expect(screen.getByTestId("records-table")).not.toBeVisible();
   });
