@@ -342,6 +342,34 @@ describe("EvtxInsightsRail", () => {
       }
     });
 
+    it("keeps publishing while records change continuously, so a tail cannot starve the cards", () => {
+      vi.useFakeTimers();
+      try {
+        const make = (count: number) =>
+          Array.from({ length: count }, (_, index) => ({ ...RECORD, id: index + 1 }));
+        const { rerender } = render(<EvtxInsightsRail summary={SUMMARY} records={make(1)} />);
+        const level = () => screen.getByRole("region", { name: "Level mix" });
+        expect(level()).toHaveTextContent("Error 1");
+
+        // A new batch every 20 ms for 300 ms: a trailing debounce would never publish.
+        for (let step = 1; step <= 15; step += 1) {
+          act(() => {
+            rerender(<EvtxInsightsRail summary={SUMMARY} records={make(1 + step)} />);
+            vi.advanceTimersByTime(20);
+          });
+        }
+        // Several publishes happened during the burst: the cards show a count past the first
+        // batch although the records are still changing.
+        const during = Number(/Error (\d+)/.exec(level().textContent ?? "")?.[1]);
+        expect(during).toBeGreaterThan(1);
+        expect(during).toBeLessThan(16);
+        act(() => void vi.advanceTimersByTime(80));
+        expect(level()).toHaveTextContent("Error 16");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("skips the record-derived cards while the rail is hidden", () => {
       useEvtxLayoutStore.getState().setPanel("insights", false);
       render(<EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />);
