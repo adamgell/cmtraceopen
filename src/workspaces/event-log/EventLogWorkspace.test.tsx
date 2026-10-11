@@ -1226,7 +1226,43 @@ describe("EventLogWorkspace fixtures", () => {
       expect(screen.queryByRole("group", { name: "Level" })).toBeNull();
     });
 
-    it("shows the first-load spinner when the machine changes in one batch with isLoading, then mounts", () => {
+    it("goes through the transition the store really makes for a machine change: no source, then a first load", () => {
+      seedFixtureEvents();
+      render(<EventLogWorkspace />);
+      expect(screen.getByRole("group", { name: "Level" })).toBeInTheDocument();
+
+      // enumerateRemoteChannels first clears the source (nothing loading), then enumerateChannels
+      // starts the remote load. Two store updates, not one.
+      act(() =>
+        useEvtxStore.setState({
+          remoteMachine: null,
+          channels: [],
+          records: [],
+          sourceMode: null,
+          selectedChannels: new Set<string>(),
+          loadedChannels: new Set<string>(),
+          isLoading: false,
+        }),
+      );
+      expect(screen.queryByRole("group", { name: "Level" })).toBeNull();
+      expect(screen.queryByText("Loading event logs...")).toBeNull();
+
+      act(() =>
+        useEvtxStore.setState({
+          remoteMachine: "SRV01",
+          sourceMode: "live",
+          channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+          isLoading: true,
+        }),
+      );
+      expect(screen.getByText("Loading event logs...")).toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: "Level" })).toBeNull();
+
+      act(() => useEvtxStore.setState({ isLoading: false, loadedChannels: new Set(["Application"]) }));
+      expect(screen.getByRole("group", { name: "Level" })).toBeInTheDocument();
+    });
+
+    it("pins the source key: a machine change in one batch with isLoading is a new source", () => {
       seedFixtureEvents();
       render(<EventLogWorkspace />);
       expect(screen.getByRole("group", { name: "Level" })).toBeInTheDocument();

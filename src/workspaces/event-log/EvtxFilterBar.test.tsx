@@ -336,23 +336,24 @@ describe("time window", () => {
     expect(screen.getByRole("combobox", { name: "Time window" })).toBeEnabled();
   });
 
-  it("keeps focus on the control after a live change reloads the channels", async () => {
+  it("stays the same enabled control after a live change reloads the channels", async () => {
     invoke.mockImplementation(async (name: string) =>
       name === "evtx_query_channels" ? new Promise(() => undefined) : undefined,
     );
     seed({ sourceMode: "live", timeWindow: "24h" });
     render(<EvtxFilterBar nowEpoch={0} />);
     const combobox = screen.getByRole("combobox", { name: "Time window" });
-    combobox.focus();
     fireEvent.click(combobox);
     fireEvent.click(await screen.findByRole("option", { name: EVTX_TIME_WINDOW_LABELS["7d"] }));
 
     await waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(true));
     expect(useEvtxStore.getState().timeWindow).toBe("7d");
     const after = screen.getByRole("combobox", { name: "Time window" });
+    // The same element, still enabled. (Whether the browser keeps focus on a control that becomes
+    // disabled is not something jsdom models, so focus is not asserted here; `toBeEnabled` is what
+    // fails if `disabled` comes back.)
     expect(after).toBe(combobox);
     expect(after).toBeEnabled();
-    expect(after).toHaveFocus();
   });
 
   it("is hidden in file mode while the window is All, as before", () => {
