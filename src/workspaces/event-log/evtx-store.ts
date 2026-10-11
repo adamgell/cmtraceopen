@@ -419,6 +419,12 @@ let activeRequestId = "initial";
  * stopped. Cleared when the next request begins.
  */
 let stoppedRequestId: string | null = null;
+/**
+ * The server criteria the active request reads with, remembered by each load next to its own filter
+ * snapshot (so a criterion that load itself adjusts, like the first live load's window, is what is
+ * kept). A stopped load that had a change queued restores exactly these.
+ */
+let requestCriteria: { requestId: string; criteria: FilterSnapshot } | null = null;
 let tailGeneration = 0;
 let activeTailRequestId: string | null = null;
 let activeTailSourceRequestId: string | null = null;
@@ -756,6 +762,21 @@ function snapshotFilterInputs(
   };
 }
 
+/**
+ * Which source the workspace is showing: its mode, machine and paths, or null for no source (a
+ * reset, or a file parse that has not finished). The store records it when a load completes
+ * (`completedSourceKey`) and the workspace compares it with the current one, so both compute it here.
+ */
+export function sourceKeyOf(source: {
+  sourceMode: EvtxSourceMode;
+  remoteMachine: string | null;
+  sourcePaths: readonly string[];
+}): string | null {
+  return source.sourceMode === null
+    ? null
+    : [source.sourceMode, source.remoteMachine ?? "", ...source.sourcePaths].join("\u0000");
+}
+
 interface EvtxState {
   records: EvtxRecord[];
   channels: EvtxChannelInfo[];
@@ -774,6 +795,13 @@ interface EvtxState {
   sourceManifest: EventLogSourceManifest | null;
   selectedChannels: Set<string>;
   loadedChannels: Set<string>;
+  /**
+   * The source (`sourceKeyOf`) whose load last completed, set as a load ends and cleared with the
+   * source. The workspace shows its full-screen spinner only for a source whose first load has not
+   * completed, so a refetch that starts in the same tick as the end of the first load cannot bring
+   * the spinner back.
+   */
+  completedSourceKey: string | null;
   /**
    * Structured parser locations behind `coverageGaps`. The legacy strings remain for live
    * streaming diagnostics, while file recovery gaps retain chunk/record identity here.
@@ -940,18 +968,49 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   };
 
   /**
+   * Forgets a change that was queued for the source being replaced, so it cannot replay on the new
+   * one, and the snapshot that went with it.
+   */
+  const dropQueuedChange = () => {
+    refreshRequested = false;
+    requestCriteria = null;
+  };
+
+  /**
    * The one rule for a before-load change made while a load ran (`refreshRequested`), applied where
-   * every kind of load ends: the channel refetch, the explicit Load and the first live load.
-   * Returns true when the caller should read again now.
+   * every kind of load ends: the channel refetch, the explicit Load and the first live load. The
+   * invariant it keeps: the criteria the controls show equal the criteria the loaded data was read
+   * with, so a window, level list or Event ID list is never shown over data read with another one.
    *
-   * Stop means stop. If the operator stopped the load that just ended, the queued change is dropped
-   * and no read starts on its own. The window keeps the operator's latest choice, the cancelled gaps
-   * already say the read is partial, and the channel pane's Load reads with the current criteria.
-   *
-   * Otherwise the caller replays against the channels its finished load attempted, not only those
-   * that ended usable, so a load in which every channel failed still applies the newer criterion once.
-   * Only a live source replays (a remote source whose load failed has dropped to no source), and
-   * nothing retries: the flag is set only by an operator change.
+   * `settleQueuedChange` is the stop half. If the operator stopped the load that is ending and a
+   * change was queued, it returns the criteria the load read with, to be written in the same `set`
+   * that clears `isLoading` (never through the setters, which would queue a read, and never a frame
+   * later, which would show the new window over old data). Stop means stop: no read starts on its own.
+   * A Stop leaves no cancelled gap on a channel whose scan had already finished, or when the cancel
+   * failed, so the coverage banner cannot be relied on to say the criteria differ. Quick filter and
+   * search are not server criteria and stay as the operator left them.
+   */
+  const settleQueuedChange = (requestId: string): Partial<EvtxState> => {
+    if (!refreshRequested || requestId !== stoppedRequestId) return {};
+    refreshRequested = false;
+    const kept = requestCriteria?.requestId === requestId ? requestCriteria.criteria : null;
+    return kept
+      ? {
+          timeWindow: kept.timeWindow,
+          filterEventIds: kept.filterEventIds,
+          filterLevels: new Set(kept.filterLevels),
+        }
+      : {};
+  };
+
+  /**
+   * The replay half, evaluated after the load has ended: true when the caller should read again now.
+   * A stopped load never does (its change was settled above). Otherwise the caller replays against
+   * the channels its finished load attempted, not only those that ended usable, so a load in which
+   * every channel failed still applies the newer criterion once. Only a live source replays: a remote
+   * refetch or first load that failed everywhere has dropped to no source, while an explicit Load
+   * never drops the source, so a remote Load that failed everywhere stays live and replays once.
+   * Nothing retries: the flag is set only by an operator change.
    */
   const takeQueuedChange = (finishedRequestId: string): boolean => {
     if (!refreshRequested) return false;
@@ -989,6 +1048,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       get().filterEventIds,
       get().filterLevels
     );
+    requestCriteria = { requestId, criteria: filterSnapshot };
     for (const channel of loaded) resetStreamedRecords([channel], requestId);
     // Refresh invokes the streaming command directly, so drain its batch before merging the
     // command reply (which intentionally carries only records not emitted in batches). Channel
@@ -1121,6 +1181,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       loadingChannel: null,
       loadingProgress: null,
       loadElapsedMs: performance.now() - startTime,
+      ...settleQueuedChange(requestId),
     });
     if (takeQueuedChange(requestId)) void refreshChannels(loaded);
   };
@@ -1144,6 +1205,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   sourceManifest: null,
   selectedChannels: new Set<string>(),
   loadedChannels: new Set<string>(),
+  completedSourceKey: null,
   filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
   filterEventIds: "",
   filterSearch: "",
@@ -1171,7 +1233,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     const requestId = beginRequest();
     preservedSelectedRecordKey = null;
     invalidateAllStreamedRecords(requestId);
-    refreshRequested = false;
+    dropQueuedChange();
     set({
       loadGeneration: generation,
       records: [],
@@ -1231,7 +1293,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     const requestId = beginRequest();
     preservedSelectedRecordKey = null;
     invalidateAllStreamedRecords(requestId);
-    refreshRequested = false;
+    dropQueuedChange();
     set({
       loadGeneration: generation,
       records: [],
@@ -1318,6 +1380,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         get().filterEventIds,
         get().filterLevels
       );
+      requestCriteria = { requestId, criteria: filterSnapshot };
       try {
         const remoteMachine = get().remoteMachine;
         const channels = remoteMachine
@@ -1475,6 +1538,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           loadingProgress: null,
           loadElapsedMs: performance.now() - startTime,
           loadError,
+          ...settleQueuedChange(requestId),
         });
         if (takeQueuedChange(requestId) && availableCore.length > 0) {
           void refreshChannels(availableCore);
@@ -1498,7 +1562,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           coverageGaps: remoteGap
             ? mergeCoverageGaps(state.coverageGaps, [remoteGap])
             : state.coverageGaps,
+          ...settleQueuedChange(requestId),
         }));
+        // The enumeration itself failed, so there is nothing to replay against.
+        dropQueuedChange();
       }
     })();
     // Cleared however the load ends, including an unexpected throw, so one failed load cannot leave
@@ -1511,6 +1578,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   },
 
   enumerateLocalChannels: async () => {
+    dropQueuedChange();
     set({
       remoteMachine: null,
       channels: [],
@@ -1529,6 +1597,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   enumerateRemoteChannels: async (machine) => {
     get().supersedePendingLoad();
     beginRequest();
+    dropQueuedChange();
     set({
       remoteMachine: null,
       channels: [],
@@ -1591,6 +1660,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       get().filterEventIds,
       get().filterLevels
     );
+    requestCriteria = { requestId, criteria: filterSnapshot };
     // One request per channel rather than one request for all of them. The backend collects a
     // whole request's records into a single vector before replying, so asking for forty channels
     // at once held every event of every channel in memory twice, once per channel and once in the
@@ -1689,6 +1759,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     // guard when "All channels" was used.
     const processedChannelNames = [...processedChannels];
     clearVisibleRequestPublication(requestId);
+    const settledCriteria = settleQueuedChange(requestId);
     set((state) => {
       const merged = mergeRecordsPreservingSelection(
         state.records,
@@ -1727,6 +1798,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         ),
         isLoading: false,
         loadError,
+        ...settledCriteria,
       };
     });
     if (takeQueuedChange(requestId)) {
@@ -2203,6 +2275,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     preservedSelectedRecordKey = null;
     const requestId = beginRequest();
     invalidateAllStreamedRecords(requestId);
+    dropQueuedChange();
     tailStopGapOwners.clear();
     set({
       records: [],
@@ -2245,6 +2318,22 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     });
   },
 });
+});
+
+// Records which source's load just completed, in the same tick as the end of that load. The store
+// notifies this listener synchronously from inside the `set` that clears `isLoading`, so a read that
+// starts right after (a replayed change) cannot be rendered before the key is recorded, and the
+// workspace's first-load gate sees every load end whichever of the load sites finished it. The key
+// is cleared with the source.
+useEvtxStore.subscribe((state, previous) => {
+  const key = sourceKeyOf(state);
+  if (key === null) {
+    if (state.completedSourceKey !== null) useEvtxStore.setState({ completedSourceKey: null });
+    return;
+  }
+  if (previous.isLoading && !state.isLoading && state.completedSourceKey !== key) {
+    useEvtxStore.setState({ completedSourceKey: key });
+  }
 });
 
 // Listen for progress events from the Rust backend

@@ -2,12 +2,15 @@
  * The replay of a before-load change that was made while a live load ran.
  *
  * Changing the window, the levels or the Event IDs during a load cannot start a second read at
- * once, so the store remembers it and applies it when that load ends. One rule governs every place a
- * load ends (the channel refetch, the explicit Load, and the first live load):
+ * once, so the store remembers it and settles it when that load ends. One rule governs every place a
+ * load ends (the channel refetch, the explicit Load, and the first live load), and it keeps one
+ * invariant: the criteria the controls show equal the criteria the loaded data was read with.
  *
- * - Stop means stop. If the operator stopped the load that just ended, the queued change is dropped
- *   and no read starts on its own. The window keeps the operator's latest choice; the cancelled gaps
- *   already say the read is partial, and Load reads with the current criteria.
+ * - Stop means stop. If the operator stopped the load that just ended and a change was queued, the
+ *   criteria go back to those the load read with, in the same update that ends the load, and no read
+ *   starts on its own. A Stop does not mark every channel (a scan that had already finished leaves no
+ *   cancelled gap, and a cancel can fail), so the criteria cannot be left showing the newer window
+ *   over data read with the older one. Quick filter and search are not server criteria and stay.
  * - Otherwise the change is replayed once against the channels the finished load attempted, not only
  *   those that ended usable, so a load in which every channel failed still applies it. Only a live
  *   source replays, and nothing retries: the flag is set only by an operator change.
@@ -29,7 +32,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
-const { cancelActiveLoad, useEvtxStore } = await import("./evtx-store");
+const { cancelActiveLoad, serverFilterKey, useEvtxStore } = await import("./evtx-store");
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -122,7 +125,7 @@ beforeEach(() => {
 });
 
 describe("Stop means stop", () => {
-  it("drops a change queued during a channel refetch that the operator stopped", async () => {
+  it("restores the criteria and sends nothing for a channel refetch the operator stopped", async () => {
     const stopped = deferred<void>();
     invoke.mockImplementation(async (name: string, args: QueryArgs) => {
       if (name === "evtx_cancel_channel_query") {
@@ -146,12 +149,13 @@ describe("Stop means stop", () => {
 
     expect(queries()).toHaveLength(1);
     const state = useEvtxStore.getState();
-    expect(state.timeWindow).toBe("7d");
+    // The window shows what the (cut) read was made with, not the queued 7 days.
+    expect(state.timeWindow).toBe("24h");
     expect(state.loadedChannels.size).toBe(0);
     expect(gapsText()).toContain("operator stopped the load");
   });
 
-  it("drops a change queued during an explicit Load that the operator stopped", async () => {
+  it("restores the criteria and sends nothing for an explicit Load the operator stopped", async () => {
     const stopped = deferred<void>();
     invoke.mockImplementation(async (name: string, args: QueryArgs) => {
       if (name === "evtx_cancel_channel_query") {
@@ -175,11 +179,11 @@ describe("Stop means stop", () => {
     // Before the rule, the Load replayed on its own after Stop: a new unbounded read the operator
     // had just refused.
     expect(queries()).toHaveLength(1);
-    expect(useEvtxStore.getState().timeWindow).toBe("7d");
+    expect(useEvtxStore.getState().timeWindow).toBe("24h");
     expect(gapsText()).toContain("operator stopped the load");
   });
 
-  it("drops a change queued during a first live load that the operator stopped", async () => {
+  it("restores the criteria and sends nothing for a first live load the operator stopped", async () => {
     const stopped = deferred<void>();
     invoke.mockImplementation(async (name: string, args: QueryArgs) => {
       if (name === "evtx_enumerate_channels") return enumerated("Application", "System");
@@ -206,7 +210,7 @@ describe("Stop means stop", () => {
     // Application ended loaded, so the old rule refetched it for the queued change after Stop.
     expect(queries()).toHaveLength(2);
     expect(useEvtxStore.getState().loadedChannels.has("Application")).toBe(true);
-    expect(useEvtxStore.getState().timeWindow).toBe("7d");
+    expect(useEvtxStore.getState().timeWindow).toBe("24h");
   });
 });
 
@@ -324,5 +328,315 @@ describe("a queued change that was not stopped", () => {
     // nothing is replayed, and no later step sends anything on its own.
     expect(useEvtxStore.getState().sourceMode).toBeNull();
     expect(remoteQueries()).toHaveLength(1);
+  });
+});
+
+describe("what a Stop restores", () => {
+  it("puts back the window, the Event IDs and the levels the read used, and leaves quick filter and search", async () => {
+    const stopped = deferred<void>();
+    invoke.mockImplementation(async (name: string, args: QueryArgs) => {
+      if (name === "evtx_cancel_channel_query") {
+        stopped.resolve();
+        return undefined;
+      }
+      if (name !== "evtx_query_channels") return undefined;
+      const reply = finished(args, { cancelled: true });
+      await stopped.promise;
+      return reply;
+    });
+    seedLive(["Application"]);
+
+    // The refetch reads with the window, Event IDs and levels at its start.
+    useEvtxStore.getState().setFilterEventIds("1000");
+    await vi.waitFor(() => expect(queries()).toHaveLength(1));
+    const read = {
+      timeWindow: useEvtxStore.getState().timeWindow,
+      filterEventIds: useEvtxStore.getState().filterEventIds,
+      levels: [...useEvtxStore.getState().filterLevels],
+    };
+
+    // While it runs: three server criteria change (queued), and two local ones.
+    useEvtxStore.getState().setTimeWindow("7d");
+    useEvtxStore.getState().setFilterEventIds("4624;4625");
+    useEvtxStore.getState().toggleFilterLevel("Information");
+    useEvtxStore.getState().setFilterSearch("logon");
+    useEvtxStore.getState().setQuickFilter({
+      ...useEvtxStore.getState().quickFilter,
+      query: "noise",
+      action: "hide",
+    });
+
+    void cancelActiveLoad();
+    await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+    await settle();
+
+    const state = useEvtxStore.getState();
+    expect(state.timeWindow).toBe(read.timeWindow);
+    expect(state.filterEventIds).toBe(read.filterEventIds);
+    expect([...state.filterLevels]).toEqual(read.levels);
+    expect(state.filterSearch).toBe("logon");
+    expect(state.quickFilter.query).toBe("noise");
+    expect(queries()).toHaveLength(1);
+  });
+
+  it("writes the restored criteria in the same update that ends the load, never after it", async () => {
+    const stopped = deferred<void>();
+    invoke.mockImplementation(async (name: string, args: QueryArgs) => {
+      if (name === "evtx_cancel_channel_query") {
+        stopped.resolve();
+        return undefined;
+      }
+      if (name !== "evtx_query_channels") return undefined;
+      const reply = finished(args, { cancelled: true });
+      await stopped.promise;
+      return reply;
+    });
+    seedLive(["Application"]);
+    useEvtxStore.getState().toggleFilterLevel("Information");
+    await vi.waitFor(() => expect(queries()).toHaveLength(1));
+    useEvtxStore.getState().setTimeWindow("7d");
+
+    // Every published state while the load ends: the window must never read 7d with isLoading false.
+    const seen: Array<{ isLoading: boolean; timeWindow: string }> = [];
+    const unsubscribe = useEvtxStore.subscribe((state) => {
+      seen.push({ isLoading: state.isLoading, timeWindow: state.timeWindow });
+    });
+    void cancelActiveLoad();
+    await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+    unsubscribe();
+
+    const ended = seen.filter((state) => !state.isLoading);
+    expect(ended.length).toBeGreaterThan(0);
+    expect(ended.every((state) => state.timeWindow === "24h")).toBe(true);
+  });
+});
+
+describe("the criteria always match the data, whichever way a load ends", () => {
+  type Kind = "refetch" | "load" | "firstLoad";
+  type End = "normal" | "stopCutsSome" | "stopAfterScans" | "cancelFails" | "superseded";
+
+  /** How many channels the finished load attempted, and so how many reads one replay makes. */
+  const REPLAY_READS: Record<Kind, { own: number; afterSupersede: number }> = {
+    refetch: { own: 2, afterSupersede: 1 },
+    load: { own: 2, afterSupersede: 2 },
+    firstLoad: { own: 2, afterSupersede: 1 },
+  };
+  const STOPPED: readonly End[] = ["stopCutsSome", "stopAfterScans", "cancelFails"];
+
+  const rows = (["refetch", "load", "firstLoad"] as const).flatMap((kind) =>
+    (["normal", "stopCutsSome", "stopAfterScans", "cancelFails", "superseded"] as const).flatMap(
+      (end) =>
+        [false, true].map((queued) => ({ kind, end, queued }) as { kind: Kind; end: End; queued: boolean }),
+    ),
+  );
+
+  const keyNow = () => {
+    const state = useEvtxStore.getState();
+    return serverFilterKey(state.timeWindow, state.filterEventIds, state.filterLevels);
+  };
+
+  it.each(rows)(
+    "$kind load ending $end, change queued: $queued",
+    async ({ kind, end, queued }) => {
+      const gate = deferred<void>();
+      const cut = deferred<void>();
+      let released = false;
+      // The channel a Stop cuts: the last one the load reads.
+      const cutChannel = kind === "load" ? "Application" : "System";
+
+      invoke.mockImplementation(async (name: string, args: QueryArgs) => {
+        if (name === "evtx_enumerate_channels") return enumerated("Application", "System");
+        if (name === "evtx_cancel_channel_query") {
+          if (end === "cancelFails") throw new Error("the cancel did not reach the service");
+          cut.resolve();
+          return undefined;
+        }
+        if (name !== "evtx_query_channels") return undefined;
+        const channel = args.channels[0];
+        // A read that starts after the load has been released (a replay) answers at once.
+        if (released || channel === "Security") return finished(args);
+        if (end === "stopCutsSome") {
+          if (channel !== cutChannel) return finished(args);
+          const reply = finished(args, { cancelled: true });
+          await cut.promise;
+          return reply;
+        }
+        // Every scan has finished; the reply is held until the end of the scenario.
+        const reply = finished(args);
+        await gate.promise;
+        return reply;
+      });
+
+      if (kind === "refetch") seedLive(["Application", "System"]);
+      else if (kind === "load") seedLive(["System"], ["System", "Application"]);
+      else useEvtxStore.getState().reset();
+
+      const start = {
+        refetch: () => useEvtxStore.getState().toggleFilterLevel("Information"),
+        load: () => void useEvtxStore.getState().queryChannels(["Application"]),
+        firstLoad: () => void useEvtxStore.getState().enumerateChannels(),
+      }[kind];
+      start();
+      const ownReads = 2 - (kind === "load" ? 1 : 0);
+      await vi.waitFor(() => expect(queries()).toHaveLength(ownReads));
+
+      // The criteria this request reads with, and then the operator's change while it runs.
+      const readKey = keyNow();
+      if (queued) useEvtxStore.getState().setTimeWindow("7d");
+      const newKey = keyNow();
+      expect(newKey === readKey).toBe(!queued);
+
+      let supersedingReads = 0;
+      if (end === "superseded") {
+        supersedingReads = 1;
+        void useEvtxStore.getState().queryChannels(["Security"]);
+        await vi.waitFor(() => expect(queries()).toHaveLength(ownReads + 1));
+      } else if (end !== "normal") {
+        void cancelActiveLoad();
+      }
+      released = true;
+      gate.resolve();
+
+      await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+      await settle();
+      await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+
+      const replays = queries().slice(ownReads + supersedingReads);
+      const storeKey = keyNow();
+      const matchesTheRead = storeKey === readKey;
+      const replayedOnce =
+        storeKey === newKey &&
+        replays.length ===
+          (end === "superseded" ? REPLAY_READS[kind].afterSupersede : REPLAY_READS[kind].own) &&
+        new Set(replays.map((args) => args.channels[0])).size === replays.length &&
+        replays.every((args) => args.filter.time?.milliseconds === WEEK_MS);
+
+      // The class: the criteria shown are the criteria the data was read with, or the change was
+      // applied by exactly one replay. Nothing in between.
+      expect(matchesTheRead || replayedOnce, `criteria ${storeKey} vs read ${readKey}`).toBe(true);
+
+      if (STOPPED.includes(end)) {
+        // Stop means stop: no read of any kind starts after it, and the window went back.
+        expect(replays).toHaveLength(0);
+        expect(matchesTheRead).toBe(true);
+        expect(useEvtxStore.getState().timeWindow).toBe("24h");
+      } else if (queued) {
+        expect(replayedOnce).toBe(true);
+        expect(useEvtxStore.getState().timeWindow).toBe("7d");
+      } else {
+        expect(replays).toHaveLength(0);
+        expect(matchesTheRead).toBe(true);
+      }
+    },
+  );
+});
+
+describe("a change queued for one source does not replay on the next", () => {
+  const queueDuringRefetch = async () => {
+    const release = deferred<void>();
+    let calls = 0;
+    invoke.mockImplementation(async (name: string, args: QueryArgs) => {
+      if (name === "evtx_enumerate_channels") return enumerated("Application", "System");
+      if (name !== "evtx_query_channels") return undefined;
+      calls += 1;
+      const reply = finished(args);
+      if (calls <= 2) await release.promise;
+      return reply;
+    });
+    seedLive(["Application", "System"]);
+    useEvtxStore.getState().toggleFilterLevel("Information");
+    await vi.waitFor(() => expect(queries()).toHaveLength(2));
+    useEvtxStore.getState().setTimeWindow("7d");
+    return release;
+  };
+
+  it.each([
+    ["enumerateLocalChannels", () => useEvtxStore.getState().enumerateLocalChannels()],
+    ["reset and a new first load", async () => {
+      useEvtxStore.getState().reset();
+      await useEvtxStore.getState().enumerateChannels();
+    }],
+  ])("%s", async (_name, changeSource) => {
+    const release = await queueDuringRefetch();
+    await changeSource();
+    release.resolve();
+    await settle();
+
+    // The new source's first load reads its two core channels once each, and nothing replays: the
+    // stale flag died with the old source. Without that, the end of this load would read again.
+    const reads = queries();
+    expect(reads).toHaveLength(4);
+    await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+    await settle();
+    expect(queries()).toHaveLength(4);
+  });
+
+  it("enumerateRemoteChannels", async () => {
+    const release = await queueDuringRefetch();
+    invoke.mockImplementation(async (name: string, args: QueryArgs) => {
+      if (name === "evtx_enumerate_remote_channels") return enumerated("Application", "System");
+      if (name === "evtx_query_remote_channels") return finished(args);
+      return undefined;
+    });
+    await useEvtxStore.getState().enumerateRemoteChannels("SRV01");
+    release.resolve();
+    await settle();
+    await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+    await settle();
+
+    // Two remote core reads for the new source and no replay of the old source's change.
+    const remote = invoke.mock.calls.filter(([name]) => name === "evtx_query_remote_channels");
+    expect(remote).toHaveLength(2);
+  });
+});
+
+describe("completedSourceKey", () => {
+  it("is already recorded when a replayed change starts reading in the same tick", async () => {
+    const release = deferred<void>();
+    let calls = 0;
+    invoke.mockImplementation(async (name: string, args: QueryArgs) => {
+      if (name === "evtx_enumerate_channels") return enumerated("Application", "System");
+      if (name !== "evtx_query_channels") return undefined;
+      calls += 1;
+      const reply = finished(args);
+      if (calls <= 2) await release.promise;
+      return reply;
+    });
+    useEvtxStore.getState().reset();
+    const first = useEvtxStore.getState().enumerateChannels();
+    await vi.waitFor(() => expect(queries()).toHaveLength(2));
+    useEvtxStore.getState().setTimeWindow("7d");
+
+    // Every published state: whenever a read is loading with nothing loaded yet, the first load must
+    // already be recorded as completed, or the workspace would show its spinner for the replay.
+    const seen: Array<{ isLoading: boolean; empty: boolean; key: string | null }> = [];
+    const unsubscribe = useEvtxStore.subscribe((state) => {
+      seen.push({
+        isLoading: state.isLoading,
+        empty: state.records.length === 0,
+        key: state.completedSourceKey,
+      });
+    });
+    release.resolve();
+    await first;
+    await vi.waitFor(() => expect(queries()).toHaveLength(4));
+    await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+    unsubscribe();
+
+    const replayStarted = seen.findIndex(
+      (state, index) => index > 0 && state.isLoading && state.empty && !seen[index - 1].isLoading,
+    );
+    expect(replayStarted).toBeGreaterThan(0);
+    expect(seen[replayStarted].key).toBe("live\u0000");
+  });
+
+  it("is cleared when the source goes", () => {
+    useEvtxStore.setState({
+      sourceMode: "live",
+      completedSourceKey: "live\u0000",
+      isLoading: false,
+    });
+    useEvtxStore.getState().reset();
+    expect(useEvtxStore.getState().completedSourceKey).toBeNull();
   });
 });
