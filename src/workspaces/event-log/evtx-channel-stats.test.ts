@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   CHANNEL_ACTIVITY_BINS,
   buildChannelPaneModel,
-  buildChannelTree,
-  channelDisplayOrder,
   computeChannelStats,
   recordTimestampMs,
   scaleActivityBars,
@@ -198,43 +196,6 @@ describe("scaleActivityBars", () => {
 
   it("never exceeds the height it was given", () => {
     expect(Math.max(...scaleActivityBars([3, 3, 3], 18))).toBe(18);
-  });
-});
-
-describe("channel tree and display order", () => {
-  const channels = [
-    live("Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"),
-    live("System"),
-    live("Microsoft-Windows-AAD/Operational"),
-    live("Application"),
-    live("Security"),
-    live("Setup"),
-  ];
-
-  it("puts Windows Logs first in Event Viewer order, then the sorted service tree", () => {
-    const order = channelDisplayOrder(buildChannelTree(channels));
-    expect([...order.keys()]).toEqual([
-      "Application",
-      "Security",
-      "System",
-      "Setup",
-      "Microsoft-Windows-AAD/Operational",
-      "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
-    ]);
-    expect([...order.values()]).toEqual([0, 1, 2, 3, 4, 5]);
-  });
-
-  it("does not depend on the order the channels arrived in", () => {
-    const forward = channelDisplayOrder(buildChannelTree(channels));
-    const backward = channelDisplayOrder(buildChannelTree([...channels].reverse()));
-    expect([...backward.entries()].sort()).toEqual([...forward.entries()].sort());
-  });
-
-  it("visits a node's own channel before the channels beneath it", () => {
-    const order = channelDisplayOrder(
-      buildChannelTree([live("Contoso/Operational"), live("Contoso"), live("Fabrikam/Operational")]),
-    );
-    expect([...order.keys()]).toEqual(["Contoso", "Contoso/Operational", "Fabrikam/Operational"]);
   });
 });
 
@@ -533,11 +494,11 @@ describe("buildChannelPaneModel", () => {
         selectable: false,
       });
       expect(model.channels.filter((channel) => channel.name === "Security")).toHaveLength(1);
-      expect([...model.order.keys()]).toEqual([
-        "Security",
-        "System",
-        "Microsoft-Windows-AAD/Operational",
-      ]);
+      // Listed in the place Windows Logs puts Security, though it takes its color index last.
+      const listed = (name: string) =>
+        model.tree.windowsLogs.some((channel) => channel.name === name);
+      expect(listed("Security")).toBe(true);
+      expect(model.tree.windowsLogs.map((channel) => channel.name)).toEqual(["Security", "System"]);
     });
 
     it("counts it in the total but not in the read count", () => {
@@ -552,11 +513,22 @@ describe("buildChannelPaneModel", () => {
       expect(row.stats.bins.every((count) => count === 0)).toBe(true);
     });
 
-    it("gives every channel the same color index no matter which rows are shown", () => {
+    it("indexes the channels the workbench lists as orderChannelNames does, and the unopened source after them", () => {
       const withRow = buildChannelPaneModel(input);
-      expect(withRow.rows.get("Security")?.index).toBe(0);
-      expect(withRow.rows.get("System")?.index).toBe(1);
-      expect(withRow.rows.get("Microsoft-Windows-AAD/Operational")?.index).toBe(2);
+      const withoutRow = buildChannelPaneModel({
+        ...input,
+        coverageDetails: [],
+        manifestCoverage: [],
+        legacyCoverage: [],
+      });
+      // The Table and the charts compute these two from the same names, so an unopened source
+      // that sorts ahead of System in the pane must not move System's color.
+      for (const name of ["System", "Microsoft-Windows-AAD/Operational"]) {
+        expect(withRow.rows.get(name)?.index).toBe(withoutRow.rows.get(name)?.index);
+      }
+      expect(withRow.rows.get("System")?.index).toBe(0);
+      expect(withRow.rows.get("Microsoft-Windows-AAD/Operational")?.index).toBe(1);
+      expect(withRow.rows.get("Security")?.index).toBe(2);
     });
   });
 

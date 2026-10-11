@@ -2,14 +2,15 @@
  * The pure model behind the Event Logs channel pane (spec section 8.6).
  *
  * Everything the pane has to decide lives here so a test can reach it without a DOM or the store
- * (which loads the Tauri bridge at module scope): the tree and display order, the per-channel
- * numbers and 24-bin activity, and the read state of each row. Nothing here reads a clock; the
+ * (which loads the Tauri bridge at module scope): the per-channel numbers and 24-bin activity, and
+ * the read state of each row. The tree and the display order are in `evtx-channel-order`. Nothing here reads a clock; the
  * caller passes `nowMs`.
  *
  * Evidence rules the model keeps (soul.md): a channel that could not be read is a coverage gap and
  * never a channel with zero events; a number is shown only for a channel that was actually read;
  * a partial read is never reported as complete.
  */
+import { buildChannelTree, orderChannelNames, type ChannelTree } from "./evtx-channel-order";
 import {
   EVTX_TIME_WINDOW_MS,
   type EvtxChannelInfo,
@@ -19,124 +20,6 @@ import {
   type EvtxTimeWindow,
   type EventLogSourceCoverage,
 } from "./types";
-
-// ── Tree and display order ──────────────────────────────────────────────────
-
-export interface ChannelTreeNode {
-  name: string;
-  fullPath: string;
-  channel: EvtxChannelInfo | null; // leaf node if present
-  children: Map<string, ChannelTreeNode>;
-}
-
-export interface ChannelTree {
-  windowsLogs: EvtxChannelInfo[];
-  serviceTree: ChannelTreeNode;
-}
-
-const WINDOWS_LOGS = new Set(["Application", "Security", "Setup", "System", "ForwardedEvents"]);
-const WINDOWS_LOGS_ORDER = ["Application", "Security", "System", "Setup", "ForwardedEvents"];
-
-export function buildChannelTree(channels: readonly EvtxChannelInfo[]): ChannelTree {
-  const windowsLogs: EvtxChannelInfo[] = [];
-  const root: ChannelTreeNode = { name: "", fullPath: "", channel: null, children: new Map() };
-
-  for (const ch of channels) {
-    if (WINDOWS_LOGS.has(ch.name)) {
-      windowsLogs.push(ch);
-      continue;
-    }
-
-    // Split channel path: "Microsoft-Windows-AAD/Operational"
-    // → split on "/" first, then split the provider part on "-"
-    const slashParts = ch.name.split("/");
-    const providerParts = slashParts[0].split("-");
-    const allParts = [...providerParts, ...slashParts.slice(1)];
-
-    let node = root;
-    for (const part of allParts) {
-      if (!node.children.has(part)) {
-        node.children.set(part, {
-          name: part,
-          fullPath: "",
-          channel: null,
-          children: new Map(),
-        });
-      }
-      node = node.children.get(part)!;
-    }
-    node.channel = ch;
-    node.fullPath = ch.name;
-  }
-
-  // Collapse single-child chains: if a node has exactly one child and no channel,
-  // merge it with its child (e.g., "Microsoft" → "Windows" becomes "Microsoft-Windows" if Windows only has children)
-  collapseChains(root);
-
-  windowsLogs.sort(
-    (a, b) => WINDOWS_LOGS_ORDER.indexOf(a.name) - WINDOWS_LOGS_ORDER.indexOf(b.name)
-  );
-
-  return { windowsLogs, serviceTree: root };
-}
-
-function collapseChains(node: ChannelTreeNode) {
-  // Process children first (bottom-up)
-  for (const child of node.children.values()) {
-    collapseChains(child);
-  }
-
-  // If this node has exactly one child, no channel, and child also has no channel,
-  // merge child's name into this node
-  if (node.children.size === 1 && !node.channel) {
-    const [childName, child] = [...node.children.entries()][0];
-    if (!child.channel || child.children.size > 0) {
-      // Merge: combine names with "-"
-      const mergedName = node.name ? `${node.name}-${childName}` : childName;
-      node.name = mergedName;
-      node.channel = child.channel;
-      node.fullPath = child.fullPath;
-      node.children = child.children;
-    }
-  }
-}
-
-export function countChannelLeaves(node: ChannelTreeNode): number {
-  if (node.children.size === 0) return node.channel ? 1 : 0;
-  let count = node.channel ? 1 : 0;
-  for (const child of node.children.values()) {
-    count += countChannelLeaves(child);
-  }
-  return count;
-}
-
-export function sortedChannelChildren(node: ChannelTreeNode): ChannelTreeNode[] {
-  return [...node.children.values()].sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/**
- * Each channel's position in channel display order (spec 6.3): Windows Logs in Event Viewer order,
- * then the service tree depth first with a node's own channel ahead of the channels beneath it.
- * This is the `i` every placement passes to `channelColor(i)`.
- *
- * It is a function of the channel set alone. It does not change with the filter text, with which
- * groups are collapsed, or with the order the channels arrived in, so a channel keeps its color.
- */
-export function channelDisplayOrder(tree: ChannelTree): Map<string, number> {
-  const order = new Map<string, number>();
-  const add = (name: string) => {
-    if (!order.has(name)) order.set(name, order.size);
-  };
-  for (const channel of tree.windowsLogs) add(channel.name);
-  const walk = (node: ChannelTreeNode) => {
-    for (const child of sortedChannelChildren(node)) {
-      if (child.channel) add(child.channel.name);
-      walk(child);
-    }
-  };
-  walk(tree.serviceTree);
-  return order;
-}
 
 // ── Activity statistics ─────────────────────────────────────────────────────
 
@@ -453,7 +336,7 @@ export interface ChannelPaneInput {
 
 export interface ChannelRowModel {
   name: string;
-  /** Position in channel display order: the `i` for `channelColor(i)`. */
+  /** The channel's color index: the `i` for `channelColor(i)`. See `ChannelPaneModel.order`. */
   index: number;
   state: ChannelReadState;
   /** Numbers for a read or partial row. For every other state they must not be shown. */
@@ -467,7 +350,13 @@ export interface ChannelRowModel {
 export interface ChannelPaneModel {
   /** The channels plus a row for each source that could not be opened. */
   channels: EvtxChannelInfo[];
-  tree: ChannelTree;
+  tree: ChannelTree<EvtxChannelInfo>;
+  /**
+   * Color index of every row. The channels the workbench lists take their position from
+   * `orderChannelNames`, exactly as the Table and the charts compute it from the same names. A
+   * source that never opened has no events anywhere else, so it is indexed after them and cannot
+   * shift a real channel's color.
+   */
   order: ReadonlyMap<string, number>;
   rows: ReadonlyMap<string, ChannelRowModel>;
   span: ChannelActivitySpan | null;
@@ -535,7 +424,12 @@ export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel
   const allChannels = [...channels, ...unopened];
 
   const tree = buildChannelTree(allChannels);
-  const order = channelDisplayOrder(tree);
+  const order = new Map(
+    [
+      ...orderChannelNames(channels.map((channel) => channel.name)),
+      ...orderChannelNames(unopened.map((channel) => channel.name)),
+    ].map((name, index) => [name, index] as const),
+  );
   const rows = new Map<string, ChannelRowModel>();
   let readCount = 0;
   for (const channel of allChannels) {

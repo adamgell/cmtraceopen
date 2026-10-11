@@ -22,16 +22,18 @@ import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import { cancelActiveLoad, channelCanHoldEvents, useEvtxStore } from "./evtx-store";
 import {
+  countChannelLeaves,
+  sortedChannelChildren,
+  type ChannelTreeNode,
+} from "./evtx-channel-order";
+import {
   NO_CHANNEL_STATS,
   buildChannelPaneModel,
-  countChannelLeaves,
   scaleActivityBars,
-  sortedChannelChildren,
   summarizeLogSources,
   type ChannelPaneModel,
   type ChannelReadState,
   type ChannelRowModel,
-  type ChannelTreeNode,
 } from "./evtx-channel-stats";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
@@ -1200,7 +1202,7 @@ function TreeNodeView({
   tailChannels,
   rowEnv,
 }: {
-  node: ChannelTreeNode;
+  node: ChannelTreeNode<EvtxChannelInfo>;
   depth: number;
   expanded: ReadonlySet<string>;
   rows: ChannelPaneModel["rows"];
