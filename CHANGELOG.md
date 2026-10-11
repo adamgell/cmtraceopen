@@ -15,6 +15,8 @@ All notable changes to this project will be documented in this file.
 
 - **DsRegCmd diagnostics link to event-log entries (#870)**: Diagnostics from rules that fire on a specific `0x` code now carry `related_error_codes` (public field on `DsregcmdDiagnosticInsight`; struct literals need `related_error_codes: Vec::new()`), and the analyzer links event-log entries that cite those codes on token boundaries. Only codes that appear in the rule's fields on token boundaries are recorded; a rule firing on a substring hit records none. See the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
 
+- **DsRegCmd splits MDM URL presence from registry-confirmed enrollment (#869)**: `DsregcmdDerived` gains `mdm_urls_present` (public field; struct literals need `mdm_urls_present: None`), and `mdm_enrolled` now means registry-confirmed enrollment: `Some(true)` on a matched enrollment, `Some(false)` only when the enrollments registry was read and is empty, `None` when the evidence is missing or unreadable. `enrollment-missing-on-joined` now fires for a joined device that has MDM URLs but a read, empty enrollments registry, and never fires on unreadable evidence. The MDM visibility label reads `mdm_urls_present`. See the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
+
 ### Fixed
 
 - **Windows Firewall logs (#814)**: Recognize firewall records separately from IIS, preserve all fields and Local wall-clock timestamps, report skipped NUL padding and warn about lost events, and retain encoding and source identity through live tailing and timeline queries.

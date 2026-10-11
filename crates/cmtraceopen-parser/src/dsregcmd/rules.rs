@@ -2116,6 +2116,117 @@ mod tests {
             "enrollment-missing-on-joined should be suppressed when cross-reference confirms MDM"
         );
     }
+    const JOINED_WITH_MDM_URLS_SAMPLE: &str = r#"
+ AzureAdJoined : YES
+ DomainJoined : NO
+ WorkplaceJoined : NO
+ TenantId : 11111111-2222-3333-4444-555555555555
+ DeviceId : abcdefab-1111-2222-3333-abcdefabcdef
+ AzureAdPrt : YES
+ AzureAdPrtUpdateTime : 2025-03-10 05:00:00.000 UTC
+ MdmUrl : https://enrollment.manage.microsoft.com/enrollmentserver/discovery.svc
+ MdmComplianceUrl : https://portal.manage.microsoft.com/?portalAction=Compliance
+"#;
+
+    const MDM_GUID: &str = "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}";
+
+    /// Build an analysis from `sample` with the given registry evidence applied,
+    /// and return it with the ids of the extended diagnostics.
+    fn analyze_mdm_split(
+        sample: &str,
+        enrollment: Option<crate::dsregcmd::models::DsregcmdEnrollmentEvidence>,
+    ) -> (crate::dsregcmd::models::DsregcmdAnalysisResult, Vec<String>) {
+        use super::{apply_enrollment_cross_reference, build_extended_diagnostics};
+        use crate::dsregcmd::models::DsregcmdScheduledTaskEvidence;
+
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let mut result = analyze_facts(facts, sample, Utc::now());
+        result.enrollment_evidence = enrollment;
+        result.scheduled_task_evidence = Some(DsregcmdScheduledTaskEvidence {
+            enterprise_mgmt_guids: vec![MDM_GUID.to_string()],
+        });
+        apply_enrollment_cross_reference(&mut result);
+        let ids = build_extended_diagnostics(&result)
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        (result, ids)
+    }
+
+    fn confirming_enrollment() -> crate::dsregcmd::models::DsregcmdEnrollmentEvidence {
+        use crate::dsregcmd::models::{DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence};
+        DsregcmdEnrollmentEvidence {
+            enrollment_count: 1,
+            enrollments: vec![DsregcmdEnrollmentEntry {
+                guid: Some(MDM_GUID.to_string()),
+                upn: Some("user@contoso.com".to_string()),
+                provider_id: Some("MS DM Server".to_string()),
+                enrollment_state: Some(1),
+            }],
+        }
+    }
+
+    fn empty_enrollment() -> crate::dsregcmd::models::DsregcmdEnrollmentEvidence {
+        crate::dsregcmd::models::DsregcmdEnrollmentEvidence {
+            enrollment_count: 0,
+            enrollments: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn mdm_urls_alone_do_not_assert_enrollment() {
+        let (result, _) = analyze_mdm_split(JOINED_WITH_MDM_URLS_SAMPLE, None);
+        assert_eq!(result.derived.mdm_urls_present, Some(true));
+        assert_eq!(result.derived.mdm_enrolled, None);
+    }
+
+    #[test]
+    fn mdm_split_urls_present_and_registry_confirms() {
+        let (result, ids) =
+            analyze_mdm_split(JOINED_WITH_MDM_URLS_SAMPLE, Some(confirming_enrollment()));
+        assert_eq!(result.derived.mdm_urls_present, Some(true));
+        assert_eq!(result.derived.mdm_enrolled, Some(true));
+        assert!(!ids.iter().any(|i| i == "enrollment-missing-on-joined"));
+        // The URLs are present, so the "confirmed without URLs" note must not fire.
+        assert!(!ids.iter().any(|i| i == "mdm-confirmed-via-registry"));
+    }
+
+    #[test]
+    fn mdm_split_urls_present_and_registry_read_empty_fires_missing_enrollment() {
+        let (result, ids) =
+            analyze_mdm_split(JOINED_WITH_MDM_URLS_SAMPLE, Some(empty_enrollment()));
+        assert_eq!(result.derived.mdm_urls_present, Some(true));
+        assert_eq!(result.derived.mdm_enrolled, Some(false));
+        assert!(ids.iter().any(|i| i == "enrollment-missing-on-joined"));
+    }
+
+    /// The #883 scenario: URLs present, enrollments export missing or
+    /// unreadable. That is unknown, never zero, so nothing may fire.
+    #[test]
+    fn mdm_split_urls_present_and_registry_unreadable_stays_unknown() {
+        let (result, ids) = analyze_mdm_split(JOINED_WITH_MDM_URLS_SAMPLE, None);
+        assert_eq!(result.derived.mdm_urls_present, Some(true));
+        assert_eq!(result.derived.mdm_enrolled, None);
+        assert!(!ids.iter().any(|i| i == "enrollment-missing-on-joined"));
+    }
+
+    #[test]
+    fn mdm_split_no_urls_and_registry_confirms() {
+        let (result, ids) =
+            analyze_mdm_split(JOINED_NO_MDM_URLS_SAMPLE, Some(confirming_enrollment()));
+        assert_eq!(result.derived.mdm_urls_present, None);
+        assert_eq!(result.derived.mdm_enrolled, Some(true));
+        assert!(ids.iter().any(|i| i == "mdm-confirmed-via-registry"));
+    }
+
+    #[test]
+    fn mdm_split_no_urls_and_no_registry_are_both_unknown() {
+        let (result, ids) = analyze_mdm_split(JOINED_NO_MDM_URLS_SAMPLE, None);
+        assert_eq!(result.derived.mdm_urls_present, None);
+        assert_eq!(result.derived.mdm_enrolled, None);
+        assert!(!ids.iter().any(|i| i == "enrollment-missing-on-joined"));
+    }
+
     #[test]
     fn scp_not_found_suppressed_when_scp_query_errored() {
         use super::build_active_diagnostics_rules;

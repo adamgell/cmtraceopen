@@ -5,27 +5,35 @@ use crate::intune::apps::windows::ime::models::IntuneDiagnosticSeverity;
 
 use super::derive::issue;
 
-/// Cross-reference enrollment registry entries with scheduled task GUIDs
-/// to upgrade `mdm_enrolled` when dsregcmd output lacks MDM URLs.
+/// Set the registry-confirmed `mdm_enrolled` from the enrollment evidence.
+///
+/// `Some(true)` when an enrollment with `EnrollmentState` 1 matches an
+/// EnterpriseMgmt scheduled task GUID. `Some(false)` only when the enrollments
+/// registry was read and holds no enrollment at all. Missing or unreadable
+/// evidence leaves the value unknown (`None`), never negative (ADR-001), and an
+/// enrollment that exists but cannot be matched to a task is also left unknown.
 pub fn apply_enrollment_cross_reference(result: &mut DsregcmdAnalysisResult) {
-    if result.derived.mdm_enrolled.is_some() {
+    let Some(enrollment) = &result.enrollment_evidence else {
         return;
-    }
-    if let (Some(enrollment), Some(tasks)) =
-        (&result.enrollment_evidence, &result.scheduled_task_evidence)
-    {
-        let confirmed = enrollment.enrollments.iter().any(|e| {
-            e.enrollment_state == Some(1)
-                && e.guid.as_ref().is_some_and(|g| {
-                    tasks
-                        .enterprise_mgmt_guids
-                        .iter()
-                        .any(|t| t.eq_ignore_ascii_case(g))
-                })
+    };
+    let confirmed = result
+        .scheduled_task_evidence
+        .as_ref()
+        .is_some_and(|tasks| {
+            enrollment.enrollments.iter().any(|e| {
+                e.enrollment_state == Some(1)
+                    && e.guid.as_ref().is_some_and(|g| {
+                        tasks
+                            .enterprise_mgmt_guids
+                            .iter()
+                            .any(|t| t.eq_ignore_ascii_case(g))
+                    })
+            })
         });
-        if confirmed {
-            result.derived.mdm_enrolled = Some(true);
-        }
+    if confirmed {
+        result.derived.mdm_enrolled = Some(true);
+    } else if enrollment.enrollment_count == 0 && enrollment.enrollments.is_empty() {
+        result.derived.mdm_enrolled = Some(false);
     }
 }
 
@@ -128,6 +136,9 @@ pub fn build_extended_diagnostics(
     if let Some(enrollment) = result.enrollment_evidence.as_ref() {
         let is_joined = result.facts.join_state.azure_ad_joined == Some(true);
 
+        // Evidence was read here (`Some`), so a zero count is a real zero. Missing
+        // or unreadable evidence never reaches this block (ADR-001). URL presence
+        // does not suppress the warning; only a registry-confirmed enrollment does.
         if enrollment.enrollment_count == 0
             && is_joined
             && result.derived.mdm_enrolled != Some(true)
