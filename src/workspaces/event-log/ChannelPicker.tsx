@@ -251,16 +251,14 @@ export function ChannelPicker() {
       id={CHANNEL_PANE_ID}
       style={{
         display: "flex",
-        flexShrink: 0,
+        // Shrinkable only so the 40% cap on the workspace's channel wrapper (the body row's
+        // flex child) can take effect. A percentage cap here would resolve against that
+        // shrink-to-fit wrapper, i.e. against the pane's own width.
+        flexShrink: 1,
         position: "relative",
         boxSizing: "border-box",
         width: `${sidebarWidth}px`,
-        // The pane cannot shrink on its own (flexShrink 0) and the body row clips, so on a narrow
-        // window a fixed width would squeeze the main view to nothing. Cap it at 40% of the row.
-        // The 200 to 500 drag range is enforced by the handle, so no CSS min-width is needed (a
-        // min-width would also override this cap). `aria-valuenow` keeps the requested width.
         minWidth: 0,
-        maxWidth: "40%",
         borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
       }}
     >
