@@ -673,7 +673,15 @@ export function EventLogWorkspace() {
         {channels.length > 0 && (
           <div
             data-evtx-region="channels"
-            style={{ display: panels.channels ? "flex" : "none", flexShrink: 0 }}
+            // The body row's flex child, so this percentage resolves against the row. The pane
+            // inside shrinks to fit (a cap on the pane itself would be relative to this
+            // shrink-to-fit wrapper, i.e. to itself).
+            style={{
+              display: panels.channels ? "flex" : "none",
+              flexShrink: 0,
+              minWidth: 0,
+              maxWidth: "40%",
+            }}
           >
             <ChannelPicker />
           </div>
@@ -730,6 +738,9 @@ export function EventLogWorkspace() {
             display: panels.insights ? "block" : "none",
             position: "relative",
             width: `${railWidth}px`,
+            // The aside is a child of the body row, so this resolves against the row.
+            minWidth: 0,
+            maxWidth: "40%",
             flexShrink: 0,
             boxSizing: "border-box",
             borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,

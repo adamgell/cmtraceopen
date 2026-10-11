@@ -55,4 +55,12 @@ describe("channel pane resize handle", () => {
     fireEvent.keyDown(handle, { key: "ArrowRight" });
     expect(pane).toHaveStyle({ width: "266px" });
   });
+
+  it("does not cap itself by percentage: that would resolve against its own shrink-to-fit wrapper", () => {
+    render(<ChannelPicker />);
+    const pane = screen.getByRole("separator", { name: "Resize channel pane" })
+      .parentElement as HTMLElement;
+    expect(pane.style.maxWidth).toBe("");
+    expect(pane).toHaveStyle({ width: "250px", minWidth: "0px", flexShrink: "1" });
+  });
 });
