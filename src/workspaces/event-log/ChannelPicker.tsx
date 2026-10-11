@@ -410,11 +410,14 @@ export function ChannelPicker() {
       id={CHANNEL_PANE_ID}
       style={{
         display: "flex",
-        flexShrink: 0,
+        // Shrinkable only so the 40% cap on the workspace's channel wrapper (the body row's
+        // flex child) can take effect. A percentage cap here would resolve against that
+        // shrink-to-fit wrapper, i.e. against the pane's own width.
+        flexShrink: 1,
         position: "relative",
         boxSizing: "border-box",
         width: `${sidebarWidth}px`,
-        minWidth: `${MIN_SIDEBAR_WIDTH}px`,
+        minWidth: 0,
         borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
       }}
     >
