@@ -235,6 +235,13 @@ test.describe("event-logs screenshots", () => {
     ).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(moreFilters).toHaveCount(0);
+    // Escape returns focus to the More filters button, and after a key press the browser paints
+    // its keyboard focus ring there. Wait for that, then drop it, so no capture shows a ring the
+    // operator did not ask for.
+    const moreFiltersButton = page.getByRole("button", { name: /^More filters/ });
+    await expect(moreFiltersButton).toBeFocused();
+    await moreFiltersButton.evaluate((element) => (element as HTMLElement).blur());
+    await expect(moreFiltersButton).not.toBeFocused();
   });
 
   test("event-logs table", async ({ page }) => {
