@@ -25,7 +25,9 @@ def main():
     repository = os.environ['GITHUB_REPOSITORY']
     response = subprocess.run(
         ['gh', 'api', f'repos/{repository}/releases/tags/{quote(tag, safe="")}'],
-        check=True, capture_output=True, text=True, timeout=30)
+        check=False, capture_output=True, text=True, timeout=30)
+    if response.returncode != 0:
+        raise RuntimeError(f'Release lookup failed ({response.returncode}): {response.stderr.strip()}')
     validate_release(tag, json.loads(response.stdout))
     print(f'Validated published stable release {tag}')
 

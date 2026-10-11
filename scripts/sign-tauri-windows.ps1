@@ -23,11 +23,11 @@ function Invoke-TauriWindowsSigning {
         -CertificateProfileName $env:SIGNING_PROFILE_NAME -Files $file.FullName `
         -FileDigest SHA256 -TimestampRfc3161 'http://timestamp.acs.microsoft.com' `
         -TimestampDigest SHA256 -Timeout 300 `
-        -ExcludeEnvironmentCredential $false -ExcludeWorkloadIdentityCredential $true `
-        -ExcludeManagedIdentityCredential $true -ExcludeSharedTokenCacheCredential $true `
-        -ExcludeVisualStudioCredential $true -ExcludeVisualStudioCodeCredential $true `
-        -ExcludeAzureCliCredential $true -ExcludeAzurePowerShellCredential $true `
-        -ExcludeAzureDeveloperCliCredential $true -ExcludeInteractiveBrowserCredential $true
+        -ExcludeEnvironmentCredential:$false -ExcludeWorkloadIdentityCredential:$true `
+        -ExcludeManagedIdentityCredential:$true -ExcludeSharedTokenCacheCredential:$true `
+        -ExcludeVisualStudioCredential:$true -ExcludeVisualStudioCodeCredential:$true `
+        -ExcludeAzureCliCredential:$true -ExcludeAzurePowerShellCredential:$true `
+        -ExcludeAzureDeveloperCliCredential:$true -ExcludeInteractiveBrowserCredential:$true
     if ((Get-AuthenticodeSignature -LiteralPath $file.FullName).Status -ne 'Valid') {
         throw 'Bundler signing did not produce a valid Authenticode signature.'
     }

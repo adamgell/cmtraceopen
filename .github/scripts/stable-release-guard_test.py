@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+from subprocess import CompletedProcess
 
 SCRIPT = Path(__file__).with_name('stable-release-guard.py')
 
@@ -30,6 +32,15 @@ class StableReleaseTests(unittest.TestCase):
     def test_rejects_wrong_release(self):
         with self.assertRaises(ValueError):
             self.guard.validate_release('v1.6.2', self.release)
+
+    def test_api_failure_surfaces_stderr_before_json_parsing(self):
+        response = CompletedProcess([], 1, stdout='not JSON', stderr='  API rate limit exceeded\n')
+        with patch.dict(self.guard.os.environ, {'TAG_NAME': 'v1.6.3', 'GITHUB_REPOSITORY': 'owner/repo'}), \
+                patch.object(self.guard.subprocess, 'run', return_value=response), \
+                patch.object(self.guard.json, 'loads') as parse:
+            with self.assertRaisesRegex(RuntimeError, r'Release lookup failed \(1\): API rate limit exceeded$'):
+                self.guard.main()
+            parse.assert_not_called()
 
     def test_workflow_guards_before_tool_download(self):
         workflow = (SCRIPT.parents[1] / 'workflows/winget-publish.yml').read_text()

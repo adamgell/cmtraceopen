@@ -349,11 +349,11 @@ Describe 'Tauri bundling-time signing hook' {
         . (Join-Path $PSScriptRoot 'sign-tauri-windows.ps1')
         function Invoke-ArtifactSigning { param($Files, $Endpoint, $CodeSigningAccountName,
             $CertificateProfileName, $FileDigest, $TimestampRfc3161, $TimestampDigest, $Timeout,
-            $ExcludeEnvironmentCredential, $ExcludeWorkloadIdentityCredential,
-            $ExcludeManagedIdentityCredential, $ExcludeSharedTokenCacheCredential,
-            $ExcludeVisualStudioCredential, $ExcludeVisualStudioCodeCredential,
-            $ExcludeAzureCliCredential, $ExcludeAzurePowerShellCredential,
-            $ExcludeAzureDeveloperCliCredential, $ExcludeInteractiveBrowserCredential) }
+            [switch]$ExcludeEnvironmentCredential, [switch]$ExcludeWorkloadIdentityCredential,
+            [switch]$ExcludeManagedIdentityCredential, [switch]$ExcludeSharedTokenCacheCredential,
+            [switch]$ExcludeVisualStudioCredential, [switch]$ExcludeVisualStudioCodeCredential,
+            [switch]$ExcludeAzureCliCredential, [switch]$ExcludeAzurePowerShellCredential,
+            [switch]$ExcludeAzureDeveloperCliCredential, [switch]$ExcludeInteractiveBrowserCredential) }
         $hookSettings = @('AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET',
             'SIGNING_ENDPOINT', 'SIGNING_ACCOUNT_NAME', 'SIGNING_PROFILE_NAME')
         $previousHookSettings = @{}
