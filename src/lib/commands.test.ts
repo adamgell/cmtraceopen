@@ -17,6 +17,7 @@ import {
   appendEventLogAnalysisChunk,
   appendEventLogExportChunk,
   clearEventLogChannel,
+  exportEventLogSubset,
   closeEventLogExportSession,
   createEventLogExportSession,
   openLogFile,
@@ -1290,6 +1291,69 @@ describe("event-log manifest commands", () => {
       clearEventLogChannel("Application", true, null),
     ).rejects.toThrow(
       "Command 'evtx_clear_channel' returned an invalid response.",
+    );
+  });
+
+  const subsetFile = {
+    kind: "channel",
+    sourcePath: "System",
+    fileName: "System-subset.evtx",
+    outputPath: "C:\\out\\System-subset.evtx",
+    requestedRecords: 2,
+    status: "exported",
+    exportedRecords: 2,
+    messagesArchived: true,
+    error: null,
+    warnings: [],
+  };
+  const subsetSources = [{ kind: "channel" as const, path: "System", recordIds: ["5", "6"] }];
+
+  it("sends the folder and the record ids as text, and returns the validated per-file results", async () => {
+    const response = { folder: "C:\\out", files: [subsetFile] };
+    invokeMock.mockResolvedValueOnce(response);
+
+    await expect(exportEventLogSubset("C:\\out", subsetSources)).resolves.toEqual(response);
+    expect(invokeMock).toHaveBeenCalledWith("evtx_export_subset", {
+      folder: "C:\\out",
+      sources: subsetSources,
+    });
+  });
+
+  it("accepts a failed file with no verified count", async () => {
+    const response = {
+      folder: "C:\\out",
+      files: [{ ...subsetFile, status: "failed", exportedRecords: null, error: "access denied" }],
+    };
+    invokeMock.mockResolvedValueOnce(response);
+    await expect(exportEventLogSubset("C:\\out", subsetSources)).resolves.toEqual(response);
+  });
+
+  it.each([
+    [null],
+    [{ folder: "C:\\out" }],
+    [{ files: [] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, status: "partial" }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, exportedRecords: -1 }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, warnings: "none" }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, messagesArchived: "yes" }] }],
+    // A reply that does not describe the request: wrong source, extra file, or missing file.
+    [{ folder: "C:\\out", files: [{ ...subsetFile, sourcePath: "Application" }] }],
+    [{ folder: "C:\\out", files: [subsetFile, subsetFile] }],
+    [{ folder: "C:\\out", files: [] }],
+  ])("rejects a malformed or mismatched subset reply (%#)", async (reply) => {
+    invokeMock.mockResolvedValueOnce(reply);
+
+    await expect(exportEventLogSubset("C:\\out", subsetSources)).rejects.toThrow(
+      "Command 'evtx_export_subset' returned an invalid response.",
+    );
+  });
+
+  it("passes a refused request's message through to the caller", async () => {
+    invokeMock.mockRejectedValueOnce(
+      "These files already exist in C:\\out and are never overwritten: System-subset.evtx.",
+    );
+    await expect(exportEventLogSubset("C:\\out", subsetSources)).rejects.toThrow(
+      "never overwritten: System-subset.evtx",
     );
   });
 

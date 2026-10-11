@@ -104,6 +104,41 @@ export interface EvtxClearResponse {
   result: EvtxClearStatusResult;
 }
 
+/** What an EVTX subset is cut from: a registered channel, or an `.evtx` file on disk. */
+export type EvtxSubsetSourceKind = "channel" | "file";
+
+/** One source log and the events to keep from it. */
+export interface EvtxSubsetSourceRequest {
+  kind: EvtxSubsetSourceKind;
+  /** The channel name, or the absolute `.evtx` path. */
+  path: string;
+  /** `EventRecordID`s as decimal strings, so a large one is never rounded in transit. */
+  recordIds: string[];
+}
+
+export type EvtxSubsetFileStatus = "exported" | "failed";
+
+export interface EvtxSubsetFileResult {
+  kind: EvtxSubsetSourceKind;
+  sourcePath: string;
+  fileName: string;
+  outputPath: string;
+  /** Distinct `EventRecordID`s that were asked for. */
+  requestedRecords: number;
+  status: EvtxSubsetFileStatus;
+  /** Events found by reading the written file back; null means "not verified", never zero. */
+  exportedRecords: number | null;
+  /** True only when the localized messages were archived next to the file. */
+  messagesArchived: boolean;
+  error: string | null;
+  warnings: string[];
+}
+
+export interface EvtxSubsetResult {
+  folder: string;
+  files: EvtxSubsetFileResult[];
+}
+
 export interface SystemDateTimePreferences {
   datePattern: string;
   timePattern: string;
@@ -1405,6 +1440,56 @@ export async function clearEventLogChannel(
     return invalidCommandResponse("evtx_clear_channel");
   }
   return response;
+}
+
+function isEvtxSubsetFileResult(value: unknown): value is EvtxSubsetFileResult {
+  return (
+    isCommandRecord(value) &&
+    hasCommandFields(value, {
+      kind: (field) => field === "channel" || field === "file",
+      sourcePath: (field) => typeof field === "string",
+      fileName: (field) => typeof field === "string",
+      outputPath: (field) => typeof field === "string",
+      requestedRecords: isNonNegativeCommandCount,
+      status: (field) => field === "exported" || field === "failed",
+      exportedRecords: (field) =>
+        field === null || isNonNegativeCommandCount(field),
+      messagesArchived: (field) => typeof field === "boolean",
+      error: (field) => field === null || typeof field === "string",
+      warnings: isStringArray,
+    })
+  );
+}
+
+function decodeEventLogSubsetResult(
+  value: unknown,
+  commandName: string,
+): EvtxSubsetResult {
+  const result = decodeRecordResponse<EvtxSubsetResult>(value, commandName, {
+    folder: (field) => typeof field === "string",
+    files: (field) => Array.isArray(field) && field.every(isEvtxSubsetFileResult),
+  });
+  return result;
+}
+
+/**
+ * Copies the given events out of live channels and `.evtx` files into new `.evtx` files in
+ * `folder`, one per source. The files are raw copies and are not redacted. Windows only.
+ */
+export async function exportEventLogSubset(
+  folder: string,
+  sources: EvtxSubsetSourceRequest[],
+): Promise<EvtxSubsetResult> {
+  const result = await invokeCommand("evtx_export_subset", { folder, sources });
+  // One file result per requested source, in request order. Anything else means the response does
+  // not describe this request, and showing it would report files that were never asked for.
+  if (
+    result.files.length !== sources.length ||
+    result.files.some((file, index) => file.sourcePath !== sources[index].path)
+  ) {
+    return invalidCommandResponse("evtx_export_subset");
+  }
+  return result;
 }
 
 const DIAGNOSIS_COVERAGE_STATES = new Set([
@@ -3251,6 +3336,7 @@ const COMMAND_DECODERS = {
   evtx_expand_sources: decodeEventLogSourceManifest,
   evtx_parse_manifest: decodeEventLogParseResult,
   evtx_clear_channel: decodeEventLogClearResponse,
+  evtx_export_subset: decodeEventLogSubsetResult,
   evtx_create_export_session: decodeEventLogExportSessionStatus,
   evtx_append_export_chunk: decodeEventLogExportSessionStatus,
   evtx_finalize_export_session: decodeEventLogExportResult,
