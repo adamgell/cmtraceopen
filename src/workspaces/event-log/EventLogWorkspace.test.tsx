@@ -240,10 +240,11 @@ describe("event-viewer shared font metrics", () => {
     cleanup();
   });
 
-  it("uses valid grid ownership for flat and grouped rows with interactive marker controls", () => {
+  it("uses valid grid ownership for flat and grouped rows", () => {
     seedEventLog();
     useEvtxStore.setState({ groupBy: ["level"] });
-    const columnCount = visibleColumns(defaultColumnConfig()).length + 1;
+    // One cell per column: the row carries no marker cell (spec 8.7).
+    const columnCount = visibleColumns(defaultColumnConfig()).length;
 
     const grouped = render(<EvtxTimeline />);
     const treegrid = grouped.getByRole("treegrid", {
@@ -269,10 +270,9 @@ describe("event-viewer shared font metrics", () => {
       expect(cell).toHaveAttribute("aria-colindex", String(index + 1));
     });
     expect(recordRow.firstElementChild).toBe(recordCells[0]);
-    expect(recordCells[0]).toContainElement(grouped.getByRole("button", { name: "Tag event" }));
-    expect(recordCells[0]).toContainElement(
-      grouped.getByRole("button", { name: "Bookmark event" }),
-    );
+    expect(recordCells[0]).toHaveAccessibleName(/^Level:/);
+    // Tagging and bookmarking are the `t` and `b` keys on the row and the Details pane's buttons.
+    expect(within(recordRow).queryAllByRole("button")).toHaveLength(0);
 
     fireEvent.click(groupRow);
     expect(groupRow).toHaveAttribute("aria-expanded", "false");
