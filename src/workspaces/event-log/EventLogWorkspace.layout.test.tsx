@@ -1,6 +1,6 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { lazy } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
@@ -202,9 +202,36 @@ describe("EventLogWorkspace three-column shell", () => {
     }
   });
 
+  it("renders the Grouped view in the tabpanel, and its Show all returns to the table filtered", () => {
+    // jsdom does no layout; the virtualized list needs a viewport height to render rows.
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.dataset.evtxGroupedScroller !== undefined ? 400 : 0;
+      },
+    });
+    onTestFinished(() => {
+      if (original) Object.defineProperty(HTMLElement.prototype, "offsetHeight", original);
+    });
+    render(<EventLogWorkspace />);
+    fireEvent.click(screen.getByRole("tab", { name: "Grouped" }));
+    const panel = screen.getByRole("tabpanel");
+    const grouped = within(panel).getByRole("table", { name: /^Grouped events, 1 group by Event ID$/ });
+    expect(grouped).toBeVisible();
+    expect(screen.getByTestId("records-table")).not.toBeVisible();
+    expect(screen.queryByText("Grouped view")).toBeNull();
+
+    fireEvent.click(within(grouped).getByRole("button", { name: /^Event ID 42,/ }));
+    fireEvent.click(within(grouped).getByRole("button", { name: "Show all 1 in table" }));
+    expect(useEvtxStore.getState().filterEventIds).toBe("42");
+    expect(screen.getByRole("tab", { name: "Table" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("records-table")).toBeVisible();
+  });
+
   it("shows a placeholder for views that are not built yet, behind the same tablist", () => {
     render(<EventLogWorkspace />);
-    for (const name of ["Grouped", "Timeline", "Charts", "Correlation"]) {
+    for (const name of ["Timeline", "Charts", "Correlation"]) {
       fireEvent.click(screen.getByRole("tab", { name }));
       expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
       expect(screen.getByRole("tab", { name })).toHaveAttribute("aria-selected", "true");

@@ -28,6 +28,7 @@ import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import { EvtxViewBar } from "./EvtxViewBar";
+import { EvtxGroupedView } from "./EvtxGroupedView";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
 import { effectiveResizeRange, useRowCappedSize } from "./use-row-capped-size";
 import {
@@ -246,6 +247,10 @@ export function EventLogWorkspace() {
       isLoading,
     ],
   );
+  // When the loaded records last changed: a query or a tail batch read them then. Unlike
+  // `nowEpoch` it does not move on a filter change, so the Grouped view's trend never counts the
+  // time since the last read as read.
+  const recordsReadAt = useMemo(() => Date.now(), [records]);
   const visibleRecords = useMemo(
     () =>
       isLoading
@@ -598,7 +603,16 @@ export function EventLogWorkspace() {
 
   const views: Record<EvtxViewId, EvtxViewEntry> = {
     table: { keepAlive: true, render: renderTableView },
-    grouped: { keepAlive: false, render: () => <ViewPlaceholder view="grouped" /> },
+    grouped: {
+      keepAlive: false,
+      render: () => (
+        <EvtxGroupedView
+          records={visibleRecords}
+          nowEpoch={nowEpoch}
+          readThroughMs={recordsReadAt}
+        />
+      ),
+    },
     timeline: { keepAlive: false, render: () => <ViewPlaceholder view="timeline" /> },
     charts: { keepAlive: false, render: () => <ViewPlaceholder view="charts" /> },
     correlation: { keepAlive: false, render: () => <ViewPlaceholder view="correlation" /> },
