@@ -194,7 +194,12 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
   // would flood a screen reader.
   const [exportState, setExportState] = useState<string | null>(null);
   // What a screen reader hears: the start and the final result only.
-  const [exportAnnouncement, setExportAnnouncement] = useState("");
+  // Each announcement is a new keyed node, so repeating the same message (a second "Nothing to
+  // export") is announced again instead of being a no-op text change.
+  const [exportAnnouncement, setExportAnnouncement] = useState({ id: 0, text: "" });
+  const announce = (text: string) =>
+    setExportAnnouncement((previous) => ({ id: previous.id + 1, text }));
+  const exportTriggerRef = useRef<HTMLButtonElement | null>(null);
   // A failure is shown in full under the bar and stays until dismissed or the next export.
   const [exportError, setExportError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
@@ -216,6 +221,8 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
   // differ from the view.
   const exportVisible = async (format: (typeof EVTX_EXPORT_FORMATS)[number]) => {
     if (exportPendingRef.current) return;
+    // A new attempt supersedes an old failure line, including attempts that end early.
+    setExportError(null);
     const state = useEvtxStore.getState();
     const visibleColumns = state.columnConfig.order;
     const exportRecords = sortRecords(
@@ -236,7 +243,7 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
     );
     if (exportRecords.length === 0) {
       setExportState("Nothing to export");
-      setExportAnnouncement("Nothing to export");
+      announce("Nothing to export");
       return;
     }
     // Claimed before the dialog opens: this is the whole point of the ref, since everything after
@@ -251,8 +258,7 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
       const controller = new AbortController();
       exportAbortRef.current = controller;
       setIsExporting(true);
-      setExportError(null);
-      setExportAnnouncement("Export started");
+      announce("Export started");
       setExportState(`Exporting 0 of ${exportRecords.length.toLocaleString()} events...`);
       const result = await streamEventLogExport({
         records: exportRecords,
@@ -268,13 +274,15 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
       });
       const done = `Exported ${result.records.toLocaleString()} events (${result.bytes.toLocaleString()} bytes)`;
       setExportState(done);
-      setExportAnnouncement(done);
+      announce(done);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         setExportState("Export cancelled");
-        setExportAnnouncement("Export cancelled");
+        announce("Export cancelled");
       } else {
         setExportState(null);
+        // The alert carries the message; announcing it too would read it twice.
+        announce("");
         setExportError(
           `Export failed: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -616,6 +624,7 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
         <Menu>
           <MenuTrigger disableButtonEnhancement>
             <Button
+              ref={exportTriggerRef}
               size="small"
               appearance="outline"
               disabled={isExporting}
@@ -641,7 +650,9 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
           data-evtx-export-announcement
           className={styles.visuallyHidden}
         >
-          {exportAnnouncement}
+          {exportAnnouncement.text && (
+            <span key={exportAnnouncement.id}>{exportAnnouncement.text}</span>
+          )}
         </span>
       </div>
       {exportError && (
@@ -664,7 +675,11 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
             appearance="subtle"
             icon={<Dismiss12Regular />}
             aria-label="Dismiss export error"
-            onClick={() => setExportError(null)}
+            onClick={() => {
+              setExportError(null);
+              // The button that had focus is about to unmount; put focus somewhere sensible.
+              exportTriggerRef.current?.focus();
+            }}
           />
         </div>
       )}

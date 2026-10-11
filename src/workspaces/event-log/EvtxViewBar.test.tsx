@@ -296,6 +296,73 @@ describe("EvtxViewBar", () => {
       expect(heard).toEqual(["Export started", "Exported 5,000 events (1,234 bytes)"]);
     });
 
+    const heardAnnouncements = () => {
+      const live = document.querySelector<HTMLElement>("[data-evtx-export-announcement]")!;
+      const heard: string[] = [];
+      const observer = new MutationObserver(() => heard.push(live.textContent ?? ""));
+      observer.observe(live, { childList: true, characterData: true, subtree: true });
+      return { heard, stop: () => observer.disconnect() };
+    };
+
+    it("announces the same message again, and announces nothing for a failure", async () => {
+      useEvtxStore.setState({ records: [] });
+      render(<EvtxViewBar nowEpoch={0} />);
+      const { heard, stop } = heardAnnouncements();
+      await exportJson();
+      await waitFor(() => expect(heard).toEqual(["Nothing to export"]));
+      await exportJson();
+      await waitFor(() => expect(heard).toEqual(["Nothing to export", "Nothing to export"]));
+      stop();
+      cleanup();
+
+      seedChannels();
+      // Fail after a tick so the start is committed (and announced) before the failure.
+      exportMock.stream.mockImplementationOnce(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        throw new Error("boom");
+      });
+      render(<EvtxViewBar nowEpoch={0} />);
+      const second = heardAnnouncements();
+      await exportJson();
+      await screen.findByRole("alert");
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      // Started, then silence for the failure (the alert carries it).
+      expect(second.heard).toEqual(["Export started", ""]);
+      exportMock.stream.mockImplementationOnce(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return { records: 1, bytes: 1 };
+      });
+      await exportJson();
+      await waitFor(() => expect(second.heard).toContain("Exported 1 events (1 bytes)"));
+      expect(second.heard.filter((text) => text === "Export started")).toHaveLength(2);
+      second.stop();
+    });
+
+    it("clears an old failure when a later attempt ends early, and restores focus on dismiss", async () => {
+      exportMock.stream.mockRejectedValueOnce(new Error("boom"));
+      render(<EvtxViewBar nowEpoch={0} />);
+      await exportJson();
+      fireEvent.click(await screen.findByRole("button", { name: "Dismiss export error" }));
+      expect(screen.getByTitle(/Export the events currently shown/)).toHaveFocus();
+
+      exportMock.stream.mockRejectedValueOnce(new Error("boom again"));
+      await exportJson();
+      await screen.findByRole("alert");
+      // A cancelled save dialog leaves no stale failure behind.
+      vi.mocked(save).mockResolvedValueOnce(null);
+      await exportJson();
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+      // Neither does "Nothing to export".
+      exportMock.stream.mockRejectedValueOnce(new Error("third"));
+      await exportJson();
+      await screen.findByRole("alert");
+      useEvtxStore.setState({ records: [] });
+      await exportJson();
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    });
+
     it("shows a long failure in full as a dismissable alert under the bar, never truncated", async () => {
       const detail = "disk full ".repeat(60).trim();
       exportMock.stream.mockRejectedValue(new Error(detail));

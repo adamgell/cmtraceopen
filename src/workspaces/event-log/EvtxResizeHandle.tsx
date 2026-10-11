@@ -161,7 +161,7 @@ export function EvtxResizeHandle({
       onPointerUp={release}
       onPointerCancel={release}
       onLostPointerCapture={release}
-      style={position}
+      style={{ touchAction: "none", ...position }}
     />
   );
 }
