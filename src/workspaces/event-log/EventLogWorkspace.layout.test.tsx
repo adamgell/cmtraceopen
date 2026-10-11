@@ -327,6 +327,13 @@ describe("EventLogWorkspace Charts view wiring", () => {
     expect(await eventsTile()).toHaveTextContent("1 channel · 2 text logs");
   });
 
+  it("shows a loading state, not 'no events', while a load runs with records present", async () => {
+    useEvtxStore.setState({ isLoading: true });
+    render(<EventLogWorkspace />);
+    await screen.findByText("Loading events...", {}, { timeout: 10_000 });
+    expect(screen.queryByText(/No events to chart/)).toBeNull();
+  });
+
   it("shows n/a for the chains tile until a timeline page exists", async () => {
     await eventsTile();
     expect(screen.getByTestId("kpi-value-chains").textContent).toBe("n/a");

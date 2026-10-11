@@ -227,13 +227,25 @@ const RFC3339 =
   /^\d{4}-\d{2}-\d{2}[Tt ](?:[01]\d|2[0-3]):\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
 const NAIVE_ISO = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):\d{2}:\d{2}(?:\.\d+)?$/;
 
+/** False when the date part names a day its month does not have (leap years included). */
+function dayExists(text: string): boolean {
+  const year = Number(text.slice(0, 4));
+  const month = Number(text.slice(5, 7));
+  const day = Number(text.slice(8, 10));
+  if (month < 1 || month > 12 || day < 1) return false;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const length = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  return day <= length;
+}
+
 /**
  * The event time in epoch milliseconds, or null when the engine would call it
  * missing. Mirrors `parsed_timestamp_epoch`: a non-zero epoch is taken as is;
  * a zero epoch falls back to the text, which must be RFC 3339 (separator "T",
  * "t" or a space; a U+2212 minus sign in the offset is read as "-"; hours 00 to
  * 23) or a zone-less `T` ISO form read as UTC. Second 60 stays unplaced (see the
- * module header). Never `Date.parse` on a display string.
+ * module header). A day beyond its month's length is rejected before parsing,
+ * as chrono does. Never `Date.parse` on a display string.
  */
 export function placedEpochMs(
   record: Pick<EvtxChartRecord, "timestamp" | "timestampEpoch">,
@@ -241,12 +253,13 @@ export function placedEpochMs(
   const epoch = record.timestampEpoch;
   if (typeof epoch !== "number" || !Number.isFinite(epoch)) return null;
   if (epoch !== 0) return epoch;
-  const text = (record.timestamp?.trim() ?? "").replace(/\u2212/g, "-");
-  if (RFC3339.test(text)) {
+  // U+2212 is read as "-" only as the offset sign, never between date parts.
+  const text = (record.timestamp?.trim() ?? "").replace(/\u2212(?=\d{2}:\d{2}$)/, "-");
+  if (RFC3339.test(text) && dayExists(text)) {
     const parsed = Date.parse(text.replace(/^(\d{4}-\d{2}-\d{2})[Tt ]/, "$1T").toUpperCase());
     return Number.isNaN(parsed) ? null : parsed;
   }
-  if (NAIVE_ISO.test(text)) {
+  if (NAIVE_ISO.test(text) && dayExists(text)) {
     const parsed = Date.parse(`${text}Z`);
     return Number.isNaN(parsed) ? null : parsed;
   }

@@ -55,6 +55,8 @@ export interface EvtxChartsViewProps {
   loadedChannelCount: EvtxChartInput["loadedChannelCount"];
   /** Distinct text-log sources from `countTextLogSources`, not lines. */
   textLogCount: EvtxChartInput["textLogCount"];
+  /** A load is running: show a loading state, not "no events", while the visible list is empty. */
+  loading?: boolean;
   /** The loaded window, for the Events KPI label, for example "24 h". */
   windowLabel?: string;
   metrics: LogListMetrics;
@@ -594,6 +596,7 @@ export function EvtxChartsView({
   timeZoneMode,
   loadedChannelCount,
   textLogCount,
+  loading = false,
   windowLabel,
   metrics,
   visualTokens,
@@ -611,7 +614,7 @@ export function EvtxChartsView({
         role="status"
         style={{ padding: 24, fontFamily: LOG_UI_FONT_FAMILY, fontSize: metrics.fontSize, color: tokens.colorNeutralForeground3 }}
       >
-        No events to chart. Load events or relax the filters.
+        {loading ? "Loading events..." : "No events to chart. Load events or relax the filters."}
       </div>
     );
   }

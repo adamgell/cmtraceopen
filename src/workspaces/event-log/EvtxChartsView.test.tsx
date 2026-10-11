@@ -275,6 +275,13 @@ describe("EvtxChartsView", () => {
     expect(screen.queryAllByRole("figure")).toHaveLength(0);
   });
 
+  it("says it is loading, not that there are no events, while a load runs", () => {
+    const { rerender } = render(<EvtxChartsView {...props({ records: [], loading: true })} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading events...");
+    rerender(<EvtxChartsView {...props({ records: [], loading: false })} />);
+    expect(screen.getByRole("status")).toHaveTextContent("No events to chart");
+  });
+
   it("sizes text from the log list font metrics", () => {
     const { rerender } = render(<EvtxChartsView {...props()} />);
     expect(screen.getByTestId("kpi-value-events").style.fontSize).toBe("22px");

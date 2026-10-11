@@ -621,6 +621,20 @@ describe("RFC 3339 text for a zero epoch", () => {
     expect(hourOfDay(zero("2026-11-01 01:30:00\u221205:30"), "utc")).toBe(7);
   });
 
+  it("reads U+2212 only as the offset sign, not between date parts", () => {
+    expect(hourOfDay(zero("2026\u221211-01T01:30:00Z"), "utc")).toBeNull();
+    expect(hourOfDay(zero("2026-11\u221201T01:30:00Z"), "utc")).toBeNull();
+  });
+
+  it("rejects a day beyond its month, leap years included", () => {
+    expect(hourOfDay(zero("2026-02-30T01:30:00Z"), "utc")).toBeNull();
+    expect(hourOfDay(zero("2025-02-29T00:00:00Z"), "utc")).toBeNull();
+    expect(hourOfDay(zero("2026-04-31T00:00:00"), "utc")).toBeNull();
+    expect(hourOfDay(zero("2024-02-29T00:00:00Z"), "utc")).toBe(0);
+    expect(hourOfDay(zero("2000-02-29T05:00:00Z"), "utc")).toBe(5);
+    expect(hourOfDay(zero("1900-02-29T00:00:00Z"), "utc")).toBeNull();
+  });
+
   it("rejects hour 24 in both forms instead of rolling to the next day", () => {
     expect(hourOfDay(zero("2026-11-01T24:00:00Z"), "utc")).toBeNull();
     expect(hourOfDay(zero("2026-11-01T24:00:00"), "utc")).toBeNull();
@@ -642,10 +656,9 @@ describe("wiring helpers", () => {
     expect(chartWindowLabel("all")).toBe("all loaded");
   });
 
-  it("counts text-log sources across both origins without double counting", () => {
-    // Attached log entries carry file paths; archived text records carry their
-    // `{archive}::{member}` label. The same member can arrive both ways only when the
-    // strings are equal, which is the overlap that is de-duplicated.
+  it("de-duplicates equal source strings across both inputs (a pure unit test)", () => {
+    // Makes no claim about real data: log-store paths and archive labels do not normally
+    // coincide. It only pins that equal strings count once and different ones count separately.
     const label = "bundle.zip::logs/agent.log";
     const entries = [
       { filePath: "C:/logs/a.log" },

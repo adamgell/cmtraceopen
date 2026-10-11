@@ -606,10 +606,18 @@ export function EventLogWorkspace() {
     [channels],
   );
   const loadedChannels = useEvtxStore((s) => s.loadedChannels);
-  const chartLoadedChannelCount = loadedChannelCountFor({ sourceMode, loadedChannels, records });
+  // Counted only while Charts is active, as `chartsViewChains` is, so a live tail does not rescan
+  // the records on every append in the other views.
+  const chartLoadedChannelCount = useMemo(
+    () =>
+      activeView === "charts"
+        ? loadedChannelCountFor({ sourceMode, loadedChannels, records })
+        : 0,
+    [activeView, sourceMode, loadedChannels, records],
+  );
   const chartTextLogCount = useMemo(
-    () => countTextLogSources(scopedLogEntries, records),
-    [scopedLogEntries, records],
+    () => (activeView === "charts" ? countTextLogSources(scopedLogEntries, records) : 0),
+    [activeView, scopedLogEntries, records],
   );
   const chartHideRules = useMemo(() => [quickFilter], [quickFilter]);
   // Phase 10c replaces this with the shared chain model. Until then the Charts chains KPI builds
@@ -636,6 +644,7 @@ export function EventLogWorkspace() {
       timeZoneMode={timeZoneMode}
       loadedChannelCount={chartLoadedChannelCount}
       textLogCount={chartTextLogCount}
+      loading={isLoading}
       windowLabel={chartWindowLabel(timeWindow)}
       metrics={chartMetrics}
       visualTokens={visualTokens}
