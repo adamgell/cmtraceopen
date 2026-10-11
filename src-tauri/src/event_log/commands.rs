@@ -159,6 +159,24 @@ impl QueryAggregation {
         }
         self.records.extend(scan.records);
     }
+
+    /// Records a channel that could not be queried at all. Its gap takes the kind the failure
+    /// reports, so a channel the service refused reads as access denied rather than as broken.
+    fn absorb_failure(
+        &mut self,
+        coverage_source: &str,
+        failure: super::query_failure::ChannelQueryError,
+    ) {
+        let kind = failure.coverage_kind();
+        self.error_messages
+            .push(format!("{coverage_source}: {}", failure.message));
+        self.coverage_gaps.push(EvtxCoverageGap::new(
+            coverage_source.to_string(),
+            kind,
+            failure.message,
+        ));
+        self.parse_errors = self.parse_errors.saturating_add(1);
+    }
 }
 
 /// Expands folder, wildcard, archive, and VSS selections before parsing.
@@ -240,7 +258,7 @@ fn query_source_channel(
     is_cancelled: &AtomicBool,
     on_progress: impl Fn(usize, Option<usize>),
     on_batch: impl FnMut(&mut Vec<super::models::EvtxRecord>) -> Result<(), String>,
-) -> Result<super::live::ChannelScan, String> {
+) -> Result<super::live::ChannelScan, super::query_failure::ChannelQueryError> {
     match remote_machine {
         Some(machine) => super::live::query_remote_channel_streamed(
             machine,
@@ -309,7 +327,10 @@ async fn query_channels_impl(
                 })
                 .unwrap_or(super::models::ChannelSourceType::Live);
 
-            let per_channel: Vec<(String, Result<super::live::ChannelScan, String>)> = channels
+            let per_channel: Vec<(
+                String,
+                Result<super::live::ChannelScan, super::query_failure::ChannelQueryError>,
+            )> = channels
                 .par_iter()
                 .map(|channel| {
                     let app_ref = &app;
@@ -381,10 +402,15 @@ async fn query_channels_impl(
                     let outcome = match terminal_emit {
                         Ok(()) => outcome,
                         Err(terminal_error) => match outcome {
-                            Ok(_) => Err(terminal_error),
-                            Err(query_error) => {
-                                Err(format!("{query_error}; {terminal_error}"))
-                            }
+                            Ok(_) => Err(super::query_failure::ChannelQueryError::from(
+                                terminal_error,
+                            )),
+                            // The query's own code is kept: the emit failure does not change
+                            // why the channel could not be read.
+                            Err(query_error) => Err(super::query_failure::ChannelQueryError {
+                                code: query_error.code,
+                                message: format!("{}; {terminal_error}", query_error.message),
+                            }),
                         },
                     };
                     (channel.clone(), outcome)
@@ -420,14 +446,7 @@ async fn query_channels_impl(
                             channel,
                             error
                         );
-                        aggregation
-                            .error_messages
-                            .push(format!("{coverage_source}: {error}"));
-                        aggregation.coverage_gaps.push(EvtxCoverageGap::new(
-                            coverage_source,
-                            EvtxCoverageGapKind::File,
-                            error,
-                        ));
+                        aggregation.absorb_failure(&coverage_source, error);
                         channel_infos.push(EvtxChannelInfo {
                             name: channel,
                             event_count: 0,
@@ -436,7 +455,6 @@ async fn query_channels_impl(
                             // reported as switched off. The refusal itself is the gap.
                             enabled_state: ChannelEnabledState::Unknown,
                         });
-                        aggregation.parse_errors = aggregation.parse_errors.saturating_add(1);
                     }
                 }
             }
@@ -1691,6 +1709,66 @@ mod tests {
             gap.reason,
             "the Event Log service reported a channel query failure (Windows error 15007)"
         );
+    }
+
+    #[test]
+    fn a_channel_the_service_will_not_open_is_reported_as_access_denied() {
+        // EvtQuery itself can refuse the channel, so no scan exists at all. The refusal is the
+        // channel's gap and must keep its kind and the service's text.
+        for code in [5, 1314] {
+            let mut aggregation = super::QueryAggregation::default();
+            aggregation.absorb_failure(
+                "Security",
+                super::super::query_failure::ChannelQueryError::win32(
+                    code,
+                    "EvtQuery(Security): Access is denied.".to_string(),
+                ),
+            );
+
+            assert_eq!(aggregation.coverage_gaps.len(), 1, "code {code}");
+            let gap = &aggregation.coverage_gaps[0];
+            assert_eq!(
+                gap.kind,
+                super::super::models::EvtxCoverageGapKind::AccessDenied,
+                "code {code}"
+            );
+            assert_eq!(gap.source, "Security");
+            assert_eq!(gap.reason, "EvtQuery(Security): Access is denied.");
+            assert_eq!(
+                aggregation.error_messages,
+                vec![format!("{}: {}", gap.source, gap.reason)]
+            );
+            assert_eq!(aggregation.parse_errors, 1);
+        }
+    }
+
+    #[test]
+    fn a_channel_that_cannot_be_opened_for_another_reason_stays_a_file_gap() {
+        for failure in [
+            super::super::query_failure::ChannelQueryError::win32(
+                15007,
+                "EvtQuery(Missing): The specified channel could not be found.".to_string(),
+            ),
+            super::super::query_failure::ChannelQueryError::from(
+                "cannot compile event query for Missing: too many event IDs".to_string(),
+            ),
+        ] {
+            let mut aggregation = super::QueryAggregation::default();
+            aggregation.absorb_failure("Missing", failure.clone());
+
+            assert_eq!(
+                aggregation.coverage_gaps,
+                vec![super::super::models::EvtxCoverageGap::new(
+                    "Missing",
+                    super::super::models::EvtxCoverageGapKind::File,
+                    failure.message.clone(),
+                )]
+            );
+            assert_eq!(
+                aggregation.error_messages,
+                vec![format!("Missing: {}", failure.message)]
+            );
+        }
     }
 
     fn diagnosis_record(

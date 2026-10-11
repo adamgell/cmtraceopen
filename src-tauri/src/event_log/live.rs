@@ -34,6 +34,7 @@ use super::parser::DescriptionOutcome;
 use super::provider_db::ProviderStore;
 #[cfg(any(target_os = "windows", test))]
 use super::query_failure::channel_failure_kind;
+use super::query_failure::ChannelQueryError;
 #[cfg(target_os = "windows")]
 use cmtraceopen_parser::event_query::build_query;
 use cmtraceopen_parser::event_query::EventQueryFilter;
@@ -726,7 +727,7 @@ fn remote_login(server: &mut [u16]) -> EVT_RPC_LOGIN {
 }
 
 #[cfg(target_os = "windows")]
-fn open_remote_session(machine: &str) -> Result<(OwnedEvtHandle, String), String> {
+fn open_remote_session(machine: &str) -> Result<(OwnedEvtHandle, String), ChannelQueryError> {
     let machine = normalize_remote_machine_name(machine)?;
     let mut server: Vec<u16> = machine.encode_utf16().chain(std::iter::once(0)).collect();
     let login = remote_login(&mut server);
@@ -739,7 +740,10 @@ fn open_remote_session(machine: &str) -> Result<(OwnedEvtHandle, String), String
         )
     }
     .map_err(|error| {
-        format_remote_error(&format!("cannot open remote session to {machine}"), &error)
+        ChannelQueryError::win32(
+            win32_code(&error),
+            format_remote_error(&format!("cannot open remote session to {machine}"), &error),
+        )
     })?;
     Ok((OwnedEvtHandle::new(session), machine))
 }
@@ -755,7 +759,7 @@ pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
 /// Enumerate channels from a remote computer using the current Windows credentials.
 #[cfg(target_os = "windows")]
 pub fn enumerate_remote_channels(machine: &str) -> Result<Vec<EvtxChannelInfo>, String> {
-    let (session, machine) = open_remote_session(machine)?;
+    let (session, machine) = open_remote_session(machine).map_err(|error| error.message)?;
     enumerate_channels_for_session(Some(session.raw()), ChannelSourceType::Remote { machine })
 }
 
@@ -891,7 +895,7 @@ pub fn query_channel(
     maps: &MapRegistry,
     providers: &std::sync::RwLock<ProviderStore>,
     max_events: Option<u64>,
-) -> Result<ChannelScan, String> {
+) -> Result<ChannelScan, ChannelQueryError> {
     query_channel_with_progress(channel, maps, providers, max_events, |_, _| {})
 }
 
@@ -906,7 +910,7 @@ pub fn query_channel_filtered(
     maps: &MapRegistry,
     providers: &std::sync::RwLock<ProviderStore>,
     max_events: Option<u64>,
-) -> Result<ChannelScan, String> {
+) -> Result<ChannelScan, ChannelQueryError> {
     query_channel_inner(
         channel,
         filter,
@@ -929,7 +933,7 @@ pub fn query_channel_with_progress(
     providers: &std::sync::RwLock<ProviderStore>,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
-) -> Result<ChannelScan, String> {
+) -> Result<ChannelScan, ChannelQueryError> {
     query_channel_inner(
         channel,
         &EventQueryFilter::default(),
@@ -953,7 +957,7 @@ pub fn query_channel_filtered_with_progress(
     providers: &std::sync::RwLock<ProviderStore>,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
-) -> Result<ChannelScan, String> {
+) -> Result<ChannelScan, ChannelQueryError> {
     query_channel_inner(
         channel,
         filter,
@@ -985,7 +989,7 @@ pub fn query_channel_streamed(
     is_cancelled: &AtomicBool,
     on_progress: impl Fn(usize, Option<usize>),
     on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
-) -> Result<ChannelScan, String> {
+) -> Result<ChannelScan, ChannelQueryError> {
     query_channel_inner(
         channel,
         filter,
@@ -1013,7 +1017,7 @@ pub fn query_remote_channel_streamed(
     is_cancelled: &AtomicBool,
     on_progress: impl Fn(usize, Option<usize>),
     on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
-) -> Result<ChannelScan, String> {
+) -> Result<ChannelScan, ChannelQueryError> {
     let (session, machine) = open_remote_session(machine)?;
     let source_label = format!("Remote: {machine}");
     query_channel_inner(
@@ -1054,7 +1058,7 @@ fn query_channel_inner(
     is_cancelled: &AtomicBool,
     on_progress: impl Fn(usize, Option<usize>),
     mut on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
-) -> Result<ChannelScan, String> {
+) -> Result<ChannelScan, ChannelQueryError> {
     let remote = source_label.starts_with("Remote:");
     let coverage_channel = if let Some(machine) = source_label.strip_prefix("Remote: ") {
         format!("{machine}/{channel}")
@@ -1079,7 +1083,12 @@ fn query_channel_inner(
             EvtQueryChannelPath.0 | EvtQueryReverseDirection.0 | EvtQueryTolerateQueryErrors.0,
         )
     }
-    .map_err(|e| format_source_error(&format!("EvtQuery({coverage_channel})"), &e, remote))?;
+    .map_err(|e| {
+        ChannelQueryError::win32(
+            win32_code(&e),
+            format_source_error(&format!("EvtQuery({coverage_channel})"), &e, remote),
+        )
+    })?;
     let query_handle = OwnedEvtHandle::new(query_handle);
     log::info!("event=evtx_live_query channel=\"{channel}\" limit={limit}");
 
@@ -2043,7 +2052,8 @@ pub fn start_channel_tail(
     let remote_session = remote_machine
         .as_deref()
         .map(open_remote_session)
-        .transpose()?;
+        .transpose()
+        .map_err(|error| error.message)?;
     let remote = remote_session.is_some();
     let session_handle = remote_session.as_ref().map(|(session, _)| session.raw());
     let source_label = remote_session
@@ -2220,7 +2230,7 @@ pub fn clear_channel(
     let remote_session = match remote_machine {
         Some(machine) => match open_remote_session(machine) {
             Ok((session, _normalized_machine)) => Some(session),
-            Err(detail) => return clear_remote_session_error(channel, detail),
+            Err(error) => return clear_remote_session_error(channel, error.message),
         },
         None => None,
     };
@@ -2268,8 +2278,10 @@ pub fn query_channel_with_progress(
     _providers: &std::sync::RwLock<ProviderStore>,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
-) -> Result<ChannelScan, String> {
-    Err("Live event log queries are only available on Windows.".to_string())
+) -> Result<ChannelScan, ChannelQueryError> {
+    Err("Live event log queries are only available on Windows."
+        .to_string()
+        .into())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -2278,8 +2290,10 @@ pub fn query_channel(
     _maps: &MapRegistry,
     _providers: &std::sync::RwLock<ProviderStore>,
     _max_events: Option<u64>,
-) -> Result<ChannelScan, String> {
-    Err("Live event log queries are only available on Windows.".to_string())
+) -> Result<ChannelScan, ChannelQueryError> {
+    Err("Live event log queries are only available on Windows."
+        .to_string()
+        .into())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -2289,8 +2303,10 @@ pub fn query_channel_filtered(
     _maps: &MapRegistry,
     _providers: &std::sync::RwLock<ProviderStore>,
     _max_events: Option<u64>,
-) -> Result<ChannelScan, String> {
-    Err("Live event log queries are only available on Windows.".to_string())
+) -> Result<ChannelScan, ChannelQueryError> {
+    Err("Live event log queries are only available on Windows."
+        .to_string()
+        .into())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -2301,8 +2317,10 @@ pub fn query_channel_filtered_with_progress(
     _providers: &std::sync::RwLock<ProviderStore>,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
-) -> Result<ChannelScan, String> {
-    Err("Live event log queries are only available on Windows.".to_string())
+) -> Result<ChannelScan, ChannelQueryError> {
+    Err("Live event log queries are only available on Windows."
+        .to_string()
+        .into())
 }
 #[cfg(not(target_os = "windows"))]
 pub fn query_channel_streamed(
@@ -2313,8 +2331,10 @@ pub fn query_channel_streamed(
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
     _on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
-) -> Result<ChannelScan, String> {
-    Err("Live event log queries are only available on Windows.".to_string())
+) -> Result<ChannelScan, ChannelQueryError> {
+    Err("Live event log queries are only available on Windows."
+        .to_string()
+        .into())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -2328,8 +2348,10 @@ pub fn query_remote_channel_streamed(
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
     _on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
-) -> Result<ChannelScan, String> {
-    Err("Remote event log queries are only available on Windows.".to_string())
+) -> Result<ChannelScan, ChannelQueryError> {
+    Err("Remote event log queries are only available on Windows."
+        .to_string()
+        .into())
 }
 // ── Win32 helpers (Windows only) ────────────────────────────────────────────
 
