@@ -637,24 +637,10 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::e
         write_evidence_json(&evidence_event_logs.join("dsregcmd-events.json"), analysis)?;
     }
 
-    // Phase 5: Scheduled task evidence (EnterpriseMgmt GUIDs). Written only
-    // for an assessable capture, so a failed or unrecognized query reads as not
-    // collected rather than as "no tasks".
+    // Phase 5: Scheduled task evidence (EnterpriseMgmt GUIDs), written only for
+    // an assessable capture.
     simulate_bundle_io_delay("capture-scheduled-task-evidence");
-    if let Some(scheduled_task_evidence) = collect_enterprise_mgmt_task_guids() {
-        let evidence_scheduled_tasks = bundle_path.join("evidence").join("scheduled-tasks");
-        fs::create_dir_all(&evidence_scheduled_tasks).map_err(|error| {
-            crate::error::AppError::Internal(format!(
-                "Failed to create the live capture's scheduled-task evidence directory '{}': {}",
-                evidence_scheduled_tasks.display(),
-                error
-            ))
-        })?;
-        write_evidence_json(
-            &evidence_scheduled_tasks.join("enterprise-mgmt-tasks.json"),
-            &scheduled_task_evidence,
-        )?;
-    }
+    write_scheduled_task_evidence(&bundle_path, collect_enterprise_mgmt_task_guids().as_ref())?;
 
     Ok(LiveCaptureBundle {
         bundle_path,
@@ -665,7 +651,7 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::e
 /// Serialize and write one evidence value, propagating either failure so an
 /// incomplete capture is not reported as successful. The manifest write above
 /// already propagates its own failure.
-#[cfg(target_os = "windows")]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn write_evidence_json<T: serde::Serialize>(
     path: &std::path::Path,
     value: &T,
@@ -677,13 +663,40 @@ fn write_evidence_json<T: serde::Serialize>(
             error
         ))
     })?;
-    fs::write(path, json).map_err(|error| {
+    std::fs::write(path, json).map_err(|error| {
         crate::error::AppError::Internal(format!(
             "Failed to write the live capture evidence '{}': {}",
             path.display(),
             error
         ))
     })
+}
+
+/// Write the EnterpriseMgmt task evidence of a live capture, and return
+/// whether it was written.
+///
+/// Only an assessable capture (`Some`, see `classify_enterprise_mgmt_tasks`) is
+/// written, and its list may be empty. A missing, failed or unrecognized query
+/// (`None`) writes nothing, so the bundle reads it as not collected rather than
+/// as "no tasks".
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn write_scheduled_task_evidence(
+    bundle_path: &Path,
+    evidence: Option<&crate::dsregcmd::DsregcmdScheduledTaskEvidence>,
+) -> Result<bool, crate::error::AppError> {
+    let Some(evidence) = evidence else {
+        return Ok(false);
+    };
+    let directory = bundle_path.join("evidence").join("scheduled-tasks");
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        crate::error::AppError::Internal(format!(
+            "Failed to create the live capture's scheduled-task evidence directory '{}': {}",
+            directory.display(),
+            error
+        ))
+    })?;
+    write_evidence_json(&directory.join("enterprise-mgmt-tasks.json"), evidence)?;
+    Ok(true)
 }
 
 #[cfg(target_os = "windows")]
@@ -880,10 +893,8 @@ fn discard_failed_registry_export(output_path: &Path) {
     }
 }
 
-/// Query the EnterpriseMgmt scheduled tasks. `None` when the capture is not
-/// assessable: `schtasks` is missing, fails to start, exits non-zero, or its
-/// output is empty or not recognized. The capture then writes no task
-/// evidence, so it reads as not collected rather than as "no tasks".
+/// Query the EnterpriseMgmt scheduled tasks. `None` when `schtasks` is missing
+/// or the capture is not assessable (see `classify_enterprise_mgmt_tasks`).
 #[cfg(target_os = "windows")]
 fn collect_enterprise_mgmt_task_guids() -> Option<crate::dsregcmd::DsregcmdScheduledTaskEvidence> {
     let schtasks_path = match resolve_system32_binary("schtasks.exe") {
@@ -894,17 +905,34 @@ fn collect_enterprise_mgmt_task_guids() -> Option<crate::dsregcmd::DsregcmdSched
         }
     };
 
-    let output = match crate::process_util::hidden_command(&schtasks_path)
-        .args([
-            "/query",
-            "/TN",
-            r"\Microsoft\Windows\EnterpriseMgmt",
-            "/FO",
-            "LIST",
-        ])
-        .output()
-    {
-        Ok(o) => o,
+    classify_enterprise_mgmt_tasks(
+        crate::process_util::hidden_command(&schtasks_path)
+            .args([
+                "/query",
+                "/TN",
+                r"\Microsoft\Windows\EnterpriseMgmt",
+                "/FO",
+                "LIST",
+            ])
+            .output(),
+    )
+}
+
+/// Classify one `schtasks /query /TN \Microsoft\Windows\EnterpriseMgmt /FO LIST`
+/// run (reducer-contract ruling 2 on #924, decision 5).
+///
+/// The capture is assessable only when `schtasks` started, exited 0, and its
+/// output references the EnterpriseMgmt path. A spawn error, a non-zero exit
+/// (whatever it printed) and empty or unrecognized output are `None`, logged,
+/// and the live capture writes no task evidence for them. The Windows capture
+/// only runs the process; this is the whole decision, and the tests exercise
+/// it on every host.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn classify_enterprise_mgmt_tasks(
+    outcome: std::io::Result<std::process::Output>,
+) -> Option<crate::dsregcmd::DsregcmdScheduledTaskEvidence> {
+    let output = match outcome {
+        Ok(output) => output,
         Err(e) => {
             log::error!("event=dsregcmd_schtasks_failed error={e}");
             return None;
@@ -1920,6 +1948,85 @@ mod tests {
             super::parse_enterprise_mgmt_task_guids(stdout),
             Some(Vec::new())
         );
+    }
+
+    fn schtasks_output(code: i32, stdout: &str) -> std::io::Result<std::process::Output> {
+        Ok(std::process::Output {
+            status: exit_status(code),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        })
+    }
+
+    const GUID_TASK_LINE: &str = r"TaskName: \Microsoft\Windows\EnterpriseMgmt\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\Schedule #1 created by enrollment client";
+
+    /// A non-zero exit is not assessable, even when stdout names a GUID folder.
+    #[test]
+    fn enterprise_mgmt_task_guids_non_zero_exit_is_not_assessable() {
+        for code in [1, 2] {
+            assert_eq!(
+                super::classify_enterprise_mgmt_tasks(schtasks_output(code, GUID_TASK_LINE)),
+                None,
+                "exit {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn enterprise_mgmt_task_guids_spawn_error_is_not_assessable() {
+        let outcome = Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "schtasks.exe could not start",
+        ));
+        assert_eq!(super::classify_enterprise_mgmt_tasks(outcome), None);
+    }
+
+    #[test]
+    fn enterprise_mgmt_task_guids_exit_0_with_a_guid_path_is_read() {
+        assert_eq!(
+            super::classify_enterprise_mgmt_tasks(schtasks_output(0, GUID_TASK_LINE)),
+            Some(crate::dsregcmd::DsregcmdScheduledTaskEvidence {
+                enterprise_mgmt_guids: vec!["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB".to_string()],
+            })
+        );
+    }
+
+    #[test]
+    fn enterprise_mgmt_task_guids_exit_0_unrecognized_output_is_not_assessable() {
+        for stdout in [
+            "",
+            "INFO: There are no scheduled tasks presently available at your access level.",
+        ] {
+            assert_eq!(
+                super::classify_enterprise_mgmt_tasks(schtasks_output(0, stdout)),
+                None,
+                "{stdout:?}"
+            );
+        }
+    }
+
+    /// Only an assessable capture is written. Not assessable writes nothing,
+    /// so the bundle reads the task evidence as not collected, never as an
+    /// empty list.
+    #[test]
+    fn enterprise_mgmt_task_guids_are_written_only_when_assessable() {
+        let assessable_empty = crate::dsregcmd::DsregcmdScheduledTaskEvidence::default();
+        let assessable_one = crate::dsregcmd::DsregcmdScheduledTaskEvidence {
+            enterprise_mgmt_guids: vec!["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB".to_string()],
+        };
+        for evidence in [None, Some(&assessable_empty), Some(&assessable_one)] {
+            let bundle = tempfile::tempdir().expect("create temp dir");
+
+            let written = super::write_scheduled_task_evidence(bundle.path(), evidence)
+                .expect("write succeeds");
+
+            assert_eq!(written, evidence.is_some(), "{evidence:?}");
+            assert_eq!(
+                super::load_scheduled_task_evidence_from_bundle(bundle.path()).as_ref(),
+                evidence,
+                "{evidence:?}"
+            );
+        }
     }
 
     fn exit_status(code: i32) -> std::process::ExitStatus {
