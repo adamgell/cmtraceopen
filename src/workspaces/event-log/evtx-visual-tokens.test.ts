@@ -415,14 +415,15 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
       {
         surface: "selected",
         section:
-          "8.7 selected table row: Time, ID, Provider, Channel, Message, Links and marker control text (issue #836)",
+          "8.7 selected table row: Time, ID, Provider, Channel, Message, Links and optional column text, and the quick-filter highlight outline and underline (issue #836)",
       },
     ],
   },
   {
     // Every text role of a tinted table row is the level's rowText (D3, issue #836): Time,
-    // Provider, ID, Channel, Message, the links cell and the marker controls. The spec 8.7
-    // colors for those (fg2, fg3, the brand link) measured 2.45:1 on the classic Error row.
+    // Provider, ID, Channel, Message, the links cell, the optional columns, and the quick-filter
+    // highlight's outline and underline. The spec 8.7 colors for those (fg2, the brand link)
+    // measured 2.45:1 and 1.14:1 on the classic Error row.
     role: "tinted table row text",
     minimum: 4.5,
     colors: (v) =>
@@ -436,12 +437,13 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
       {
         surface: "ownRow",
         section:
-          "8.7 tinted table row: Time, ID, Provider, Channel, Message, Links and marker control text (issue #836)",
+          "8.7 tinted table row: Time, ID, Provider, Channel, Message, Links and optional column text, and the quick-filter highlight outline and underline (issue #836)",
       },
     ],
   },
   {
-    // A plain (Information or Verbose) row keeps the 8.7 neutral hierarchy.
+    // A plain (Information or Verbose) row keeps the 8.7 neutral hierarchy; its quick-filter
+    // highlight is outlined and underlined in fg1.
     role: "plain table row text",
     minimum: 4.5,
     colors: () => ({
@@ -453,7 +455,7 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
       {
         surface: "surface",
         section:
-          "8.7 plain table row: ID and Message (fg1), Time and Provider (fg2), Links (brand link), marker controls (fg2)",
+          "8.7 plain table row: ID, Channel and Message (fg1), Time, Provider and optional columns (fg2), Links (brand link), quick-filter highlight outline and underline (fg1)",
       },
     ],
   },
