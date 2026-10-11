@@ -1,7 +1,17 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const invoke = vi.hoisted(() => vi.fn());
+
+// The coverage note reads the event-log store, which registers Tauri listeners when it loads.
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
 import { getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
+import { useEvtxStore } from "./evtx-store";
 import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
 import { DETAIL_RENDER_CAP, OUTCOME_LABELS, EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import type {
@@ -440,6 +450,88 @@ describe("EventDiagnosisPanel", () => {
     it("is absent when there are no coverage gaps", () => {
       render(<EventDiagnosisPanel summary={neutralSummary("noFindings")} />);
       expect(screen.queryByText(/Coverage gaps/)).toBeNull();
+    });
+  });
+
+  describe("coverage note (spec 8.13, item 2)", () => {
+    const NOTE = "Security channel not read. Findings may be incomplete.";
+    // The backend's shape for an unelevated live Security read once #931 files it as accessDenied.
+    const deniedSecurity = {
+      source: "Security",
+      kind: "accessDenied" as const,
+      reason: "the Event Log service refused the channel query (Windows error 5: Access is denied)",
+    };
+    const deniedDiagnosisGap: DiagnosisCoverageGap = {
+      id: "security-denied",
+      source: "Security",
+      state: "accessDenied",
+      detail: deniedSecurity.reason,
+      evidence: [],
+    };
+    const deniedSummary: DiagnosisSummary = {
+      ...summary,
+      coverageGaps: [deniedDiagnosisGap],
+      overview: { ...summary.overview, coverageGapCount: 1 },
+    };
+
+    async function settle(): Promise<void> {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+
+    beforeEach(() => {
+      invoke.mockReset();
+      invoke.mockImplementation((command: string) =>
+        command === "get_app_elevation_state"
+          ? Promise.resolve({ platformSupported: true, isElevated: false })
+          : Promise.reject(new Error(`unexpected command ${command}`)),
+      );
+      useEvtxStore.setState({ coverageDetails: [deniedSecurity], sourceManifest: null, archiveMembers: [] });
+    });
+
+    afterEach(() => {
+      useEvtxStore.setState({ coverageDetails: [] });
+    });
+
+    it("sits after the finding cards and above the coverage disclosure", async () => {
+      render(<EventDiagnosisPanel summary={deniedSummary} />);
+      await settle();
+
+      const note = screen.getByText(NOTE);
+      const card = screen.getByRole("article", { name: finding.title });
+      const coverage = disclosure("Coverage gaps (1)");
+      expect(card.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(note.compareDocumentPosition(coverage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("leaves the access-denied gap in the disclosure, which lists the engine's gaps as given", async () => {
+      render(<EventDiagnosisPanel summary={deniedSummary} />);
+      await settle();
+      expand("Coverage gaps (1)");
+
+      expect(
+        screen.getByText(`Coverage: Security (accessDenied): ${deniedSecurity.reason} (1 occurrence)`),
+      ).toBeTruthy();
+    });
+
+    it("shows while a first build is pending and after a build failed", async () => {
+      const { rerender } = render(<EventDiagnosisPanel summary={null} updating />);
+      await settle();
+      expect(screen.getByText(NOTE)).toBeTruthy();
+
+      rerender(<EventDiagnosisPanel summary={null} error="engine unavailable" />);
+      await settle();
+      expect(screen.getByText(NOTE)).toBeTruthy();
+    });
+
+    it("is not drawn without an accessDenied gap", async () => {
+      useEvtxStore.setState({ coverageDetails: [{ ...deniedSecurity, kind: "record" }] });
+      render(<EventDiagnosisPanel summary={summary} />);
+      await settle();
+
+      expect(screen.queryByText(/channel not read/)).toBeNull();
+      expect(invoke).not.toHaveBeenCalled();
     });
   });
 

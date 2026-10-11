@@ -12,12 +12,15 @@
  * - "Open correlation view": Phase 10 (Correlation view).
  * - "Review unplaced lines": Phase 10b (unplaced list).
  * - "{n} nearby, not linked": Phase 10c (Chains tab data).
- * - The coverage note with its Elevate action: Phase 4b.
+ *
+ * The coverage note (item 2) comes from the loaded sources rather than the diagnosis, so it shows
+ * while a build is pending or has failed; `EvtxCoverageBanner` owns it.
  */
 import { memo, useId, useMemo, useState, type ReactNode } from "react";
 import { tokens } from "@fluentui/react-components";
 import { LOG_MONOSPACE_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
+import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 import { useRailTextColors } from "./evtx-rail-text";
 import {
@@ -854,6 +857,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
         >
           {message}
         </div>
+        <EvtxCoverageBanner variant="rail" />
         {recordCards}
       </section>
     );
@@ -920,6 +924,8 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
           />
         </>
       )}
+
+      <EvtxCoverageBanner variant="rail" />
 
       {summary.overview.coverageGapCount > 0 && (
         <Disclosure
