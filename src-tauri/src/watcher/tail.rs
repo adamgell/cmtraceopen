@@ -19,8 +19,6 @@ use crate::models::log_entry::{
 };
 use crate::parser::{self, FileEncoding, ResolvedParser};
 
-const IME_RECORD_START: &str = "<![LOG[";
-const IME_RECORD_ATTRS_START: &str = "]LOG]!><";
 const LOGICAL_RECORD_DEBOUNCE: Duration = Duration::from_millis(250);
 const MAX_PENDING_LOGICAL_RECORD_BYTES: usize = 1024 * 1024;
 
@@ -1436,52 +1434,13 @@ fn utf8_prefix_at_most(text: &str, maximum: usize) -> usize {
 }
 
 fn collect_complete_ime_lines<'a>(text: &'a str, pending_fragment: &mut String) -> Vec<&'a str> {
-    let cutoff = find_complete_ime_cutoff(text);
+    let cutoff = parser::ccm::logical::complete_ime_prefix_len(text);
 
     if cutoff < text.len() {
         pending_fragment.push_str(&text[cutoff..]);
     }
 
     text[..cutoff].lines().collect()
-}
-
-fn find_complete_ime_cutoff(text: &str) -> usize {
-    let mut cursor = 0usize;
-
-    loop {
-        let Some(relative_start) = text[cursor..].find(IME_RECORD_START) else {
-            return cursor + complete_unmatched_tail_len(&text[cursor..]);
-        };
-
-        let record_start = cursor + relative_start;
-
-        let Some(record_end) = find_complete_ime_record_end(text, record_start) else {
-            return record_start;
-        };
-
-        cursor = record_end;
-    }
-}
-
-fn find_complete_ime_record_end(text: &str, record_start: usize) -> Option<usize> {
-    let message_start = record_start + IME_RECORD_START.len();
-    let attrs_relative_start = text[message_start..].find(IME_RECORD_ATTRS_START)?;
-    let attrs_start = message_start + attrs_relative_start + IME_RECORD_ATTRS_START.len();
-    let attrs_relative_end = text[attrs_start..].find('>')?;
-
-    Some(attrs_start + attrs_relative_end + 1)
-}
-
-fn complete_unmatched_tail_len(text: &str) -> usize {
-    if text.is_empty() {
-        return 0;
-    }
-
-    if text.ends_with('\n') {
-        return text.len();
-    }
-
-    text.rfind('\n').map(|index| index + 1).unwrap_or(0)
 }
 
 fn emit_final_tail_batch<F>(tail_reader: &mut TailReader, on_new_entries: F)
@@ -2541,6 +2500,40 @@ mod tests {
         assert!(repeat_entries.is_empty());
 
         fs::remove_dir_all(root).expect("should clean up temp IME fixture");
+    }
+
+    #[test]
+    fn interrupted_ime_attributes_wait_for_following_records_metadata() {
+        let partial =
+            r#"<![LOG[Interrupted]LOG]!><time="23:42:01.2534753" date="4-7-2026" component="#;
+        let intact = r#"<![LOG[Recovered]LOG]!><time="23:42:01.2570860" date="4-7-2026" component="AgentExecutor" context="" type="1" thread="7" file="">"#;
+        let content = format!("{partial}{intact}\n");
+        let expected = parser::ccm::logical::parse_ime_entries(&content, "AgentExecutor.log");
+        assert_eq!(expected.0.len(), 2);
+        // Every possible byte boundary, including just after the next message
+        // closer, must produce the same records as opening the complete file.
+        for split in 0..=content.len() {
+            let mut pending = String::new();
+            let lines = collect_complete_ime_lines(&content[..split], &mut pending);
+            let mut actual =
+                parser::ccm::logical::parse_ime_entries(&lines.join("\n"), "AgentExecutor.log");
+            let remainder = format!("{pending}{}", &content[split..]);
+            pending.clear();
+            let lines = collect_complete_ime_lines(&remainder, &mut pending);
+            let next =
+                parser::ccm::logical::parse_ime_entries(&lines.join("\n"), "AgentExecutor.log");
+            actual.0.extend(next.0);
+            actual.1 += next.1;
+            assert!(pending.is_empty(), "split={split}");
+            assert_eq!(actual.1, expected.1, "split={split}");
+            assert_eq!(actual.0.len(), expected.0.len(), "split={split}");
+            for (actual, expected) in actual.0.iter().zip(&expected.0) {
+                assert_eq!(actual.message, expected.message, "split={split}");
+                assert_eq!(actual.component, expected.component, "split={split}");
+                assert_eq!(actual.timestamp, expected.timestamp, "split={split}");
+                assert_eq!(actual.thread, expected.thread, "split={split}");
+            }
+        }
     }
 
     #[test]
