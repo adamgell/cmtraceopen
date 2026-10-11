@@ -6,33 +6,45 @@
  * (soul.md: evidence first). The counts come from `overview`, which is authoritative; the arrays
  * are bounded previews, so a preview is never presented as a total.
  *
- * Not built yet: the "Filter to {n} events" link and the Top event IDs click action need the chip
- * row of Phase 5, the coverage note with its Elevate action is Phase 4b, and the "nearby, not
- * linked" and unplaced lines of the correlation summary belong to the correlation view phases.
+ * Deferred, with the phase that owns each (that phase's change must touch this file):
+ * - "Filter to {n} events" on a finding, and the Top event IDs click: the event-ID chip and the
+ *   record-scope chip belong to Phase 5 (chip row) and Phase 6a (record-scope criterion).
+ * - "Open correlation view": Phase 10 (Correlation view).
+ * - "Review unplaced lines": Phase 10b (unplaced list).
+ * - "{n} nearby, not linked": Phase 10c (Chains tab data).
+ * - The coverage note with its Elevate action: Phase 4b.
  */
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { tokens } from "@fluentui/react-components";
 import { LOG_MONOSPACE_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
+import {
+  correlationBreakdown,
+  eventEvidenceLabel,
+  evidenceSpansSources,
+  formatCount,
+  summarizeRecords,
+  type LevelMixEntry,
+  type TopEventId,
+} from "./evtx-insights-data";
 import type {
   DiagnosisCorrelationEdge,
   DiagnosisCoverageGap,
   DiagnosisErrorToken,
   DiagnosisEvidence,
   DiagnosisFinding,
+  DiagnosisFindingClass,
   DiagnosisFindingConfidence,
   DiagnosisFindingSeverity,
   DiagnosisOverview,
   DiagnosisSummary,
   EventDiagnosis,
-  EvtxLevel,
   EvtxRecord,
 } from "./types";
 
 export const DETAIL_RENDER_CAP = 100;
 const EVIDENCE_PREVIEW_COUNT = 3;
-const TOP_EVENT_ID_COUNT = 7;
 /** A rare level keeps a visible sliver of the level-mix bar. */
 const MIN_LEVEL_SEGMENT_SHARE = 0.006;
 
@@ -48,14 +60,16 @@ const CONFIDENCE_RANK: Record<DiagnosisFindingConfidence, number> = {
   low: 1,
   unknown: 0,
 };
-/** Most severe first, the order of the level-mix bar and its legend. */
-const LEVEL_ORDER: readonly EvtxLevel[] = [
-  "Critical",
-  "Error",
-  "Warning",
-  "Information",
-  "Verbose",
-];
+/** Labels for the finding class, mapped from the engine's enum; never invented text. */
+const CLASS_LABELS: Record<DiagnosisFindingClass, string> = {
+  confirmedFailure: "Confirmed failure",
+  likelyContributor: "Likely contributor",
+  symptom: "Symptom",
+  recovered: "Recovered",
+  contradictoryEvidence: "Contradictory evidence",
+  coverageGap: "Coverage gap",
+  unknown: "Unknown",
+};
 
 interface EventDiagnosisPanelProps {
   summary: DiagnosisSummary | null;
@@ -64,6 +78,10 @@ interface EventDiagnosisPanelProps {
    * event IDs; without it those two cards are left out.
    */
   records?: readonly EvtxRecord[];
+  /** The diagnosis is being rebuilt; `summary` is then the previous build, shown as such. */
+  updating?: boolean;
+  /** Why the last build failed, when it did. */
+  error?: string | null;
 }
 
 interface GroupedCoverageGap {
@@ -130,18 +148,15 @@ function countLabel(
   singular: string,
   plural = `${singular}s`,
 ): string {
-  return `${count} ${count === 1 ? singular : plural}`;
+  return `${formatCount(count)} ${count === 1 ? singular : plural}`;
 }
 
 function omittedLabel(count: number, singular: string): string {
   return `${countLabel(count, singular)} omitted.`;
 }
 
-function evidenceLabel(evidence: DiagnosisEvidence): string {
-  if (evidence.kind === "event") {
-    const { eventId, channel, provider, recordId, recordIdText } = evidence.value;
-    return `${eventId} · ${channel ?? provider} · record ${recordIdText ?? recordId}`;
-  }
+function evidenceLabel(evidence: DiagnosisEvidence, includeOrigin = false): string {
+  if (evidence.kind === "event") return eventEvidenceLabel(evidence.value, includeOrigin);
   const kind =
     typeof evidence.kind === "string" ? evidence.kind : "source reference";
   const value = evidence.value;
@@ -159,7 +174,7 @@ function evidenceLabel(evidence: DiagnosisEvidence): string {
 }
 
 function evidenceText(evidence: DiagnosisEvidence[]): string {
-  return evidence.map(evidenceLabel).join("; ");
+  return evidence.map((item) => evidenceLabel(item)).join("; ");
 }
 
 interface RailSizes {
@@ -175,6 +190,10 @@ function useRailSizes(): RailSizes {
     const f = getLogListMetrics(logListFontSize).fontSize;
     return { f, small: Math.max(10, f - 2), caption: Math.max(10, f - 3) };
   }, [logListFontSize]);
+}
+
+function Count({ value }: { value: number }) {
+  return <span style={{ fontFamily: tokens.fontFamilyNumeric }}>{formatCount(value)}</span>;
 }
 
 function CoverageGapRow({
@@ -201,24 +220,43 @@ function CoverageGapRow({
   );
 }
 
+const linkButtonStyle = {
+  justifySelf: "start",
+  padding: 0,
+  border: "none",
+  background: "none",
+  cursor: "pointer",
+  font: "inherit",
+  color: tokens.colorBrandForeground1,
+} as const;
+
 function FindingCard({
   finding,
+  includeOrigin,
+  stale,
   sizes,
   visuals,
 }: {
   finding: DiagnosisFinding;
+  includeOrigin: boolean;
+  stale: boolean;
   sizes: RailSizes;
   visuals: EvtxVisualTokens;
 }) {
   const [checksExpanded, setChecksExpanded] = useState(false);
+  const [evidenceExpanded, setEvidenceExpanded] = useState(false);
   const level = visuals.findingSeverityVisual(finding.severity);
-  const shownEvidence = finding.evidence.slice(0, EVIDENCE_PREVIEW_COUNT);
-  const moreEvidence = finding.evidence.length - shownEvidence.length;
+  const shownEvidence = evidenceExpanded
+    ? finding.evidence.slice(0, DETAIL_RENDER_CAP)
+    : finding.evidence.slice(0, EVIDENCE_PREVIEW_COUNT);
+  const hiddenEvidence = finding.evidence.length - shownEvidence.length;
   const [firstCheck, ...otherChecks] = finding.recommendedChecks;
   return (
     <article
       aria-label={finding.title}
+      aria-busy={stale || undefined}
       data-finding-id={finding.findingId}
+      tabIndex={-1}
       style={{
         display: "grid",
         gap: "6px",
@@ -227,6 +265,7 @@ function FindingCard({
         backgroundColor: tokens.colorNeutralBackground1,
         border: `1px solid ${tokens.colorNeutralStroke2}`,
         borderTop: `3px solid ${level.barColor}`,
+        opacity: stale ? 0.6 : 1,
       }}
     >
       <div
@@ -253,9 +292,10 @@ function FindingCard({
             fontSize: `${sizes.caption}px`,
             fontFamily: LOG_MONOSPACE_FONT_FAMILY,
             color: tokens.colorNeutralForeground3,
+            textAlign: "right",
           }}
         >
-          {finding.confidence} confidence
+          {CLASS_LABELS[finding.class]} {"·"} {finding.confidence} confidence
         </span>
       </div>
       <div
@@ -291,12 +331,24 @@ function FindingCard({
           }}
         >
           {shownEvidence.map((item, index) => (
-            <div key={index}>{evidenceLabel(item)}</div>
+            <div key={index}>{evidenceLabel(item, includeOrigin)}</div>
           ))}
-          {moreEvidence > 0 && (
+          {evidenceExpanded && hiddenEvidence > 0 && (
             <div style={{ color: tokens.colorNeutralForeground3 }}>
-              +{moreEvidence} more
+              {omittedLabel(hiddenEvidence, "evidence reference")}
             </div>
+          )}
+          {finding.evidence.length > EVIDENCE_PREVIEW_COUNT && (
+            <button
+              type="button"
+              aria-expanded={evidenceExpanded}
+              onClick={() => setEvidenceExpanded((value) => !value)}
+              style={linkButtonStyle}
+            >
+              {evidenceExpanded
+                ? "Show fewer"
+                : `+${formatCount(finding.evidence.length - EVIDENCE_PREVIEW_COUNT)} more`}
+            </button>
           )}
         </div>
       )}
@@ -317,15 +369,7 @@ function FindingCard({
               type="button"
               aria-expanded={checksExpanded}
               onClick={() => setChecksExpanded((value) => !value)}
-              style={{
-                justifySelf: "start",
-                padding: 0,
-                border: "none",
-                background: "none",
-                cursor: "pointer",
-                font: "inherit",
-                color: tokens.colorBrandForeground1,
-              }}
+              style={linkButtonStyle}
             >
               {checksExpanded
                 ? "Show fewer checks"
@@ -355,14 +399,24 @@ export const OUTCOME_LABELS: Record<DiagnosisOverview["outcome"], string> = {
 function OverviewBlock({
   overview,
   scopeCount,
+  updating,
   sizes,
 }: {
   overview: DiagnosisOverview;
   scopeCount: number | null;
+  updating: boolean;
   sizes: RailSizes;
 }) {
   return (
     <div style={{ display: "grid", gap: "4px" }}>
+      {updating && (
+        <div
+          role="status"
+          style={{ fontSize: `${sizes.caption}px`, color: tokens.colorNeutralForeground3 }}
+        >
+          Updating diagnosis...
+        </div>
+      )}
       <div
         style={{
           fontSize: `${sizes.caption}px`,
@@ -384,16 +438,19 @@ function OverviewBlock({
         {overview.headline}
       </div>
       <div
+        data-testid="overview-counts"
         style={{ fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground3 }}
       >
-        {countLabel(overview.actionableFindingCount, "actionable finding")},{" "}
-        {countLabel(overview.coverageGapCount, "source coverage gap")}
+        <Count value={overview.actionableFindingCount} />{" "}
+        {overview.actionableFindingCount === 1 ? "actionable finding" : "actionable findings"},{" "}
+        <Count value={overview.coverageGapCount} />{" "}
+        {overview.coverageGapCount === 1 ? "source coverage gap" : "source coverage gaps"}
       </div>
       {scopeCount !== null && (
         <div
           style={{ fontSize: `${sizes.caption}px`, color: tokens.colorNeutralForeground3 }}
         >
-          Scoped to {scopeCount} visible {scopeCount === 1 ? "event" : "events"}
+          Scoped to <Count value={scopeCount} /> visible {scopeCount === 1 ? "event" : "events"}
         </div>
       )}
     </div>
@@ -402,12 +459,10 @@ function OverviewBlock({
 
 function RailCard({
   title,
-  caption,
   sizes,
   children,
 }: {
   title: string;
-  caption?: string;
   sizes: RailSizes;
   children: ReactNode;
 }) {
@@ -423,81 +478,20 @@ function RailCard({
         border: `1px solid ${tokens.colorNeutralStroke2}`,
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
-        <span
-          style={{
-            fontSize: `${sizes.caption}px`,
-            fontWeight: 700,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-            color: tokens.colorNeutralForeground3,
-          }}
-        >
-          {title}
-        </span>
-        {caption && (
-          <span
-            style={{ fontSize: `${sizes.caption}px`, color: tokens.colorNeutralForeground3 }}
-          >
-            {caption}
-          </span>
-        )}
-      </div>
+      <span
+        style={{
+          fontSize: `${sizes.caption}px`,
+          fontWeight: 700,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          color: tokens.colorNeutralForeground3,
+        }}
+      >
+        {title}
+      </span>
       {children}
     </section>
   );
-}
-
-interface LevelMixEntry {
-  level: EvtxLevel;
-  count: number;
-}
-
-interface TopEventId {
-  eventId: number;
-  count: number;
-  /** The level most of this ID's records carry; ties go to the more severe level. */
-  level: EvtxLevel;
-}
-
-/** One pass over the records for both the level mix and the top event IDs. */
-export function summarizeRecords(records: readonly EvtxRecord[]): {
-  levelMix: LevelMixEntry[];
-  topEventIds: TopEventId[];
-} {
-  const levelCounts = new Map<EvtxLevel, number>();
-  const perId = new Map<number, Map<EvtxLevel, number>>();
-  for (const record of records) {
-    levelCounts.set(record.level, (levelCounts.get(record.level) ?? 0) + 1);
-    let byLevel = perId.get(record.eventId);
-    if (!byLevel) {
-      byLevel = new Map();
-      perId.set(record.eventId, byLevel);
-    }
-    byLevel.set(record.level, (byLevel.get(record.level) ?? 0) + 1);
-  }
-  const levelMix = LEVEL_ORDER.flatMap((level) => {
-    const count = levelCounts.get(level) ?? 0;
-    return count > 0 ? [{ level, count }] : [];
-  });
-  const topEventIds = [...perId.entries()]
-    .map(([eventId, byLevel]) => {
-      let count = 0;
-      let level: EvtxLevel = "Information";
-      let best = -1;
-      for (const candidate of LEVEL_ORDER) {
-        const n = byLevel.get(candidate) ?? 0;
-        count += n;
-        if (n > best && n > 0) {
-          best = n;
-          level = candidate;
-        }
-      }
-      return { eventId, count, level };
-    })
-    .sort((a, b) => b.count - a.count || a.eventId - b.eventId)
-    .slice(0, TOP_EVENT_ID_COUNT);
-  return { levelMix, topEventIds };
 }
 
 function LevelMixCard({
@@ -544,7 +538,7 @@ function LevelMixCard({
       >
         {levelMix.map((entry) => (
           <li key={entry.level}>
-            {entry.level} {entry.count}
+            {entry.level} <Count value={entry.count} />
           </li>
         ))}
       </ul>
@@ -569,6 +563,7 @@ function TopEventIdsCard({
           <li
             key={entry.eventId}
             data-event-id={entry.eventId}
+            aria-label={`${entry.eventId}: ${formatCount(entry.count)} ${entry.count === 1 ? "event" : "events"}`}
             style={{
               display: "grid",
               gridTemplateColumns: "40px 1fr 30px",
@@ -578,6 +573,7 @@ function TopEventIdsCard({
             }}
           >
             <span
+              aria-hidden="true"
               style={{
                 fontFamily: tokens.fontFamilyNumeric,
                 fontWeight: 700,
@@ -586,23 +582,25 @@ function TopEventIdsCard({
             >
               {entry.eventId}
             </span>
+            {/* Single-series bars (spec 6.3): the count is the text form. */}
             <span
               aria-hidden="true"
               style={{
                 height: "10px",
                 width: `${Math.max((entry.count / max) * 100, 2)}%`,
                 borderRadius: "2px",
-                backgroundColor: visuals.levels[entry.level].barColor,
+                backgroundColor: visuals.singleSeries,
               }}
             />
             <span
+              aria-hidden="true"
               style={{
                 fontFamily: tokens.fontFamilyNumeric,
                 textAlign: "right",
                 color: tokens.colorNeutralForeground2,
               }}
             >
-              {entry.count}
+              {formatCount(entry.count)}
             </span>
           </li>
         ))}
@@ -618,25 +616,33 @@ function CorrelationSummaryCard({
   summary: DiagnosisSummary;
   sizes: RailSizes;
 }) {
+  const breakdown = correlationBreakdown(summary);
   const total = summary.overview.correlationCount;
-  const preview = summary.correlations;
-  const previewComplete = preview.length >= total;
-  const byStatus = (status: DiagnosisCorrelationEdge["status"]) =>
-    preview.filter((edge) => edge.status === status).length;
+  const preview = summary.correlations.length;
+  const lineStyle = { fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground2 };
+  const mutedStyle = { fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground3 };
   return (
     <RailCard title="Correlations" sizes={sizes}>
-      <div style={{ fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground2 }}>
-        {countLabel(total, "correlation")}
-      </div>
-      {preview.length > 0 && (
-        <div style={{ fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground2 }}>
-          {byStatus("exact")} exact {"·"} {byStatus("candidate")} candidate {"·"}{" "}
-          {byStatus("ambiguous")} ambiguous
-          {!previewComplete && (
-            <span style={{ color: tokens.colorNeutralForeground3 }}>
-              {` (first ${preview.length} of ${total})`}
-            </span>
-          )}
+      {breakdown.complete ? (
+        <div style={lineStyle}>
+          <Count value={breakdown.correlations} />{" "}
+          {breakdown.correlations === 1 ? "correlation" : "correlations"}
+        </div>
+      ) : (
+        // The overview total counts relations of every status, so it is not a correlation count.
+        <div style={mutedStyle}>
+          Showing the first <Count value={preview} /> of <Count value={total} /> relations
+        </div>
+      )}
+      {preview > 0 && (
+        <div style={lineStyle}>
+          <Count value={breakdown.exact} /> exact {"·"} <Count value={breakdown.candidate} />{" "}
+          candidate {"·"} <Count value={breakdown.ambiguous} /> ambiguous
+        </div>
+      )}
+      {breakdown.coverageBlocked > 0 && (
+        <div style={mutedStyle}>
+          <Count value={breakdown.coverageBlocked} /> coverage blocked
         </div>
       )}
     </RailCard>
@@ -709,19 +715,27 @@ function OmittedRows({
   ) : null;
 }
 
-/** A collapsed-by-default native disclosure whose body is a bounded, focusable scroll region. */
+/**
+ * A disclosure whose open state lives in the caller, so it survives the diagnosis being rebuilt.
+ * The body is a bounded, focusable scroll region.
+ */
 function Disclosure({
   label,
+  open,
+  onOpenChange,
   sizes,
   children,
 }: {
   label: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   sizes: RailSizes;
   children: ReactNode;
 }) {
   const labelId = useId();
   return (
     <details
+      open={open}
       style={{
         padding: "8px 12px",
         borderRadius: "6px",
@@ -731,6 +745,10 @@ function Disclosure({
     >
       <summary
         id={labelId}
+        onClick={(event) => {
+          event.preventDefault();
+          onOpenChange(!open);
+        }}
         style={{ cursor: "pointer", fontSize: `${sizes.small}px`, fontWeight: 600 }}
       >
         {label}
@@ -753,28 +771,66 @@ function Disclosure({
   );
 }
 
-export function EventDiagnosisPanel({ summary, records }: EventDiagnosisPanelProps) {
+export function EventDiagnosisPanel({
+  summary,
+  records,
+  updating = false,
+  error = null,
+}: EventDiagnosisPanelProps) {
   const sizes = useRailSizes();
   const visuals = useEvtxVisualTokens();
+  const [coverageOpen, setCoverageOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const recordSummary = useMemo(
     () => (records && records.length > 0 ? summarizeRecords(records) : null),
     [records],
   );
+
+  const recordCards = recordSummary && (
+    <>
+      {recordSummary.levelMix.length > 0 && (
+        <LevelMixCard
+          levelMix={recordSummary.levelMix}
+          total={recordSummary.total}
+          sizes={sizes}
+          visuals={visuals}
+        />
+      )}
+      {recordSummary.topEventIds.length > 0 && (
+        <TopEventIdsCard
+          topEventIds={recordSummary.topEventIds}
+          sizes={sizes}
+          visuals={visuals}
+        />
+      )}
+    </>
+  );
+
   if (!summary) {
+    const message = error
+      ? `Diagnosis could not be built: ${error}`
+      : updating
+        ? "Updating diagnosis..."
+        : "There are no events or text logs to diagnose.";
     return (
-      <div
-        role="status"
-        style={{ fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground3 }}
+      <section
+        aria-label="Operational diagnosis status"
+        style={{ display: "grid", gap: "12px", fontSize: `${sizes.f}px` }}
       >
-        No diagnosis is available yet.
-      </div>
+        <div
+          role="status"
+          style={{ fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground3 }}
+        >
+          {message}
+        </div>
+        {recordCards}
+      </section>
     );
   }
 
-  const findings = capSection(
-    sortFindings(actionableFindings(summary.findings)),
-    summary.overview.actionableFindingCount,
-  );
+  const actionable = sortFindings(actionableFindings(summary.findings));
+  const findings = capSection(actionable, summary.overview.actionableFindingCount);
+  const includeOrigin = evidenceSpansSources(findings.items);
   const coverageGaps = capCoverageSection(
     summary.coverageGaps,
     summary.overview.coverageGapCount,
@@ -792,11 +848,13 @@ export function EventDiagnosisPanel({ summary, records }: EventDiagnosisPanelPro
   return (
     <section
       aria-label="Operational diagnosis"
+      aria-busy={updating || undefined}
       style={{ display: "grid", gap: "12px", fontSize: `${sizes.f}px` }}
     >
       <OverviewBlock
         overview={summary.overview}
         scopeCount={records ? records.length : null}
+        updating={updating}
         sizes={sizes}
       />
 
@@ -810,6 +868,8 @@ export function EventDiagnosisPanel({ summary, records }: EventDiagnosisPanelPro
             <FindingCard
               key={finding.findingId}
               finding={finding}
+              includeOrigin={includeOrigin}
+              stale={updating}
               sizes={sizes}
               visuals={visuals}
             />
@@ -824,7 +884,9 @@ export function EventDiagnosisPanel({ summary, records }: EventDiagnosisPanelPro
 
       {summary.overview.coverageGapCount > 0 && (
         <Disclosure
-          label={`Coverage gaps (${summary.overview.coverageGapCount})`}
+          label={`Coverage gaps (${formatCount(summary.overview.coverageGapCount)})`}
+          open={coverageOpen}
+          onOpenChange={setCoverageOpen}
           sizes={sizes}
         >
           {coverageGaps.items.map(({ gap, occurrences }) => (
@@ -839,28 +901,19 @@ export function EventDiagnosisPanel({ summary, records }: EventDiagnosisPanelPro
         </Disclosure>
       )}
 
-      {recordSummary && recordSummary.levelMix.length > 0 && records && (
-        <LevelMixCard
-          levelMix={recordSummary.levelMix}
-          total={records.length}
-          sizes={sizes}
-          visuals={visuals}
-        />
-      )}
-      {recordSummary && recordSummary.topEventIds.length > 0 && (
-        <TopEventIdsCard
-          topEventIds={recordSummary.topEventIds}
-          sizes={sizes}
-          visuals={visuals}
-        />
-      )}
+      {recordCards}
 
       {(summary.overview.correlationCount > 0 || summary.correlations.length > 0) && (
         <CorrelationSummaryCard summary={summary} sizes={sizes} />
       )}
 
       {(hasDetails || correlations.omitted > 0 || events.omitted > 0) && (
-        <Disclosure label="Show diagnosis details" sizes={sizes}>
+        <Disclosure
+          label="Show diagnosis details"
+          open={detailsOpen}
+          onOpenChange={setDetailsOpen}
+          sizes={sizes}
+        >
           {correlations.items.map((edge, index) => (
             <CorrelationRow
               key={`${edge.left}-${edge.right ?? "none"}-${index}`}

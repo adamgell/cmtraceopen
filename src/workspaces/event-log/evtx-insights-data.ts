@@ -1,0 +1,241 @@
+/**
+ * Pure derivations for the Insights rail (spec sections 8.13 and 11): no React, no stores.
+ *
+ * `summarizeRecords` counts levels and event IDs in one pass. Phase 5 plans a separate level count
+ * in `evtx-filter.ts` for the filter row; when it lands, one of the two should call the other so
+ * the rail and the filter row never disagree about a count.
+ */
+import type {
+  DiagnosisEventEvidence,
+  DiagnosisFinding,
+  DiagnosisSummary,
+  EvtxLevel,
+  EvtxRecord,
+} from "./types";
+
+export const TOP_EVENT_ID_COUNT = 7;
+export const SAME_ID_BIN_COUNT = 24;
+
+/** Most severe first, the order of the level-mix bar and its legend. */
+export const LEVEL_ORDER: readonly EvtxLevel[] = [
+  "Critical",
+  "Error",
+  "Warning",
+  "Information",
+  "Verbose",
+];
+
+/** Counts as the app shows them elsewhere (the status bar uses the same locale formatting). */
+export function formatCount(value: number): string {
+  return value.toLocaleString();
+}
+
+export interface LevelMixEntry {
+  level: EvtxLevel;
+  count: number;
+}
+
+export interface TopEventId {
+  eventId: number;
+  count: number;
+}
+
+export interface RecordSummary {
+  total: number;
+  levelMix: LevelMixEntry[];
+  topEventIds: TopEventId[];
+}
+
+export function summarizeRecords(records: readonly EvtxRecord[]): RecordSummary {
+  const levelCounts = new Map<EvtxLevel, number>();
+  const idCounts = new Map<number, number>();
+  for (const record of records) {
+    levelCounts.set(record.level, (levelCounts.get(record.level) ?? 0) + 1);
+    idCounts.set(record.eventId, (idCounts.get(record.eventId) ?? 0) + 1);
+  }
+  const levelMix = LEVEL_ORDER.flatMap((level) => {
+    const count = levelCounts.get(level) ?? 0;
+    return count > 0 ? [{ level, count }] : [];
+  });
+  const topEventIds = [...idCounts.entries()]
+    .map(([eventId, count]) => ({ eventId, count }))
+    .sort((a, b) => b.count - a.count || a.eventId - b.eventId)
+    .slice(0, TOP_EVENT_ID_COUNT);
+  return { total: records.length, levelMix, topEventIds };
+}
+
+/** A timestamp the sparkline may bin: finite and after the epoch origin. */
+export function hasUsableTimestamp(record: EvtxRecord): boolean {
+  return Number.isFinite(record.timestampEpoch) && record.timestampEpoch > 0;
+}
+
+export interface SameIdSeries {
+  /** Every matching record, including any without a usable timestamp. */
+  occurrences: number;
+  /** Counts per bin over the window; empty when no match has a usable timestamp. */
+  bins: number[];
+  /** Earliest usable timestamp among the matches, or null. */
+  firstEpoch: number | null;
+}
+
+/**
+ * The same event ID from the same provider across `window`, the visible records. A record without
+ * a usable timestamp is counted as an occurrence but never binned (it must not read as bin 0).
+ * The window is the extent of the usable timestamps of ALL visible records, so the sparkline
+ * shows when the ID occurred relative to the rest of what is on screen.
+ */
+export function buildSameIdSeries(
+  window: readonly EvtxRecord[],
+  selected: EvtxRecord,
+  binCount = SAME_ID_BIN_COUNT,
+): SameIdSeries {
+  const matches = window.filter(
+    (record) => record.eventId === selected.eventId && record.provider === selected.provider,
+  );
+  const timed = matches.filter(hasUsableTimestamp);
+  if (timed.length === 0) {
+    return { occurrences: matches.length, bins: [], firstEpoch: null };
+  }
+  let start = Infinity;
+  let end = -Infinity;
+  for (const record of window) {
+    if (!hasUsableTimestamp(record)) continue;
+    start = Math.min(start, record.timestampEpoch);
+    end = Math.max(end, record.timestampEpoch);
+  }
+  const span = end - start;
+  const bins = new Array<number>(binCount).fill(0);
+  let first = Infinity;
+  for (const record of timed) {
+    first = Math.min(first, record.timestampEpoch);
+    const index =
+      span <= 0
+        ? 0
+        : Math.min(binCount - 1, Math.floor(((record.timestampEpoch - start) / span) * binCount));
+    bins[index] += 1;
+  }
+  return { occurrences: matches.length, bins, firstEpoch: first };
+}
+
+/**
+ * The record before or after `id` in `ordered`, or null at the ends or when `id` is not in the
+ * list (a selection the current filters hide has no neighbor).
+ */
+export function neighborRecordId(
+  ordered: readonly EvtxRecord[],
+  id: number | null,
+  step: -1 | 1,
+): number | null {
+  if (id === null) return null;
+  const index = ordered.findIndex((record) => record.id === id);
+  if (index < 0) return null;
+  return ordered[index + step]?.id ?? null;
+}
+
+/** True when `value` is a real EventRecordID text: present and not the parser's zero placeholder. */
+function hasRecordIdText(value: string | null | undefined): value is string {
+  return typeof value === "string" && value.length > 0 && value !== "0";
+}
+
+/**
+ * How an evidence reference names its record, following the engine's `stable_id` order: a
+ * non-zero `recordIdText`, then `fallbackIdentity`, then a non-zero `recordId`. A record the
+ * provider never numbered says so; it is never printed as "record 0".
+ */
+export function eventRecordIdentity(evidence: DiagnosisEventEvidence): string {
+  if (hasRecordIdText(evidence.recordIdText)) return `record ${evidence.recordIdText}`;
+  if (evidence.fallbackIdentity) return `ref ${evidence.fallbackIdentity.slice(0, 8)}`;
+  if (evidence.recordId !== 0) return `record ${evidence.recordId}`;
+  return "no record ID";
+}
+
+/** Whether the findings' event evidence spans more than one source or machine. */
+export function evidenceSpansSources(findings: readonly DiagnosisFinding[]): boolean {
+  const sources = new Set<string>();
+  const machines = new Set<string>();
+  for (const finding of findings) {
+    for (const evidence of finding.evidence) {
+      if (evidence.kind !== "event") continue;
+      sources.add(evidence.value.source);
+      machines.add(evidence.value.machine ?? "");
+    }
+  }
+  return sources.size > 1 || machines.size > 1;
+}
+
+export function eventEvidenceLabel(
+  evidence: DiagnosisEventEvidence,
+  includeOrigin: boolean,
+): string {
+  const parts = [
+    String(evidence.eventId),
+    evidence.channel ?? evidence.provider,
+    eventRecordIdentity(evidence),
+  ];
+  if (includeOrigin) {
+    parts.push(evidence.source);
+    if (evidence.machine) parts.push(evidence.machine);
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * The first finding (in the order given) whose event evidence names `record`. The match needs the
+ * event ID and provider, and a record identity: a record the provider never numbered cannot be
+ * matched, because two different events would then look the same. A channel or machine on the
+ * evidence must agree with the record.
+ */
+export function findingForRecord(
+  findings: readonly DiagnosisFinding[],
+  record: EvtxRecord,
+): DiagnosisFinding | null {
+  const recordIdText = record.eventRecordIdText;
+  const recordHasIdentity = hasRecordIdText(recordIdText) || record.eventRecordId !== 0;
+  if (!recordHasIdentity) return null;
+  for (const finding of findings) {
+    for (const evidence of finding.evidence) {
+      if (evidence.kind !== "event") continue;
+      const value = evidence.value;
+      if (value.eventId !== record.eventId || value.provider !== record.provider) continue;
+      if (value.channel && value.channel !== record.channel) continue;
+      if (value.machine && value.machine !== record.computer) continue;
+      const sameRecord = hasRecordIdText(value.recordIdText)
+        ? value.recordIdText === (recordIdText ?? String(record.eventRecordId))
+        : value.recordId !== 0 && value.recordId === record.eventRecordId;
+      if (sameRecord) return finding;
+    }
+  }
+  return null;
+}
+
+export interface CorrelationBreakdown {
+  exact: number;
+  candidate: number;
+  ambiguous: number;
+  coverageBlocked: number;
+  /** The preview holds every edge the overview counts. */
+  complete: boolean;
+  /** exact + candidate + ambiguous: the only edges that are correlations. */
+  correlations: number;
+}
+
+/**
+ * Correlation counts for the summary card. Only exact, candidate and ambiguous edges are
+ * correlations; a coverage-blocked relation is a coverage state (soul.md) and is counted apart,
+ * never folded into the total.
+ */
+export function correlationBreakdown(summary: DiagnosisSummary): CorrelationBreakdown {
+  const count = (status: string) =>
+    summary.correlations.filter((edge) => edge.status === status).length;
+  const exact = count("exact");
+  const candidate = count("candidate");
+  const ambiguous = count("ambiguous");
+  return {
+    exact,
+    candidate,
+    ambiguous,
+    coverageBlocked: count("coverageBlocked"),
+    complete: summary.correlations.length >= summary.overview.correlationCount,
+    correlations: exact + candidate + ambiguous,
+  };
+}

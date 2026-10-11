@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DETAIL_RENDER_CAP, OUTCOME_LABELS, EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import type {
+  DiagnosisCorrelationEdge,
   DiagnosisCoverageGap,
   DiagnosisFinding,
   DiagnosisSummary,
@@ -234,10 +235,12 @@ describe("EventDiagnosisPanel", () => {
     expect(screen.getByLabelText("Operational diagnosis")).toBeTruthy();
     expect(disclosure(/Coverage gaps/)).not.toHaveAttribute("open");
     expect(disclosure("Show diagnosis details")).not.toHaveAttribute("open");
-    expect(
-      screen.getByText(/1 actionable finding, 1 source coverage gap/),
-    ).toBeTruthy();
-    expect(screen.queryByText("1 correlation")).toBeTruthy();
+    expect(screen.getByTestId("overview-counts")).toHaveTextContent(
+      "1 actionable finding, 1 source coverage gap",
+    );
+    expect(screen.getByRole("region", { name: "Correlations" })).toHaveTextContent(
+      "1 correlation",
+    );
     expect(screen.getByText("Issues detected")).toBeTruthy();
     expect(screen.getByText("Evidence contains confirmed operational failure(s).")).toBeTruthy();
   });
@@ -280,7 +283,7 @@ describe("EventDiagnosisPanel", () => {
       expect(screen.getByText("MDM enrollment failed")).toBeTruthy();
       expect(screen.queryByText("IME coverage gap")).toBeNull();
       expect(screen.getByText("error")).toHaveStyle({ textTransform: "uppercase" });
-      expect(screen.getByText("high confidence")).toBeTruthy();
+      expect(screen.getByText("Confirmed failure \u00b7 high confidence")).toBeTruthy();
       expect(screen.getByText("The provider reported access denied.")).toBeTruthy();
     });
 
@@ -481,14 +484,14 @@ describe("EventDiagnosisPanel", () => {
     };
     render(<EventDiagnosisPanel summary={boundedSummary} />);
 
-    expect(
-      screen.getByText(/712 actionable findings, 4228 source coverage gaps/),
-    ).toBeTruthy();
+    expect(screen.getByTestId("overview-counts")).toHaveTextContent(
+      "712 actionable findings, 4,228 source coverage gaps",
+    );
     expect(screen.getByText("711 actionable findings omitted.")).toBeTruthy();
-    expect(screen.getByText("Coverage gaps (4228)")).toBeTruthy();
+    expect(screen.getByText("Coverage gaps (4,228)")).toBeTruthy();
 
-    expand("Coverage gaps (4228)");
-    expect(screen.getByText("4227 coverage gaps omitted.")).toBeTruthy();
+    expand("Coverage gaps (4,228)");
+    expect(screen.getByText("4,227 coverage gaps omitted.")).toBeTruthy();
     expand("Show diagnosis details");
     expect(screen.getByText("848 correlations omitted.")).toBeTruthy();
     expect(
@@ -511,7 +514,9 @@ describe("EventDiagnosisPanel", () => {
       const mix = screen.getByRole("region", { name: "Level mix" });
       const legend = within(mix).getAllByRole("listitem").map((item) => item.textContent);
       expect(legend).toEqual(["Critical 1", "Error 2", "Warning 1", "Information 1"]);
-      expect(screen.getByText("Scoped to 5 visible events")).toBeTruthy();
+      expect(screen.getByLabelText("Operational diagnosis")).toHaveTextContent(
+        "Scoped to 5 visible events",
+      );
     });
 
     it("lists the top event IDs by count with no click action yet", () => {
@@ -523,6 +528,17 @@ describe("EventDiagnosisPanel", () => {
       expect(rows[0]).toHaveTextContent("1003");
       // Phase 5 owns the event-ID chip; until then a row is information only.
       expect(within(top).queryAllByRole("button")).toHaveLength(0);
+    });
+
+    it("draws the bars in the single-series color and gives each row a text form", () => {
+      render(<EventDiagnosisPanel summary={summary} records={records} />);
+      const top = screen.getByRole("region", { name: "Top event IDs" });
+      const row = within(top).getAllByRole("listitem")[0];
+      expect(row).toHaveAttribute("aria-label", "100: 3 events");
+      const bar = row.querySelector("span[style*='height: 10px']") as HTMLElement;
+      expect(bar.style.backgroundColor).not.toBe("");
+      expect(bar.style.backgroundColor).not.toContain("var(--colorPalette");
+      expect(within(top).getAllByRole("listitem")[1]).toHaveAttribute("aria-label", "200: 1 event");
     });
 
     it("keeps only the seven most frequent IDs", () => {
@@ -549,15 +565,211 @@ describe("EventDiagnosisPanel", () => {
       expect(card).toHaveTextContent("0 exact \u00b7 1 candidate \u00b7 0 ambiguous");
     });
 
-    it("says when the breakdown covers only a preview of the total", () => {
+    it("says when the breakdown covers only a preview and states no correlation total", () => {
       render(
         <EventDiagnosisPanel
           summary={{ ...summary, overview: { ...summary.overview, correlationCount: 849 } }}
         />,
       );
       const card = screen.getByRole("region", { name: "Correlations" });
-      expect(card).toHaveTextContent("849 correlations");
-      expect(card).toHaveTextContent("(first 1 of 849)");
+      expect(card).toHaveTextContent("Showing the first 1 of 849 relations");
+      expect(card).not.toHaveTextContent(/849 correlations/);
+    });
+
+    it("never counts a coverage-blocked relation as a correlation", () => {
+      const edge = (status: DiagnosisCorrelationEdge["status"], id: string) => ({
+        ...summary.correlations[0],
+        status,
+        left: id,
+      });
+      render(
+        <EventDiagnosisPanel
+          summary={{
+            ...summary,
+            correlations: [edge("exact", "a"), edge("coverageBlocked", "b"), edge("coverageBlocked", "c")],
+            overview: { ...summary.overview, correlationCount: 3 },
+          }}
+        />,
+      );
+      const card = screen.getByRole("region", { name: "Correlations" });
+      expect(card).toHaveTextContent(/^Correlations1 correlation1 exact/);
+      expect(card).toHaveTextContent("2 coverage blocked");
+      expect(card).not.toHaveTextContent("3 correlations");
+    });
+  });
+
+  describe("finding class, evidence labels and expansion", () => {
+    const labelFor = (
+      findingClass: DiagnosisFinding["class"],
+      label: string,
+    ) => {
+      cleanup();
+      render(
+        <EventDiagnosisPanel
+          summary={{ ...summary, findings: [{ ...finding, class: findingClass }] }}
+        />,
+      );
+      expect(screen.getByText(`${label} \u00b7 high confidence`)).toBeTruthy();
+    };
+
+    it("shows the engine's class on every card, so contradictory evidence is not a plain failure", () => {
+      labelFor("confirmedFailure", "Confirmed failure");
+      labelFor("likelyContributor", "Likely contributor");
+      labelFor("contradictoryEvidence", "Contradictory evidence");
+      labelFor("recovered", "Recovered");
+    });
+
+    const eventEvidence = (overrides: Record<string, unknown>) => ({
+      kind: "event" as const,
+      value: {
+        source: "a.evtx",
+        provider: "Provider",
+        eventId: 76,
+        recordId: 0,
+        channel: "DeviceManagement/Admin",
+        machine: "PC-1",
+        ...overrides,
+      },
+    });
+
+    it("follows the engine's identity order and never prints record 0", () => {
+      render(
+        <EventDiagnosisPanel
+          summary={{
+            ...summary,
+            findings: [
+              {
+                ...finding,
+                evidence: [
+                  eventEvidence({ recordIdText: "88456", recordId: 5 }),
+                  eventEvidence({ recordIdText: "0", fallbackIdentity: "abcdef0123456789" }),
+                  eventEvidence({ recordId: 0 }),
+                ],
+              },
+            ],
+          }}
+        />,
+      );
+      const card = screen.getByRole("article");
+      expect(card).toHaveTextContent("76 \u00b7 DeviceManagement/Admin \u00b7 record 88456");
+      expect(card).toHaveTextContent("76 \u00b7 DeviceManagement/Admin \u00b7 ref abcdef01");
+      expect(card).toHaveTextContent("76 \u00b7 DeviceManagement/Admin \u00b7 no record ID");
+      expect(card).not.toHaveTextContent("record 0");
+    });
+
+    it("adds the source and machine when the evidence spans more than one", () => {
+      const spanning = {
+        ...summary,
+        findings: [
+          {
+            ...finding,
+            evidence: [
+              eventEvidence({ recordId: 1 }),
+              eventEvidence({ recordId: 2, source: "b.evtx", machine: "PC-2" }),
+            ],
+          },
+        ],
+      };
+      render(<EventDiagnosisPanel summary={spanning} />);
+      const card = screen.getByRole("article");
+      expect(card).toHaveTextContent("record 1 \u00b7 a.evtx \u00b7 PC-1");
+      expect(card).toHaveTextContent("record 2 \u00b7 b.evtx \u00b7 PC-2");
+    });
+
+    it("leaves the origin out when every reference shares it", () => {
+      render(
+        <EventDiagnosisPanel
+          summary={{ ...summary, findings: [{ ...finding, evidence: [eventEvidence({ recordId: 1 })] }] }}
+        />,
+      );
+      expect(screen.getByRole("article")).not.toHaveTextContent("a.evtx");
+    });
+
+    it("expands the evidence beyond three references in place, bounded with an omitted count", () => {
+      const evidence = Array.from({ length: 105 }, (_, index) =>
+        eventEvidence({ recordId: index + 1 }),
+      );
+      render(<EventDiagnosisPanel summary={{ ...summary, findings: [{ ...finding, evidence }] }} />);
+      expect(screen.queryByText(/record 4$/)).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "+102 more" }));
+      expect(screen.getByText(/record 4$/)).toBeTruthy();
+      expect(screen.getByText(/record 100$/)).toBeTruthy();
+      expect(screen.queryByText(/record 101$/)).toBeNull();
+      expect(screen.getByText("5 evidence references omitted.")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
+      expect(screen.queryByText(/record 4$/)).toBeNull();
+    });
+  });
+
+  describe("rebuilding, failure and no input", () => {
+    const records = [record(1, 100, "Error"), record(2, 200, "Warning")];
+
+    it("keeps the record cards while a first diagnosis is being built", () => {
+      render(<EventDiagnosisPanel summary={null} records={records} updating />);
+      expect(screen.getByRole("status")).toHaveTextContent("Updating diagnosis...");
+      expect(screen.getByRole("region", { name: "Level mix" })).toBeTruthy();
+      expect(screen.getByRole("region", { name: "Top event IDs" })).toBeTruthy();
+      expect(screen.queryByText("No actionable findings.")).toBeNull();
+    });
+
+    it("says a build failed, with its reason, and not that nothing is available yet", () => {
+      render(<EventDiagnosisPanel summary={null} records={records} error="engine unavailable" />);
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Diagnosis could not be built: engine unavailable",
+      );
+      expect(screen.queryByText(/not available yet/)).toBeNull();
+    });
+
+    it("says there is nothing to diagnose when there is no input", () => {
+      render(<EventDiagnosisPanel summary={null} />);
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "There are no events or text logs to diagnose.",
+      );
+    });
+
+    it("keeps open disclosures and card expansions across a rebuild, marked as updating", () => {
+      const many = {
+        ...summary,
+        findings: [{ ...finding, recommendedChecks: ["One.", "Two."] }],
+      };
+      const { rerender } = render(<EventDiagnosisPanel summary={many} records={records} />);
+      expand(/Coverage gaps/);
+      expand("Show diagnosis details");
+      fireEvent.click(screen.getByRole("button", { name: "+1 more check" }));
+
+      rerender(<EventDiagnosisPanel summary={many} records={records} updating />);
+
+      expect(disclosure(/Coverage gaps/)).toHaveProperty("open", true);
+      expect(disclosure("Show diagnosis details")).toHaveProperty("open", true);
+      expect(screen.getByText("Next: Two.")).toBeTruthy();
+      expect(screen.getByRole("status")).toHaveTextContent("Updating diagnosis...");
+      expect(screen.getByRole("article")).toHaveAttribute("aria-busy", "true");
+
+      rerender(<EventDiagnosisPanel summary={many} records={records} />);
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(disclosure(/Coverage gaps/)).toHaveProperty("open", true);
+    });
+  });
+
+  describe("rendered text", () => {
+    it("is exactly the engine's strings plus the known UI labels", () => {
+      render(<EventDiagnosisPanel summary={summary} />);
+      let text = screen.getByRole("article").textContent ?? "";
+      const known = [
+        "error",
+        "Confirmed failure",
+        "high confidence",
+        finding.title,
+        finding.summary,
+        "76",
+        "Next: Inspect the provider record.",
+      ];
+      // The evidence reference is built from the finding's own fields.
+      const evidence = finding.evidence[0].value as { eventId: number; provider: string; recordId: number };
+      known.push(`${evidence.eventId} \u00b7 ${evidence.provider} \u00b7 record ${evidence.recordId}`);
+      for (const part of known.sort((a, b) => b.length - a.length)) text = text.replace(part, "");
+      expect(text.replace(/[\s\u00b7]/g, "")).toBe("");
     });
   });
 });
