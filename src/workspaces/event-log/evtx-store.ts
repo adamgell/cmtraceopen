@@ -301,6 +301,21 @@ function forgetTailStopGapOwner(gap: string, owner: string): boolean {
   return owners.size === 0;
 }
 
+/**
+ * The source a tail belonged to, recorded when a load supersedes it (the view is still the old
+ * source at that point). A stop failure that arrives later belongs to that source, not to whatever
+ * view is current when the rejection lands.
+ */
+const staleTailOrigins = new Map<string, { live: boolean; remoteMachine: string | null }>();
+const MAX_STALE_TAIL_ORIGINS = 64;
+
+function tailBelongsToCurrentSource(requestId: string): boolean {
+  const origin = staleTailOrigins.get(requestId);
+  if (origin === undefined) return true;
+  const state = useEvtxStore.getState();
+  return origin.live && state.sourceMode === "live" && state.remoteMachine === origin.remoteMachine;
+}
+
 function canUpdateStaleTailGap(requestId: string): boolean {
   const state = useEvtxStore.getState();
   return (
@@ -320,6 +335,14 @@ function reportStaleTailStopOutcome(outcome: TailStopOutcome): void {
     }
     staleTailStopFailures.set(failureKey, gap);
     rememberTailStopGapOwner(gap, failureKey);
+    if (!tailBelongsToCurrentSource(outcome.requestId)) {
+      // A live tail of a source that has been replaced could not be stopped. That says nothing about
+      // the channels now on screen, so it is logged, never written into their coverage.
+      console.warn(
+        `[evtx] ${gap} (the tail belonged to a source that is no longer open)`
+      );
+      return;
+    }
     if (!canUpdateStaleTailGap(outcome.requestId)) return;
     useEvtxStore.setState((state) => ({
       tailCoverageGaps: mergeCoverageGaps(
@@ -334,6 +357,7 @@ function reportStaleTailStopOutcome(outcome: TailStopOutcome): void {
   if (!gap) return;
   staleTailStopFailures.delete(failureKey);
   if (!forgetTailStopGapOwner(gap, failureKey)) return;
+  if (!tailBelongsToCurrentSource(outcome.requestId)) return;
   if (!canUpdateStaleTailGap(outcome.requestId)) return;
   useEvtxStore.setState((state) => ({
     tailCoverageGaps: state.tailCoverageGaps.filter((currentGap) => currentGap !== gap),
@@ -506,6 +530,19 @@ function beginRequest(): string {
       if (pendingTailStarts.get(staleTailRequestId)?.has(channel)) continue;
       channels.add(channel);
     }
+  }
+  // The view is still the source these tails belonged to: remember it, for a stop that fails later.
+  const outgoing = useEvtxStore.getState();
+  for (const requestId of cleanupRequests.keys()) {
+    if (staleTailOrigins.has(requestId)) continue;
+    if (staleTailOrigins.size >= MAX_STALE_TAIL_ORIGINS) {
+      const oldest = staleTailOrigins.keys().next().value;
+      if (oldest !== undefined) staleTailOrigins.delete(oldest);
+    }
+    staleTailOrigins.set(requestId, {
+      live: outgoing.sourceMode === "live",
+      remoteMachine: outgoing.remoteMachine,
+    });
   }
   activeTailRequestId = null;
   activeTailSourceRequestId = null;
@@ -844,9 +881,20 @@ function hasStructuredEvtxBasename(value: string, channel: string): boolean {
  * gap is, when that channel reloads or is cleared. A gap that lost nothing (a tail that could not
  * start) is not carried.
  */
-function carryTailLoss(state: Pick<EvtxState, "coverageGaps" | "tailCoverageGaps">): string[] {
+function carryTailLoss(
+  state: Pick<EvtxState, "coverageGaps" | "tailCoverageGaps" | "remoteMachine">
+): string[] {
   const lost = state.tailCoverageGaps.filter(isLossShapedTailGap);
-  return lost.length === 0 ? state.coverageGaps : mergeCoverageGaps(state.coverageGaps, lost);
+  if (lost.length === 0) return state.coverageGaps;
+  // A tail names its channel bare ("System: ..."), but on a remote machine every other gap is filed,
+  // and every reload and clear filter matches it, as "Machine/Channel". A carried gap left bare
+  // would never be cleared. A summary that names no channel ("<live tail coverage>: ...") is not
+  // qualified: no filter would match it either way.
+  const prefix = state.remoteMachine ? `${state.remoteMachine}/` : "";
+  const filed = lost.map((gap) =>
+    prefix === "" || gap.startsWith(prefix) || gap.startsWith("<") ? gap : `${prefix}${gap}`
+  );
+  return mergeCoverageGaps(state.coverageGaps, filed);
 }
 
 function coverageBelongsToChannel(
@@ -1301,6 +1349,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   },
 
   enumerateLocalChannels: async () => {
+    // Begun before the view is cleared, as enumerateRemoteChannels does: the request tears the
+    // previous source's tail down, and its lost events must not be carried into the new view.
+    beginRequest();
     set({
       remoteMachine: null,
       channels: [],
@@ -2151,6 +2202,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   reset: () => {
     const loadGeneration = get().loadGeneration + 1;
     staleTailStopFailures.clear();
+    staleTailOrigins.clear();
     preservedSelectedRecordKey = null;
     const requestId = beginRequest();
     invalidateAllStreamedRecords(requestId);
