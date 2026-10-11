@@ -237,6 +237,7 @@ export function ChannelPicker() {
   const groupFontSize = Math.max(10, metrics.fontSize - 2);
   const visual = useEvtxVisualTokens();
   const { primary: primaryText, muted: mutedText } = usePaneText();
+  const styles = useStyles();
 
   const records = useEvtxStore((s) => s.records);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
@@ -246,6 +247,7 @@ export function ChannelPicker() {
   const legacyCoverage = useEvtxStore((s) => s.coverageGaps);
   const tailChannels = useEvtxStore((s) => s.tailChannels);
   const tailCoverageGaps = useEvtxStore((s) => s.tailCoverageGaps);
+  const archiveMembers = useEvtxStore((s) => s.archiveMembers);
 
   const logEntries = useLogStore((s) => s.entries);
   const activeLogSource = useLogStore((s) => s.activeSource);
@@ -342,6 +344,7 @@ export function ChannelPicker() {
         manifestCoverage: sourceManifest?.coverage ?? [],
         legacyCoverage,
         tailCoverage: tailCoverageGaps,
+        archiveMembers,
         isSwitchedOff,
       }),
     [
@@ -356,6 +359,7 @@ export function ChannelPicker() {
       sourceManifest,
       legacyCoverage,
       tailCoverageGaps,
+      archiveMembers,
     ],
   );
 
@@ -394,6 +398,12 @@ export function ChannelPicker() {
     [metrics.fontSize, metrics.rowHeight, captionFontSize, groupFontSize],
   );
   const windowLabel = WINDOW_ACTIVITY_LABELS[timeWindow];
+  // Gaps that name no row cannot be counted in any row, so the header says so instead of claiming
+  // that everything listed was read.
+  const hasUnattributed = model.unattributed.count > 0;
+  const unattributedSentence = `${model.unattributed.count} ${
+    model.unattributed.count === 1 ? "gap" : "gaps"
+  } could not be attributed to a channel: ${model.unattributed.reasons.map(speakable).join("; ")}.`;
 
   const unloadedSelectedCount =
     sourceMode !== "live"
@@ -471,18 +481,29 @@ export function ChannelPicker() {
         >
           <span style={eyebrowStyle(captionFontSize, mutedText)}>Channels</span>
           <span
-            title={`${model.readCount} of ${model.totalCount} channels read`}
+            title={
+              hasUnattributed
+                ? `${model.readCount} of ${model.totalCount} channels read. ${unattributedSentence}`
+                : `${model.readCount} of ${model.totalCount} channels read`
+            }
             style={{
               ...numericStyle(captionFontSize),
               color: mutedText,
               minWidth: 0,
               overflow: "hidden",
               textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
+              // The disclosure is longer than the pane: wrap it instead of cutting it off.
+              whiteSpace: hasUnattributed ? "normal" : "nowrap",
+              textAlign: "right",
             }}
           >
-            {`${model.readCount} of ${model.totalCount} read \u00B7 ${windowLabel} activity`}
+            {hasUnattributed
+              ? `${model.readCount} of ${model.totalCount} read \u00B7 some gaps could not be attributed`
+              : `${model.readCount} of ${model.totalCount} read \u00B7 ${windowLabel} activity`}
           </span>
+          {hasUnattributed && (
+            <span className={styles.visuallyHidden}>{unattributedSentence}</span>
+          )}
         </div>
         {/* Controls */}
         <div
@@ -909,6 +930,14 @@ function sparklineLabel(row: ChannelRowModel, windowLabel: string): string {
 }
 
 /**
+ * A reason as it is spoken. Backend reasons can end in "(sha256:<64 hex digits>)" (an archive
+ * member that failed to parse): the tooltip keeps the digest, the spoken text does not read it out.
+ */
+function speakable(reason: string): string {
+  return reason.replace(/\s*\(sha256:[0-9a-f]{64}\)/gi, "").trim();
+}
+
+/**
  * What a screen reader gets for a row, as the checkbox's description: the total (or that there is
  * none), the counts, the state, the activity chart in words, why the channel is not complete, and
  * whether the tail covers it. The visible counts and the sparkline repeat this and are hidden from
@@ -943,7 +972,7 @@ function rowDescription(
       ? sparklineLabel(row, windowLabel)
       : `${windowLabel} activity: no data, the channel was not read`,
   );
-  if (row.reasons.length > 0) parts.push(`Why: ${row.reasons.join("; ")}`);
+  if (row.reasons.length > 0) parts.push(`Why: ${row.reasons.map(speakable).join("; ")}`);
   if (tailing) parts.push("Live tail running");
   return `${parts.join(". ")}.`;
 }
@@ -1307,7 +1336,8 @@ const ChannelRow = memo(function ChannelRow({
         )}
         {tailing && <span>{"\u00B7 live"}</span>}
       </div>
-      <span id={descriptionId} className={styles.visuallyHidden}>
+      {/* Hidden from reading in browse mode; aria-describedby still resolves it. */}
+      <span id={descriptionId} aria-hidden="true" className={styles.visuallyHidden}>
         {rowDescription(row, windowLabel, { tailing, switchedOff })}
       </span>
     </div>
@@ -1338,9 +1368,25 @@ const TextLogRow = memo(function TextLogRow({
   const styles = useStyles();
   const descriptionId = `${CHANNEL_PANE_ID}-text-log-${position}`;
   const unit = row.entries === 1 ? "entry" : "entries";
+  // A member nothing was kept from has an unknown number of entries, not none.
+  const hasCount = row.state !== "notRead";
+  const cue = row.state === "partial" ? "partial" : row.state === "notRead" ? "not read" : "";
+  const description = [
+    hasCount ? `${row.entries.toLocaleString()} ${unit}` : "No count",
+    row.state === "partial"
+      ? "Partial: some entries may be missing"
+      : row.state === "notRead"
+        ? "Not read"
+        : "",
+    row.reasons.length > 0 ? `Why: ${row.reasons.map(speakable).join("; ")}` : "",
+    "A text log from an archive, not an event channel",
+  ]
+    .filter((part) => part !== "")
+    .join(". ");
   return (
     <div
       data-text-log-row={row.name}
+      data-text-log-state={row.state}
       style={{
         display: "flex",
         alignItems: "center",
@@ -1353,7 +1399,7 @@ const TextLogRow = memo(function TextLogRow({
     >
       <span style={{ width: "14px", flexShrink: 0, marginRight: "4px" }} />
       <label
-        title={row.name}
+        title={row.reasons.length > 0 ? `${row.name}\n${row.reasons.join("\n")}` : row.name}
         style={{
           display: "flex",
           alignItems: "center",
@@ -1377,6 +1423,18 @@ const TextLogRow = memo(function TextLogRow({
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", flex: 1, minWidth: 0 }}>
           {row.label}
         </span>
+        {cue !== "" && (
+          <span
+            style={{
+              fontSize: `${metrics.captionFontSize}px`,
+              fontWeight: 600,
+              color: selected ? visual.selection.foreground : primaryText,
+              flexShrink: 0,
+            }}
+          >
+            {cue}
+          </span>
+        )}
         <span
           style={{
             ...numericStyle(metrics.captionFontSize),
@@ -1384,11 +1442,18 @@ const TextLogRow = memo(function TextLogRow({
             flexShrink: 0,
           }}
         >
-          {`${row.entries.toLocaleString()} ${unit}`}
+          {hasCount ? (
+            `${row.entries.toLocaleString()} ${unit}`
+          ) : (
+            <>
+              <span aria-hidden="true">{NO_COUNT}</span>
+              <span className={styles.visuallyHidden}>no count</span>
+            </>
+          )}
         </span>
       </label>
-      <span id={descriptionId} className={styles.visuallyHidden}>
-        {`${row.entries.toLocaleString()} ${unit}. A text log from an archive, not an event channel.`}
+      <span id={descriptionId} aria-hidden="true" className={styles.visuallyHidden}>
+        {`${description}.`}
       </span>
     </div>
   );

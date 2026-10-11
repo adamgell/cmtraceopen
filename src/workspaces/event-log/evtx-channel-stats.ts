@@ -19,6 +19,7 @@ import {
 } from "./evtx-channel-order";
 import {
   EVTX_TIME_WINDOW_MS,
+  type EvtxArchiveMember,
   type EvtxChannelInfo,
   type EvtxCoverageGap,
   type EvtxCoverageGapKind,
@@ -271,6 +272,8 @@ function legacyGap(text: string): ChannelGap {
 }
 
 const EVTX_EXTENSION = /\.evtx$/i;
+// A rotated log, which `is_evtx_name` in archive.rs accepts: System.evtx.1
+const EVTX_ROTATION = /\.evtx\.\d+$/i;
 
 /**
  * The name a gap's file would carry as a channel, or null when the source is not a single .evtx
@@ -286,9 +289,10 @@ function evtxStem(source: string): string | null {
     member === -1 ? -1 : member + 1,
   );
   const basename = source.slice(cut + 1).trim();
+  if (EVTX_ROTATION.test(basename)) return basename;
   if (!EVTX_EXTENSION.test(basename)) return null;
   // Event Viewer writes a "/" in a channel name as "%4" in the file name.
-  return basename.replace(EVTX_EXTENSION, "").replace(/%4/g, "/");
+  return basename.replace(EVTX_EXTENSION, "").replace(/%4/g, "/") || basename;
 }
 
 /** Gaps by the exact source they name. A channel finds its gaps by its name or its file path. */
@@ -339,6 +343,8 @@ export interface ChannelPaneInput {
   legacyCoverage: readonly string[];
   /** The live tail's gap strings (`tailCoverageGaps`); only those that mean lost events count. */
   tailCoverage: readonly string[];
+  /** The archive members the open reported (`archiveMembers`): which text members are not channels. */
+  archiveMembers: readonly Pick<EvtxArchiveMember, "path" | "kind">[];
   /** True when the service reports the channel as switched off. */
   isSwitchedOff: (channel: EvtxChannelInfo) => boolean;
 }
@@ -356,6 +362,9 @@ export interface ChannelRowModel {
   reasons: string[];
 }
 
+/** Whether a text log's entries are all there. A text log has no other state: it is not a channel. */
+export type TextLogState = "read" | "partial" | "notRead";
+
 /** A text log the archive reader listed as a channel: not an event channel, so no event semantics. */
 export interface TextLogRowModel {
   /** The channel name the records carry, which is what the selection toggles. */
@@ -363,6 +372,14 @@ export interface TextLogRowModel {
   /** The member's file name. */
   label: string;
   entries: number;
+  /**
+   * "partial" when entries were kept and a gap says more are missing (a member cut off at the
+   * archive's line limit, or with lines that would not parse); "notRead" when nothing was kept and
+   * a gap says why, so its entry count is unknown rather than zero.
+   */
+  state: TextLogState;
+  /** Up to three distinct reasons the member is not complete. */
+  reasons: string[];
 }
 
 export interface ChannelPaneModel {
@@ -379,6 +396,12 @@ export interface ChannelPaneModel {
   rows: ReadonlyMap<string, ChannelRowModel>;
   /** Text logs from archives, listed apart from the channels and counted in neither total. */
   textLogs: TextLogRowModel[];
+  /**
+   * Gaps that say something is missing and belong to no row: a coalesced summary
+   * (`<coverage>`, `<archive coverage>`, `<live tail coverage>`), a wildcard that matched nothing,
+   * a folder, a string with no source. The header must not claim "k of k read" while any exist.
+   */
+  unattributed: { count: number; reasons: string[] };
   span: ChannelActivitySpan | null;
   /** Rows whose events were acquired, wholly or in part. */
   readCount: number;
@@ -411,14 +434,23 @@ function distinctReasons(gaps: readonly ChannelGap[]): string[] {
 }
 
 /**
- * Live tail gaps that do not mean an event was lost. A tail that could not start, a stop that
- * failed, a subscription that fell back to polling, and a provider message that could not be
- * formatted all leave every event delivered so far intact. Everything else a tail reports (a batch
- * that was not received or delivered, a callback error, a poll that could not read events) says
- * events may be missing, and an unrecognized gap is treated that way too.
+ * Live tail gaps that do not mean an event was lost. A tail that could not start, a subscription
+ * that fell back to polling, and a provider message that could not be formatted all leave every
+ * event delivered so far intact. Everything else a tail reports (a batch that was not received or
+ * delivered, a callback error, a poll that could not read events, and a stop that failed, after
+ * which the tail's own check for missing batches never ran) says events may be missing, and an
+ * unrecognized gap is treated that way too.
  */
 const NEUTRAL_TAIL_GAP =
-  /\blive tail unavailable\b|\blive tail stop failed\b|polling fallback is active|raw event data is shown instead|provider database lookup failed/i;
+  /\blive tail unavailable\b|polling fallback is active|raw event data is shown instead|provider database lookup failed/i;
+
+/**
+ * True when a live tail gap string says events may be missing. The store uses it to keep such a gap
+ * as long as the records it qualifies stay loaded, after the tail's own list is reset.
+ */
+export function isLossShapedTailGap(text: string): boolean {
+  return !NEUTRAL_TAIL_GAP.test(legacyGap(text).reason);
+}
 
 function filePathOf(channel: EvtxChannelInfo): string | null {
   const source = channel.sourceType;
@@ -431,24 +463,44 @@ interface ListedChannel {
   keys: string[];
 }
 
+/** One entry per channel name: two exports of the same log are one channel read from two files. */
+function listChannel(listed: Map<string, ListedChannel>, channel: EvtxChannelInfo): void {
+  const path = filePathOf(channel);
+  const existing = listed.get(channel.name);
+  if (existing === undefined) {
+    listed.set(channel.name, { channel, keys: path === null ? [channel.name] : [channel.name, path] });
+  } else if (path !== null && !existing.keys.includes(path)) {
+    existing.keys.push(path);
+  }
+}
+
+// A wildcard that matched nothing is reported under the pattern, which is no file's path.
+const GLOB_CHARACTERS = /[*?]/;
+const MAX_UNATTRIBUTED_REASONS = 5;
+
 /**
  * Builds the rows, order and counts the pane renders.
  *
  * A gap belongs to a channel when its source is exactly the channel's name (a live channel) or the
  * path of a file the channel was read from (files mode). The file's name is never used to guess the
  * channel: a renamed export, a file listed under its own path because nothing in it was readable,
- * and a member of an archive all carry the path they were read from.
+ * and a member of an archive all carry the path they were read from. A text member is held to the
+ * same rule, so a member cut off at the archive's line limit is partial, not complete.
  *
- * A source that could not be opened has no channel entry (an access-denied Security.evtx is only a
- * gap), yet the pane has to show it: omitting it would hide the very channel that is missing. So a
- * gap that blocks a single .evtx file no channel listed becomes a row of its own, counted in the
- * total and never in the read count.
+ * A source no listed channel came from was never listed, so nothing of it was read. When it is a
+ * single .evtx file (a rotation like System.evtx.1 included), any gap that says something is
+ * missing makes it a row of its own: omitting it would hide the very channel that is missing. It
+ * is counted in the total and never in the read count. Any other gap that reaches no row (a
+ * coalesced summary, a wildcard, a folder) is reported in `unattributed` and never dropped.
  */
 export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel {
   const { loadedChannels, remoteMachine, sourceMode } = input;
 
   // Text logs from archives share the channel list but are not event channels.
-  const textLogNames = textLogChannelNames(input.records);
+  const textLogNames = textLogChannelNames(input.records, {
+    channels: input.channels.map((channel) => channel.name),
+    archiveMembers: input.archiveMembers,
+  });
   const eventRecords =
     textLogNames.size === 0
       ? input.records
@@ -462,30 +514,6 @@ export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel
       }
     }
   }
-
-  // One row per channel name: two exports of the same log are one channel read from two files.
-  const listed = new Map<string, ListedChannel>();
-  const textLogs: TextLogRowModel[] = [];
-  for (const channel of input.channels) {
-    if (textLogNames.has(channel.name)) {
-      if (!textLogs.some((row) => row.name === channel.name)) {
-        textLogs.push({
-          name: channel.name,
-          label: memberLabel(channel.name),
-          entries: entryCounts.get(channel.name) ?? 0,
-        });
-      }
-      continue;
-    }
-    const path = filePathOf(channel);
-    const existing = listed.get(channel.name);
-    if (existing === undefined) {
-      listed.set(channel.name, { channel, keys: path === null ? [channel.name] : [channel.name, path] });
-    } else if (path !== null && !existing.keys.includes(path)) {
-      existing.keys.push(path);
-    }
-  }
-  textLogs.sort((a, b) => a.label.localeCompare(b.label) || a.name.localeCompare(b.name));
 
   const structured: ChannelGap[] = [
     ...input.coverageDetails.map(({ source, kind, reason }) => ({ source, kind, reason })),
@@ -501,16 +529,48 @@ export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel
   ].filter(isIncomplete);
   const index = indexGaps(gaps, remoteMachine);
 
-  // A blocking gap on an .evtx file that no listed channel came from is a source that never opened.
-  const knownSources = new Set([...listed.values()].flatMap((entry) => entry.keys));
+  const listed = new Map<string, ListedChannel>();
+  const listedLogs = new Map<string, ListedChannel>();
+  for (const channel of input.channels) {
+    listChannel(textLogNames.has(channel.name) ? listedLogs : listed, channel);
+  }
+
+  const textLogs: TextLogRowModel[] = [...listedLogs.values()].map(({ channel, keys }) => {
+    const entries = entryCounts.get(channel.name) ?? 0;
+    const logGaps = gapsFor(index, keys);
+    const state: TextLogState = logGaps.length === 0 ? "read" : entries > 0 ? "partial" : "notRead";
+    return {
+      name: channel.name,
+      label: memberLabel(channel.name),
+      entries,
+      state,
+      reasons: state === "read" ? [] : distinctReasons(logGaps),
+    };
+  });
+  textLogs.sort((a, b) => a.label.localeCompare(b.label) || a.name.localeCompare(b.name));
+
+  // Gaps whose source no listed channel or text log came from.
+  const knownSources = new Set(
+    [...listed.values(), ...listedLogs.values()].flatMap((entry) => entry.keys)
+  );
   const remotePrefix = remoteMachine ? `${remoteMachine}/` : "";
+  const strays = new Map<string, ChannelGap[]>();
+  for (const gap of gaps) {
+    if (knownSources.has(gap.source)) continue;
+    if (remotePrefix !== "" && knownSources.has(gap.source.slice(remotePrefix.length))) continue;
+    const list = strays.get(gap.source);
+    if (list === undefined) strays.set(gap.source, [gap]);
+    else list.push(gap);
+  }
   const takenNames = new Set([...listed.keys()].map((name) => name.toLowerCase()));
   const unopened: EvtxChannelInfo[] = [];
-  for (const [source, sourceGaps] of index) {
-    const stem = evtxStem(source);
-    if (stem === null || knownSources.has(source)) continue;
-    if (remotePrefix !== "" && knownSources.has(source.slice(remotePrefix.length))) continue;
-    if (!sourceGaps.some(isBlocking)) continue;
+  const unattributed: ChannelGap[] = [];
+  for (const [source, sourceGaps] of strays) {
+    const stem = GLOB_CHARACTERS.test(source) ? null : evtxStem(source);
+    if (stem === null) {
+      unattributed.push(...sourceGaps);
+      continue;
+    }
     // The file's own name when that is free; otherwise its path, which is unique, so two files
     // called Security.evtx (or one called System.evtx beside the System channel) stay two rows.
     const name = takenNames.has(stem.toLowerCase()) ? source : stem;
@@ -566,6 +626,16 @@ export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel
     order,
     rows,
     textLogs,
+    unattributed: {
+      count: unattributed.length,
+      reasons: [
+        ...new Set(
+          unattributed.map((gap) =>
+            gap.source === "" ? gap.reason.trim() : `${gap.source}: ${gap.reason.trim()}`
+          )
+        ),
+      ].slice(0, MAX_UNATTRIBUTED_REASONS),
+    },
     span,
     readCount,
     totalCount: allChannels.length,

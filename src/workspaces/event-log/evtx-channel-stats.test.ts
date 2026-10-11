@@ -218,6 +218,7 @@ function paneInput(overrides: Partial<ChannelPaneInput>): ChannelPaneInput {
     manifestCoverage: [],
     legacyCoverage: [],
     tailCoverage: [],
+    archiveMembers: [],
     isSwitchedOff: () => false,
     ...overrides,
   };
@@ -815,6 +816,10 @@ describe("live tail gaps", () => {
     ["a batch the backend could not deliver", "System: live tail batch 4 was not delivered (channel closed)"],
     ["a subscription callback error", "System: subscription callback reported an error"],
     [
+      "a stop that failed, after which the tail's check for missing batches never ran",
+      "System: live tail stop failed (channel not found)",
+    ],
+    [
       "a gap carried by a tail batch's payload",
       "System: 3 events could not be read and are missing from this view",
     ],
@@ -824,7 +829,6 @@ describe("live tail gaps", () => {
 
   it.each([
     ["a tail that could not start", "System: live tail unavailable (not supported)"],
-    ["a stop that failed", "System: live tail stop failed (channel not found)"],
     [
       "a subscription that fell back to polling",
       "System: EvtSubscribe unavailable; polling fallback is active (Windows error 87)",
@@ -893,7 +897,8 @@ describe("text logs from archives", () => {
       paneInput({
         sourceMode: "files",
         timeWindow: "all",
-        channels: [file("System"), file(MEMBER, "C:\\cases\\bundle.zip")],
+        // append_parsed_file lists a text member under its own label, which is also its path.
+        channels: [file("System"), file(MEMBER, MEMBER)],
         records: [record("System", NOW - HOUR), log(MEMBER, NOW - 2 * HOUR), log(MEMBER, NOW - 3 * HOUR)],
       }),
     );
@@ -901,7 +906,13 @@ describe("text logs from archives", () => {
   it("lists a text-log member apart from the channels, with its entry count", () => {
     const built = model();
     expect(built.textLogs).toEqual([
-      { name: MEMBER, label: "IntuneManagementExtension.log", entries: 2 },
+      {
+        name: MEMBER,
+        label: "IntuneManagementExtension.log",
+        entries: 2,
+        state: "read",
+        reasons: [],
+      },
     ]);
     expect(built.rows.has(MEMBER)).toBe(false);
     expect(built.channels.map((channel) => channel.name)).toEqual(["System"]);
@@ -921,15 +932,22 @@ describe("text logs from archives", () => {
   });
 
   it("does not change an event channel's color index", () => {
-    const withLog = model();
-    const without = buildChannelPaneModel(
-      paneInput({
-        sourceMode: "files",
-        timeWindow: "all",
-        channels: [file("System")],
-        records: [record("System", NOW - HOUR)],
-      }),
+    // The member label begins "C:\\", so it sorts ahead of every Microsoft-* service channel: were
+    // it ordered with the channels it would push this one from index 3 to 4.
+    const AAD = "Microsoft-Windows-AAD/Operational";
+    const input = (channels: EvtxChannelInfo[], records: EvtxRecord[]) =>
+      paneInput({ sourceMode: "files", timeWindow: "all", channels, records });
+    const withLog = buildChannelPaneModel(
+      input(
+        [file("System"), file(AAD), file(MEMBER, MEMBER)],
+        [record("System", NOW - HOUR), record(AAD, NOW - HOUR), log(MEMBER, NOW - 2 * HOUR)],
+      ),
     );
+    const without = buildChannelPaneModel(
+      input([file("System"), file(AAD)], [record("System", NOW - HOUR), record(AAD, NOW - HOUR)]),
+    );
+    expect(without.rows.get(AAD)?.index).toBe(1);
+    expect(withLog.rows.get(AAD)?.index).toBe(without.rows.get(AAD)?.index);
     expect(withLog.rows.get("System")?.index).toBe(without.rows.get("System")?.index);
   });
 
@@ -948,5 +966,228 @@ describe("text logs from archives", () => {
 
   it("starts its group open", () => {
     expect(defaultExpandedGroups(model()).has("TextLogs")).toBe(true);
+  });
+});
+
+describe("text-log members carry their coverage", () => {
+  const MEMBER = "C:\\cases\\bundle.zip::logs/IntuneManagementExtension.log";
+  const log = (at: number) => ({ ...record(MEMBER, at), originKind: "log" as const });
+  const logs = (count: number) => Array.from({ length: count }, (_, i) => log(NOW - (i + 1) * HOUR));
+  const build = (over: Partial<ChannelPaneInput>) =>
+    buildChannelPaneModel(
+      paneInput({
+        sourceMode: "files",
+        timeWindow: "all",
+        channels: [file(MEMBER, MEMBER)],
+        ...over,
+      }),
+    );
+
+  it("shows a member cut off at the archive's line limit as partial, with the reason", () => {
+    // A 60,000-line member is parsed up to MAX_ARCHIVE_TEXT_RECORDS (25,000) lines.
+    const reason = "text member parsing stopped after 25000 lines; later records were not parsed";
+    const built = build({ records: logs(3), coverageDetails: [gap(MEMBER, "limit", reason)] });
+    expect(built.textLogs).toEqual([
+      expect.objectContaining({ name: MEMBER, entries: 3, state: "partial", reasons: [reason] }),
+    ]);
+  });
+
+  it("shows a member with lines that would not parse as partial", () => {
+    const reason = "12 text records could not be parsed";
+    const built = build({
+      records: logs(2),
+      coverageDetails: [gap(MEMBER, "record", reason)],
+      legacyCoverage: [`${MEMBER}: ${reason}`],
+    });
+    expect(built.textLogs[0]).toMatchObject({ state: "partial", entries: 2, reasons: [reason] });
+  });
+
+  it("shows a member with no records and a gap that says why as not read, not as zero entries", () => {
+    const reason = "12 text records could not be parsed";
+    const built = build({
+      records: [],
+      archiveMembers: [{ path: MEMBER, kind: "text" }],
+      coverageDetails: [gap(MEMBER, "record", reason)],
+    });
+    expect(built.textLogs).toEqual([
+      expect.objectContaining({ entries: 0, state: "notRead", reasons: [reason] }),
+    ]);
+  });
+
+  it("shows a member cut to zero lines by the archive budget as not read", () => {
+    const built = build({
+      records: [],
+      archiveMembers: [{ path: MEMBER, kind: "text" }],
+      coverageDetails: [
+        gap(MEMBER, "limit", "text member parsing stopped after 0 lines; later records were not parsed"),
+      ],
+    });
+    expect(built.textLogs[0]).toMatchObject({ entries: 0, state: "notRead" });
+  });
+
+  it("shows an empty member as read, with a real zero", () => {
+    const built = build({
+      records: [],
+      archiveMembers: [{ path: MEMBER, kind: "text" }],
+      coverageDetails: [gap(MEMBER, "empty", "text member is empty")],
+    });
+    expect(built.textLogs).toEqual([
+      expect.objectContaining({ entries: 0, state: "read", reasons: [] }),
+    ]);
+  });
+
+  it("never lists an empty or unparseable text member as an event channel", () => {
+    // None of these kept a record, so only the archive's member list or the label names them.
+    for (const over of [
+      { archiveMembers: [{ path: MEMBER, kind: "text" as const }] },
+      { archiveMembers: [] },
+    ]) {
+      const built = build({ records: [], coverageDetails: [gap(MEMBER, "empty", "text member is empty")], ...over });
+      expect(built.channels).toEqual([]);
+      expect(built.totalCount).toBe(0);
+      expect(built.readCount).toBe(0);
+      expect(built.textLogs).toHaveLength(1);
+    }
+  });
+
+  it("keeps an EVTX member that kept nothing as a channel, rotated names included", () => {
+    for (const member of [
+      "C:\\cases\\bundle.zip::logs/System.evtx",
+      "C:\\cases\\bundle.zip::logs/System.evtx.1",
+    ]) {
+      const built = build({
+        channels: [file(member, member)],
+        records: [],
+        coverageDetails: [gap(member, "chunk", "chunk 3 is corrupt")],
+      });
+      expect(built.textLogs).toEqual([]);
+      expect(built.rows.get(member)?.state).toBe("notRead");
+    }
+  });
+});
+
+describe("sources no listed channel came from", () => {
+  const filesInput = (over: Partial<ChannelPaneInput>) =>
+    paneInput({
+      sourceMode: "files",
+      timeWindow: "all",
+      channels: [file("System")],
+      records: [record("System", NOW - HOUR)],
+      ...over,
+    });
+
+  it("lists a member the archive's record budget skipped, though the gap is a limit", () => {
+    const member = "C:\\cases\\bundle.zip::logs/Security.evtx";
+    const built = buildChannelPaneModel(
+      filesInput({
+        coverageDetails: [
+          gap(member, "limit", "archive record budget of 1000000 records was exhausted"),
+        ],
+      }),
+    );
+    expect(built.rows.get("Security")).toMatchObject({ state: "notRead", selectable: false });
+    expect(built.totalCount).toBe(2);
+    expect(built.readCount).toBe(1);
+  });
+
+  it("lists the next unparsed source when the manifest's byte budget ran out", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        manifestCoverage: [
+          { kind: "limitReached", path: "C:\\logs\\Next.evtx", reason: "the manifest byte budget was reached" },
+        ],
+      }),
+    );
+    expect(built.rows.get("Next")?.state).toBe("notRead");
+  });
+
+  it("lists a rotated log, which the archive accepts as an EVTX name", () => {
+    for (const source of ["C:\\logs\\System.evtx.1", "C:\\cases\\bundle.zip::logs/System.evtx.12"]) {
+      const built = buildChannelPaneModel(
+        filesInput({ coverageDetails: [gap(source, "file", "could not be parsed")] }),
+      );
+      const name = source.slice(Math.max(source.lastIndexOf("\\"), source.lastIndexOf("/")) + 1);
+      expect(built.rows.get(name)).toMatchObject({ state: "notRead", selectable: false });
+      expect(built.rows.get("System")?.state).toBe("read");
+    }
+  });
+
+  it("does not drop a coalesced summary, and says the gaps could not be attributed", () => {
+    // Past the per-run limit the backend folds gaps into one summary under a made-up source.
+    const built = buildChannelPaneModel(
+      filesInput({
+        coverageDetails: [
+          gap("<coverage>", "limit", "4096 further coverage gaps were coalesced"),
+          gap("<archive coverage>", "limit", "812 archive coverage gaps were coalesced"),
+        ],
+        legacyCoverage: ["<live tail coverage>: 40 tail coverage gaps were coalesced"],
+      }),
+    );
+    expect(built.unattributed.count).toBe(3);
+    expect(built.unattributed.reasons).toEqual([
+      "<coverage>: 4096 further coverage gaps were coalesced",
+      "<archive coverage>: 812 archive coverage gaps were coalesced",
+      "<live tail coverage>: 40 tail coverage gaps were coalesced",
+    ]);
+    expect(built.totalCount).toBe(1);
+    expect(built.readCount).toBe(1);
+  });
+
+  it("does not invent a row named after a wildcard that matched nothing", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        manifestCoverage: [
+          { kind: "missing", path: "C:\\logs\\Sys*.evtx", reason: "no files matched the pattern" },
+          { kind: "missing", path: "C:\\logs\\Sec?rity.evtx", reason: "no files matched the pattern" },
+        ],
+      }),
+    );
+    expect(built.totalCount).toBe(1);
+    expect(built.channels.map((channel) => channel.name)).toEqual(["System"]);
+    expect(built.unattributed.count).toBe(2);
+    expect(built.unattributed.reasons[0]).toBe("C:\\logs\\Sys*.evtx: no files matched the pattern");
+  });
+
+  it("discloses a gap on a folder, a gap with no source and a gap from a source nobody listed", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        manifestCoverage: [
+          { kind: "accessDenied", path: "C:\\logs\\protected-folder", reason: "folder access was denied" },
+        ],
+        legacyCoverage: ["something went wrong reading the sources", "Elsewhere: not read (gone)"],
+      }),
+    );
+    expect(built.unattributed.count).toBe(3);
+    expect(built.unattributed.reasons).toContain("something went wrong reading the sources");
+    expect(built.unattributed.reasons).toContain("Elsewhere: not read (gone)");
+    expect(built.totalCount).toBe(1);
+  });
+
+  it("reports nothing unattributed when every gap belongs to a row", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        coverageDetails: [
+          gap("C:\\logs\\System.evtx", "chunk", "chunk 2 was zero-filled"),
+          gap("C:\\logs\\Security.evtx", "accessDenied", "denied"),
+          gap("C:\\logs\\System.evtx", "provider", "provider message could not be formatted"),
+        ],
+        legacyCoverage: ["C:\\logs\\Security.evtx: denied"],
+      }),
+    );
+    expect(built.unattributed).toEqual({ count: 0, reasons: [] });
+  });
+
+  it("matches a remote gap to its channel by its Machine/Channel source", () => {
+    const built = buildChannelPaneModel(
+      paneInput({
+        remoteMachine: "SRV01",
+        channels: [live("System")],
+        loadedChannels: new Set(["System"]),
+        records: [record("System", NOW - HOUR)],
+        legacyCoverage: ["SRV01/System: live stream batch 3 was not received"],
+      }),
+    );
+    expect(built.rows.get("System")?.state).toBe("partial");
+    expect(built.unattributed.count).toBe(0);
   });
 });

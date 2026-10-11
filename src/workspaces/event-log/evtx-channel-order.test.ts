@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildChannelTree,
+  isEvtxMemberName,
   isTextLogChannel,
   orderChannelNames,
   textLogChannelNames,
@@ -106,5 +107,73 @@ describe("text-log channels", () => {
     expect(textLogChannelNames([legacy("System")]).size).toBe(0);
     expect(isTextLogChannel("System", [legacy("System")])).toBe(false);
     expect(isTextLogChannel("Unknown", [event("System")])).toBe(false);
+  });
+});
+
+describe("text-log channels with no records", () => {
+  const MEMBER = "C:\\cases\\bundle.zip::logs/AgentExecutor.log";
+  const event = (channel: string) => ({ channel, originKind: "event" as const });
+
+  it("recognizes a member the open reported as text, whatever it is called", () => {
+    // An empty, wholly unparseable or zero-line member kept no record to say what it is.
+    const archiveMembers = [{ path: "plain-name", kind: "text" as const }];
+    expect([...textLogChannelNames([], { channels: ["plain-name", "System"], archiveMembers })]).toEqual([
+      "plain-name",
+    ]);
+    expect(isTextLogChannel("plain-name", [], { archiveMembers })).toBe(true);
+    expect(isTextLogChannel("plain-name", [])).toBe(false);
+  });
+
+  it("does not take an EVTX or binary member the open reported for a text log", () => {
+    const archiveMembers = [
+      { path: "evtx-member", kind: "evtx" as const },
+      { path: "binary-member", kind: "binary" as const },
+    ];
+    expect(
+      textLogChannelNames([], { channels: ["evtx-member", "binary-member"], archiveMembers }).size,
+    ).toBe(0);
+  });
+
+  it("recognizes {archive}::{member} when the member is not an EVTX name", () => {
+    expect([...textLogChannelNames([], { channels: [MEMBER, "System"] })]).toEqual([MEMBER]);
+    expect(isTextLogChannel(MEMBER, [])).toBe(true);
+  });
+
+  it("keeps an EVTX member, a rotation included, a channel", () => {
+    for (const member of [
+      "bundle.zip::logs/System.evtx",
+      "bundle.zip::logs/System.EVTX",
+      "bundle.zip::logs/System.evtx.1",
+      "bundle.zip::System.evtx.20",
+    ]) {
+      expect(textLogChannelNames([], { channels: [member] }).size).toBe(0);
+      expect(isTextLogChannel(member, [])).toBe(false);
+    }
+  });
+
+  it("lets an event record win over every name rule", () => {
+    expect(textLogChannelNames([event(MEMBER)], { channels: [MEMBER] }).size).toBe(0);
+    expect(isTextLogChannel(MEMBER, [event(MEMBER)])).toBe(false);
+  });
+
+  it("does not take a plain channel name for a text log", () => {
+    expect(textLogChannelNames([], { channels: ["System", "Microsoft-Windows-AAD/Operational"] }).size).toBe(0);
+  });
+});
+
+describe("isEvtxMemberName", () => {
+  it.each([
+    ["System.evtx", true],
+    ["logs/System.evtx", true],
+    ["logs/System.EVTX", true],
+    ["logs/System.evtx.1", true],
+    ["logs/System.evtx.123", true],
+    ["logs/System.evtx.", false],
+    ["logs/System.evtx.old", false],
+    ["logs/.evtx.1", false],
+    ["logs/app.log", false],
+    ["logs.evtx/app.log", false],
+  ])("%s -> %s", (name, expected) => {
+    expect(isEvtxMemberName(name)).toBe(expected);
   });
 });

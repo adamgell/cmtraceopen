@@ -220,6 +220,7 @@ function resetPane(over: Record<string, unknown> = {}) {
     coverageGaps: [],
     coverageDetails: [],
     sourceManifest: null,
+    archiveMembers: [],
     tailMode: null,
     tailChannels: new Set<string>(),
     tailCoverageGaps: [],
@@ -753,6 +754,119 @@ describe("a row that is not complete says why in text", () => {
   });
 });
 
+describe("the description is read once, and reads cleanly", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("hides the description node from browse mode while the checkbox still resolves it", () => {
+    resetPane({
+      channels: [channel("System", "enabled")],
+      loadedChannels: new Set(["System"]),
+      records: [evtxRecord("System", NOW - HOUR)],
+    });
+    render(<ChannelPicker />);
+    const box = within(paneRow("System")).getByRole("checkbox");
+    const node = document.getElementById(box.getAttribute("aria-describedby")!)!;
+    expect(node).toHaveAttribute("aria-hidden", "true");
+    expect(node.textContent).toMatch(/^1 event, 0 errors, 0 warnings\./);
+    // aria-describedby still names it, so the checkbox is described by it.
+    expect(box).toHaveAccessibleDescription(node.textContent!);
+  });
+
+  it("does not speak a sha256 digest, but keeps it in the tooltip", () => {
+    const digest = "a".repeat(64);
+    const reason = `member could not be parsed (sha256:${digest})`;
+    resetPane({
+      sourceMode: "files",
+      timeWindow: "all",
+      channels: [
+        { name: "System", eventCount: 1, sourceType: { file: { path: "C:\\logs\\System.evtx" } } },
+      ],
+      selectedChannels: new Set(["System"]),
+      records: [evtxRecord("System", NOW - HOUR)],
+      coverageDetails: [gapRecord("C:\\cases\\bundle.zip::logs/Corrupt.evtx", "file", reason)],
+    });
+    render(<ChannelPicker />);
+    // A service-tree row sits in a group that starts closed: nothing in it holds events.
+    fireEvent.click(screen.getByRole("button", { name: "Expand Applications and Services Logs" }));
+    const description = document
+      .getElementById(
+        within(paneRow("Corrupt")).getByRole("checkbox").getAttribute("aria-describedby")!,
+      )!
+      .textContent!;
+    expect(description).toContain("Why: member could not be parsed");
+    expect(description).not.toContain("sha256");
+    expect(description).not.toContain(digest);
+    expect(paneRow("Corrupt").querySelector("label")!.getAttribute("title")).toContain(digest);
+  });
+});
+
+describe("gaps that reach no row", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    resetPane({
+      sourceMode: "files",
+      timeWindow: "all",
+      channels: [
+        { name: "System", eventCount: 1, sourceType: { file: { path: "C:\\logs\\System.evtx" } } },
+      ],
+      selectedChannels: new Set(["System"]),
+      records: [evtxRecord("System", NOW - HOUR)],
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("claims k of k read when every gap belongs to a row", () => {
+    render(<ChannelPicker />);
+    expect(screen.getByText("1 of 1 read \u00B7 all-time activity")).toBeInTheDocument();
+    expect(screen.queryByText(/could not be attributed/)).not.toBeInTheDocument();
+  });
+
+  it("says some gaps could not be attributed, and lists them, instead of claiming k of k", () => {
+    useEvtxStore.setState({
+      coverageDetails: [
+        gapRecord("<coverage>", "limit", "4096 further coverage gaps were coalesced"),
+        gapRecord("C:\\logs\\Sys*.evtx", "missing", "no files matched the pattern"),
+      ],
+    });
+    render(<ChannelPicker />);
+    expect(
+      screen.getByText("1 of 1 read \u00B7 some gaps could not be attributed"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("1 of 1 read \u00B7 all-time activity")).not.toBeInTheDocument();
+    const disclosure = screen.getByText(/2 gaps could not be attributed to a channel/);
+    expect(disclosure).toHaveTextContent("<coverage>: 4096 further coverage gaps were coalesced");
+    expect(disclosure).toHaveTextContent("C:\\logs\\Sys*.evtx: no files matched the pattern");
+    // The wildcard is not a row.
+    expect(document.querySelectorAll("[data-channel-row]")).toHaveLength(1);
+  });
+
+  it("lists a member the archive skipped for a limit as a row, not as an unattributed gap", () => {
+    useEvtxStore.setState({
+      coverageDetails: [
+        gapRecord(
+          "C:\\cases\\bundle.zip::logs/Security.evtx",
+          "limit",
+          "archive record budget of 1000000 records was exhausted",
+        ),
+      ],
+    });
+    render(<ChannelPicker />);
+    expect(paneRow("Security")).toHaveAttribute("data-channel-state", "notRead");
+    expect(screen.getByText("1 of 2 read \u00B7 all-time activity")).toBeInTheDocument();
+  });
+});
+
 describe("a pane with no source mode", () => {
   afterEach(cleanup);
 
@@ -824,7 +938,8 @@ describe("text logs from archives", () => {
           eventCount: 1,
           sourceType: { file: { path: "C:\\cases\\bundle.zip::System.evtx" } },
         },
-        { name: MEMBER, eventCount: 2, sourceType: { file: { path: "C:\\cases\\bundle.zip" } } },
+        // The archive reader lists a text member under its own label, which is also its path.
+        { name: MEMBER, eventCount: 2, sourceType: { file: { path: MEMBER } } },
       ],
       selectedChannels: new Set(["System", MEMBER]),
       records: [
@@ -892,26 +1007,139 @@ describe("text logs from archives", () => {
   });
 
   it("does not change the color of an event channel", () => {
-    render(<ChannelPicker />);
+    // The member label begins "C:\\", so it sorts ahead of every Microsoft-* service channel: were
+    // it ordered with the channels it would push this one from index 1 to 2.
+    const AAD = "Microsoft-Windows-AAD/Operational";
+    const aad = {
+      name: AAD,
+      eventCount: 1,
+      sourceType: { file: { path: "C:\\cases\\bundle.zip::logs/AAD.evtx" } },
+    };
     const swatch = (name: string) =>
       paneRow(name).querySelector<HTMLElement>('span[aria-hidden="true"][style*="border-radius"]')!;
-    const withLog = swatch("System").style.backgroundColor;
-    cleanup();
+    const channels = (extra: EvtxChannelInfo[]) => [
+      {
+        name: "System",
+        eventCount: 1,
+        sourceType: { file: { path: "C:\\cases\\bundle.zip::System.evtx" } },
+      },
+      aad,
+      ...extra,
+    ];
+    const records = [evtxRecord("System", NOW - HOUR), evtxRecord(AAD, NOW - HOUR)];
+
     resetPane({
       sourceMode: "files",
       timeWindow: "all",
-      channels: [
-        {
-          name: "System",
-          eventCount: 1,
-          sourceType: { file: { path: "C:\\cases\\bundle.zip::System.evtx" } },
-        },
-      ],
-      selectedChannels: new Set(["System"]),
-      records: [evtxRecord("System", NOW - HOUR)],
+      channels: channels([]),
+      selectedChannels: new Set(["System", AAD]),
+      records,
     });
     render(<ChannelPicker />);
-    expect(swatch("System").style.backgroundColor).toBe(withLog);
+    const without = swatch(AAD).style.backgroundColor;
+    cleanup();
+
+    resetPane({
+      sourceMode: "files",
+      timeWindow: "all",
+      channels: channels([
+        { name: MEMBER, eventCount: 2, sourceType: { file: { path: MEMBER } } },
+      ]),
+      selectedChannels: new Set(["System", AAD, MEMBER]),
+      records: [
+        ...records,
+        { ...evtxRecord(MEMBER, NOW - 2 * HOUR), originKind: "log" as const },
+      ],
+    });
+    render(<ChannelPicker />);
+    expect(swatch(AAD).style.backgroundColor).toBe(without);
+  });
+});
+
+describe("text-log members carry their coverage", () => {
+  const MEMBER = "C:\\cases\\bundle.zip::logs/IntuneManagementExtension.log";
+  const member = (name: string) => ({
+    name,
+    eventCount: 0,
+    sourceType: { file: { path: name } },
+  });
+  const logRecord = (at: number) => ({
+    ...evtxRecord(MEMBER, at),
+    originKind: "log" as const,
+  });
+  const textLogRow = () =>
+    [...document.querySelectorAll<HTMLElement>("[data-text-log-row]")].find(
+      (row) => row.getAttribute("data-text-log-row") === MEMBER,
+    )!;
+  const describedBy = (row: HTMLElement) =>
+    document.getElementById(
+      row.querySelector('input[type="checkbox"]')!.getAttribute("aria-describedby")!,
+    )!;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("marks a member cut off at the archive's line limit as partial, with the reason in text", () => {
+    const reason = "text member parsing stopped after 25000 lines; later records were not parsed";
+    resetPane({
+      sourceMode: "files",
+      timeWindow: "all",
+      channels: [member(MEMBER)],
+      selectedChannels: new Set([MEMBER]),
+      records: [logRecord(NOW - HOUR), logRecord(NOW - 2 * HOUR)],
+      coverageDetails: [gapRecord(MEMBER, "limit", reason)],
+    });
+    render(<ChannelPicker />);
+    const row = textLogRow();
+    expect(row).toHaveAttribute("data-text-log-state", "partial");
+    expect(row).toHaveTextContent("partial");
+    expect(row).toHaveTextContent("2 entries");
+    const description = describedBy(row).textContent!;
+    expect(description).toContain("Partial: some entries may be missing");
+    expect(description).toContain(`Why: ${reason}`);
+    expect(row.querySelector("label")!.getAttribute("title")).toContain(reason);
+  });
+
+  it("shows a member nothing was kept from as not read, with a dash and no zero", () => {
+    resetPane({
+      sourceMode: "files",
+      timeWindow: "all",
+      channels: [member(MEMBER)],
+      selectedChannels: new Set([MEMBER]),
+      archiveMembers: [{ path: MEMBER, kind: "text", outcome: "malformed" }],
+      records: [],
+      coverageDetails: [gapRecord(MEMBER, "record", "12 text records could not be parsed")],
+    });
+    render(<ChannelPicker />);
+    const row = textLogRow();
+    expect(row).toHaveAttribute("data-text-log-state", "notRead");
+    expect(row).toHaveTextContent("not read");
+    expect(row).toHaveTextContent(DASH);
+    expect(row).not.toHaveTextContent(/\b0\b/);
+    expect(describedBy(row).textContent).toMatch(/^No count\. Not read\. Why: 12 text records/);
+  });
+
+  it("lists an empty member as a text log, not as an event channel", () => {
+    resetPane({
+      sourceMode: "files",
+      timeWindow: "all",
+      channels: [member(MEMBER)],
+      selectedChannels: new Set([MEMBER]),
+      archiveMembers: [{ path: MEMBER, kind: "text", outcome: "parsed" }],
+      records: [],
+      coverageDetails: [gapRecord(MEMBER, "empty", "text member is empty")],
+    });
+    render(<ChannelPicker />);
+    expect(document.querySelectorAll("[data-channel-row]")).toHaveLength(0);
+    expect(textLogRow()).toHaveAttribute("data-text-log-state", "read");
+    expect(textLogRow()).toHaveTextContent("0 entries");
+    expect(screen.getByText("0 of 0 read \u00B7 all-time activity")).toBeInTheDocument();
   });
 });
 
@@ -1349,29 +1577,43 @@ describe("contrast of everything the pane renders", () => {
   );
 
   it.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
-    "meets the same floors for text-log rows, selected and not, in %s",
+    "meets the same floors for text-log rows, complete, partial and not read, selected and not, in %s",
     (_id, theme) => {
       const member = (name: string, at: number) => ({
         ...evtxRecord(name, at),
         originKind: "log" as const,
       });
+      const listed = (name: string) => ({
+        name,
+        eventCount: 1,
+        sourceType: { file: { path: name } },
+      });
       resetPane({
         sourceMode: "files",
         timeWindow: "all",
         channels: [
-          { name: "bundle.zip::a.log", eventCount: 1, sourceType: { file: { path: "bundle.zip" } } },
-          { name: "bundle.zip::b.log", eventCount: 1, sourceType: { file: { path: "bundle.zip" } } },
+          listed("bundle.zip::a.log"),
+          listed("bundle.zip::b.log"),
+          listed("bundle.zip::c.log"),
         ],
+        // a is selected and cut off; b is complete and not selected; c kept nothing.
         selectedChannels: new Set(["bundle.zip::a.log"]),
+        archiveMembers: [{ path: "bundle.zip::c.log", kind: "text", outcome: "malformed" }],
         records: [member("bundle.zip::a.log", NOW - HOUR), member("bundle.zip::b.log", NOW - HOUR)],
+        coverageDetails: [
+          gapRecord("bundle.zip::a.log", "limit", "text member parsing stopped after 25000 lines"),
+          gapRecord("bundle.zip::c.log", "record", "9 text records could not be parsed"),
+        ],
       });
       useUiStore.setState({ themeId: theme.id });
       const { container } = render(<ChannelPicker />);
-      expect(container.querySelectorAll("[data-text-log-row]")).toHaveLength(2);
+      expect(container.querySelectorAll("[data-text-log-row]")).toHaveLength(3);
 
       const pairs = measurePane(container, theme);
       expect(pairs.some((pair) => pair.what === 'text "a.log"')).toBe(true);
       expect(pairs.some((pair) => pair.what === 'text "1 entry"')).toBe(true);
+      expect(pairs.some((pair) => pair.what === 'text "partial"')).toBe(true);
+      expect(pairs.some((pair) => pair.what === 'text "not read"')).toBe(true);
       const failures = pairs.filter((pair) => pair.ratio < pair.minimum);
       expect(
         failures.map((pair) => `${pair.what}: ${pair.ratio.toFixed(2)}:1 (needs ${pair.minimum})`),

@@ -7,7 +7,7 @@
  * add/add conflict to this version: it is a superset (the tree helpers the pane renders from, name
  * dedupe, and the text-log helpers below).
  */
-import type { EvtxRecord } from "./types";
+import type { EvtxArchiveMember, EvtxRecord } from "./types";
 
 /** Anything with a channel name; the tree and the order never read more than that. */
 export interface NamedChannel {
@@ -134,17 +134,51 @@ export function orderChannelNames(names: readonly string[]): string[] {
 }
 
 /**
- * The channels that are really text logs: an archive reader labels the records of a text member
- * (a .log inside a .zip) with `channel = "{archive}::{member}"` and `originKind: "log"`, so the
- * workbench lists the member like a channel. A text log is not an event channel. It has no color
- * index, no level semantics and no place in `orderChannelNames`, so a caller that colors or orders
- * by channel excludes these names before it asks for an order.
+ * True for the file name an EVTX archive member carries: `.evtx`, or a rotation `.evtx.N`
+ * (`is_evtx_name` in archive.rs, which looks at the part after the last "/").
+ */
+export function isEvtxMemberName(name: string): boolean {
+  const file = name.slice(name.lastIndexOf("/") + 1).toLowerCase();
+  if (file.endsWith(".evtx")) return true;
+  const at = file.lastIndexOf(".evtx.");
+  return at > 0 && /^\d+$/.test(file.slice(at + ".evtx.".length));
+}
+
+/** `{archive}::{member}` where the member is not an EVTX file: how an archive labels a text member. */
+function isTextMemberLabel(name: string): boolean {
+  const at = name.lastIndexOf("::");
+  if (at <= 0) return false;
+  const member = name.slice(at + 2);
+  return member.length > 0 && !isEvtxMemberName(member);
+}
+
+/** What the open reported, beyond the records, about which channels are text logs. */
+export interface TextLogContext {
+  /** The channels the workbench lists (the store's `channels`, by name). */
+  channels?: readonly string[];
+  /** The archive members the open reported (the store's `archiveMembers`). */
+  archiveMembers?: readonly Pick<EvtxArchiveMember, "path" | "kind">[];
+}
+
+/**
+ * The channels that are really text logs. An archive reader labels a text member (a .log inside a
+ * .zip) `{archive}::{member}`, lists it like a channel, and labels its records with that name and
+ * `originKind: "log"`. A text log is not an event channel: it has no color index, no level
+ * semantics and no place in `orderChannelNames`, so a caller that colors or orders by channel
+ * excludes these names before it asks for an order.
  *
- * A channel is a text log when it has records and every one is `originKind: "log"`. Returns the
- * set for all records in one pass; use it in a loop, and `isTextLogChannel` for a single name.
+ * A channel is a text log when any of these holds, and none of its records is an event:
+ * - it has records and every one is `originKind: "log"`;
+ * - it is a listed channel named like an archive member the open reported as text;
+ * - it is a listed channel named `{archive}::{member}` with a member that is not an EVTX name.
+ *
+ * The last two catch a member that kept no records (empty, wholly unparseable, or cut to zero
+ * lines), which the records alone cannot recognize. Returns the set for all records in one pass;
+ * use it in a loop, and `isTextLogChannel` for a single name.
  */
 export function textLogChannelNames(
-  records: readonly Pick<EvtxRecord, "channel" | "originKind">[]
+  records: readonly Pick<EvtxRecord, "channel" | "originKind">[],
+  context: TextLogContext = {}
 ): Set<string> {
   const eventChannels = new Set<string>();
   const logChannels = new Set<string>();
@@ -152,19 +186,32 @@ export function textLogChannelNames(
     if (record.originKind === "log") logChannels.add(record.channel);
     else eventChannels.add(record.channel);
   }
+  const textMembers = new Set(
+    (context.archiveMembers ?? [])
+      .filter((member) => member.kind === "text")
+      .map((member) => member.path)
+  );
+  for (const name of context.channels ?? []) {
+    if (textMembers.has(name) || isTextMemberLabel(name)) logChannels.add(name);
+  }
   for (const name of eventChannels) logChannels.delete(name);
   return logChannels;
 }
 
 export function isTextLogChannel(
   name: string,
-  records: readonly Pick<EvtxRecord, "channel" | "originKind">[]
+  records: readonly Pick<EvtxRecord, "channel" | "originKind">[],
+  context: Pick<TextLogContext, "archiveMembers"> = {}
 ): boolean {
-  let seen = false;
+  let sawLog = false;
   for (const record of records) {
     if (record.channel !== name) continue;
     if (record.originKind !== "log") return false;
-    seen = true;
+    sawLog = true;
   }
-  return seen;
+  return (
+    sawLog ||
+    isTextMemberLabel(name) ||
+    (context.archiveMembers ?? []).some((member) => member.kind === "text" && member.path === name)
+  );
 }
