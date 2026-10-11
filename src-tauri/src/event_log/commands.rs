@@ -1,7 +1,8 @@
 #[cfg(not(target_os = "windows"))]
 use super::models::EvtxLiveMode;
-// Named only by the Windows query path, which is where these channel entries are built.
-#[cfg(target_os = "windows")]
+// Named only by the Windows query path, which is where these channel entries are built, and by
+// the portable decision it calls.
+#[cfg(any(target_os = "windows", test))]
 use super::models::ChannelEnabledState;
 use super::models::{
     EvtxChannelInfo, EvtxClearResult, EvtxClearStatus, EvtxCoverageGap, EvtxCoverageGapKind,
@@ -119,6 +120,23 @@ struct QueryAggregation {
     parse_errors: u32,
     error_messages: Vec<String>,
     coverage_gaps: Vec<EvtxCoverageGap>,
+}
+
+/// What a scan proves about its channel's configuration.
+///
+/// A delivered event proves the channel exists and is recording, and so does a read that finished
+/// with nothing missing, because the service refuses a channel that is switched off. A read that
+/// delivered nothing and reports a gap proves neither: the service refused or failed the channel,
+/// which says no more about its configuration than a query that failed outright. This underclaims
+/// one case, a channel whose every event failed to parse, but `Unknown` is still acquired, so no
+/// channel is hidden by it.
+#[cfg(any(target_os = "windows", test))]
+fn scan_enabled_state(scan: &super::live::ChannelScan) -> ChannelEnabledState {
+    if scan.delivered == 0 && !scan.gaps.is_empty() {
+        ChannelEnabledState::Unknown
+    } else {
+        ChannelEnabledState::Enabled
+    }
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -432,10 +450,7 @@ async fn query_channels_impl(
                             name: channel.clone(),
                             event_count: scan.delivered as u64,
                             source_type: source_type.clone(),
-                            // It was read, so it exists and is recording. A channel that is switched
-                            // off is refused by the service, which is why this is proof of the one
-                            // and not of the other.
-                            enabled_state: ChannelEnabledState::Enabled,
+                            enabled_state: scan_enabled_state(&scan),
                         });
                         streamed += scan.delivered;
                         aggregation.absorb_scan(&coverage_source, scan);
@@ -1767,6 +1782,69 @@ mod tests {
             assert_eq!(
                 aggregation.error_messages,
                 vec![format!("Missing: {}", failure.message)]
+            );
+        }
+    }
+
+    fn scan_with(
+        delivered: usize,
+        gaps: Vec<super::super::live::ScanGap>,
+    ) -> super::super::live::ChannelScan {
+        super::super::live::ChannelScan {
+            records: Vec::new(),
+            delivered,
+            gaps,
+            provider_gaps: Vec::new(),
+            cancelled: false,
+        }
+    }
+
+    #[test]
+    fn a_channel_the_service_refused_outright_has_an_unknown_configuration() {
+        // Nothing was read, so nothing shows the channel is recording. A refusal says no more
+        // about the configuration than a query that failed outright, which is also unknown.
+        for status in [5, 1314, 15007] {
+            let mut scan = scan_with(0, Vec::new());
+            super::super::live::append_query_status_gaps(
+                &mut scan,
+                &super::super::live::QueryStatusInspection::Available(vec![
+                    super::super::live::QueryPathStatus {
+                        path: "Security".to_string(),
+                        status,
+                    },
+                ]),
+            );
+
+            assert_eq!(
+                super::scan_enabled_state(&scan),
+                super::super::models::ChannelEnabledState::Unknown,
+                "status {status}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_channel_that_was_read_is_enabled() {
+        let refused_partway = super::super::live::ScanGap {
+            kind: super::super::models::EvtxCoverageGapKind::AccessDenied,
+            message: "Security: stopped after 3 events, the channel could not be read further"
+                .to_string(),
+        };
+        let unparsable = super::super::live::ScanGap::record(
+            "Application: 1 events could not be read and are missing from this view".to_string(),
+        );
+        for (scan, case) in [
+            (scan_with(0, Vec::new()), "read whole and empty"),
+            (
+                scan_with(3, vec![refused_partway]),
+                "refused after events were read",
+            ),
+            (scan_with(2, vec![unparsable]), "read with a record gap"),
+        ] {
+            assert_eq!(
+                super::scan_enabled_state(&scan),
+                super::super::models::ChannelEnabledState::Enabled,
+                "{case}"
             );
         }
     }

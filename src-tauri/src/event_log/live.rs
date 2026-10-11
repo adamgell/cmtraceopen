@@ -32,9 +32,9 @@ use super::models::{EvtxLiveMode, EvtxTailBatch, ProviderMessageCoverage, Provid
 #[cfg(any(target_os = "windows", test))]
 use super::parser::DescriptionOutcome;
 use super::provider_db::ProviderStore;
-#[cfg(any(target_os = "windows", test))]
-use super::query_failure::channel_failure_kind;
 use super::query_failure::ChannelQueryError;
+#[cfg(any(target_os = "windows", test))]
+use super::query_failure::{channel_failure_kind, is_access_refusal};
 #[cfg(target_os = "windows")]
 use cmtraceopen_parser::event_query::build_query;
 use cmtraceopen_parser::event_query::EventQueryFilter;
@@ -1799,17 +1799,17 @@ fn subscription_unavailable(error: &Error) -> bool {
     matches!(win32_code(error), 1 | 50 | 120 | 127)
 }
 
+/// Whether a clear that failed with Windows error `code` was refused, as opposed to the channel
+/// being unavailable. Decided apart from the Windows call so it is tested on every platform.
+#[cfg(any(target_os = "windows", test))]
+fn clear_refused(code: u32, remote: bool) -> bool {
+    is_access_refusal(code) || (remote && remote_error_kind(code) == "credentials rejected")
+}
+
 #[cfg(target_os = "windows")]
 fn clear_error_status(channel: &str, error: &Error, remote: bool) -> EvtxClearResult {
-    let code = win32_code(error);
     let detail = format_source_error("EvtClearLog", error, remote);
-    let denied = code == 5
-        || (remote
-            && matches!(
-                remote_error_kind(code),
-                "access denied" | "credentials rejected"
-            ));
-    if denied {
+    if clear_refused(win32_code(error), remote) {
         EvtxClearResult {
             channel: channel.to_string(),
             result: EvtxClearStatus::Denied { detail },
@@ -1822,10 +1822,12 @@ fn clear_error_status(channel: &str, error: &Error, remote: bool) -> EvtxClearRe
     }
 }
 
+/// A remote clear whose session could not be opened. Classified by the session's Windows code, not
+/// by its message; a failure without a code, such as an invalid machine name, is unavailable.
 #[cfg(target_os = "windows")]
-fn clear_remote_session_error(channel: &str, detail: String) -> EvtxClearResult {
-    let denied = detail.to_ascii_lowercase().contains("access denied")
-        || detail.to_ascii_lowercase().contains("credentials rejected");
+fn clear_remote_session_error(channel: &str, error: ChannelQueryError) -> EvtxClearResult {
+    let denied = error.code.is_some_and(|code| clear_refused(code, true));
+    let detail = error.message;
     let result = if denied {
         EvtxClearStatus::Denied { detail }
     } else {
@@ -2228,7 +2230,7 @@ pub fn clear_channel(
     let remote_session = match remote_machine {
         Some(machine) => match open_remote_session(machine) {
             Ok((session, _normalized_machine)) => Some(session),
-            Err(error) => return clear_remote_session_error(channel, error.message),
+            Err(error) => return clear_remote_session_error(channel, error),
         },
         None => None,
     };
@@ -2521,14 +2523,14 @@ fn format_channel_code(context: &str, code: u32, remote: bool) -> String {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn remote_error_kind(code: u32) -> &'static str {
     match code {
         // ERROR_LOGON_FAILURE, ERROR_INVALID_PASSWORD, ERROR_ACCOUNT_RESTRICTION,
         // ERROR_LOGON_TYPE_NOT_GRANTED.
         1326 | 86 | 1327 | 1385 => "credentials rejected",
         // ERROR_ACCESS_DENIED and ERROR_PRIVILEGE_NOT_HELD.
-        5 | 1314 => "access denied",
+        code if is_access_refusal(code) => "access denied",
         // Network/path failures indicate an unavailable computer or Event Log service, not an
         // empty channel and not proof that the caller lacks permission.
         3 | 53 | 64 | 67 | 121 | 1231 | 1232 | 1237 | 1722 | 1723 | 1727 => {
@@ -3628,6 +3630,42 @@ mod portable_tests {
         assert_eq!(text.len(), MAX_TAIL_COVERAGE_GAPS);
         assert_eq!(text[0], "gap-0");
         assert_eq!(text.last(), Some(&summary(2)));
+    }
+
+    #[test]
+    fn remote_errors_name_both_refusals_access_denied() {
+        for code in [5, 1314] {
+            assert_eq!(remote_error_kind(code), "access denied", "code {code}");
+        }
+        assert_eq!(remote_error_kind(1326), "credentials rejected");
+        assert_eq!(remote_error_kind(53), "remote source unavailable");
+        assert_eq!(remote_error_kind(15007), "remote source query failed");
+    }
+
+    #[test]
+    fn a_refused_clear_is_denied_whether_local_or_remote() {
+        // The same refusals the query paths report as access denied: running elevated, or with
+        // other rights, is what changes the outcome.
+        for code in [5, 1314] {
+            assert!(clear_refused(code, false), "local code {code}");
+            assert!(clear_refused(code, true), "remote code {code}");
+        }
+    }
+
+    #[test]
+    fn rejected_credentials_deny_only_a_remote_clear() {
+        for code in [1326, 86, 1327, 1385] {
+            assert!(clear_refused(code, true), "remote code {code}");
+            assert!(!clear_refused(code, false), "local code {code}");
+        }
+    }
+
+    #[test]
+    fn any_other_clear_failure_is_unavailable() {
+        for code in [2, 53, 1722, 15007] {
+            assert!(!clear_refused(code, false), "local code {code}");
+            assert!(!clear_refused(code, true), "remote code {code}");
+        }
     }
 
     fn test_record(message: &str) -> EvtxRecord {

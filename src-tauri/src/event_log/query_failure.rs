@@ -16,6 +16,12 @@ const ACCESS_DENIED: u32 = 5;
 /// Windows `ERROR_PRIVILEGE_NOT_HELD`: the caller lacks a privilege the channel requires.
 const PRIVILEGE_NOT_HELD: u32 = 1314;
 
+/// Whether Windows error `win32_code` is the service refusing access: the failure that running
+/// elevated, or with other rights, can change.
+pub fn is_access_refusal(win32_code: u32) -> bool {
+    matches!(win32_code, ACCESS_DENIED | PRIVILEGE_NOT_HELD)
+}
+
 /// The coverage kind for a live channel read that failed with Windows error `win32_code`.
 ///
 /// Both access refusals are `AccessDenied`. Any other code keeps `otherwise`, the kind the failing
@@ -24,9 +30,10 @@ pub fn channel_failure_kind(
     win32_code: u32,
     otherwise: EvtxCoverageGapKind,
 ) -> EvtxCoverageGapKind {
-    match win32_code {
-        ACCESS_DENIED | PRIVILEGE_NOT_HELD => EvtxCoverageGapKind::AccessDenied,
-        _ => otherwise,
+    if is_access_refusal(win32_code) {
+        EvtxCoverageGapKind::AccessDenied
+    } else {
+        otherwise
     }
 }
 
@@ -79,6 +86,15 @@ impl std::fmt::Display for ChannelQueryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_two_refusals_are_access_refusals() {
+        assert!(is_access_refusal(5));
+        assert!(is_access_refusal(1314));
+        for code in [0, 2, 1326, 1734, 15007] {
+            assert!(!is_access_refusal(code), "code {code}");
+        }
+    }
 
     #[test]
     fn access_denied_is_an_access_refusal() {
