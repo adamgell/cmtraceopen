@@ -570,6 +570,43 @@ describe("event-viewer shared font metrics", () => {
       largeList.rowHeight * 3,
     );
   });
+  it("mounts the column header above the grid, sized from the same metrics and outside the row count", () => {
+    seedEventLog();
+    useEvtxStore.setState({ groupBy: [], sortField: "time", sortDirection: "desc" });
+    setListFontSize(MIN_LOG_LIST_FONT_SIZE);
+
+    const timeline = render(<EvtxTimeline />);
+    const header = timeline.container.querySelector<HTMLElement>("[data-evtx-table-header]");
+    const grid = timeline.getByRole("grid");
+    expect(header).not.toBeNull();
+    expect(header!.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(header).not.toContainElement(grid);
+    // Presentational: it adds no row, so the grid still counts records only.
+    expect(header).toHaveAttribute("aria-hidden", "true");
+    expect(grid).toHaveAttribute("aria-rowcount", "1");
+    expect(timeline.getAllByRole("row")).toHaveLength(1);
+    expect(header!.style.height).toBe(
+      `${getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).headerLineHeight + 2}px`
+    );
+
+    setListFontSize(MAX_LOG_LIST_FONT_SIZE);
+    expect(header!.style.height).toBe(
+      `${getLogListMetrics(MAX_LOG_LIST_FONT_SIZE).headerLineHeight + 2}px`
+    );
+
+    expect(header!.querySelector("[data-evtx-sort-direction]")).toHaveAttribute(
+      "data-evtx-sort-direction",
+      "desc"
+    );
+    act(() => {
+      useEvtxStore.setState({ sortDirection: "asc" });
+    });
+    expect(header!.querySelector("[data-evtx-sort-direction]")).toHaveAttribute(
+      "data-evtx-sort-direction",
+      "asc"
+    );
+    timeline.unmount();
+  });
   it("keeps a 100,000-record view addressable with a bounded DOM window", () => {
     seedEventLog();
     const records = Array.from({ length: 100_000 }, (_, index) => ({
