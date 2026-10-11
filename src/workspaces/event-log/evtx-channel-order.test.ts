@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildChannelTree, orderChannelNames } from "./evtx-channel-order";
+import {
+  buildChannelTree,
+  isTextLogChannel,
+  orderChannelNames,
+  textLogChannelNames,
+} from "./evtx-channel-order";
 
 describe("orderChannelNames", () => {
   const names = [
@@ -68,5 +73,38 @@ describe("orderChannelNames", () => {
     };
     walk(tree.serviceTree);
     expect(orderChannelNames(names)).toEqual(rendered);
+  });
+});
+
+describe("text-log channels", () => {
+  const event = (channel: string) => ({ channel, originKind: "event" as const });
+  const log = (channel: string) => ({ channel, originKind: "log" as const });
+  const legacy = (channel: string) => ({ channel });
+
+  it("finds the channels whose records are all text-log records", () => {
+    const records = [
+      event("System"),
+      log("bundle.zip::logs/app.log"),
+      log("bundle.zip::logs/app.log"),
+      log("bundle.zip::logs/other.log"),
+    ];
+    expect([...textLogChannelNames(records)].sort()).toEqual([
+      "bundle.zip::logs/app.log",
+      "bundle.zip::logs/other.log",
+    ]);
+    expect(isTextLogChannel("bundle.zip::logs/app.log", records)).toBe(true);
+    expect(isTextLogChannel("System", records)).toBe(false);
+  });
+
+  it("does not call a channel a text log when any of its records is an event", () => {
+    const records = [log("Mixed"), event("Mixed")];
+    expect(textLogChannelNames(records).has("Mixed")).toBe(false);
+    expect(isTextLogChannel("Mixed", records)).toBe(false);
+  });
+
+  it("treats a record with no origin as an event, and a channel with no records as no text log", () => {
+    expect(textLogChannelNames([legacy("System")]).size).toBe(0);
+    expect(isTextLogChannel("System", [legacy("System")])).toBe(false);
+    expect(isTextLogChannel("Unknown", [event("System")])).toBe(false);
   });
 });

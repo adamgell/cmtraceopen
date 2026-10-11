@@ -229,6 +229,7 @@ export function ChannelPicker() {
   const sourceManifest = useEvtxStore((s) => s.sourceManifest);
   const legacyCoverage = useEvtxStore((s) => s.coverageGaps);
   const tailChannels = useEvtxStore((s) => s.tailChannels);
+  const tailCoverageGaps = useEvtxStore((s) => s.tailCoverageGaps);
 
   const logEntries = useLogStore((s) => s.entries);
   const activeLogSource = useLogStore((s) => s.activeSource);
@@ -324,6 +325,7 @@ export function ChannelPicker() {
         coverageDetails,
         manifestCoverage: sourceManifest?.coverage ?? [],
         legacyCoverage,
+        tailCoverage: tailCoverageGaps,
         isSwitchedOff,
       }),
     [
@@ -337,6 +339,7 @@ export function ChannelPicker() {
       coverageDetails,
       sourceManifest,
       legacyCoverage,
+      tailCoverageGaps,
     ],
   );
 

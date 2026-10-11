@@ -13,6 +13,7 @@
 import {
   buildChannelTree,
   orderChannelNames,
+  textLogChannelNames,
   type ChannelTree,
   type ChannelTreeNode,
 } from "./evtx-channel-order";
@@ -245,78 +246,79 @@ function isBlocking(gap: ChannelGap): boolean {
 }
 
 /**
- * What a structured gap and the legacy string written for it have in common. The two are formatted
- * differently (the string may carry " chunk N" or " record N" after the source, or the Rust
- * formatter may omit it), so the source is compared without its location.
+ * What a structured gap and the legacy string written for it have in common: the same source and
+ * the same reason. The string's source is already free of its location (see `legacyGap`).
  */
 function twinKey(gap: ChannelGap): string {
-  return `${gap.source.replace(LOCATION_SUFFIX, "").trim()}\u0000${gap.reason.trim()}`;
+  return `${gap.source.trim()}\u0000${gap.reason.trim()}`;
 }
+
+// `formatCoverageGap` appends " chunk N" or " record N" to the source of a legacy string. Only a
+// legacy string carries it: a structured gap's source is the bare path, and a folder in that path
+// may well be called "record 42".
+const LEGACY_LOCATION_SUFFIX = /\s+(?:chunk|record)\s+\d+$/i;
 
 function legacyGap(text: string): ChannelGap {
   const message = text.trim();
   const separator = message.indexOf(": ");
   return separator > 0
-    ? { source: message.slice(0, separator), kind: null, reason: message.slice(separator + 2) }
+    ? {
+        source: message.slice(0, separator).replace(LEGACY_LOCATION_SUFFIX, "").trim(),
+        kind: null,
+        reason: message.slice(separator + 2),
+      }
     : { source: "", kind: null, reason: message };
 }
 
 const EVTX_EXTENSION = /\.evtx$/i;
-// formatCoverageGap appends " chunk N" / " record N" to the source of a legacy string.
-const LOCATION_SUFFIX = /\s+(?:chunk|record)\s+\S+$/i;
 
-/** The file stem a gap's source names, or null when the source is not a single .evtx file. */
+/**
+ * The name a gap's file would carry as a channel, or null when the source is not a single .evtx
+ * file. Used only to name a row for a file that never opened; which channel a gap belongs to is
+ * decided by the source path, never by this name.
+ */
 function evtxStem(source: string): string | null {
-  const trimmed = source.replace(LOCATION_SUFFIX, "").trim();
-  const basename = trimmed.slice(Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\")) + 1);
+  // The member of an archive follows "::", so "bundle.zip::System.evtx" is named System.
+  const member = source.lastIndexOf("::");
+  const cut = Math.max(
+    source.lastIndexOf("/"),
+    source.lastIndexOf("\\"),
+    member === -1 ? -1 : member + 1,
+  );
+  const basename = source.slice(cut + 1).trim();
   if (!EVTX_EXTENSION.test(basename)) return null;
   // Event Viewer writes a "/" in a channel name as "%4" in the file name.
   return basename.replace(EVTX_EXTENSION, "").replace(/%4/g, "/");
 }
 
-interface GapIndex {
-  /** Gaps keyed by the live channel context ("Channel" or "Machine/Channel" with the machine removed). */
-  byContext: Map<string, ChannelGap[]>;
-  /** Gaps keyed by the lower-cased channel name their .evtx file stands for. */
-  byFile: Map<string, ChannelGap[]>;
-  /** The first source seen for each file stem, for naming and locating a row the file produced. */
-  files: Map<string, { name: string; path: string }>;
-}
+/** Gaps by the exact source they name. A channel finds its gaps by its name or its file path. */
+type GapIndex = Map<string, ChannelGap[]>;
 
 function indexGaps(gaps: readonly ChannelGap[], remoteMachine: string | null): GapIndex {
-  const index: GapIndex = { byContext: new Map(), byFile: new Map(), files: new Map() };
-  const push = (map: Map<string, ChannelGap[]>, key: string, gap: ChannelGap) => {
-    const list = map.get(key);
-    if (list === undefined) map.set(key, [gap]);
+  const index: GapIndex = new Map();
+  const push = (key: string, gap: ChannelGap) => {
+    const list = index.get(key);
+    if (list === undefined) index.set(key, [gap]);
     else list.push(gap);
   };
   const remotePrefix = remoteMachine ? `${remoteMachine}/` : null;
   for (const gap of gaps) {
-    const stem = evtxStem(gap.source);
-    if (stem !== null) {
-      push(index.byFile, stem.toLowerCase(), gap);
-      if (!index.files.has(stem.toLowerCase())) {
-        index.files.set(stem.toLowerCase(), {
-          name: stem,
-          path: gap.source.replace(LOCATION_SUFFIX, "").trim(),
-        });
-      }
-      continue;
-    }
-    if (remotePrefix === null) push(index.byContext, gap.source, gap);
-    else if (gap.source.startsWith(remotePrefix)) {
-      push(index.byContext, gap.source.slice(remotePrefix.length), gap);
+    push(gap.source, gap);
+    // A remote query names its gaps "Machine/Channel"; the channel list names them "Channel".
+    if (remotePrefix !== null && gap.source.startsWith(remotePrefix)) {
+      push(gap.source.slice(remotePrefix.length), gap);
     }
   }
   return index;
 }
 
-function gapsFor(index: GapIndex, channelName: string): ChannelGap[] {
-  // File stems were decoded (%4 back to a slash) when indexed, so the channel name is the key.
-  return [
-    ...(index.byContext.get(channelName) ?? []),
-    ...(index.byFile.get(channelName.toLowerCase()) ?? []),
-  ];
+/** The distinct gaps filed under any of `keys`. */
+function gapsFor(index: GapIndex, keys: readonly string[]): ChannelGap[] {
+  const found = new Set<ChannelGap>();
+  for (const key of keys) {
+    for (const gap of index.get(key) ?? []) found.add(gap);
+  }
+  return [...found];
 }
 
 // ── The pane model ──────────────────────────────────────────────────────────
@@ -335,6 +337,8 @@ export interface ChannelPaneInput {
   manifestCoverage: readonly EventLogSourceCoverage[];
   /** The legacy gap strings (`coverageGaps`); a thrown query leaves nothing else. */
   legacyCoverage: readonly string[];
+  /** The live tail's gap strings (`tailCoverageGaps`); only those that mean lost events count. */
+  tailCoverage: readonly string[];
   /** True when the service reports the channel as switched off. */
   isSwitchedOff: (channel: EvtxChannelInfo) => boolean;
 }
@@ -348,22 +352,33 @@ export interface ChannelRowModel {
   stats: ChannelStats;
   /** False for a row that stands for a source that could not be opened. */
   selectable: boolean;
-  /** Up to three distinct reasons the channel is not complete, for a tooltip. */
+  /** Up to three distinct reasons the channel is not complete, for a tooltip and a description. */
   reasons: string[];
 }
 
+/** A text log the archive reader listed as a channel: not an event channel, so no event semantics. */
+export interface TextLogRowModel {
+  /** The channel name the records carry, which is what the selection toggles. */
+  name: string;
+  /** The member's file name. */
+  label: string;
+  entries: number;
+}
+
 export interface ChannelPaneModel {
-  /** The channels plus a row for each source that could not be opened. */
+  /** The event channels plus a row for each source that could not be opened. Names are unique. */
   channels: EvtxChannelInfo[];
   tree: ChannelTree<EvtxChannelInfo>;
   /**
    * Color index of every row. The channels the workbench lists take their position from
    * `orderChannelNames`, exactly as the Table and the charts compute it from the same names. A
    * source that never opened has no events anywhere else, so it is indexed after them and cannot
-   * shift a real channel's color.
+   * shift a real channel's color. Text logs are not channels and have no index.
    */
   order: ReadonlyMap<string, number>;
   rows: ReadonlyMap<string, ChannelRowModel>;
+  /** Text logs from archives, listed apart from the channels and counted in neither total. */
+  textLogs: TextLogRowModel[];
   span: ChannelActivitySpan | null;
   /** Rows whose events were acquired, wholly or in part. */
   readCount: number;
@@ -385,7 +400,9 @@ function classify(
   const kept = stats.total > 0;
   if (!kept && gaps.some(isDenied)) return remote ? "accessDenied" : "needsElevation";
   if (!kept && gaps.some(isBlocking)) return "notRead";
-  if (gaps.length > 0) return acquired || kept ? "partial" : "notRead";
+  // A gap with nothing kept is a channel that could not be read, however it was acquired: zero
+  // here is not a count of events but the absence of any.
+  if (gaps.length > 0) return kept ? "partial" : "notRead";
   return acquired || kept ? "read" : "notLoaded";
 }
 
@@ -394,16 +411,81 @@ function distinctReasons(gaps: readonly ChannelGap[]): string[] {
 }
 
 /**
+ * Live tail gaps that do not mean an event was lost. A tail that could not start, a stop that
+ * failed, a subscription that fell back to polling, and a provider message that could not be
+ * formatted all leave every event delivered so far intact. Everything else a tail reports (a batch
+ * that was not received or delivered, a callback error, a poll that could not read events) says
+ * events may be missing, and an unrecognized gap is treated that way too.
+ */
+const NEUTRAL_TAIL_GAP =
+  /\blive tail unavailable\b|\blive tail stop failed\b|polling fallback is active|raw event data is shown instead|provider database lookup failed/i;
+
+function filePathOf(channel: EvtxChannelInfo): string | null {
+  const source = channel.sourceType;
+  return typeof source === "object" && "file" in source ? source.file.path : null;
+}
+
+interface ListedChannel {
+  channel: EvtxChannelInfo;
+  /** Every source a gap can name this channel by: its name and the path of each file it came from. */
+  keys: string[];
+}
+
+/**
  * Builds the rows, order and counts the pane renders.
+ *
+ * A gap belongs to a channel when its source is exactly the channel's name (a live channel) or the
+ * path of a file the channel was read from (files mode). The file's name is never used to guess the
+ * channel: a renamed export, a file listed under its own path because nothing in it was readable,
+ * and a member of an archive all carry the path they were read from.
  *
  * A source that could not be opened has no channel entry (an access-denied Security.evtx is only a
  * gap), yet the pane has to show it: omitting it would hide the very channel that is missing. So a
- * gap that blocks a single .evtx file no channel matches becomes a row of its own, counted in the
+ * gap that blocks a single .evtx file no channel listed becomes a row of its own, counted in the
  * total and never in the read count.
  */
 export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel {
-  const { channels, loadedChannels, remoteMachine, sourceMode } = input;
-  const { span, byChannel } = computeChannelStats(input.records, input);
+  const { loadedChannels, remoteMachine, sourceMode } = input;
+
+  // Text logs from archives share the channel list but are not event channels.
+  const textLogNames = textLogChannelNames(input.records);
+  const eventRecords =
+    textLogNames.size === 0
+      ? input.records
+      : input.records.filter((record) => !textLogNames.has(record.channel));
+  const { span, byChannel } = computeChannelStats(eventRecords, input);
+  const entryCounts = new Map<string, number>();
+  if (textLogNames.size > 0) {
+    for (const record of input.records) {
+      if (textLogNames.has(record.channel)) {
+        entryCounts.set(record.channel, (entryCounts.get(record.channel) ?? 0) + 1);
+      }
+    }
+  }
+
+  // One row per channel name: two exports of the same log are one channel read from two files.
+  const listed = new Map<string, ListedChannel>();
+  const textLogs: TextLogRowModel[] = [];
+  for (const channel of input.channels) {
+    if (textLogNames.has(channel.name)) {
+      if (!textLogs.some((row) => row.name === channel.name)) {
+        textLogs.push({
+          name: channel.name,
+          label: memberLabel(channel.name),
+          entries: entryCounts.get(channel.name) ?? 0,
+        });
+      }
+      continue;
+    }
+    const path = filePathOf(channel);
+    const existing = listed.get(channel.name);
+    if (existing === undefined) {
+      listed.set(channel.name, { channel, keys: path === null ? [channel.name] : [channel.name, path] });
+    } else if (path !== null && !existing.keys.includes(path)) {
+      existing.keys.push(path);
+    }
+  }
+  textLogs.sort((a, b) => a.label.localeCompare(b.label) || a.name.localeCompare(b.name));
 
   const structured: ChannelGap[] = [
     ...input.coverageDetails.map(({ source, kind, reason }) => ({ source, kind, reason })),
@@ -415,34 +497,54 @@ export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel
   const gaps = [
     ...structured,
     ...input.legacyCoverage.map(legacyGap).filter((gap) => !structuredKeys.has(twinKey(gap))),
+    ...input.tailCoverage.map(legacyGap).filter((gap) => !NEUTRAL_TAIL_GAP.test(gap.reason)),
   ].filter(isIncomplete);
   const index = indexGaps(gaps, remoteMachine);
 
-  const known = new Set(channels.map((channel) => channel.name.toLowerCase()));
+  // A blocking gap on an .evtx file that no listed channel came from is a source that never opened.
+  const knownSources = new Set([...listed.values()].flatMap((entry) => entry.keys));
+  const remotePrefix = remoteMachine ? `${remoteMachine}/` : "";
+  const takenNames = new Set([...listed.keys()].map((name) => name.toLowerCase()));
   const unopened: EvtxChannelInfo[] = [];
-  for (const [key, fileGaps] of index.byFile) {
-    const file = index.files.get(key);
-    if (file === undefined || known.has(key) || !fileGaps.some(isBlocking)) continue;
-    unopened.push({ name: file.name, eventCount: 0, sourceType: { file: { path: file.path } } });
+  for (const [source, sourceGaps] of index) {
+    const stem = evtxStem(source);
+    if (stem === null || knownSources.has(source)) continue;
+    if (remotePrefix !== "" && knownSources.has(source.slice(remotePrefix.length))) continue;
+    if (!sourceGaps.some(isBlocking)) continue;
+    // The file's own name when that is free; otherwise its path, which is unique, so two files
+    // called Security.evtx (or one called System.evtx beside the System channel) stay two rows.
+    const name = takenNames.has(stem.toLowerCase()) ? source : stem;
+    takenNames.add(name.toLowerCase());
+    unopened.push({ name, eventCount: 0, sourceType: { file: { path: source } } });
   }
+
+  const listedChannels = [...listed.values()].map((entry) => entry.channel);
+  const allChannels = [...listedChannels, ...unopened];
   const unopenedNames = new Set(unopened.map((channel) => channel.name));
-  const allChannels = [...channels, ...unopened];
 
   const tree = buildChannelTree(allChannels);
   const order = new Map(
     [
-      ...orderChannelNames(channels.map((channel) => channel.name)),
+      ...orderChannelNames(listedChannels.map((channel) => channel.name)),
       ...orderChannelNames(unopened.map((channel) => channel.name)),
-    ].map((name, index) => [name, index] as const),
+    ].map((name, position) => [name, position] as const),
   );
   const rows = new Map<string, ChannelRowModel>();
   let readCount = 0;
   for (const channel of allChannels) {
-    const channelGaps = gapsFor(index, channel.name);
     const isUnopened = unopenedNames.has(channel.name);
+    const keys = isUnopened
+      ? [(channel.sourceType as { file: { path: string } }).file.path]
+      : (listed.get(channel.name)?.keys ?? [channel.name]);
+    const channelGaps = gapsFor(index, keys);
     const stats = byChannel.get(channel.name) ?? NO_CHANNEL_STATS;
+    // A parsed file set was read as it was opened. A live channel was read when it was loaded. With
+    // no source mode nothing was read: the channel list alone proves nothing about its events.
+    const acquired =
+      !isUnopened &&
+      (sourceMode === "files" || (sourceMode === "live" && loadedChannels.has(channel.name)));
     const state = classify(channelGaps, {
-      acquired: !isUnopened && (sourceMode !== "live" || loadedChannels.has(channel.name)),
+      acquired,
       switchedOff: !isUnopened && input.isSwitchedOff(channel),
       stats,
       remote: remoteMachine !== null && remoteMachine !== "",
@@ -458,7 +560,23 @@ export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel
     });
   }
 
-  return { channels: allChannels, tree, order, rows, span, readCount, totalCount: allChannels.length };
+  return {
+    channels: allChannels,
+    tree,
+    order,
+    rows,
+    textLogs,
+    span,
+    readCount,
+    totalCount: allChannels.length,
+  };
+}
+
+/** The member a text-log channel label names: "bundle.zip::logs/app.log" is app.log. */
+function memberLabel(name: string): string {
+  const member = name.lastIndexOf("::");
+  const cut = Math.max(name.lastIndexOf("/"), name.lastIndexOf("\\"), member === -1 ? -1 : member + 1);
+  return name.slice(cut + 1).trim() || name;
 }
 
 // ── Text logs correlated alongside the channels ─────────────────────────────
@@ -500,6 +618,7 @@ export function summarizeLogSources(
 /** Group keys of the two top-level headers; nested folders use `fullPath || name`. */
 export const WINDOWS_LOGS_GROUP = "Windows Logs";
 export const APP_SERVICES_GROUP = "AppServices";
+export const TEXT_LOGS_GROUP = "TextLogs";
 
 /**
  * The groups that start open: Windows Logs, and every group on the path to a channel that was
@@ -509,9 +628,11 @@ export const APP_SERVICES_GROUP = "AppServices";
  * keeps that choice; this is only the starting point.
  */
 export function defaultExpandedGroups(
-  model: Pick<ChannelPaneModel, "tree" | "rows">
+  model: Pick<ChannelPaneModel, "tree" | "rows" | "textLogs">
 ): Set<string> {
   const open = new Set([WINDOWS_LOGS_GROUP]);
+  // The text logs in an archive are why the operator opened it, and they are few.
+  if (model.textLogs.length > 0) open.add(TEXT_LOGS_GROUP);
   const holdsEvents = (name: string) => {
     const row = model.rows.get(name);
     return (

@@ -2,7 +2,12 @@
  * The order the Event Logs channel pane lists its channels in, and the tree it lists them as
  * (spec 8.6), kept apart from any component so every figure that colors by channel can use it.
  * Pure: no React, no store.
+ *
+ * This file is also on Phase 14 (#846). If the two branches add it independently, resolve the
+ * add/add conflict to this version: it is a superset (the tree helpers the pane renders from, name
+ * dedupe, and the text-log helpers below).
  */
+import type { EvtxRecord } from "./types";
 
 /** Anything with a channel name; the tree and the order never read more than that. */
 export interface NamedChannel {
@@ -126,4 +131,40 @@ export function orderChannelNames(names: readonly string[]): string[] {
   };
   walk(tree.serviceTree);
   return [...ordered];
+}
+
+/**
+ * The channels that are really text logs: an archive reader labels the records of a text member
+ * (a .log inside a .zip) with `channel = "{archive}::{member}"` and `originKind: "log"`, so the
+ * workbench lists the member like a channel. A text log is not an event channel. It has no color
+ * index, no level semantics and no place in `orderChannelNames`, so a caller that colors or orders
+ * by channel excludes these names before it asks for an order.
+ *
+ * A channel is a text log when it has records and every one is `originKind: "log"`. Returns the
+ * set for all records in one pass; use it in a loop, and `isTextLogChannel` for a single name.
+ */
+export function textLogChannelNames(
+  records: readonly Pick<EvtxRecord, "channel" | "originKind">[]
+): Set<string> {
+  const eventChannels = new Set<string>();
+  const logChannels = new Set<string>();
+  for (const record of records) {
+    if (record.originKind === "log") logChannels.add(record.channel);
+    else eventChannels.add(record.channel);
+  }
+  for (const name of eventChannels) logChannels.delete(name);
+  return logChannels;
+}
+
+export function isTextLogChannel(
+  name: string,
+  records: readonly Pick<EvtxRecord, "channel" | "originKind">[]
+): boolean {
+  let seen = false;
+  for (const record of records) {
+    if (record.channel !== name) continue;
+    if (record.originKind !== "log") return false;
+    seen = true;
+  }
+  return seen;
 }
