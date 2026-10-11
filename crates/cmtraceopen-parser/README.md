@@ -155,8 +155,8 @@ Windows Firewall support (#814), DsRegCmd event-log linking (#870) and the DsReg
 - `DsregcmdDerived` struct literals need `mdm_urls_present: None` (or the computed value). The new field is `Some(true)` when the capture shows `MdmUrl` or `MdmComplianceUrl`, and `None` when it does not or shows them empty, `-` or `n/a`; it is never `Some(false)`. JSON without the field deserializes to `None`. Exhaustive destructuring must include the field or use `..`.
 - `DsregcmdDerived::mdm_enrolled` changed meaning. It no longer follows URL presence:
   - `Some(true)` when the Enrollments registry holds an enrollment with `EnrollmentState` 1 whose GUID matches an EnterpriseMgmt scheduled task GUID, ignoring braces and case.
-  - `Some(false)` only when the Enrollments export was read, holds no enrollment, and no EnterpriseMgmt task GUID was observed. Empty and absent task evidence count the same.
-  - `None` otherwise: the export is missing, unreadable or lacks its root key; an enrollment exists that no task confirms; or an empty registry sits beside an observed task GUID.
+  - `Some(false)` only when the Enrollments export was read, holds no enrollment, and the EnterpriseMgmt task evidence is absent or lists no task. Empty and absent task evidence count the same.
+  - `None` otherwise: the export is missing, unreadable or lacks its root key; an enrollment exists that no task confirms; or an empty registry sits beside a listed task.
 
   Callers that read `mdm_enrolled` as "an MDM URL is present" must read `mdm_urls_present`. `analyze_text` without bundle evidence now returns `mdm_enrolled: None`. The `enrollment-missing-on-joined` rule fires exactly when `mdm_enrolled` is `Some(false)` on an Entra-joined device, so it can fire when MDM URLs are present and never fires on missing, unreadable or conflicting evidence.
 - New public helpers `dsregcmd::extended::unbraced_guid` and `dsregcmd::extended::same_enrollment_guid` give the enrollment GUID identity the analyzer uses: the unbraced `8-4-4-4-12` form, compared ignoring braces and case. They are additions and need no source change.

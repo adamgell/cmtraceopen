@@ -241,10 +241,11 @@ pub struct DsregcmdDerived {
     ///   matches an EnterpriseMgmt scheduled task GUID (ignoring braces and
     ///   case).
     /// - `Some(false)` only when the Enrollments export was read, holds no
-    ///   enrollment, and no EnterpriseMgmt task GUID was observed.
+    ///   enrollment, and the EnterpriseMgmt task evidence is absent or lists
+    ///   no task.
     /// - `None` otherwise: the export is missing, unreadable or lacks its root
     ///   key; an enrollment exists that no task confirms; or an empty registry
-    ///   sits beside an observed task GUID (conflicting evidence).
+    ///   sits beside a listed task (conflicting evidence).
     ///
     /// URL presence never sets it; see `mdm_urls_present`.
     pub mdm_enrolled: Option<bool>,

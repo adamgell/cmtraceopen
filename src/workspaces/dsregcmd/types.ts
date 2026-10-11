@@ -187,9 +187,10 @@ export interface DsregcmdDerived {
   /**
    * Registry-confirmed enrollment: true when an enrollment in state 1 matches
    * an EnterpriseMgmt task GUID; false only when the Enrollments export was
-   * read, holds no enrollment, and no task GUID was observed; null otherwise
-   * (missing or unreadable export, an enrollment no task confirms, or an empty
-   * registry beside a task GUID). URL presence never sets it.
+   * read, holds no enrollment, and the task evidence is absent or lists no
+   * task; null otherwise (missing or unreadable export, an enrollment no task
+   * confirms, or an empty registry beside a listed task). URL presence never
+   * sets it.
    */
   mdmEnrolled: boolean | null;
   /**
