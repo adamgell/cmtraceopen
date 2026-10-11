@@ -2800,16 +2800,20 @@ export async function cancelActiveLoad(): Promise<void> {
 /**
  * Why a comparison cannot be made, in words that name only actions that exist: Load reads a channel
  * a stopped load left partly read, in full; deselecting leaves a channel out. No control reads a
- * capped channel in full. When nothing would remain, it says no channel can be compared rather than
- * offering a result that does not exist.
+ * capped channel in full. When nothing would remain to compare, it says so rather than promising a
+ * result that does not exist.
+ *
+ * "Remain" means channels that would be compared: the loaded selected channels that are not listed,
+ * and the listed ones that Load would bring in. A selected channel that was never loaded is not
+ * compared, so deselecting around it leaves nothing.
  */
 function incompleteCurrentPeriodDetail(
   capped: readonly string[],
   notReadInFull: readonly string[],
-  selected: ReadonlySet<string>
+  compared: readonly string[]
 ): string {
   const listed = new Set([...capped, ...notReadInFull]);
-  const othersRemain = [...selected].some((channel) => !listed.has(channel));
+  const othersRemain = notReadInFull.length > 0 || compared.some((channel) => !listed.has(channel));
   const causes = [
     ...(capped.length > 0
       ? [
@@ -2829,13 +2833,11 @@ function incompleteCurrentPeriodDetail(
     );
   }
   if (capped.length > 0) {
-    if (othersRemain) {
-      advice.push(`Deselect ${capped.join(", ")} to compare the other channels.`);
-    } else if (notReadInFull.length > 0) {
-      advice.push(`${capped.join(", ")} cannot be compared while at the cap.`);
-    } else {
-      advice.push("No channel can be compared while every selected channel is at the cap.");
-    }
+    advice.push(
+      othersRemain
+        ? `Deselect ${capped.join(", ")} to compare the other channels.`
+        : "No channel can be compared while every loaded selected channel is at the cap."
+    );
   }
   return `${causes.join("; ")}, so the current period is only partly loaded. ${advice.join(" ")}`;
 }
@@ -2945,7 +2947,7 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
   if (notReadInFull.length > 0 || capped.length > 0) {
     publishComparisonUnavailable(
       "currentPeriodIncomplete",
-      incompleteCurrentPeriodDetail(capped, notReadInFull, state.selectedChannels)
+      incompleteCurrentPeriodDetail(capped, notReadInFull, channels)
     );
     return;
   }

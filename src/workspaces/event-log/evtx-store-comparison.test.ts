@@ -710,7 +710,7 @@ describe("when the current period is not fully loaded", () => {
     expect(settled()).toEqual({
       status: "unavailable",
       reason: "currentPeriodIncomplete",
-      detail: `System, Security reached the automatic load's cap of 2,000 events, ${CAP_DETAIL_TAIL} No channel can be compared while every selected channel is at the cap.`,
+      detail: `System, Security reached the automatic load's cap of 2,000 events, ${CAP_DETAIL_TAIL} No channel can be compared while every loaded selected channel is at the cap.`,
     });
     expect((settled() as { detail: string }).detail).not.toContain("Deselect");
   });
@@ -733,7 +733,7 @@ describe("when the current period is not fully loaded", () => {
     });
   });
 
-  it("says a capped channel cannot be compared, rather than to deselect it, when nothing else would remain", async () => {
+  it("offers to deselect a capped channel when a channel still to be loaded in full would remain", async () => {
     await autoLoad({ Security: AUTO_LOAD_MAX_EVENTS });
     invoke.mockImplementation(async (_name: string, rawArgs: unknown) =>
       streamedReply(rawArgs as QueryArgs, [record("Setup")], [{ ...STOPPED_GAP, source: "Setup" }])
@@ -747,7 +747,23 @@ describe("when the current period is not fully loaded", () => {
     expect(settled()).toEqual({
       status: "unavailable",
       reason: "currentPeriodIncomplete",
-      detail: `Security reached the automatic load's cap of 2,000 events; Setup was not read in full, ${CAP_DETAIL_TAIL} Load Setup to read it in full. Security cannot be compared while at the cap.`,
+      detail: `Security reached the automatic load's cap of 2,000 events; Setup was not read in full, ${CAP_DETAIL_TAIL} Load Setup to read it in full. Deselect Security to compare the other channels.`,
+    });
+  });
+
+  it("does not promise other channels when the only other selected channel was never loaded", async () => {
+    // Deselecting Security would leave Application, which holds nothing and is not loaded: Compare
+    // would then have no channel to compare. The copy must describe the channels that are compared.
+    await autoLoad({ Security: AUTO_LOAD_MAX_EVENTS });
+    useEvtxStore.setState({ selectedChannels: new Set(["Security", "Application"]) });
+    expect(useEvtxStore.getState().loadedChannels.has("Application")).toBe(false);
+
+    await comparePreviousPeriod(ANCHOR);
+
+    expect(settled()).toEqual({
+      status: "unavailable",
+      reason: "currentPeriodIncomplete",
+      detail: `Security reached the automatic load's cap of 2,000 events, ${CAP_DETAIL_TAIL} No channel can be compared while every loaded selected channel is at the cap.`,
     });
   });
 
