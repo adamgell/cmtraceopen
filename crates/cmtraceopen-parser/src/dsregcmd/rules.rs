@@ -1466,7 +1466,9 @@ fn build_diagnostics(
 mod tests {
     use super::analyze_facts;
     use crate::dsregcmd::models::{
-        DsregcmdCaptureConfidence, DsregcmdDiagnosticPhase, DsregcmdJoinType,
+        DsregcmdAnalysisResult, DsregcmdCaptureConfidence, DsregcmdDiagnosticPhase,
+        DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdJoinType,
+        DsregcmdScheduledTaskEvidence,
     };
     use crate::dsregcmd::parser::parse_dsregcmd;
     use crate::intune::apps::windows::ime::models::IntuneDiagnosticSeverity;
@@ -1991,160 +1993,80 @@ mod tests {
         );
     }
 
-    #[test]
-    fn mdm_confirmed_via_registry_diagnostic_fires_when_cross_referenced() {
-        use super::{apply_enrollment_cross_reference, build_extended_diagnostics};
-        use crate::dsregcmd::models::{
-            DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdScheduledTaskEvidence,
-        };
+    // ---------------------------------------------------------------------
+    // `mdm_enrolled` and `enrollment-missing-on-joined` (reducer-contract
+    // ruling on #924). Run the group with `--lib mdm_enrollment_rule_`.
+    // ---------------------------------------------------------------------
 
-        let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse sample");
-        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE, Utc::now());
+    /// Synthetic enrollment GUIDs. `MDM_GUID_VARIANT` is `MDM_GUID` braced and
+    /// in the other letter case.
+    const MDM_GUID: &str = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+    const MDM_GUID_VARIANT: &str = "{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}";
+    const OTHER_GUID: &str = "99999999-8888-7777-6666-555555555555";
 
-        result.enrollment_evidence = Some(DsregcmdEnrollmentEvidence {
-            enrollment_count: 1,
-            enrollments: vec![DsregcmdEnrollmentEntry {
-                guid: Some("{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_string()),
-                upn: Some("user@contoso.com".to_string()),
-                provider_id: Some("MS DM Server".to_string()),
-                enrollment_state: Some(1),
-            }],
-        });
-        result.scheduled_task_evidence = Some(DsregcmdScheduledTaskEvidence {
-            enterprise_mgmt_guids: vec!["{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_string()],
-        });
+    const MISSING_WARNING: &str = "enrollment-missing-on-joined";
+    const REGISTRY_NOTE: &str = "mdm-confirmed-via-registry";
 
-        assert_eq!(result.derived.mdm_enrolled, None);
-        apply_enrollment_cross_reference(&mut result);
-        assert_eq!(result.derived.mdm_enrolled, Some(true));
-
-        let extended = build_extended_diagnostics(&result);
-        assert!(
-            extended
-                .iter()
-                .any(|d| d.id == "mdm-confirmed-via-registry"),
-            "should fire mdm-confirmed-via-registry diagnostic"
-        );
+    #[derive(Clone, Copy, Debug)]
+    enum Join {
+        Joined,
+        NotJoined,
+        Unreported,
     }
 
-    #[test]
-    fn mdm_not_confirmed_without_matching_scheduled_task() {
-        use super::apply_enrollment_cross_reference;
-        use crate::dsregcmd::models::{
-            DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdScheduledTaskEvidence,
+    fn mdm_status(join: Join, urls: bool) -> String {
+        let mut text = match join {
+            Join::Joined => " AzureAdJoined : YES\n DomainJoined : NO\n".to_string(),
+            Join::NotJoined => " AzureAdJoined : NO\n DomainJoined : NO\n".to_string(),
+            Join::Unreported => " DomainJoined : NO\n".to_string(),
         };
-
-        let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse sample");
-        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE, Utc::now());
-
-        // Enrollment state=1 but GUID doesn't match any scheduled task
-        result.enrollment_evidence = Some(DsregcmdEnrollmentEvidence {
-            enrollment_count: 1,
-            enrollments: vec![DsregcmdEnrollmentEntry {
-                guid: Some("{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_string()),
-                upn: Some("user@contoso.com".to_string()),
-                provider_id: Some("MS DM Server".to_string()),
-                enrollment_state: Some(1),
-            }],
-        });
-        result.scheduled_task_evidence = Some(DsregcmdScheduledTaskEvidence {
-            enterprise_mgmt_guids: vec!["{99999999-8888-7777-6666-555555555555}".to_string()],
-        });
-
-        // Cross-reference should NOT upgrade because GUIDs don't match
-        apply_enrollment_cross_reference(&mut result);
-        assert_eq!(
-            result.derived.mdm_enrolled, None,
-            "should stay None when GUIDs don't match"
-        );
+        text.push_str(" WorkplaceJoined : NO\n TenantId : 11111111-2222-3333-4444-555555555555\n");
+        if urls {
+            text.push_str(
+                " MdmUrl : https://enrollment.manage.microsoft.com/enrollmentserver/discovery.svc\n MdmComplianceUrl : https://portal.manage.microsoft.com/?portalAction=Compliance\n",
+            );
+        }
+        text
     }
 
-    /// Regression: on a joined device with enrollment_count == 0 but cross-reference
-    /// confirming MDM, the "enrollment-missing-on-joined" warning must NOT fire.
-    const JOINED_NO_MDM_URLS_SAMPLE: &str = r#"
- AzureAdJoined : YES
- DomainJoined : NO
- WorkplaceJoined : NO
- TenantId : 11111111-2222-3333-4444-555555555555
- DeviceId : abcdefab-1111-2222-3333-abcdefabcdef
- AzureAdPrt : YES
- AzureAdPrtUpdateTime : 2025-03-10 05:00:00.000 UTC
-"#;
-
-    #[test]
-    fn enrollment_missing_warning_suppressed_when_cross_reference_confirms_mdm() {
-        use super::{apply_enrollment_cross_reference, build_extended_diagnostics};
-        use crate::dsregcmd::models::{
-            DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdScheduledTaskEvidence,
-        };
-
-        let facts = parse_dsregcmd(JOINED_NO_MDM_URLS_SAMPLE).expect("parse sample");
-        let mut result = analyze_facts(facts, JOINED_NO_MDM_URLS_SAMPLE, Utc::now());
-
-        // enrollment_count is 0 in registry evidence, but scheduled tasks have matching GUIDs
-        result.enrollment_evidence = Some(DsregcmdEnrollmentEvidence {
-            enrollment_count: 0,
-            enrollments: vec![DsregcmdEnrollmentEntry {
-                guid: Some("{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_string()),
-                upn: Some("user@contoso.com".to_string()),
-                provider_id: Some("MS DM Server".to_string()),
-                enrollment_state: Some(1),
-            }],
-        });
-        result.scheduled_task_evidence = Some(DsregcmdScheduledTaskEvidence {
-            enterprise_mgmt_guids: vec!["{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_string()],
-        });
-
-        apply_enrollment_cross_reference(&mut result);
-        assert_eq!(result.derived.mdm_enrolled, Some(true));
-
-        let extended = build_extended_diagnostics(&result);
-
-        // The cross-reference info diagnostic SHOULD fire
-        assert!(
-            extended
-                .iter()
-                .any(|d| d.id == "mdm-confirmed-via-registry"),
-            "should fire mdm-confirmed-via-registry diagnostic"
-        );
-
-        // The enrollment-missing warning should NOT fire — MDM was confirmed
-        assert!(
-            !extended
-                .iter()
-                .any(|d| d.id == "enrollment-missing-on-joined"),
-            "enrollment-missing-on-joined should be suppressed when cross-reference confirms MDM"
-        );
+    fn entry(guid: Option<&str>, state: Option<u32>) -> DsregcmdEnrollmentEntry {
+        DsregcmdEnrollmentEntry {
+            guid: guid.map(str::to_string),
+            upn: Some("user@contoso.test".to_string()),
+            provider_id: Some("MS DM Server".to_string()),
+            enrollment_state: state,
+        }
     }
-    const JOINED_WITH_MDM_URLS_SAMPLE: &str = r#"
- AzureAdJoined : YES
- DomainJoined : NO
- WorkplaceJoined : NO
- TenantId : 11111111-2222-3333-4444-555555555555
- DeviceId : abcdefab-1111-2222-3333-abcdefabcdef
- AzureAdPrt : YES
- AzureAdPrtUpdateTime : 2025-03-10 05:00:00.000 UTC
- MdmUrl : https://enrollment.manage.microsoft.com/enrollmentserver/discovery.svc
- MdmComplianceUrl : https://portal.manage.microsoft.com/?portalAction=Compliance
-"#;
 
-    const MDM_GUID: &str = "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}";
+    /// Registry evidence the native reader can produce: the count is the
+    /// length of the list.
+    fn registry(entries: Vec<DsregcmdEnrollmentEntry>) -> Option<DsregcmdEnrollmentEvidence> {
+        Some(DsregcmdEnrollmentEvidence {
+            enrollment_count: u32::try_from(entries.len()).expect("count fits"),
+            enrollments: entries,
+        })
+    }
 
-    /// Build an analysis from `sample` with the given registry evidence applied,
-    /// and return it with the ids of the extended diagnostics.
-    fn analyze_mdm_split(
-        sample: &str,
-        enrollment: Option<crate::dsregcmd::models::DsregcmdEnrollmentEvidence>,
-    ) -> (crate::dsregcmd::models::DsregcmdAnalysisResult, Vec<String>) {
+    fn tasks(guids: &[&str]) -> Option<DsregcmdScheduledTaskEvidence> {
+        Some(DsregcmdScheduledTaskEvidence {
+            enterprise_mgmt_guids: guids.iter().map(|guid| guid.to_string()).collect(),
+        })
+    }
+
+    /// Analyze `status` with the given evidence the way
+    /// `analyze_text_with_evidence` assembles it, returning the analysis and
+    /// the ids of the extended diagnostics.
+    fn analyze_mdm(
+        status: &str,
+        enrollment: Option<DsregcmdEnrollmentEvidence>,
+        task_evidence: Option<DsregcmdScheduledTaskEvidence>,
+    ) -> (DsregcmdAnalysisResult, Vec<String>) {
         use super::{apply_enrollment_cross_reference, build_extended_diagnostics};
-        use crate::dsregcmd::models::DsregcmdScheduledTaskEvidence;
 
-        let facts = parse_dsregcmd(sample).expect("parse sample");
-        let mut result = analyze_facts(facts, sample, Utc::now());
+        let facts = parse_dsregcmd(status).expect("parse sample");
+        let mut result = analyze_facts(facts, status, Utc::now());
         result.enrollment_evidence = enrollment;
-        result.scheduled_task_evidence = Some(DsregcmdScheduledTaskEvidence {
-            enterprise_mgmt_guids: vec![MDM_GUID.to_string()],
-        });
+        result.scheduled_task_evidence = task_evidence;
         apply_enrollment_cross_reference(&mut result);
         let ids = build_extended_diagnostics(&result)
             .into_iter()
@@ -2153,78 +2075,408 @@ mod tests {
         (result, ids)
     }
 
-    fn confirming_enrollment() -> crate::dsregcmd::models::DsregcmdEnrollmentEvidence {
-        use crate::dsregcmd::models::{DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence};
-        DsregcmdEnrollmentEvidence {
-            enrollment_count: 1,
-            enrollments: vec![DsregcmdEnrollmentEntry {
-                guid: Some(MDM_GUID.to_string()),
-                upn: Some("user@contoso.com".to_string()),
-                provider_id: Some("MS DM Server".to_string()),
-                enrollment_state: Some(1),
-            }],
+    fn has(ids: &[String], id: &str) -> bool {
+        ids.iter().any(|candidate| candidate == id)
+    }
+
+    /// Case (a): an empty registry beside an observed task GUID contradicts
+    /// itself, so the answer is unknown and nothing warns.
+    #[test]
+    fn mdm_enrollment_rule_registry_empty_task_guid_observed_is_unknown() {
+        for urls in [true, false] {
+            for task_guids in [
+                &[MDM_GUID][..],
+                &[MDM_GUID_VARIANT],
+                &[OTHER_GUID, MDM_GUID],
+            ] {
+                let (result, ids) = analyze_mdm(
+                    &mdm_status(Join::Joined, urls),
+                    registry(vec![]),
+                    tasks(task_guids),
+                );
+                assert_eq!(
+                    result.derived.mdm_enrolled, None,
+                    "urls={urls} tasks={task_guids:?}"
+                );
+                assert!(
+                    !has(&ids, MISSING_WARNING),
+                    "urls={urls} tasks={task_guids:?}"
+                );
+            }
         }
     }
 
-    fn empty_enrollment() -> crate::dsregcmd::models::DsregcmdEnrollmentEvidence {
-        crate::dsregcmd::models::DsregcmdEnrollmentEvidence {
+    /// Case (b): an empty task capture is absence, not a contradiction.
+    #[test]
+    fn mdm_enrollment_rule_registry_empty_task_list_empty_is_not_enrolled() {
+        for urls in [true, false] {
+            let (result, ids) = analyze_mdm(
+                &mdm_status(Join::Joined, urls),
+                registry(vec![]),
+                tasks(&[]),
+            );
+            assert_eq!(result.derived.mdm_enrolled, Some(false), "urls={urls}");
+            assert!(has(&ids, MISSING_WARNING), "urls={urls}");
+        }
+    }
+
+    /// Case (c): no task evidence at all.
+    #[test]
+    fn mdm_enrollment_rule_registry_empty_task_evidence_absent_is_not_enrolled() {
+        for urls in [true, false] {
+            let (result, ids) =
+                analyze_mdm(&mdm_status(Join::Joined, urls), registry(vec![]), None);
+            assert_eq!(result.derived.mdm_enrolled, Some(false), "urls={urls}");
+            assert!(has(&ids, MISSING_WARNING), "urls={urls}");
+        }
+    }
+
+    #[test]
+    fn mdm_enrollment_rule_empty_and_absent_task_evidence_are_equivalent() {
+        for join in [Join::Joined, Join::NotJoined, Join::Unreported] {
+            for urls in [true, false] {
+                let status = mdm_status(join, urls);
+                for enrollment in [
+                    registry(vec![]),
+                    registry(vec![entry(Some(MDM_GUID), Some(1))]),
+                    None,
+                ] {
+                    let (empty, empty_ids) = analyze_mdm(&status, enrollment.clone(), tasks(&[]));
+                    let (absent, absent_ids) = analyze_mdm(&status, enrollment, None);
+                    assert_eq!(empty.derived.mdm_enrolled, absent.derived.mdm_enrolled);
+                    assert_eq!(empty_ids, absent_ids, "{join:?} urls={urls}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mdm_enrollment_rule_not_joined_negative_has_no_warning() {
+        for join in [Join::NotJoined, Join::Unreported] {
+            for urls in [true, false] {
+                let (result, ids) = analyze_mdm(&mdm_status(join, urls), registry(vec![]), None);
+                assert_eq!(
+                    result.derived.mdm_enrolled,
+                    Some(false),
+                    "{join:?} urls={urls}"
+                );
+                assert!(!has(&ids, MISSING_WARNING), "{join:?} urls={urls}");
+            }
+        }
+    }
+
+    /// No registry evidence (missing or unreadable export) is unknown, with or
+    /// without task GUIDs and URLs: URLs alone never assert enrollment, and a
+    /// task GUID alone never confirms it. The native reader maps both a missing
+    /// and an unreadable export to `None`; `enrollments_export_*` in src-tauri
+    /// cover that mapping.
+    #[test]
+    fn mdm_enrollment_rule_registry_absent_with_task_guids_is_unknown() {
+        for urls in [true, false] {
+            for task_evidence in [tasks(&[MDM_GUID]), tasks(&[]), None] {
+                let (result, ids) =
+                    analyze_mdm(&mdm_status(Join::Joined, urls), None, task_evidence.clone());
+                assert_eq!(
+                    result.derived.mdm_enrolled, None,
+                    "urls={urls} {task_evidence:?}"
+                );
+                assert!(!has(&ids, MISSING_WARNING));
+                assert!(!has(&ids, REGISTRY_NOTE));
+                assert_eq!(result.derived.mdm_urls_present, urls.then_some(true));
+            }
+        }
+    }
+
+    /// An enrollment that exists but is not confirmed by a task is unknown,
+    /// never negative: EnrollmentState other than 1 or missing (even with a
+    /// matching task), a null GUID, a GUID that is not among the tasks, or no
+    /// task GUIDs to match.
+    #[test]
+    fn mdm_enrollment_rule_present_unconfirmed_enrollment_is_unknown() {
+        let cases = [
+            (
+                "state 0",
+                entry(Some(MDM_GUID), Some(0)),
+                tasks(&[MDM_GUID]),
+            ),
+            (
+                "state 2",
+                entry(Some(MDM_GUID), Some(2)),
+                tasks(&[MDM_GUID]),
+            ),
+            (
+                "state 6",
+                entry(Some(MDM_GUID), Some(6)),
+                tasks(&[MDM_GUID]),
+            ),
+            (
+                "state missing",
+                entry(Some(MDM_GUID), None),
+                tasks(&[MDM_GUID]),
+            ),
+            ("guid missing", entry(None, Some(1)), tasks(&[MDM_GUID])),
+            (
+                "guid not among tasks",
+                entry(Some(MDM_GUID), Some(1)),
+                tasks(&[OTHER_GUID]),
+            ),
+            (
+                "empty task list",
+                entry(Some(MDM_GUID), Some(1)),
+                tasks(&[]),
+            ),
+            ("no task evidence", entry(Some(MDM_GUID), Some(1)), None),
+        ];
+        for (name, enrollment_entry, task_evidence) in cases {
+            for urls in [true, false] {
+                let (result, ids) = analyze_mdm(
+                    &mdm_status(Join::Joined, urls),
+                    registry(vec![enrollment_entry.clone()]),
+                    task_evidence.clone(),
+                );
+                assert_eq!(result.derived.mdm_enrolled, None, "{name} urls={urls}");
+                assert!(!has(&ids, MISSING_WARNING), "{name} urls={urls}");
+                assert!(!has(&ids, REGISTRY_NOTE), "{name} urls={urls}");
+            }
+        }
+    }
+
+    /// The reader never produces a count that disagrees with its list, but a
+    /// hand-made bundle can. Either disagreement is not "empty".
+    #[test]
+    fn mdm_enrollment_rule_count_and_list_disagreement_is_not_negative() {
+        let zero_count_with_entry = Some(DsregcmdEnrollmentEvidence {
             enrollment_count: 0,
+            enrollments: vec![entry(Some(MDM_GUID), Some(6))],
+        });
+        let count_with_empty_list = Some(DsregcmdEnrollmentEvidence {
+            enrollment_count: 1,
             enrollments: Vec::new(),
+        });
+        for enrollment in [zero_count_with_entry, count_with_empty_list] {
+            let (result, ids) =
+                analyze_mdm(&mdm_status(Join::Joined, true), enrollment.clone(), None);
+            assert_eq!(result.derived.mdm_enrolled, None, "{enrollment:?}");
+            assert!(!has(&ids, MISSING_WARNING), "{enrollment:?}");
+        }
+    }
+
+    /// The warning fires exactly when the field is negative on an Entra-joined
+    /// device, and the registry note exactly when the field is positive without
+    /// URLs, across every combination of the inputs.
+    #[test]
+    fn mdm_enrollment_rule_gate_matches_field_on_every_case() {
+        let enrollments = [
+            None,
+            registry(vec![]),
+            registry(vec![entry(Some(MDM_GUID), Some(1))]),
+            registry(vec![entry(Some(MDM_GUID), Some(6))]),
+            registry(vec![
+                entry(Some(OTHER_GUID), Some(6)),
+                entry(Some(MDM_GUID), Some(1)),
+            ]),
+        ];
+        let task_evidence = [
+            None,
+            tasks(&[]),
+            tasks(&[MDM_GUID]),
+            tasks(&[MDM_GUID_VARIANT]),
+            tasks(&[OTHER_GUID]),
+        ];
+        let mut negatives = 0;
+        for join in [Join::Joined, Join::NotJoined, Join::Unreported] {
+            for urls in [true, false] {
+                let status = mdm_status(join, urls);
+                for enrollment in &enrollments {
+                    for task in &task_evidence {
+                        let (result, ids) = analyze_mdm(&status, enrollment.clone(), task.clone());
+                        let field = result.derived.mdm_enrolled;
+                        let joined = result.facts.join_state.azure_ad_joined == Some(true);
+                        let case = format!("{join:?} urls={urls} {enrollment:?} {task:?}");
+                        assert_eq!(
+                            has(&ids, MISSING_WARNING),
+                            field == Some(false) && joined,
+                            "{case}"
+                        );
+                        assert_eq!(
+                            has(&ids, REGISTRY_NOTE),
+                            field == Some(true) && !urls,
+                            "{case}"
+                        );
+                        negatives += usize::from(field == Some(false));
+                    }
+                }
+            }
+        }
+        // Empty registry with no or empty task evidence, for each join x urls.
+        assert_eq!(negatives, 3 * 2 * 2);
+    }
+
+    /// GUID identity is the unbraced form, compared ignoring case, on both sides.
+    #[test]
+    fn mdm_enrollment_rule_guid_braces_and_case_do_not_change_identity() {
+        let pairs = [
+            (
+                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}",
+            ),
+            (
+                "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}",
+                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            ),
+            (
+                "{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}",
+                "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}",
+            ),
+            (
+                "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            ),
+        ];
+        for (registry_guid, task_guid) in pairs {
+            let (result, ids) = analyze_mdm(
+                &mdm_status(Join::Joined, false),
+                registry(vec![entry(Some(registry_guid), Some(1))]),
+                tasks(&[task_guid]),
+            );
+            assert_eq!(
+                result.derived.mdm_enrolled,
+                Some(true),
+                "{registry_guid} vs {task_guid}"
+            );
+            assert!(has(&ids, REGISTRY_NOTE));
         }
     }
 
     #[test]
-    fn mdm_urls_alone_do_not_assert_enrollment() {
-        let (result, _) = analyze_mdm_split(JOINED_WITH_MDM_URLS_SAMPLE, None);
-        assert_eq!(result.derived.mdm_urls_present, Some(true));
-        assert_eq!(result.derived.mdm_enrolled, None);
-    }
-
-    #[test]
-    fn mdm_split_urls_present_and_registry_confirms() {
-        let (result, ids) =
-            analyze_mdm_split(JOINED_WITH_MDM_URLS_SAMPLE, Some(confirming_enrollment()));
-        assert_eq!(result.derived.mdm_urls_present, Some(true));
+    fn mdm_enrollment_rule_any_one_of_several_enrollments_confirms() {
+        let (result, ids) = analyze_mdm(
+            &mdm_status(Join::Joined, true),
+            registry(vec![
+                entry(Some(OTHER_GUID), Some(1)),
+                entry(Some("11111111-2222-3333-4444-555555555555"), Some(6)),
+                entry(Some(MDM_GUID), Some(1)),
+            ]),
+            tasks(&["22222222-3333-4444-5555-666666666666", MDM_GUID_VARIANT]),
+        );
         assert_eq!(result.derived.mdm_enrolled, Some(true));
-        assert!(!ids.iter().any(|i| i == "enrollment-missing-on-joined"));
-        // The URLs are present, so the "confirmed without URLs" note must not fire.
-        assert!(!ids.iter().any(|i| i == "mdm-confirmed-via-registry"));
+        assert!(!has(&ids, MISSING_WARNING));
     }
 
     #[test]
-    fn mdm_split_urls_present_and_registry_read_empty_fires_missing_enrollment() {
-        let (result, ids) =
-            analyze_mdm_split(JOINED_WITH_MDM_URLS_SAMPLE, Some(empty_enrollment()));
-        assert_eq!(result.derived.mdm_urls_present, Some(true));
-        assert_eq!(result.derived.mdm_enrolled, Some(false));
-        assert!(ids.iter().any(|i| i == "enrollment-missing-on-joined"));
+    fn mdm_enrollment_rule_task_order_and_duplicates_do_not_change_result() {
+        let task_orders: [&[&str]; 4] = [
+            &[MDM_GUID, OTHER_GUID],
+            &[OTHER_GUID, MDM_GUID],
+            &[MDM_GUID_VARIANT, OTHER_GUID, MDM_GUID, MDM_GUID],
+            &[OTHER_GUID, OTHER_GUID, MDM_GUID_VARIANT],
+        ];
+        let confirmed = entry(Some(MDM_GUID), Some(1));
+        let unconfirmed = entry(Some(OTHER_GUID), Some(6));
+        let entry_orders = [
+            vec![confirmed.clone(), unconfirmed.clone()],
+            vec![unconfirmed.clone(), confirmed.clone()],
+        ];
+        for task_guids in task_orders {
+            for entries in &entry_orders {
+                let (result, ids) = analyze_mdm(
+                    &mdm_status(Join::Joined, true),
+                    registry(entries.clone()),
+                    tasks(task_guids),
+                );
+                assert_eq!(result.derived.mdm_enrolled, Some(true), "{task_guids:?}");
+                assert!(!has(&ids, MISSING_WARNING));
+            }
+            // Case (a) stays unknown whatever the task order or duplicates.
+            let (result, ids) = analyze_mdm(
+                &mdm_status(Join::Joined, true),
+                registry(vec![]),
+                tasks(task_guids),
+            );
+            assert_eq!(result.derived.mdm_enrolled, None, "{task_guids:?}");
+            assert!(!has(&ids, MISSING_WARNING));
+        }
     }
 
-    /// The #883 scenario: URLs present, enrollments export missing or
-    /// unreadable. That is unknown, never zero, so nothing may fire.
+    /// A confirmed enrollment suppresses the warning. Without URLs it raises
+    /// the registry note, with the matched GUID in the evidence; with URLs the
+    /// note does not fire.
     #[test]
-    fn mdm_split_urls_present_and_registry_unreadable_stays_unknown() {
-        let (result, ids) = analyze_mdm_split(JOINED_WITH_MDM_URLS_SAMPLE, None);
-        assert_eq!(result.derived.mdm_urls_present, Some(true));
-        assert_eq!(result.derived.mdm_enrolled, None);
-        assert!(!ids.iter().any(|i| i == "enrollment-missing-on-joined"));
+    fn mdm_enrollment_rule_confirmed_enrollment_raises_the_note_only_without_urls() {
+        use super::build_extended_diagnostics;
+
+        let (without_urls, ids) = analyze_mdm(
+            &mdm_status(Join::Joined, false),
+            registry(vec![entry(Some(MDM_GUID), Some(1))]),
+            tasks(&[MDM_GUID_VARIANT]),
+        );
+        assert_eq!(without_urls.derived.mdm_enrolled, Some(true));
+        assert!(has(&ids, REGISTRY_NOTE));
+        assert!(!has(&ids, MISSING_WARNING));
+        let note = build_extended_diagnostics(&without_urls)
+            .into_iter()
+            .find(|d| d.id == REGISTRY_NOTE)
+            .expect("registry note");
+        assert!(
+            note.evidence.iter().any(|line| line.contains(MDM_GUID)),
+            "{:?}",
+            note.evidence
+        );
+
+        let (with_urls, ids) = analyze_mdm(
+            &mdm_status(Join::Joined, true),
+            registry(vec![entry(Some(MDM_GUID), Some(1))]),
+            tasks(&[MDM_GUID]),
+        );
+        assert_eq!(with_urls.derived.mdm_urls_present, Some(true));
+        assert_eq!(with_urls.derived.mdm_enrolled, Some(true));
+        assert!(!has(&ids, REGISTRY_NOTE));
+        assert!(!has(&ids, MISSING_WARNING));
     }
 
+    /// The parser side of the six MDM states (URLs shown or not x enrolled
+    /// true, unknown or false) on a joined and a not-joined device. The
+    /// workspace's labels for the same twelve rows are pinned in
+    /// `dsregcmd-verdict.test.ts`.
     #[test]
-    fn mdm_split_no_urls_and_registry_confirms() {
-        let (result, ids) =
-            analyze_mdm_split(JOINED_NO_MDM_URLS_SAMPLE, Some(confirming_enrollment()));
-        assert_eq!(result.derived.mdm_urls_present, None);
-        assert_eq!(result.derived.mdm_enrolled, Some(true));
-        assert!(ids.iter().any(|i| i == "mdm-confirmed-via-registry"));
-    }
-
-    #[test]
-    fn mdm_split_no_urls_and_no_registry_are_both_unknown() {
-        let (result, ids) = analyze_mdm_split(JOINED_NO_MDM_URLS_SAMPLE, None);
-        assert_eq!(result.derived.mdm_urls_present, None);
-        assert_eq!(result.derived.mdm_enrolled, None);
-        assert!(!ids.iter().any(|i| i == "enrollment-missing-on-joined"));
+    fn mdm_enrollment_rule_six_states_joined_and_not_joined() {
+        let confirmed = || {
+            (
+                registry(vec![entry(Some(MDM_GUID), Some(1))]),
+                tasks(&[MDM_GUID]),
+            )
+        };
+        let unknown = || (None, None);
+        let negative = || (registry(vec![]), None);
+        for (join, joined) in [(Join::Joined, true), (Join::NotJoined, false)] {
+            for urls in [true, false] {
+                for (expected, (enrollment, task_evidence)) in [
+                    (Some(true), confirmed()),
+                    (None, unknown()),
+                    (Some(false), negative()),
+                ] {
+                    let (result, ids) =
+                        analyze_mdm(&mdm_status(join, urls), enrollment, task_evidence);
+                    let case = format!("{join:?} urls={urls} expected={expected:?}");
+                    assert_eq!(
+                        result.derived.mdm_urls_present,
+                        urls.then_some(true),
+                        "{case}"
+                    );
+                    assert_eq!(result.derived.mdm_enrolled, expected, "{case}");
+                    assert_eq!(
+                        has(&ids, MISSING_WARNING),
+                        expected == Some(false) && joined,
+                        "{case}"
+                    );
+                    assert_eq!(
+                        has(&ids, REGISTRY_NOTE),
+                        expected == Some(true) && !urls,
+                        "{case}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

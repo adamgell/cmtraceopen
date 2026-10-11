@@ -1670,6 +1670,78 @@ mod tests {
         assert!(missing(&genuine));
     }
 
+    /// End to end through `load_bundle_evidence` with a status that shows MDM
+    /// URLs. The URLs never decide enrollment: an export that was not read
+    /// leaves `mdm_enrolled` unknown, and a read root-only export with no task
+    /// evidence is the registry negative.
+    #[test]
+    fn enrollments_export_end_to_end_with_mdm_urls_shown() {
+        let _env_guard = dsregcmd_test_env_lock()
+            .lock()
+            .expect("lock dsregcmd env guard");
+        let status = "\n AzureAdJoined : YES\n DomainJoined : NO\n TenantId : 11111111-2222-3333-4444-555555555555\n DeviceId : abcdefab-1111-2222-3333-abcdefabcdef\n MdmUrl : https://enrollment.manage.microsoft.com/enrollmentserver/discovery.svc\n MdmComplianceUrl : https://portal.manage.microsoft.com/?portalAction=Compliance\n";
+        let analyze = |export: Option<&[u8]>, unreadable: bool| {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let registry_dir = temp_dir.path().join("evidence").join("registry");
+            std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+            let file = registry_dir.join("enrollments.reg");
+            if let Some(bytes) = export {
+                std::fs::write(&file, bytes).expect("write export");
+            }
+            #[cfg(unix)]
+            if unreadable {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000))
+                    .expect("remove permissions");
+            }
+            #[cfg(not(unix))]
+            let _ = unreadable;
+            let evidence =
+                super::load_bundle_evidence(temp_dir.path().to_str().expect("utf8 path"));
+            crate::dsregcmd::analyze_text_with_evidence(status, evidence, chrono::Utc::now())
+                .expect("analysis succeeds")
+        };
+        let missing = |result: &crate::dsregcmd::DsregcmdAnalysisResult| {
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "enrollment-missing-on-joined")
+        };
+        let root_only: &[u8] = b"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n";
+
+        let mut not_read = vec![
+            ("missing", analyze(None, false)),
+            ("empty", analyze(Some(b""), false)),
+            (
+                "undecodable",
+                analyze(Some(&[0x80, 0x81, 0x9D, 0xFF, 0x00, 0xC3]), false),
+            ),
+        ];
+        // A privileged runner can still read a 0o000 file, which is not a gap.
+        let probe = tempfile::NamedTempFile::new().expect("probe file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(probe.path(), std::fs::Permissions::from_mode(0o000))
+                .expect("remove probe permissions");
+        }
+        if std::fs::read(probe.path()).is_err() {
+            not_read.push(("unreadable", analyze(Some(root_only), true)));
+        }
+        for (name, result) in &not_read {
+            assert_eq!(result.derived.mdm_urls_present, Some(true), "{name}");
+            assert!(result.enrollment_evidence.is_none(), "{name}");
+            assert_eq!(result.derived.mdm_enrolled, None, "{name}");
+            assert!(!missing(result), "{name}");
+        }
+
+        let read_empty = analyze(Some(root_only), false);
+        assert_eq!(read_empty.derived.mdm_urls_present, Some(true));
+        assert!(read_empty.scheduled_task_evidence.is_none());
+        assert_eq!(read_empty.derived.mdm_enrolled, Some(false));
+        assert!(missing(&read_empty));
+    }
+
     /// Synthetic `schtasks /query /FO LIST` lines. The repository holds no
     /// captured output of this command, so the `TaskName:` shape and the folder
     /// naming are not anchored to a real device (Windows-lab item).

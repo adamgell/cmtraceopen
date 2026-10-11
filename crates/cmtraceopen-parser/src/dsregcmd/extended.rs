@@ -1,5 +1,5 @@
 use crate::dsregcmd::models::{
-    DsregcmdAnalysisResult, DsregcmdDiagnosticInsight, DsregcmdJoinType,
+    DsregcmdAnalysisResult, DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry, DsregcmdJoinType,
 };
 use crate::intune::apps::windows::ime::models::IntuneDiagnosticSeverity;
 
@@ -37,34 +37,59 @@ pub fn same_enrollment_guid(left: &str, right: &str) -> bool {
 
 /// Set the registry-confirmed `mdm_enrolled` from the enrollment evidence.
 ///
-/// `Some(true)` when an enrollment with `EnrollmentState` 1 matches an
-/// EnterpriseMgmt scheduled task GUID. `Some(false)` only when the enrollments
-/// registry was read and holds no enrollment at all. Missing or unreadable
-/// evidence leaves the value unknown (`None`), never negative (ADR-001), and an
-/// enrollment that exists but cannot be matched to a task is also left unknown.
+/// [`registry_mdm_enrollment`] is the only producer of the value, and
+/// `enrollment-missing-on-joined` reads the value it sets, so the field and the
+/// diagnostic cannot disagree.
 pub fn apply_enrollment_cross_reference(result: &mut DsregcmdAnalysisResult) {
-    let Some(enrollment) = &result.enrollment_evidence else {
-        return;
-    };
-    let confirmed = result
+    result.derived.mdm_enrolled = registry_mdm_enrollment(result);
+}
+
+/// The registry-confirmed MDM enrollment answer (reducer-contract ruling on
+/// #924, ADR-001 and ADR-003):
+/// - `Some(true)` when an enrollment with `EnrollmentState` 1 has a GUID that
+///   matches an observed EnterpriseMgmt task GUID.
+/// - `Some(false)` only when the Enrollments export was read (`Some`), holds no
+///   enrollment (a zero count and an empty list), and no GUID-shaped
+///   EnterpriseMgmt task was observed. Absent and empty task evidence are the
+///   same here: a failed task capture is absence and neither supports nor
+///   blocks the negative.
+/// - `None` otherwise: the export was not collected, an enrollment exists but
+///   is not confirmed by a task, or an empty registry sits beside an observed
+///   task GUID (a contradiction, so the answer stays unknown).
+///
+/// Join state is not part of this answer; it only gates the warning. Input
+/// order and duplicated or differently written GUIDs do not change it.
+fn registry_mdm_enrollment(result: &DsregcmdAnalysisResult) -> Option<bool> {
+    let enrollment = result.enrollment_evidence.as_ref()?;
+    let task_guids = observed_task_guids(result);
+    if enrollment
+        .enrollments
+        .iter()
+        .any(|entry| is_task_confirmed(entry, task_guids))
+    {
+        return Some(true);
+    }
+    let registry_empty = enrollment.enrollment_count == 0 && enrollment.enrollments.is_empty();
+    let task_guid_observed = task_guids.iter().any(|task| unbraced_guid(task).is_some());
+    (registry_empty && !task_guid_observed).then_some(false)
+}
+
+fn observed_task_guids(result: &DsregcmdAnalysisResult) -> &[String] {
+    result
         .scheduled_task_evidence
         .as_ref()
-        .is_some_and(|tasks| {
-            enrollment.enrollments.iter().any(|e| {
-                e.enrollment_state == Some(1)
-                    && e.guid.as_ref().is_some_and(|g| {
-                        tasks
-                            .enterprise_mgmt_guids
-                            .iter()
-                            .any(|t| same_enrollment_guid(t, g))
-                    })
-            })
-        });
-    if confirmed {
-        result.derived.mdm_enrolled = Some(true);
-    } else if enrollment.enrollment_count == 0 && enrollment.enrollments.is_empty() {
-        result.derived.mdm_enrolled = Some(false);
-    }
+        .map_or(&[], |tasks| tasks.enterprise_mgmt_guids.as_slice())
+}
+
+/// An enrollment in `EnrollmentState` 1 whose GUID matches an EnterpriseMgmt
+/// task GUID, ignoring braces and case.
+fn is_task_confirmed(entry: &DsregcmdEnrollmentEntry, task_guids: &[String]) -> bool {
+    entry.enrollment_state == Some(1)
+        && entry.guid.as_deref().is_some_and(|guid| {
+            task_guids
+                .iter()
+                .any(|task| same_enrollment_guid(task, guid))
+        })
 }
 
 /// Extended diagnostics based on registry evidence collected in Phase 2.
@@ -166,13 +191,10 @@ pub fn build_extended_diagnostics(
     if let Some(enrollment) = result.enrollment_evidence.as_ref() {
         let is_joined = result.facts.join_state.azure_ad_joined == Some(true);
 
-        // Evidence was read here (`Some`), so a zero count is a real zero. Missing
-        // or unreadable evidence never reaches this block (ADR-001). URL presence
-        // does not suppress the warning; only a registry-confirmed enrollment does.
-        if enrollment.enrollment_count == 0
-            && is_joined
-            && result.derived.mdm_enrolled != Some(true)
-        {
+        // The warning is exactly the negative `mdm_enrolled` on a joined device:
+        // no other input (URL presence, the count alone) enables or suppresses
+        // it. Join state gates the warning only, never the negative itself.
+        if result.derived.mdm_enrolled == Some(false) && is_joined {
             diagnostics.push(issue(
                 "enrollment-missing-on-joined",
                 IntuneDiagnosticSeverity::Warning,
@@ -211,14 +233,7 @@ pub fn build_extended_diagnostics(
             (&result.enrollment_evidence, &result.scheduled_task_evidence)
         {
             for entry in &enrollment.enrollments {
-                let guid_matched = entry.enrollment_state == Some(1)
-                    && entry.guid.as_ref().is_some_and(|g| {
-                        tasks
-                            .enterprise_mgmt_guids
-                            .iter()
-                            .any(|t| same_enrollment_guid(t, g))
-                    });
-                if guid_matched {
+                if is_task_confirmed(entry, &tasks.enterprise_mgmt_guids) {
                     let guid_display = entry.guid.as_deref().unwrap_or("(unknown)");
                     let upn_display = entry.upn.as_deref().unwrap_or("(no UPN)");
                     evidence_lines.push(format!(
