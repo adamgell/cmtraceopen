@@ -135,7 +135,8 @@ describe("computePriorWindow", () => {
   });
 
   it("refuses an anchor that is not a whole, finite epoch", () => {
-    for (const anchor of [Number.NaN, Number.POSITIVE_INFINITY, ANCHOR + 0.5]) {
+    // Zero is what an anchor reads before any load has set one.
+    for (const anchor of [Number.NaN, Number.POSITIVE_INFINITY, ANCHOR + 0.5, 0, -1]) {
       const result = computePriorWindow("24h", anchor);
       expect(result.status).toBe("unavailable");
       if (result.status === "unavailable") expect(result.reason).toBe("invalidAnchor");

@@ -51,9 +51,13 @@ import {
 import {
   beginLiveComparison,
   cancelComparison,
+  channelReachGap,
+  computePriorWindow,
   isComparisonRequestId,
+  messageTextCriterionActive,
   observeComparisonBatch,
   observeComparisonComplete,
+  observeComparisonProgress,
   publishComparisonUnavailable,
   publishFilesComparison,
   type ComparisonVisibility,
@@ -424,6 +428,28 @@ function isLatestTailStop(outcome: TailStopOutcome): boolean {
 
 let requestGeneration = 0;
 let activeRequestId = "initial";
+
+/**
+ * When the newest load began. A live window is evaluated by the service as each channel's read
+ * starts, so a load's current period is the one that ends here, and a comparison is anchored here
+ * rather than at the workspace clock, which keeps moving after the load. Channels read later in
+ * the same load have their windows evaluated up to a few minutes after this instant (a read waits
+ * its turn in the pool); that start-side sliver is not reported.
+ */
+let loadAnchorEpoch = 0;
+/** When the live tail last appended a batch; 0 until one has, and cleared by the next load. */
+let lastTailAppendEpoch = 0;
+/** When each channel's current-period read was issued. Comparison reads are not recorded. */
+const channelReadEpochs = new Map<string, number>();
+
+/**
+ * Records that `channels` were read at `epoch`, which is how far each one's current period
+ * reaches. Every live read does this through `invokeEventQuery`; exported so a test can say when a
+ * channel was read without running a load.
+ */
+export function noteChannelRead(channels: readonly string[], epoch: number = Date.now()): void {
+  for (const channel of channels) channelReadEpochs.set(channel, epoch);
+}
 let tailGeneration = 0;
 let activeTailRequestId: string | null = null;
 let activeTailSourceRequestId: string | null = null;
@@ -520,6 +546,8 @@ function beginRequest(): string {
   activeTailSourceRequestId = null;
   activeTailChannels = new Set<string>();
   activeRequestId = `event-log-${++requestGeneration}`;
+  loadAnchorEpoch = Date.now();
+  lastTailAppendEpoch = 0;
   // A new request supersedes every stale tail cleanup represented above. Remove its old failure
   // records before clearing the gap-owner index, otherwise a later stop completion can retain
   // request-scoped state that no longer has a visible owner.
@@ -587,6 +615,8 @@ function invokeEventQuery<T>(
   maxEvents: number | null,
   filter: EventQueryFilterSubset
 ): Promise<T> {
+  // A comparison reads the previous period; it says nothing about how far the current one reaches.
+  if (!isComparisonRequestId(requestId)) noteChannelRead(channels);
   if (remoteMachine) {
     return invoke<T>("evtx_query_remote_channels", {
       machine: remoteMachine,
@@ -2194,6 +2224,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 listen<{ requestId: string; channel: string; fetched: number }>(
   "evtx-query-progress",
   (event) => {
+    // A comparison's scan progress belongs to the comparison, not to the load on screen.
+    if (isComparisonRequestId(event.payload.requestId)) {
+      observeComparisonProgress(event.payload);
+      return;
+    }
     if (!isCurrentRequest(event.payload.requestId)) return;
     useEvtxStore.setState({
       loadingChannel: event.payload.channel,
@@ -2218,12 +2253,16 @@ const COMPARISON_INPUTS: ReadonlyArray<keyof EvtxState> = [
   "filterEventIds",
   "filterSearch",
   "quickFilter",
-  "timeZoneMode",
-  "columnConfig",
   "loadGeneration",
 ];
+/** Only a quick filter reads the clock a timestamp is printed in or the columns it scans. */
+const QUICK_FILTER_INPUTS: ReadonlyArray<keyof EvtxState> = ["timeZoneMode", "columnConfig"];
 useEvtxStore.subscribe((state, previous) => {
-  if (COMPARISON_INPUTS.some((key) => state[key] !== previous[key])) cancelComparison();
+  const changed = (keys: ReadonlyArray<keyof EvtxState>) =>
+    keys.some((key) => state[key] !== previous[key]);
+  if (changed(COMPARISON_INPUTS) || (state.quickFilter.query.trim() !== "" && changed(QUICK_FILTER_INPUTS))) {
+    cancelComparison();
+  }
 });
 
 type StreamReply =
@@ -2636,6 +2675,7 @@ listen<EvtxTailBatch>("evtx-tail-batch", (event) => {
     tailSequences.set(key, sequences);
   }
   if (sequences.has(payload.sequence)) return;
+  lastTailAppendEpoch = Date.now();
 
   const missing: string[] = [];
   let highest = -1;
@@ -2753,15 +2793,19 @@ export async function cancelActiveLoad(): Promise<void> {
 /**
  * Compares the current time window with the period of the same length immediately before it.
  *
- * `anchorEpoch` is the instant the current window is measured from, the workspace's `nowEpoch`, so
- * the two periods meet exactly. Files are compared from the records already loaded, when they
- * cover the previous period. A live source is queried again, once per loaded selected channel, with
- * the view's own pushed-down criteria and an explicit `between` window, under a request ID of its
- * own: the events stream into the comparison's aggregator and are discarded, never entering
- * `records`. The outcome, including why a comparison is unavailable, is published to
- * `useComparisonStore`; it is cleared when the source, channels, window or criteria change.
+ * Files are compared from the records already loaded, when they cover the previous period.
+ * `nowEpoch` is the workspace's clock, the instant `isWithinTimeWindow` measures the window from,
+ * and is used only for files. A live source is anchored where its current period actually ends: the
+ * instant the newest load began, or the latest live-tail batch after it. The workspace clock keeps
+ * moving after a load, and a criterion change hours later must not move the comparison with it.
+ *
+ * A live source is queried again, once per loaded selected channel, with the view's own pushed-down
+ * criteria and an explicit `between` window, under a request ID of its own: the events stream into
+ * the comparison's aggregator and are discarded, never entering `records`. The outcome, including
+ * why a comparison is unavailable or only partial, is published to `useComparisonStore`; it is
+ * cleared when the source, channels, window or criteria change.
  */
-export async function comparePreviousPeriod(anchorEpoch: number): Promise<void> {
+export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
   const state = useEvtxStore.getState();
   const notReady = state.isLoading
     ? "Events are still loading."
@@ -2788,7 +2832,7 @@ export async function comparePreviousPeriod(anchorEpoch: number): Promise<void> 
     publishFilesComparison({
       records: state.records,
       window: state.timeWindow,
-      anchorEpoch,
+      anchorEpoch: nowEpoch,
       visibility,
       coverageDetails: state.coverageDetails,
       sourceCoverage: state.sourceManifest?.coverage ?? [],
@@ -2796,23 +2840,48 @@ export async function comparePreviousPeriod(anchorEpoch: number): Promise<void> 
     return;
   }
 
+  // Where the current period ends. A running tail has extended it to its latest batch.
+  const tailRunning = state.tailRequestId !== null && lastTailAppendEpoch > loadAnchorEpoch;
+  const anchorEpoch = tailRunning ? lastTailAppendEpoch : loadAnchorEpoch;
+  // Before anything about completeness: a window with no previous period cannot be fixed by loading.
+  const windowResult = computePriorWindow(state.timeWindow, anchorEpoch);
+  if (windowResult.status === "unavailable") {
+    publishComparisonUnavailable(windowResult.reason, windowResult.detail);
+    return;
+  }
+
   // The grid counts every selected channel that has records, wholly read or not. A channel left
   // partly on screen by a stopped load, or cut off at the automatic load's bound, is a slice of its
-  // period; comparing a slice with a whole previous period would be a ratio of unlike sets.
+  // period; comparing a slice with a whole previous period would be a ratio of unlike sets. No
+  // control reads a capped channel in full, so the way out named is to leave it out of the view.
   const channelsWithRecords = new Set(state.records.map((record) => record.channel));
-  const incomplete = [...state.selectedChannels].filter(
-    (channel) =>
-      (channelsWithRecords.has(channel) && !state.loadedChannels.has(channel)) ||
-      state.coverageGaps.some(
-        (gap) =>
-          gap.endsWith(CAPPED_GAP_SUFFIX) &&
-          coverageBelongsToChannel(gap, channel, state.remoteMachine)
-      )
+  const notReadInFull = [...state.selectedChannels].filter(
+    (channel) => channelsWithRecords.has(channel) && !state.loadedChannels.has(channel)
   );
-  if (incomplete.length > 0) {
+  const capped = [...state.selectedChannels].filter((channel) =>
+    state.coverageGaps.some(
+      (gap) =>
+        gap.endsWith(CAPPED_GAP_SUFFIX) &&
+        coverageBelongsToChannel(gap, channel, state.remoteMachine)
+    )
+  );
+  if (notReadInFull.length > 0 || capped.length > 0) {
+    const causes = [
+      ...(capped.length > 0
+        ? [
+            `${capped.join(", ")} reached the automatic load's cap of ${AUTO_LOAD_MAX_EVENTS.toLocaleString("en-US")} events`,
+          ]
+        : []),
+      ...(notReadInFull.length > 0
+        ? [
+            `${notReadInFull.join(", ")} ${notReadInFull.length === 1 ? "was" : "were"} not read in full`,
+          ]
+        : []),
+    ];
+    const toDeselect = [...new Set([...capped, ...notReadInFull])];
     publishComparisonUnavailable(
       "currentPeriodIncomplete",
-      `The current period is not loaded in full for ${incomplete.join(", ")}. Load it in full to compare it with the previous period.`
+      `${causes.join("; ")}, so the current period is only partly loaded. Deselect ${toDeselect.join(", ")} to compare the other channels.`
     );
     return;
   }
@@ -2822,15 +2891,43 @@ export async function comparePreviousPeriod(anchorEpoch: number): Promise<void> 
   const channels = [...state.selectedChannels].filter((channel) =>
     state.loadedChannels.has(channel)
   );
+
+  // What is short in the current period of the channels compared. These do not stop a comparison,
+  // but a ratio against a clean previous period would otherwise read as complete.
+  const currentPeriodGaps = new Set<string>();
+  for (const channel of channels) {
+    const readEpoch = channelReadEpochs.get(channel);
+    const reach =
+      tailRunning && state.tailChannels.has(channel) && readEpoch !== undefined
+        ? Math.max(readEpoch, lastTailAppendEpoch)
+        : readEpoch;
+    const reachGap = channelReachGap(channel, reach, anchorEpoch);
+    if (reachGap !== null) currentPeriodGaps.add(reachGap);
+  }
+  const textCriterion = messageTextCriterionActive(visibility);
+  for (const detail of state.coverageDetails) {
+    if (detail.kind === "provider" && !textCriterion) continue;
+    if (
+      channels.some((channel) => coverageBelongsToChannel(detail.source, channel, state.remoteMachine))
+    ) {
+      currentPeriodGaps.add(formatCoverageGap(detail));
+    }
+  }
+  for (const gap of state.tailCoverageGaps) currentPeriodGaps.add(gap);
+
   const session = beginLiveComparison({
     window: state.timeWindow,
     anchorEpoch,
-    anchorBasis: "load",
+    anchorBasis: tailRunning ? "tail" : "load",
     remote: state.remoteMachine !== null,
-    currentPeriodGaps: [],
+    currentPeriodGaps: [...currentPeriodGaps],
     channels,
     visibility,
     cancelQuery: (requestId) => {
+      // Best effort: the backend registers a request's cancel flag when its first read is polled,
+      // and a cancel that arrives before that finds nothing to flag, so a scan started a moment
+      // before the cancel can run on with every batch dropped. Whether that window is real is
+      // still to be confirmed on Windows; the unbounded scan makes it worth knowing.
       invoke("evtx_cancel_channel_query", { requestId }).catch((error: unknown) => {
         console.warn("[evtx] Failed to cancel the previous-period comparison:", error);
       });

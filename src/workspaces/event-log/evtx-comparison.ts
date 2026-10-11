@@ -105,6 +105,7 @@ export function computePriorWindow(window: EvtxTimeWindow, anchorEpoch: number):
   const toMs = anchorEpoch - lengthMs - 1;
   if (
     !Number.isSafeInteger(anchorEpoch) ||
+    anchorEpoch <= 0 ||
     Number.isNaN(new Date(fromMs).getTime()) ||
     Number.isNaN(new Date(toMs).getTime())
   ) {
@@ -402,6 +403,27 @@ function limitGapLines(lines: readonly string[]): string[] {
     ...lines.slice(0, MAX_LISTED_GAPS),
     `and ${lines.length - MAX_LISTED_GAPS} more not shown.`,
   ];
+}
+
+/**
+ * What is short in one channel's current period, or null when its read reaches the anchor.
+ *
+ * `reachEpoch` is the instant the channel's current-period data runs to: when it was read, or the
+ * latest live-tail batch if a tail has extended it. A channel read before the anchor was fixed has
+ * no events from the gap between, so a count that treats it as whole would understate the current
+ * period.
+ */
+export function channelReachGap(
+  channel: string,
+  reachEpoch: number | undefined,
+  anchorEpoch: number
+): string | null {
+  if (reachEpoch === undefined || !Number.isFinite(reachEpoch)) {
+    return `${channel} was read at an unknown time, so how much of its current period is covered is unknown.`;
+  }
+  if (reachEpoch >= anchorEpoch) return null;
+  const span = formatSpan(anchorEpoch - reachEpoch);
+  return `${channel} was read at ${isoOrUnknown(reachEpoch)}, ${span} before the comparison anchor ${isoOrUnknown(anchorEpoch)}, so the last ${span} of its current period is not covered.`;
 }
 
 /**
