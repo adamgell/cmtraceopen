@@ -22,6 +22,18 @@ export const EVTX_VIEW_IDS = [
 ] as const;
 export type EvtxViewId = (typeof EVTX_VIEW_IDS)[number];
 
+export const EVTX_VIEW_LABELS: Record<EvtxViewId, string> = {
+  table: "Table",
+  grouped: "Grouped",
+  timeline: "Timeline",
+  charts: "Charts",
+  correlation: "Correlation",
+};
+
+/** Id of the tabpanel the Layout tablist controls. */
+export const EVTX_VIEW_PANEL_ID = "evtx-view-panel";
+export const evtxViewTabId = (view: EvtxViewId) => `evtx-view-tab-${view}`;
+
 /** Tab ids of the Insights rail (spec section 8.13: Insights, Chains, Details). */
 export const EVTX_RAIL_TAB_IDS = ["insights", "chains", "details"] as const;
 export type EvtxRailTabId = (typeof EVTX_RAIL_TAB_IDS)[number];
