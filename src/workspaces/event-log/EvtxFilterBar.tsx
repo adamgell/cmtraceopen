@@ -405,7 +405,6 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
           size="small"
           value={timeWindowSnapshotLabel}
           selectedOptions={[timeWindow]}
-          disabled={isLoading}
           style={{ minWidth: timeWindow === "all" ? "132px" : "260px" }}
           title={
             timeWindow === "all"

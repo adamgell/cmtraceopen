@@ -12,12 +12,18 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EVTX_LEVELS, levelsFilteredAtSource } from "./evtx-filter";
-import type { EvtxLevel } from "./types";
+import { deferred } from "../../test-utils/deferred";
+import type { EvtxLevel, EvtxRecord } from "./types";
 
 const invoke = vi.hoisted(() => vi.fn());
+// Captured so a test can deliver a record batch and the terminal marker the way the backend does.
+const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => undefined),
+  listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
+    listeners.set(name, handler);
+    return Promise.resolve(() => undefined);
+  }),
 }));
 
 // Imported after the mocks: the store subscribes to the bridge at module scope.
@@ -27,6 +33,7 @@ const levels = (...names: EvtxLevel[]) => new Set<EvtxLevel>(names);
 const ALL = () => levels(...EVTX_LEVELS);
 
 type QueryArgs = {
+  requestId?: string;
   channels: string[];
   maxEvents: number | null;
   filter: { levels?: number[]; eventIds?: unknown[]; time?: unknown };
@@ -225,5 +232,83 @@ describe("a live refetch only when the server filter changes", () => {
     useEvtxStore.getState().setFilterEventIds("4624");
     await settle();
     expect(queries()).toHaveLength(0);
+  });
+});
+
+describe("a change made while a refetch is running", () => {
+  const record = (id: number): EvtxRecord => ({
+    id,
+    eventRecordId: id,
+    timestamp: "2026-08-12T12:00:00.000Z",
+    timestampEpoch: 1_000 + id,
+    provider: "P",
+    channel: "Application",
+    eventId: 1,
+    level: "Error",
+    computer: "C",
+    message: "m",
+    eventData: [],
+    rawXml: "<Event/>",
+    sourceLabel: "Live",
+    mapped: [],
+  });
+
+  /** A reply whose records travelled as a batch, with the terminal marker delivered first. */
+  const streamed = (args: QueryArgs) => {
+    const channel = args.channels[0];
+    listeners.get("evtx-record-batch")?.({
+      payload: { requestId: args.requestId, channel, sequence: 0, records: [record(1)] },
+    });
+    listeners.get("evtx-record-stream-complete")?.({
+      payload: { requestId: args.requestId, channel, sequenceCount: 1, totalRecords: 1 },
+    });
+    return {
+      records: [],
+      channels: [{ name: channel, eventCount: 1, sourceType: "live" as const }],
+      totalRecords: 1,
+      parseErrors: 0,
+      errorMessages: [],
+    };
+  };
+
+  it("is queued and replayed when the load ends, so the control that made it can stay enabled", async () => {
+    const firstReply = deferred<void>();
+    let queryCount = 0;
+    invoke.mockReset();
+    invoke.mockImplementation(async (name: string, args: QueryArgs) => {
+      if (name !== "evtx_query_channels") return undefined;
+      queryCount += 1;
+      if (queryCount === 1) {
+        await firstReply.promise;
+      }
+      return streamed(args);
+    });
+    useEvtxStore.getState().reset();
+    useEvtxStore.setState({
+      sourceMode: "live",
+      channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+      loadedChannels: new Set(["Application"]),
+      selectedChannels: new Set(["Application"]),
+      timeWindow: "24h",
+      filterLevels: ALL(),
+      filterEventIds: "",
+      isLoading: false,
+    });
+
+    // A change that reloads starts the first refetch, and it is still running.
+    useEvtxStore.getState().toggleFilterLevel("Information");
+    await vi.waitFor(() => expect(queries()).toHaveLength(1));
+    expect(useEvtxStore.getState().isLoading).toBe(true);
+
+    // The window is changed during that load: nothing is sent yet.
+    useEvtxStore.getState().setTimeWindow("7d");
+    await settle();
+    expect(queries()).toHaveLength(1);
+
+    // When the first load ends, the queued change is replayed with the current window.
+    firstReply.resolve();
+    await vi.waitFor(() => expect(queries()).toHaveLength(2));
+    expect(queries()[1].filter.time).toEqual({ kind: "last", milliseconds: 7 * 24 * 60 * 60 * 1000 });
+    expect(queries()[1].filter.levels).toEqual([1, 2, 3, 5]);
   });
 });

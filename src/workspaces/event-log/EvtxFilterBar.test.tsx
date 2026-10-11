@@ -327,10 +327,32 @@ describe("time window", () => {
     expect(screen.getByRole("combobox", { name: "Time window" }).style.minHeight).toBe("28px");
   });
 
-  it("is disabled while events load", () => {
+  it("stays enabled while events load: the store queues a change made during a load", () => {
+    // Disabling it would drop keyboard focus from the control just used, since the rows now stay
+    // mounted through a refetch. A change made during a load is replayed when the load ends
+    // (evtx-store-server-filter.test.ts).
     seed({ sourceMode: "live", timeWindow: "24h", isLoading: true });
     render(<EvtxFilterBar nowEpoch={0} />);
-    expect(screen.getByRole("combobox", { name: "Time window" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Time window" })).toBeEnabled();
+  });
+
+  it("keeps focus on the control after a live change reloads the channels", async () => {
+    invoke.mockImplementation(async (name: string) =>
+      name === "evtx_query_channels" ? new Promise(() => undefined) : undefined,
+    );
+    seed({ sourceMode: "live", timeWindow: "24h" });
+    render(<EvtxFilterBar nowEpoch={0} />);
+    const combobox = screen.getByRole("combobox", { name: "Time window" });
+    combobox.focus();
+    fireEvent.click(combobox);
+    fireEvent.click(await screen.findByRole("option", { name: EVTX_TIME_WINDOW_LABELS["7d"] }));
+
+    await waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(true));
+    expect(useEvtxStore.getState().timeWindow).toBe("7d");
+    const after = screen.getByRole("combobox", { name: "Time window" });
+    expect(after).toBe(combobox);
+    expect(after).toBeEnabled();
+    expect(after).toHaveFocus();
   });
 
   it("is hidden in file mode while the window is All, as before", () => {
