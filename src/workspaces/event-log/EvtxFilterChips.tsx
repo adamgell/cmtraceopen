@@ -3,22 +3,28 @@
  * and the "Showing {visible} of {loaded}" readout.
  *
  * Which chips exist is a pure function of the filter state (`buildFilterChips`), so the next
- * criteria add a descriptor and a removal, not a layout:
- * - Phase 6a (#834) adds the transient time range ("Time: brushed 09:00-09:45", `tone: "selection"`
- *   draws it with the selection triplet) and the record scope ("Chain: {title}" / "Finding:
- *   {title}"). Each adds an id to `EvtxFilterChipId`, a branch in `buildFilterChips`, and a case
- *   in `removeChip`; `clearedByClearAll` says whether Clear all takes it too.
- * - Level toggles, the search box and the time window are visible on the filter row, so only the
- *   search text has a chip; levels and the time window never do.
+ * criteria add a descriptor and a removal, not a layout. Phase 6a (#834) adds the transient time
+ * range ("Time: brushed 09:00-09:45") and the record scope ("Chain: {title}" / "Finding: {title}"):
+ * each adds an id to `EvtxFilterChipId`, a branch in `buildFilterChips`, and a case in `removeChip`,
+ * and `clearedByClearAll` says whether Clear all takes it too. The level toggles, the search box and
+ * the time window are on the filter row, so only the search text has a chip; levels and the time
+ * window never do.
  */
-import { useMemo } from "react";
-import { Link, makeStyles, tokens } from "@fluentui/react-components";
+import { useLayoutEffect, useMemo, useRef } from "react";
+import {
+  createFocusOutlineStyle,
+  Link,
+  makeStyles,
+  tokens,
+} from "@fluentui/react-components";
 import { Dismiss12Regular } from "@fluentui/react-icons";
 import type { EvtxQuickFilter } from "./evtx-filter";
 import { useEvtxStore } from "./evtx-store";
-import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
+
+/** The id of the search box on the filter row, where focus goes when no chip is left to take it. */
+export const EVTX_SEARCH_INPUT_ID = "evtx-filter-search";
 
 export type EvtxFilterChipId = "channels" | "eventIds" | "quickFilter" | "search";
 
@@ -31,8 +37,6 @@ export interface EvtxFilterChip {
    * where the events come from, set in the channel pane, and a chip is only the reminder.
    */
   clearedByClearAll: boolean;
-  /** Draws the chip with the selection triplet (spec 6.2). Used by the brushed time range in 6a. */
-  tone?: "selection";
 }
 
 export interface EvtxFilterChipInput {
@@ -98,6 +102,41 @@ export function buildFilterChips(input: EvtxFilterChipInput): EvtxFilterChip[] {
   return chips;
 }
 
+/**
+ * The chips for the current filter state, and the channels they were counted against. The filter
+ * row reads the same chips for its "More filters" number, so the two cannot disagree.
+ */
+export function useFilterChips(): {
+  chips: EvtxFilterChip[];
+  heldChannels: ReadonlySet<string>;
+} {
+  const filterEventIds = useEvtxStore((s) => s.filterEventIds);
+  const filterSearch = useEvtxStore((s) => s.filterSearch);
+  const quickFilter = useEvtxStore((s) => s.quickFilter);
+  const selectedChannels = useEvtxStore((s) => s.selectedChannels);
+  const channels = useEvtxStore((s) => s.channels);
+  const loadedChannels = useEvtxStore((s) => s.loadedChannels);
+  const sourceMode = useEvtxStore((s) => s.sourceMode);
+
+  const heldChannels = useMemo(
+    () =>
+      sourceMode === "live" ? loadedChannels : new Set(channels.map((channel) => channel.name)),
+    [sourceMode, loadedChannels, channels],
+  );
+  const chips = useMemo(
+    () =>
+      buildFilterChips({
+        filterEventIds,
+        filterSearch,
+        quickFilter,
+        selectedChannels,
+        heldChannels,
+      }),
+    [filterEventIds, filterSearch, quickFilter, selectedChannels, heldChannels],
+  );
+  return { chips, heldChannels };
+}
+
 const useStyles = makeStyles({
   row: {
     display: "flex",
@@ -146,6 +185,8 @@ const useStyles = makeStyles({
     whiteSpace: "nowrap",
   },
   remove: {
+    // The focus ring is Fluent's own, drawn as a pseudo-element around this positioned box.
+    position: "relative",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
@@ -166,12 +207,7 @@ const useStyles = makeStyles({
       backgroundColor: tokens.colorSubtleBackgroundPressed,
       color: tokens.colorNeutralForeground2Pressed,
     },
-    ":focus-visible": {
-      outlineStyle: "solid",
-      outlineWidth: "2px",
-      outlineColor: tokens.colorStrokeFocus2,
-      outlineOffset: "1px",
-    },
+    ...createFocusOutlineStyle({ style: { outlineRadius: tokens.borderRadiusSmall } }),
   },
   readout: {
     marginLeft: "auto",
@@ -181,43 +217,6 @@ const useStyles = makeStyles({
   },
 });
 
-interface EvtxFilterChipViewProps {
-  chip: EvtxFilterChip;
-  onRemove: () => void;
-}
-
-/** One chip: the criterion in words and a button that removes it. */
-export function EvtxFilterChipView({ chip, onRemove }: EvtxFilterChipViewProps) {
-  const styles = useStyles();
-  const visual = useEvtxVisualTokens();
-  return (
-    <li
-      className={styles.chip}
-      style={
-        chip.tone === "selection"
-          ? {
-              backgroundColor: visual.selection.background,
-              borderColor: visual.selection.border,
-              color: visual.selection.foreground,
-            }
-          : undefined
-      }
-    >
-      <span className={styles.chipText} title={chip.label}>
-        {chip.label}
-      </span>
-      <button
-        type="button"
-        className={styles.remove}
-        aria-label={`Remove ${chip.label}`}
-        onClick={onRemove}
-      >
-        <Dismiss12Regular aria-hidden />
-      </button>
-    </li>
-  );
-}
-
 interface EvtxFilterChipsProps {
   /** How many loaded events the filters leave on screen. */
   visibleCount: number;
@@ -225,41 +224,43 @@ interface EvtxFilterChipsProps {
   loadedCount: number;
 }
 
+type FocusTarget = EvtxFilterChipId | "search";
+
 export function EvtxFilterChips({ visibleCount, loadedCount }: EvtxFilterChipsProps) {
   const styles = useStyles();
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
-  const fontSize = `${Math.max(10, metrics.fontSize - 2)}px`;
+  const fontPx = Math.max(10, metrics.fontSize - 2);
+  const fontSize = `${fontPx}px`;
+  // Explicit, so a chip is 16 + 2 x 2 padding + 2 x 1 border = 22 px at the default size (the row
+  // is then 28 px with its bottom padding, against the spec's ~26). Inherited, the provider's 20 px
+  // body line height made a chip 26 px and the row 32 px.
+  const lineHeight = `${Math.round(fontPx * 1.45)}px`;
 
-  const filterEventIds = useEvtxStore((s) => s.filterEventIds);
   const setFilterEventIds = useEvtxStore((s) => s.setFilterEventIds);
-  const filterSearch = useEvtxStore((s) => s.filterSearch);
   const setFilterSearch = useEvtxStore((s) => s.setFilterSearch);
   const quickFilter = useEvtxStore((s) => s.quickFilter);
   const setQuickFilter = useEvtxStore((s) => s.setQuickFilter);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
   const setSelectedChannels = useEvtxStore((s) => s.setSelectedChannels);
-  const channels = useEvtxStore((s) => s.channels);
-  const loadedChannels = useEvtxStore((s) => s.loadedChannels);
-  const sourceMode = useEvtxStore((s) => s.sourceMode);
   const isLoading = useEvtxStore((s) => s.isLoading);
+  const { chips, heldChannels } = useFilterChips();
 
-  const heldChannels = useMemo(
-    () =>
-      sourceMode === "live" ? loadedChannels : new Set(channels.map((channel) => channel.name)),
-    [sourceMode, loadedChannels, channels],
-  );
-  const chips = useMemo(
-    () =>
-      buildFilterChips({
-        filterEventIds,
-        filterSearch,
-        quickFilter,
-        selectedChannels,
-        heldChannels,
-      }),
-    [filterEventIds, filterSearch, quickFilter, selectedChannels, heldChannels],
-  );
+  // Removing a chip unmounts the button that had focus, and removing the last one unmounts the
+  // whole row. Focus is handed on after the re-render: to the next chip's remove button, else the
+  // previous one, else the search box.
+  const rowRef = useRef<HTMLDivElement>(null);
+  const pendingFocus = useRef<FocusTarget | null>(null);
+  useLayoutEffect(() => {
+    const target = pendingFocus.current;
+    if (target === null) return;
+    pendingFocus.current = null;
+    const chipButton =
+      target === "search"
+        ? null
+        : rowRef.current?.querySelector<HTMLElement>(`[data-evtx-chip="${target}"] button`);
+    (chipButton ?? document.getElementById(EVTX_SEARCH_INPUT_ID))?.focus();
+  });
 
   if (chips.length === 0) return null;
 
@@ -282,13 +283,35 @@ export function EvtxFilterChips({ visibleCount, loadedCount }: EvtxFilterChipsPr
         break;
     }
   };
+  const removeOne = (id: EvtxFilterChipId) => {
+    const index = chips.findIndex((chip) => chip.id === id);
+    pendingFocus.current = (chips[index + 1] ?? chips[index - 1])?.id ?? "search";
+    removeChip(id);
+  };
   const clearable = chips.filter((chip) => chip.clearedByClearAll);
 
   return (
-    <div data-evtx-region="chip-row" className={styles.row} style={{ fontSize }}>
+    <div
+      ref={rowRef}
+      data-evtx-region="chip-row"
+      className={styles.row}
+      style={{ fontSize, lineHeight }}
+    >
       <ul aria-label="Active filters" className={styles.list}>
         {chips.map((chip) => (
-          <EvtxFilterChipView key={chip.id} chip={chip} onRemove={() => removeChip(chip.id)} />
+          <li key={chip.id} data-evtx-chip={chip.id} className={styles.chip}>
+            <span className={styles.chipText} title={chip.label}>
+              {chip.label}
+            </span>
+            <button
+              type="button"
+              className={styles.remove}
+              aria-label={`Remove ${chip.label}`}
+              onClick={() => removeOne(chip.id)}
+            >
+              <Dismiss12Regular aria-hidden />
+            </button>
+          </li>
         ))}
       </ul>
       {clearable.length > 0 && (
@@ -297,6 +320,8 @@ export function EvtxFilterChips({ visibleCount, loadedCount }: EvtxFilterChipsPr
           type="button"
           style={{ fontSize, fontWeight: 600 }}
           onClick={() => {
+            // Clear all unmounts itself once nothing clearable is left, so focus goes to the search.
+            pendingFocus.current = "search";
             for (const chip of clearable) removeChip(chip.id);
           }}
         >

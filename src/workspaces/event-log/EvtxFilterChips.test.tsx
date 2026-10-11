@@ -10,14 +10,13 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import {
   buildFilterChips,
+  EVTX_SEARCH_INPUT_ID,
   EvtxFilterChips,
-  EvtxFilterChipView,
-  type EvtxFilterChip,
   type EvtxFilterChipInput,
 } from "./EvtxFilterChips";
 import { DEFAULT_QUICK_FILTER } from "./evtx-filter";
 import { useEvtxStore } from "./evtx-store";
-import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
+import { resolveToken } from "./evtx-visual-tokens";
 import { useUiStore } from "../../stores/ui-store";
 
 const input = (overrides: Partial<EvtxFilterChipInput> = {}): EvtxFilterChipInput => ({
@@ -124,6 +123,23 @@ function seed(state: Partial<ReturnType<typeof useEvtxStore.getState>> = {}) {
     isLoading: false,
     ...state,
   });
+}
+
+/** The CSS of every rule that targets one of the element's classes, for pinning styles in jsdom. */
+function rulesText(element: Element): string {
+  const classes = Array.from(element.classList);
+  const out: string[] = [];
+  const visit = (rules: CSSRuleList) => {
+    for (const rule of Array.from(rules)) {
+      if (rule instanceof CSSStyleRule) {
+        if (classes.some((name) => rule.selectorText.includes(`.${name}`))) out.push(rule.cssText);
+      } else if (rule instanceof CSSMediaRule) {
+        visit(rule.cssRules);
+      }
+    }
+  };
+  for (const sheet of Array.from(document.styleSheets)) visit(sheet.cssRules);
+  return out.join("\n");
 }
 
 beforeEach(() => {
@@ -251,28 +267,102 @@ describe("EvtxFilterChips", () => {
     expect(readout.textContent).not.toMatch(/Showing/);
   });
 
-  it("sizes the chips at f - 2 from the list font and uses the numeric font for the readout", () => {
+  it("sizes the chips at f - 2 from the list font with an explicit line height", () => {
     seed({ filterSearch: "logon" });
+    const { unmount } = render(<EvtxFilterChips visibleCount={1} loadedCount={1} />);
+    const row = () => document.querySelector<HTMLElement>("[data-evtx-region='chip-row']")!;
+    // The default list size is 13: chips at 11 px on a 16 px line, so a chip is 16 + 2 x 2 padding
+    // + 2 x 1 border = 22 px and the row 22 + 6 = 28 px (spec 5.1: about 26). Inherited, the
+    // provider's 20 px line made the chip 26 px and the row 32.
+    expect(row().style.fontSize).toBe("11px");
+    expect(row().style.lineHeight).toBe("16px");
+    unmount();
+
     act(() => useUiStore.getState().setLogListFontSize(20));
     render(<EvtxFilterChips visibleCount={1} loadedCount={1} />);
-    expect(document.querySelector<HTMLElement>("[data-evtx-region='chip-row']")!.style.fontSize).toBe("18px");
+    expect(row().style.fontSize).toBe("18px");
+    expect(row().style.lineHeight).toBe("26px");
   });
 
-  it("draws a chip with the selection triplet when its descriptor asks for it", () => {
-    const chip: EvtxFilterChip = {
-      id: "search",
-      label: "Time: brushed 09:00-09:45",
-      clearedByClearAll: true,
-      tone: "selection",
+  it("draws the readout in the numeric font with tabular figures", () => {
+    seed({ filterSearch: "logon" });
+    render(<EvtxFilterChips visibleCount={1} loadedCount={1} />);
+    const readout = document.querySelector("[data-evtx-filter-count]")!;
+    expect(rulesText(readout)).toMatch(/font-family:\s*var\(--fontFamilyNumeric\)/);
+    expect(rulesText(readout)).toMatch(/font-variant-numeric:\s*tabular-nums/);
+  });
+
+  it("gives the remove button Fluent's focus ring, not a custom outline", () => {
+    seed({ filterSearch: "logon" });
+    render(<EvtxFilterChips visibleCount={1} loadedCount={1} />);
+    const remove = screen.getByRole("button", { name: "Remove Search: logon" });
+    const rules = rulesText(remove);
+    expect(rules).toMatch(/\[data-fui-focus-visible\]::after/);
+    expect(rules).toMatch(/colorStrokeFocus2/);
+    expect(rules).not.toMatch(/:focus-visible[^}]*outline-color/);
+  });
+
+  describe("focus after a removal", () => {
+    /** The chip row beside a stand-in for the filter row's search box. */
+    const renderWithSearch = () =>
+      render(
+        <>
+          <input id={EVTX_SEARCH_INPUT_ID} aria-label="Search events" />
+          <EvtxFilterChips visibleCount={1} loadedCount={2} />
+        </>,
+      );
+    const remove = (label: string) => screen.getByRole("button", { name: `Remove ${label}` });
+    const clickRemove = (label: string) => {
+      remove(label).focus();
+      expect(remove(label)).toHaveFocus();
+      fireEvent.click(remove(label));
     };
-    render(
-      <ul>
-        <EvtxFilterChipView chip={chip} onRemove={() => undefined} />
-      </ul>,
-    );
-    const item = screen.getByRole("listitem");
-    expect(item.style.backgroundColor).toBe(tokens.colorPaletteBlueBackground2);
-    expect(item.style.color).toBe(tokens.colorPaletteBlueForeground2);
+    const seedThree = () =>
+      seed({ filterEventIds: "4624", filterSearch: "logon", quickFilter: { ...DEFAULT_QUICK_FILTER, query: "x" } });
+
+    it("moves to the next chip's remove button", () => {
+      seedThree();
+      renderWithSearch();
+      clickRemove("Event IDs: 4624");
+      expect(remove("Quick filter: x")).toHaveFocus();
+    });
+
+    it("moves to the previous chip's remove button when the last chip is removed", () => {
+      seedThree();
+      renderWithSearch();
+      clickRemove("Search: logon");
+      expect(remove("Quick filter: x")).toHaveFocus();
+    });
+
+    it("moves to the search box when the only chip is removed and the row goes away", () => {
+      seed({ filterSearch: "logon" });
+      renderWithSearch();
+      clickRemove("Search: logon");
+      expect(screen.queryByRole("list", { name: "Active filters" })).toBeNull();
+      expect(screen.getByRole("textbox", { name: "Search events" })).toHaveFocus();
+    });
+
+    it("moves to the search box after Clear all, whether or not a channel chip stays", () => {
+      seedThree();
+      renderWithSearch();
+      const clear = screen.getByRole("button", { name: "Clear all" });
+      clear.focus();
+      fireEvent.click(clear);
+      expect(screen.getByRole("textbox", { name: "Search events" })).toHaveFocus();
+
+      cleanup();
+      seed({
+        filterSearch: "logon",
+        selectedChannels: new Set(["System"]),
+      });
+      renderWithSearch();
+      const again = screen.getByRole("button", { name: "Clear all" });
+      again.focus();
+      fireEvent.click(again);
+      // The channel chip stays, and so does the row; focus still lands on the search box.
+      expect(screen.getByRole("button", { name: "Remove Channels: 1 of 2" })).toBeInTheDocument();
+      expect(screen.getByRole("textbox", { name: "Search events" })).toHaveFocus();
+    });
   });
 
   it("truncates a long chip with an ellipsis and keeps the full text in its tooltip", () => {
@@ -352,11 +442,6 @@ describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
         tokens.colorNeutralBackground1,
       ]);
       atLeast("readout", tokens.colorNeutralForeground2, tokens.colorNeutralBackground1, 4.5);
-    });
-
-    it("reads a selection-tone chip at 4.5:1 on the selection surface", () => {
-      const visual = buildEvtxVisualTokens(theme);
-      atLeast("selection chip", visual.selection.foreground, visual.selection.background, 4.5);
     });
   },
 );
