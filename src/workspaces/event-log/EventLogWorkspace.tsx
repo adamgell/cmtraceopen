@@ -319,7 +319,7 @@ export function EventLogWorkspace() {
   const setRailWidth = useEvtxLayoutStore((s) => s.setRailWidth);
   // The rail is capped to a share of the body row (see its style), so the handle reports and
   // steps from the width actually rendered and its maximum never exceeds the cap.
-  const { ref: railRef, ...railMeasure } = useRowCappedSize(1);
+  const { ref: railRef, ...railMeasure } = useRowCappedSize(1, railWidth);
   const railRange = effectiveResizeRange(railWidth, MIN_RAIL_WIDTH, MAX_RAIL_WIDTH, railMeasure);
 
   const setDockHeight = useEvtxLayoutStore((s) => s.setDockHeight);

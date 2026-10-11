@@ -153,4 +153,25 @@ describe("channel pane resize handle", () => {
       restore();
     }
   });
+
+  it("keeps stepping with ArrowRight when ResizeObserver is unavailable and a width is measured", () => {
+    // Without a ResizeObserver only a window resize triggers a read; the value must still follow
+    // the stored width, or the second press would propose the same width again and stall.
+    expect(typeof ResizeObserver).toBe("undefined");
+    const restore = stubLayout({ "evtx-channel-pane": "style" }, 1440);
+    try {
+      render(<ChannelPicker />);
+      const handle = screen.getByRole("separator", { name: "Resize channel pane" });
+      const pane = requireElement(handle.parentElement, "the channel pane");
+      expect(handle).toHaveAttribute("aria-valuenow", "250");
+      fireEvent.keyDown(handle, { key: "ArrowRight" });
+      expect(pane).toHaveStyle({ width: "266px" });
+      expect(handle).toHaveAttribute("aria-valuenow", "266");
+      fireEvent.keyDown(handle, { key: "ArrowRight" });
+      expect(pane).toHaveStyle({ width: "282px" });
+      expect(handle).toHaveAttribute("aria-valuenow", "282");
+    } finally {
+      restore();
+    }
+  });
 });

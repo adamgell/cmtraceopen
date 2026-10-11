@@ -17,7 +17,7 @@ export interface LayoutStub {
   /** Restores the real layout methods. */
   (): void;
   /** Changes the stubbed widths (the next measurement sees them). */
-  set(renderedWidths: Record<string, number>, clientWidth: number): void;
+  set(renderedWidths: Record<string, number | "style">, clientWidth: number): void;
 }
 
 /**
@@ -26,14 +26,17 @@ export interface LayoutStub {
  * row, gets `rowWidth`. Call the result to restore; `set` changes the widths, as a window resize
  * would.
  */
-export function stubLayout(initialWidths: Record<string, number>, initialClientWidth: number): LayoutStub {
-  let renderedWidths = initialWidths;
+export function stubLayout(initialWidths: Record<string, number | "style">, initialClientWidth: number): LayoutStub {
+  let renderedWidths: Record<string, number | "style"> = initialWidths;
   let clientWidth = initialClientWidth;
   const proto = HTMLElement.prototype;
   const originalRect = proto.getBoundingClientRect;
   const originalClient = Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth");
   proto.getBoundingClientRect = function getBoundingClientRect(this: HTMLElement) {
-    const width = renderedWidths[this.id] ?? clientWidth;
+    const configured = renderedWidths[this.id] ?? clientWidth;
+    // "style" follows the element's own inline width, as a real layout would when the cap is not
+    // binding, so a stored-width change is visible to the next measurement.
+    const width = configured === "style" ? Number.parseFloat(this.style.width) || 0 : configured;
     return { width, height: 0, top: 0, left: 0, right: width, bottom: 0, x: 0, y: 0, toJSON() {} };
   };
   Object.defineProperty(Element.prototype, "clientWidth", {
@@ -46,7 +49,7 @@ export function stubLayout(initialWidths: Record<string, number>, initialClientW
     else delete (Element.prototype as unknown as Record<string, unknown>).clientWidth;
   };
   return Object.assign(restore, {
-    set(widths: Record<string, number>, client: number) {
+    set(widths: Record<string, number | "style">, client: number) {
       renderedWidths = widths;
       clientWidth = client;
     },

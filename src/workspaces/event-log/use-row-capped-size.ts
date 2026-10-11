@@ -14,6 +14,9 @@ export interface RowCappedSize {
 }
 
 /**
+ * @param requested the stored (requested) width. Measurement is redone whenever it changes, so
+ *   the reported width never lags a store write, with or without ResizeObserver (without one,
+ *   only a window resize would otherwise trigger a read and keyboard resizing would stall).
  * @param rowLevelsUp how many parents above the element the body row is (the channel pane sits
  *   inside its region wrapper, so 2; the rail is the row's own child, so 1)
  * @param share the row share used by the CSS cap
@@ -24,6 +27,7 @@ export interface RowCappedSize {
  */
 export function useRowCappedSize(
   rowLevelsUp: number,
+  requested: number,
   share = 0.4,
 ): RowCappedSize & { ref: (element: HTMLElement | null) => void } {
   const [element, setElement] = useState<HTMLElement | null>(null);
@@ -57,7 +61,7 @@ export function useRowCappedSize(
     observer.observe(element);
     if (row) observer.observe(row);
     return () => observer.disconnect();
-  }, [element, rowLevelsUp, share]);
+  }, [element, rowLevelsUp, requested, share]);
 
   return { ...size, ref: setElement };
 }

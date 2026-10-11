@@ -191,6 +191,24 @@ describe("EventLogWorkspace three-column shell", () => {
     }
   });
 
+  it("keeps stepping the rail with ArrowLeft when ResizeObserver is unavailable and a width is measured", () => {
+    expect(typeof ResizeObserver).toBe("undefined");
+    const restore = stubLayout({ "evtx-insights-rail": "style" }, 1440);
+    try {
+      render(<EventLogWorkspace />);
+      const handle = screen.getByRole("separator", { name: "Resize insights rail", hidden: true });
+      expect(handle).toHaveAttribute("aria-valuenow", "340");
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      expect(useEvtxLayoutStore.getState().railWidth).toBe(356);
+      expect(handle).toHaveAttribute("aria-valuenow", "356");
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      expect(useEvtxLayoutStore.getState().railWidth).toBe(372);
+      expect(handle).toHaveAttribute("aria-valuenow", "372");
+    } finally {
+      restore();
+    }
+  });
+
   it("hides and shows the channel pane without discarding its state", () => {
     render(<EventLogWorkspace />);
     const search = screen.getByTestId("channel-picker");
