@@ -192,6 +192,12 @@ test.describe("event-logs screenshots", () => {
     // The status bar's "Updated {time}" reads the page clock, which would put the capture time
     // into the PNG. Pin it to the fixture's own instant; timers keep running. The zone is
     // pinned above, so the printed time and zone label are the same on every host.
+    //
+    // Do not add a LIVE-stream capture to this block. A live query settles through the stream
+    // grace in evtx-store.ts (settlePendingStream and acknowledgeStreamedRecords), which compares
+    // a deadline with Date.now(). Under a fixed clock the time remaining never shrinks, the timer
+    // re-arms itself, and the load never leaves isLoading: the capture times out at 15 s with
+    // nothing pointing at this pin. These captures load files, which do not stream.
     await page.clock.setFixedTime(EVENT_LOG_FIXTURE_NOW_EPOCH_MS);
 
     await page.goto("/");
