@@ -208,8 +208,9 @@ describe("activeEnrollmentCount", () => {
   );
 });
 
-/// The registry-key row reads the parser's negative and never re-derives it:
-/// it warns exactly when `enrollment-missing-on-joined` is raised.
+/// The registry-key row reads the parser's `enrollment-missing-on-joined`
+/// diagnostic and never re-derives it: it warns exactly when the diagnostic is
+/// raised.
 describe("Enrollment Status rows", () => {
   const missingOnJoined = buildDiagnostic({
     id: "enrollment-missing-on-joined",
@@ -266,6 +267,19 @@ describe("Enrollment Status rows", () => {
       );
     },
   );
+
+  /// Fixtures where the diagnostic and the raw fields disagree, which the
+  /// parser never produces: the row follows the diagnostic, so rebuilding the
+  /// predicate from `mdmEnrolled` and the join state fails here.
+  it("follows the diagnostic, not the raw fields, when they disagree", () => {
+    const rawNegativeWithoutDiagnostic = parserState(true, "negative");
+    rawNegativeWithoutDiagnostic.diagnostics = [];
+    expect(enrollmentRows(rawNegativeWithoutDiagnostic).keyRow?.tone).toBe("neutral");
+
+    const diagnosticWithoutRawNegative = parserState(false, "case-a");
+    diagnosticWithoutRawNegative.diagnostics = [missingOnJoined];
+    expect(enrollmentRows(diagnosticWithoutRawNegative).keyRow?.tone).toBe("warn");
+  });
 
   it("keeps the key row neutral for an empty registry beside a task GUID (case a)", () => {
     const { keyRow } = enrollmentRows(parserState(true, "case-a"));

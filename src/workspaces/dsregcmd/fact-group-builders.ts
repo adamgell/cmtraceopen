@@ -26,6 +26,7 @@ import {
   getPolicyDisplayValue,
   getPolicyEvidenceSummary,
   getPolicyValueTone,
+  hasEnrollmentMissingOnJoined,
   toneForBool,
   toneForCaptureConfidence,
   toneForDomainJoined,
@@ -748,7 +749,6 @@ export function buildEnrollmentStatusGroup(
   if (!result.enrollmentEvidence) {
     return [];
   }
-  const { facts, derived } = result;
   const activeCount = activeEnrollmentCount(result.enrollmentEvidence);
   return [
     {
@@ -759,16 +759,16 @@ export function buildEnrollmentStatusGroup(
       rows: withNotReportedMetadata([
         {
           // Counts every GUID key, whatever its values: it errs high on
-          // purpose for the negative, so it is never "good". It warns only for
-          // the parser's negative on a joined device, the same predicate as
-          // `enrollment-missing-on-joined`, and is neutral otherwise (an empty
-          // registry beside a task GUID, or a device that is not joined).
+          // purpose for the negative, so it is never "good". It warns exactly
+          // when the parser raised `enrollment-missing-on-joined`, read through
+          // the same helper as the MDM chip and the visibility tone, and is
+          // neutral otherwise (an empty registry beside a task GUID, or a
+          // device that is not joined).
           label: "Enrollment registry keys",
           value: String(result.enrollmentEvidence.enrollmentCount),
-          tone:
-            derived.mdmEnrolled === false && facts.joinState.azureAdJoined === true
-              ? ("warn" as const)
-              : ("neutral" as const),
+          tone: hasEnrollmentMissingOnJoined(result)
+            ? ("warn" as const)
+            : ("neutral" as const),
         },
         {
           label: "Active enrollments (EnrollmentState 1)",
