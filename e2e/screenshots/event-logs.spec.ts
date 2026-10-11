@@ -282,4 +282,3 @@ test.describe("event-logs screenshots", () => {
     });
   });
 });
-
