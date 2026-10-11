@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { EvtxViewBar } from "./EvtxViewBar";
 import { EVTX_EXPORT_FORMATS } from "./evtx-export";
+import { defaultColumnConfig } from "./evtx-columns";
 import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
 
@@ -69,23 +70,72 @@ describe("EvtxViewBar", () => {
     expect(screen.getByRole("tab", { name: "Charts" })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("exposes the three panel toggles with aria-pressed and flips the layout store", () => {
+  it("exposes the panel toggles with aria-pressed and flips the channel pane", () => {
     render(<EvtxViewBar nowEpoch={0} />);
     const channels = screen.getByRole("button", { name: "Channels" });
-    const insights = screen.getByRole("button", { name: "Insights" });
-    const dock = screen.getByRole("button", { name: "Correlation dock" });
     expect(channels).toHaveAttribute("aria-pressed", "true");
-    expect(insights).toHaveAttribute("aria-pressed", "true");
-    expect(dock).toHaveAttribute("aria-pressed", "false");
-
-    fireEvent.click(dock);
-    expect(dock).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(channels);
     expect(channels).toHaveAttribute("aria-pressed", "false");
+    expect(useEvtxLayoutStore.getState().panels.channels).toBe(false);
+  });
+
+  it("ships the Insights and Correlation dock toggles disabled, with an accessible reason", () => {
+    render(<EvtxViewBar nowEpoch={0} />);
+    const cases: Array<[string, string]> = [
+      ["Insights", "Available when the Insights rail ships"],
+      ["Correlation dock", "Available when the correlation dock ships"],
+    ];
+    for (const [name, reason] of cases) {
+      const toggle = screen.getByRole("button", { name });
+      expect(toggle).toHaveAttribute("aria-pressed", "false");
+      expect(toggle).toHaveAttribute("aria-disabled", "true");
+      expect(toggle).toHaveAttribute("title", reason);
+      expect(toggle).toHaveAccessibleDescription(reason);
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute("aria-pressed", "false");
+    }
     expect(useEvtxLayoutStore.getState().panels).toEqual({
-      channels: false,
-      insights: true,
-      dock: true,
+      channels: true,
+      insights: false,
+      dock: false,
+    });
+  });
+
+  it("draws the Layout tab focus ring inside the tab so the clipped group cannot cut it off", () => {
+    render(<EvtxViewBar nowEpoch={0} />);
+    const tab = screen.getByRole("tab", { name: "Table" });
+    const classes = tab.className.split(/\s+/).filter(Boolean);
+    expect(classes.length).toBeGreaterThan(0);
+    const rules: CSSStyleRule[] = [];
+    for (const sheet of Array.from(document.styleSheets)) {
+      for (const rule of Array.from(sheet.cssRules)) {
+        if (rule instanceof CSSStyleRule) rules.push(rule);
+      }
+    }
+    // Griffel emits one atomic rule per declaration, so gather every focus-visible rule that
+    // targets one of the tab's classes.
+    const focusCss = rules
+      .filter(
+        (rule) =>
+          rule.selectorText.includes(":focus-visible") &&
+          classes.some((name) => rule.selectorText.includes(`.${name}`)),
+      )
+      .map((rule) => rule.cssText)
+      .join(" ");
+    expect(focusCss).toMatch(/outline-offset:\s*-2px/);
+    expect(focusCss).toMatch(/outline-style:\s*solid/);
+  });
+
+  it("keeps the export status in the spacer with overflow ellipsis and the full text in the title", () => {
+    render(<EvtxViewBar nowEpoch={0} />);
+    const status = document.querySelector<HTMLElement>("[data-evtx-export-status]")!;
+    expect(status).toHaveAttribute("role", "status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(status).toHaveStyle({
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+      minWidth: "0",
     });
   });
 
@@ -128,5 +178,31 @@ describe("EvtxViewBar", () => {
     expect(items.map((item) => item.textContent)).toEqual(
       EVTX_EXPORT_FORMATS.map((format) => format.label),
     );
+  });
+
+  it("reorders a column and resets columns inside the Columns popover, with icon arrows", async () => {
+    render(<EvtxViewBar nowEpoch={0} />);
+    const defaults = defaultColumnConfig().order;
+    fireEvent.click(screen.getByRole("button", { name: `Columns (${defaults.length})` }));
+
+    fireEvent.click(await screen.findByRole("combobox", { name: "Column to reorder" }));
+    const options = await screen.findAllByRole("option");
+    await act(async () => {
+      fireEvent.click(options[0]);
+    });
+    const later = screen.getByRole("button", { name: "Move the selected column later" });
+    const earlier = screen.getByRole("button", { name: "Move the selected column earlier" });
+    expect(later.querySelector("svg")).not.toBeNull();
+    expect(earlier.querySelector("svg")).not.toBeNull();
+    expect(later.textContent).toBe("");
+    expect(earlier).toBeDisabled();
+
+    fireEvent.click(later);
+    const moved = useEvtxStore.getState().columnConfig.order;
+    expect(moved[1]).toBe(defaults[0]);
+    expect(moved[0]).toBe(defaults[1]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset columns" }));
+    expect(useEvtxStore.getState().columnConfig.order).toEqual(defaults);
   });
 });
