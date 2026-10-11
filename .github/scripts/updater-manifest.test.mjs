@@ -90,11 +90,8 @@ test("two publishers seeing the same assets produce identical manifests", () => 
   assert.deepEqual(first.manifest, second.manifest);
 });
 
-// The property that makes an out-of-order publisher safe: a run that cannot see
-// the other platform's artifacts yet must not delete its entries. This is the
-// exact regression that shipped v1.5.2 without windows-aarch64 and then, on the
-// repair run, without any Linux key at all.
-test("carries published entries forward when their artifacts are not visible", () => {
+// Complete publication requires current signatures, never inherited entries.
+test("does not carry old entries forward when current signatures are absent", () => {
   const published = {
     version: TAG_NAME,
     notes: `CMTrace Open ${TAG_NAME}`,
@@ -112,9 +109,9 @@ test("carries published entries forward when their artifacts are not visible", (
     publishedManifest: published,
   });
 
-  assert.deepEqual(missing, []);
-  assert.deepEqual(Object.keys(manifest.platforms).sort(), [...ALL_KEYS].sort());
-  assert.equal(manifest.platforms["linux-x86_64-deb"].signature, "already-published");
+  assert.deepEqual(missing.sort(), [...UNIX_KEYS].sort());
+  assert.deepEqual(Object.keys(manifest.platforms).sort(), [...WINDOWS_KEYS].sort());
+  assert.equal(manifest.platforms["linux-x86_64-deb"], undefined);
   assert.equal(manifest.platforms["windows-x86_64"].signature, "sig-for-windows-x86_64");
 });
 
@@ -138,7 +135,7 @@ test("a freshly built entry replaces the published one for the same target", () 
 test("keeps the original publication date across republishes", () => {
   const { manifest } = build({
     signatures: signaturesFor(ALL_KEYS),
-    publishedManifest: { pub_date: "2026-08-13T12:00:00Z", platforms: {} },
+    publishedManifest: { version: TAG_NAME, pub_date: "2026-08-13T12:00:00Z", platforms: {} },
   });
 
   assert.equal(manifest.pub_date, "2026-08-13T12:00:00Z");
