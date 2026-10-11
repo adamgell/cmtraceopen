@@ -15,10 +15,13 @@
  * transport and routes streamed batches here by request ID.
  */
 
+import { create } from "zustand";
+import { assertParseResultShape, formatCoverageGap } from "./evtx-coverage";
 import { selectVisibleRecords, type VisibleRecordsInput } from "./evtx-filter";
 import {
   EVTX_TIME_WINDOW_MS,
   type EvtxLevel,
+  type EvtxParseResult,
   type EvtxRecord,
   type EvtxTimeWindow,
 } from "./types";
@@ -304,8 +307,10 @@ function plural(count: number, singular: string, pluralForm: string): string {
   return count === 1 ? singular : pluralForm;
 }
 
-function unplacedGap(count: number): string {
-  return `${count} loaded ${plural(count, "event has", "events have")} no usable timestamp and could not be placed in either period.`;
+function unplacedGap(count: number, scope: "files" | "live"): string {
+  return scope === "files"
+    ? `${count} loaded ${plural(count, "event has", "events have")} no usable timestamp and could not be placed in either period.`
+    : `${count} ${plural(count, "event has", "events have")} no usable timestamp and could not be placed in the previous period.`;
 }
 
 export interface FilesComparisonInput {
@@ -334,7 +339,7 @@ export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutco
   const aggregator = createAggregator(prior, input.visibility);
   aggregator.add(input.records);
   const tally = aggregator.finish();
-  const gaps = tally.unplacedRecords > 0 ? [unplacedGap(tally.unplacedRecords)] : [];
+  const gaps = tally.unplacedRecords > 0 ? [unplacedGap(tally.unplacedRecords, "files")] : [];
   return {
     status: gaps.length === 0 ? "complete" : "partial",
     result: {
@@ -347,4 +352,398 @@ export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutco
       unreadChannels: [],
     },
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Published state
+// ---------------------------------------------------------------------------------------------
+
+export type ComparisonState =
+  | { phase: "idle" }
+  | { phase: "running"; mode: "live"; requestId: string; prior: PriorWindow }
+  | { phase: "settled"; outcome: ComparisonOutcome };
+
+/**
+ * What the comparison currently is. A result is published once, when the comparison settles, and
+ * never as a running tally: a delta against a half-read period is an estimate, and the workspace
+ * shows no estimate.
+ */
+export const useComparisonStore = create<{ state: ComparisonState }>(() => ({
+  state: { phase: "idle" },
+}));
+
+export function getComparisonState(): ComparisonState {
+  return useComparisonStore.getState().state;
+}
+
+function publish(state: ComparisonState): void {
+  useComparisonStore.setState({ state });
+}
+
+/** Publishes that no comparison can be made, and why. Ends any comparison in flight. */
+export function publishComparisonUnavailable(
+  reason: ComparisonUnavailableReason,
+  detail: string
+): void {
+  endActiveSession();
+  publish({ phase: "settled", outcome: { status: "unavailable", reason, detail } });
+}
+
+/** Computes and publishes the files-mode comparison. Ends any comparison in flight. */
+export function publishFilesComparison(input: FilesComparisonInput): ComparisonOutcome {
+  endActiveSession();
+  const outcome = compareLoadedFiles(input);
+  publish({ phase: "settled", outcome });
+  return outcome;
+}
+
+/**
+ * Ends the comparison and clears its result.
+ *
+ * Stops the backend read of a comparison still in flight, so abandoning a comparison of a large
+ * channel does not leave the scan running. Safe to call at any time and when nothing is running.
+ */
+export function cancelComparison(): void {
+  endActiveSession();
+  if (getComparisonState().phase !== "idle") publish({ phase: "idle" });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Live comparison
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Request IDs of comparison queries. The store routes any batch carrying one to this module and
+ * never to its own streams, so a comparison cannot be mistaken for, or merged into, a load.
+ */
+export const COMPARISON_REQUEST_ID_PREFIX = "event-log-compare-";
+
+export function isComparisonRequestId(requestId: string): boolean {
+  return requestId.startsWith(COMPARISON_REQUEST_ID_PREFIX);
+}
+
+/**
+ * How long a channel waits, after the query replied, for batches the event channel has not yet
+ * delivered. The reply and the end-of-stream marker travel on different paths from the batches, so
+ * either can arrive first; the grace turns "the last batch is a moment behind" into a complete
+ * count and "a batch was lost" into a stated gap.
+ */
+const COMPARISON_STRAGGLER_GRACE_MS = 250;
+
+export interface LiveComparisonInput {
+  window: EvtxTimeWindow;
+  anchorEpoch: number;
+  /** The channels to read, each queried under the session's request ID. */
+  channels: readonly string[];
+  visibility: ComparisonVisibility;
+  /** Stops the backend read for a comparison that is cancelled or superseded before it settles. */
+  cancelQuery: (requestId: string) => void;
+}
+
+export interface LiveComparisonSession {
+  /** The dedicated request ID every channel query of this comparison must carry. */
+  readonly requestId: string;
+  /** The previous period the queries must be bounded to. */
+  readonly prior: PriorWindow;
+  /** Resolves when the comparison settles or is cancelled. */
+  readonly done: Promise<void>;
+  /** False once the comparison has settled, been cancelled or been superseded. */
+  isActive(): boolean;
+  /** A channel's query resolved. Ignored when the comparison is no longer active. */
+  replied(channel: string, reply: EvtxParseResult): void;
+  /** A channel's query rejected. Ignored when the comparison is no longer active. */
+  failed(channel: string, message: string): void;
+}
+
+interface ChannelStream {
+  received: number;
+  sequences: Set<number>;
+  terminal?: { sequenceCount: number; totalRecords: number };
+  reply?: { expected: number | null; gaps: string[]; replyRecords: number };
+  failure?: string;
+  settled: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+  gaps: string[];
+  unread: boolean;
+}
+
+interface ActiveSession {
+  requestId: string;
+  prior: PriorWindow;
+  channels: string[];
+  streams: Map<string, ChannelStream>;
+  aggregator: ComparisonAggregator;
+  active: boolean;
+  cancelQuery: (requestId: string) => void;
+  resolveDone: () => void;
+}
+
+let activeSession: ActiveSession | null = null;
+let comparisonGeneration = 0;
+
+function endActiveSession(): void {
+  const session = activeSession;
+  if (!session) return;
+  activeSession = null;
+  session.active = false;
+  for (const stream of session.streams.values()) clearTimeout(stream.timer);
+  session.cancelQuery(session.requestId);
+  session.resolveDone();
+}
+
+function missingSequences(stream: ChannelStream): number {
+  if (!stream.terminal) return 0;
+  let missing = 0;
+  for (let sequence = 0; sequence < stream.terminal.sequenceCount; sequence++) {
+    if (!stream.sequences.has(sequence)) missing++;
+  }
+  return missing;
+}
+
+function expectedEvents(stream: ChannelStream): number | null {
+  return stream.reply?.expected ?? stream.terminal?.totalRecords ?? null;
+}
+
+function describeChannel(channel: string, stream: ChannelStream): void {
+  if (stream.failure !== undefined) {
+    stream.gaps = [`${channel}: ${stream.failure}`];
+    stream.unread = true;
+    return;
+  }
+  const reply = stream.reply;
+  const gaps = reply ? [...reply.gaps] : [];
+  if (reply && reply.replyRecords > 0) {
+    const n = reply.replyRecords;
+    gaps.push(
+      `${channel}: ${n} ${plural(n, "event arrived", "events arrived")} in the reply instead of the stream and ${plural(n, "was", "were")} not counted`
+    );
+  }
+  const expected = expectedEvents(stream);
+  if (expected === null) {
+    gaps.push(`${channel}: the reader did not report how many events it sent`);
+  }
+  if (stream.terminal) {
+    const missing = missingSequences(stream);
+    if (missing > 0) {
+      gaps.push(
+        `${channel}: ${missing} ${plural(missing, "batch of events was", "batches of events were")} not received`
+      );
+    }
+  } else {
+    gaps.push(`${channel}: the end-of-stream marker was not received`);
+  }
+  if (expected !== null) {
+    if (stream.received < expected) {
+      gaps.push(
+        `${channel}: ${expected - stream.received} of ${expected} events did not reach the comparison`
+      );
+    } else if (stream.received > expected && (reply?.gaps.length ?? 0) === 0) {
+      gaps.push(`${channel}: more events arrived than the reader reported`);
+    }
+  }
+  stream.gaps = gaps;
+  // A channel that delivered nothing and has something to report is not a channel with no events.
+  stream.unread = stream.received === 0 && gaps.length > 0;
+}
+
+function finishIfSettled(session: ActiveSession): void {
+  if (!session.active) return;
+  for (const stream of session.streams.values()) if (!stream.settled) return;
+
+  const tally = session.aggregator.finish();
+  const gaps = session.channels.flatMap((channel) => session.streams.get(channel)?.gaps ?? []);
+  const unreadChannels = session.channels.filter((channel) => session.streams.get(channel)?.unread);
+  if (tally.unplacedRecords > 0) gaps.push(unplacedGap(tally.unplacedRecords, "live"));
+  if (tally.outsideWindowRecords > 0) {
+    const n = tally.outsideWindowRecords;
+    gaps.push(
+      `${n} ${plural(n, "event the query returned lies", "events the query returned lie")} outside the previous period and ${plural(n, "was", "were")} not counted.`
+    );
+  }
+
+  const outcome: ComparisonOutcome =
+    unreadChannels.length === session.channels.length
+      ? { status: "unavailable", reason: "queryFailed", detail: gaps.join(" ") }
+      : {
+          status: gaps.length === 0 ? "complete" : "partial",
+          result: {
+            mode: "live",
+            window: session.prior.window,
+            prior: session.prior,
+            counts: tally.counts,
+            gaps,
+            unplacedRecords: tally.unplacedRecords,
+            unreadChannels,
+          },
+        };
+
+  activeSession = null;
+  session.active = false;
+  publish({ phase: "settled", outcome });
+  session.resolveDone();
+}
+
+function settleChannel(session: ActiveSession, channel: string, stream: ChannelStream): void {
+  stream.settled = true;
+  clearTimeout(stream.timer);
+  stream.timer = undefined;
+  describeChannel(channel, stream);
+  finishIfSettled(session);
+}
+
+/**
+ * Settles a channel once everything it will say has been heard: its query replied, its
+ * end-of-stream marker arrived, no batch is missing and the events received equal the events the
+ * reader reported. Anything short of that waits for the straggler grace and then settles with the
+ * shortfall stated.
+ */
+function trySettleChannel(
+  session: ActiveSession,
+  channel: string,
+  stream: ChannelStream,
+  graceExpired = false
+): void {
+  if (!session.active || stream.settled) return;
+  if (stream.failure !== undefined) {
+    settleChannel(session, channel, stream);
+    return;
+  }
+  if (!stream.reply) return;
+
+  const expected = expectedEvents(stream);
+  const reconciled =
+    stream.terminal !== undefined &&
+    missingSequences(stream) === 0 &&
+    expected !== null &&
+    stream.received >= expected;
+  if (reconciled || graceExpired) {
+    settleChannel(session, channel, stream);
+    return;
+  }
+  stream.timer ??= setTimeout(
+    () => trySettleChannel(session, channel, stream, true),
+    COMPARISON_STRAGGLER_GRACE_MS
+  );
+}
+
+/**
+ * Starts a live comparison, or publishes why it cannot start and returns null.
+ *
+ * Ends whatever comparison was in flight or on show first. The caller issues one query per channel,
+ * each under `session.requestId` and bounded by `session.prior`, and reports each channel's reply
+ * or rejection on the session. Streamed batches reach the session through
+ * `observeComparisonBatch`, which the store calls for any comparison request ID.
+ */
+export function beginLiveComparison(input: LiveComparisonInput): LiveComparisonSession | null {
+  endActiveSession();
+  const windowResult = computePriorWindow(input.window, input.anchorEpoch);
+  if (windowResult.status === "unavailable") {
+    publishComparisonUnavailable(windowResult.reason, windowResult.detail);
+    return null;
+  }
+  const channels = [...new Set(input.channels)];
+  if (channels.length === 0) {
+    publishComparisonUnavailable("noChannels", "No loaded channel is selected to compare.");
+    return null;
+  }
+
+  const { prior } = windowResult;
+  const requestId = `${COMPARISON_REQUEST_ID_PREFIX}${++comparisonGeneration}`;
+  let resolveDone: () => void = () => {};
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+  });
+  const session: ActiveSession = {
+    requestId,
+    prior,
+    channels,
+    streams: new Map(
+      channels.map((channel) => [
+        channel,
+        { received: 0, sequences: new Set<number>(), settled: false, gaps: [], unread: false },
+      ])
+    ),
+    aggregator: createAggregator(prior, input.visibility),
+    active: true,
+    cancelQuery: input.cancelQuery,
+    resolveDone,
+  };
+  activeSession = session;
+  publish({ phase: "running", mode: "live", requestId, prior });
+
+  return {
+    requestId,
+    prior,
+    done,
+    isActive: () => session.active,
+    replied(channel, result) {
+      const stream = session.active ? session.streams.get(channel) : undefined;
+      if (!stream || stream.settled) return;
+      try {
+        const checked = assertParseResultShape(result);
+        stream.reply = {
+          expected: checked.totalRecords,
+          // Provider-description failures leave every count intact; anything else may not.
+          gaps: checked.coverageGaps
+            .filter((coverageGap) => coverageGap.kind !== "provider")
+            .map(formatCoverageGap),
+          replyRecords: checked.records.length,
+        };
+      } catch (error) {
+        stream.failure = error instanceof Error ? error.message : String(error);
+      }
+      trySettleChannel(session, channel, stream);
+    },
+    failed(channel, message) {
+      const stream = session.active ? session.streams.get(channel) : undefined;
+      if (!stream || stream.settled) return;
+      stream.failure = message;
+      trySettleChannel(session, channel, stream);
+    },
+  };
+}
+
+export interface ComparisonBatch {
+  requestId: string;
+  channel: string;
+  sequence: number;
+  records: readonly EvtxRecord[];
+}
+
+/**
+ * Takes a streamed batch for the active comparison and aggregates it. A batch for any other
+ * request, a cancelled or superseded comparison, a channel not being read, or a channel that has
+ * already settled is dropped.
+ */
+export function observeComparisonBatch(batch: ComparisonBatch): void {
+  const session = activeSession;
+  if (!session || session.requestId !== batch.requestId) return;
+  const stream = session.streams.get(batch.channel);
+  if (!stream || stream.settled || stream.sequences.has(batch.sequence)) return;
+  stream.sequences.add(batch.sequence);
+  if (Array.isArray(batch.records) && batch.records.length > 0) {
+    stream.received += batch.records.length;
+    session.aggregator.add(batch.records);
+  }
+  trySettleChannel(session, batch.channel, stream);
+}
+
+export interface ComparisonStreamComplete {
+  requestId: string;
+  channel: string;
+  sequenceCount: number;
+  totalRecords: number;
+}
+
+/** Takes a channel's end-of-stream marker for the active comparison; otherwise drops it. */
+export function observeComparisonComplete(complete: ComparisonStreamComplete): void {
+  const session = activeSession;
+  if (!session || session.requestId !== complete.requestId) return;
+  const stream = session.streams.get(complete.channel);
+  if (!stream || stream.settled) return;
+  stream.terminal = {
+    sequenceCount: complete.sequenceCount,
+    totalRecords: complete.totalRecords,
+  };
+  trySettleChannel(session, complete.channel, stream);
 }

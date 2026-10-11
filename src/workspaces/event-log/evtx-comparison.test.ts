@@ -1,15 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  beginLiveComparison,
+  cancelComparison,
   checkFilesCoverage,
   compareLoadedFiles,
   computePriorWindow,
   createAggregator,
   eventIdentityKey,
+  getComparisonState,
+  isComparisonRequestId,
+  observeComparisonBatch,
+  observeComparisonComplete,
+  publishFilesComparison,
+  useComparisonStore,
   type ComparisonVisibility,
+  type LiveComparisonSession,
   type PriorWindow,
 } from "./evtx-comparison";
 import { DEFAULT_QUICK_FILTER, isWithinTimeWindow } from "./evtx-filter";
-import { EVTX_TIME_WINDOW_MS, type EvtxLevel, type EvtxRecord } from "./types";
+import {
+  EVTX_TIME_WINDOW_MS,
+  type EvtxCoverageGap,
+  type EvtxLevel,
+  type EvtxParseResult,
+  type EvtxRecord,
+} from "./types";
 
 const ALL_LEVELS: EvtxLevel[] = ["Critical", "Error", "Warning", "Information", "Verbose"];
 
@@ -421,5 +436,541 @@ describe("compareLoadedFiles", () => {
     if (outcome.status !== "complete") return;
     expect(outcome.result.counts.total).toBe(2);
     expect(outcome.result.counts.levels.Warning).toBe(0);
+  });
+});
+
+function reply(
+  totalRecords: number | undefined,
+  overrides: Partial<EvtxParseResult> = {}
+): EvtxParseResult {
+  return {
+    records: [],
+    channels: [],
+    totalRecords: totalRecords as number,
+    parseErrors: 0,
+    errorMessages: [],
+    coverageGaps: [],
+    ...overrides,
+  };
+}
+
+function gap(overrides: Partial<EvtxCoverageGap> = {}): EvtxCoverageGap {
+  return { source: "System", kind: "record", reason: "unreadable record", ...overrides };
+}
+
+describe("a live comparison", () => {
+  const cancelQuery = vi.fn<(requestId: string) => void>();
+  const channels = ["System", "Application"];
+  let inPrior: number;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    cancelComparison();
+    cancelQuery.mockReset();
+    inPrior = priorFor().fromMs + HOUR;
+  });
+
+  afterEach(() => {
+    cancelComparison();
+    vi.useRealTimers();
+  });
+
+  function begin(overrides: Partial<Parameters<typeof beginLiveComparison>[0]> = {}) {
+    const session = beginLiveComparison({
+      window: "24h",
+      anchorEpoch: ANCHOR,
+      channels,
+      visibility: visibility(),
+      cancelQuery,
+      ...overrides,
+    });
+    if (!session) throw new Error("expected the comparison to start");
+    return session;
+  }
+
+  function batch(
+    session: LiveComparisonSession,
+    channel: string,
+    sequence: number,
+    records: EvtxRecord[]
+  ) {
+    observeComparisonBatch({ requestId: session.requestId, channel, sequence, records });
+  }
+
+  function terminal(
+    session: LiveComparisonSession,
+    channel: string,
+    sequenceCount: number,
+    totalRecords: number
+  ) {
+    observeComparisonComplete({ requestId: session.requestId, channel, sequenceCount, totalRecords });
+  }
+
+  function systemEvents(count: number, overrides: Partial<EvtxRecord> = {}): EvtxRecord[] {
+    return Array.from({ length: count }, () =>
+      record({ channel: "System", timestampEpoch: inPrior, ...overrides })
+    );
+  }
+
+  /** Delivers a whole channel the way the backend does: batches, terminal, then the reply. */
+  function deliver(session: LiveComparisonSession, channel: string, records: EvtxRecord[]) {
+    if (records.length > 0) batch(session, channel, 0, records);
+    terminal(session, channel, records.length > 0 ? 1 : 0, records.length);
+    session.replied(channel, reply(records.length));
+  }
+
+  function settled() {
+    const state = getComparisonState();
+    if (state.phase !== "settled") throw new Error(`expected a settled comparison, got ${state.phase}`);
+    return state.outcome;
+  }
+
+  it("takes a request ID from its own namespace, unique per comparison", () => {
+    const first = begin();
+    cancelComparison();
+    const second = begin();
+    expect(isComparisonRequestId(first.requestId)).toBe(true);
+    expect(isComparisonRequestId(second.requestId)).toBe(true);
+    expect(second.requestId).not.toBe(first.requestId);
+    // The store's own requests must never be mistaken for a comparison.
+    expect(isComparisonRequestId("event-log-1")).toBe(false);
+    expect(isComparisonRequestId("event-log-tail-1")).toBe(false);
+    expect(isComparisonRequestId("initial")).toBe(false);
+  });
+
+  it("publishes a running state, and no numbers, until every channel has settled", () => {
+    const session = begin();
+    const published: string[] = [];
+    const unsubscribe = useComparisonStore.subscribe((value) => published.push(value.state.phase));
+
+    expect(getComparisonState()).toMatchObject({
+      phase: "running",
+      requestId: session.requestId,
+      prior: priorFor(),
+    });
+    deliver(session, "System", systemEvents(3));
+    expect(getComparisonState().phase).toBe("running");
+    expect(published).toEqual([]);
+
+    deliver(session, "Application", []);
+    unsubscribe();
+    expect(published).toEqual(["settled"]);
+  });
+
+  it("completes with the aggregated counts when the stream reconciles with the replies", async () => {
+    const session = begin();
+    deliver(
+      session,
+      "System",
+      systemEvents(2, { level: "Error", eventId: 7 }).concat(
+        systemEvents(1, { level: "Warning", eventId: 8 })
+      )
+    );
+    deliver(session, "Application", [
+      record({
+        channel: "Application",
+        timestampEpoch: inPrior,
+        level: "Error",
+        eventId: 7,
+        provider: "Other-Provider",
+      }),
+    ]);
+    await session.done;
+
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status !== "complete") return;
+    expect(outcome.result.mode).toBe("live");
+    expect(outcome.result.gaps).toEqual([]);
+    expect(outcome.result.unreadChannels).toEqual([]);
+    expect(outcome.result.counts.total).toBe(4);
+    expect(outcome.result.counts.levels.Error).toBe(3);
+    expect(Object.fromEntries(outcome.result.counts.channels)).toEqual({ System: 3, Application: 1 });
+    expect(outcome.result.counts.distinctEvents.size).toBe(3);
+    expect(cancelQuery).not.toHaveBeenCalled();
+  });
+
+  it("does not finish early when the reply and terminal outrun the last batch", () => {
+    const session = begin({ channels: ["System"] });
+    batch(session, "System", 0, systemEvents(2));
+    session.replied("System", reply(4));
+    terminal(session, "System", 2, 4);
+    expect(getComparisonState().phase).toBe("running");
+
+    batch(session, "System", 1, systemEvents(2));
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") expect(outcome.result.counts.total).toBe(4);
+  });
+
+  it("still waits for a batch the end-of-stream marker promises when the reply's count is already met", () => {
+    // The reply says 2 events and the marker promises two batches. Trusting the reply alone would
+    // settle now and drop the second batch; the marker keeps the channel open, and the
+    // disagreement between the two reports is then stated rather than hidden.
+    const session = begin({ channels: ["System"] });
+    batch(session, "System", 0, systemEvents(2));
+    session.replied("System", reply(2));
+    terminal(session, "System", 2, 4);
+    expect(getComparisonState().phase).toBe("running");
+
+    batch(session, "System", 1, systemEvents(2));
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    expect(outcome.result.counts.total).toBe(4);
+    expect(outcome.result.gaps).toEqual(["System: more events arrived than the reader reported"]);
+  });
+
+  it("settles as partial, naming what was not received, once the stragglers' grace has passed", () => {
+    const session = begin({ channels: ["System"] });
+    batch(session, "System", 0, systemEvents(3));
+    session.replied("System", reply(5));
+    terminal(session, "System", 2, 5);
+    expect(getComparisonState().phase).toBe("running");
+
+    vi.runAllTimers();
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    expect(outcome.result.counts.total).toBe(3);
+    expect(outcome.result.gaps).toEqual([
+      "System: 1 batch of events was not received",
+      "System: 2 of 5 events did not reach the comparison",
+    ]);
+  });
+
+  it("is partial when the end-of-stream marker never arrives, even if the counts line up", () => {
+    const session = begin({ channels: ["System"] });
+    batch(session, "System", 0, systemEvents(2));
+    session.replied("System", reply(2));
+    expect(getComparisonState().phase).toBe("running");
+
+    vi.runAllTimers();
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status === "partial") {
+      expect(outcome.result.gaps).toEqual(["System: the end-of-stream marker was not received"]);
+    }
+  });
+
+  it("counts a batch delivered twice once", () => {
+    const session = begin({ channels: ["System"] });
+    batch(session, "System", 0, systemEvents(2));
+    batch(session, "System", 0, systemEvents(2));
+    terminal(session, "System", 1, 2);
+    session.replied("System", reply(2));
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") expect(outcome.result.counts.total).toBe(2);
+  });
+
+  it("ignores a batch for a channel it did not ask for, or for another request", () => {
+    const session = begin({ channels: ["System"] });
+    batch(session, "Security", 0, systemEvents(5, { channel: "Security" }));
+    observeComparisonBatch({
+      requestId: "event-log-compare-0",
+      channel: "System",
+      sequence: 0,
+      records: systemEvents(5),
+    });
+    deliver(session, "System", systemEvents(1));
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") expect(outcome.result.counts.total).toBe(1);
+  });
+
+  it("drops batches that arrive after the channel has settled", () => {
+    const session = begin({ channels: ["System", "Application"] });
+    deliver(session, "System", systemEvents(1));
+    batch(session, "System", 1, systemEvents(10));
+    deliver(session, "Application", []);
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") expect(outcome.result.counts.total).toBe(1);
+  });
+
+  describe("cancelling", () => {
+    it("stops the query, clears the state and resolves done", async () => {
+      const session = begin();
+      deliver(session, "System", systemEvents(2));
+
+      cancelComparison();
+
+      expect(cancelQuery).toHaveBeenCalledTimes(1);
+      expect(cancelQuery).toHaveBeenCalledWith(session.requestId);
+      expect(getComparisonState()).toEqual({ phase: "idle" });
+      expect(session.isActive()).toBe(false);
+      await expect(session.done).resolves.toBeUndefined();
+    });
+
+    it("drops every late batch, terminal and reply, and publishes nothing afterwards", () => {
+      const session = begin();
+      cancelComparison();
+      const published: string[] = [];
+      const unsubscribe = useComparisonStore.subscribe((value) => published.push(value.state.phase));
+
+      deliver(session, "System", systemEvents(3));
+      deliver(session, "Application", systemEvents(3, { channel: "Application" }));
+      session.failed("System", "late");
+      vi.runAllTimers();
+      unsubscribe();
+
+      expect(published).toEqual([]);
+      expect(getComparisonState()).toEqual({ phase: "idle" });
+    });
+
+    it("clears a finished result and does not stop a query that already ended", () => {
+      const session = begin();
+      deliver(session, "System", systemEvents(1));
+      deliver(session, "Application", []);
+      expect(getComparisonState().phase).toBe("settled");
+
+      cancelComparison();
+
+      expect(getComparisonState()).toEqual({ phase: "idle" });
+      expect(cancelQuery).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op, and publishes nothing, when idle", () => {
+      const published: string[] = [];
+      const unsubscribe = useComparisonStore.subscribe((value) => published.push(value.state.phase));
+      cancelComparison();
+      cancelComparison();
+      unsubscribe();
+      expect(published).toEqual([]);
+    });
+
+    it("is what starting another comparison does to the one in flight", () => {
+      const first = begin();
+      const second = begin();
+
+      expect(cancelQuery).toHaveBeenCalledTimes(1);
+      expect(cancelQuery).toHaveBeenCalledWith(first.requestId);
+      expect(first.isActive()).toBe(false);
+      expect(second.isActive()).toBe(true);
+
+      // The first comparison's stragglers must not leak into the second one's counts.
+      deliver(first, "System", systemEvents(9));
+      deliver(second, "System", systemEvents(1));
+      deliver(second, "Application", []);
+      const outcome = settled();
+      expect(outcome.status).toBe("complete");
+      if (outcome.status === "complete") expect(outcome.result.counts.total).toBe(1);
+    });
+  });
+
+  describe("when a channel cannot be read", () => {
+    it("lists a rejected channel as unread rather than counting it as 0, and is partial", () => {
+      const session = begin();
+      deliver(session, "System", systemEvents(2));
+      session.failed("Application", "Access is denied.");
+
+      const outcome = settled();
+      expect(outcome.status).toBe("partial");
+      if (outcome.status !== "partial") return;
+      expect(outcome.result.unreadChannels).toEqual(["Application"]);
+      expect(outcome.result.counts.channels.has("Application")).toBe(false);
+      expect(outcome.result.gaps).toEqual(["Application: Access is denied."]);
+    });
+
+    it("is unavailable, never a table of zeros, when no channel could be read", () => {
+      const session = begin();
+      session.failed("System", "Access is denied.");
+      session.failed("Application", "The channel was not found.");
+      expect(settled()).toEqual({
+        status: "unavailable",
+        reason: "queryFailed",
+        detail: "System: Access is denied. Application: The channel was not found.",
+      });
+    });
+
+    it("treats a reply that reports a refusal and sent nothing as an unread channel", () => {
+      const session = begin();
+      terminal(session, "Application", 0, 0);
+      session.replied(
+        "Application",
+        reply(0, {
+          coverageGaps: [gap({ source: "Application", kind: "file", reason: "access denied" })],
+          errorMessages: ["Application: access denied"],
+        })
+      );
+      deliver(session, "System", systemEvents(1));
+
+      const outcome = settled();
+      expect(outcome.status).toBe("partial");
+      if (outcome.status !== "partial") return;
+      expect(outcome.result.unreadChannels).toEqual(["Application"]);
+      expect(outcome.result.gaps).toEqual(["Application: access denied"]);
+    });
+
+    it("keeps the events a partly read channel did deliver, and says it is partial", () => {
+      const session = begin({ channels: ["System"] });
+      batch(session, "System", 0, systemEvents(2));
+      terminal(session, "System", 1, 2);
+      session.replied(
+        "System",
+        reply(2, { coverageGaps: [gap({ kind: "record", reason: "record 9 unreadable" })] })
+      );
+      const outcome = settled();
+      expect(outcome.status).toBe("partial");
+      if (outcome.status !== "partial") return;
+      expect(outcome.result.counts.total).toBe(2);
+      expect(outcome.result.unreadChannels).toEqual([]);
+      expect(outcome.result.gaps).toEqual(["System: record 9 unreadable"]);
+    });
+
+    it("is not made partial by a provider-description gap, which does not change any count", () => {
+      const session = begin({ channels: ["System"] });
+      batch(session, "System", 0, systemEvents(2));
+      terminal(session, "System", 1, 2);
+      session.replied(
+        "System",
+        reply(2, {
+          coverageGaps: [gap({ kind: "provider", reason: "message text unavailable" })],
+          errorMessages: ["System: message text unavailable"],
+        })
+      );
+      expect(settled().status).toBe("complete");
+    });
+
+    it("does not count events that arrive in the reply as well, and says they were left out", () => {
+      const session = begin({ channels: ["System"] });
+      batch(session, "System", 0, systemEvents(2));
+      terminal(session, "System", 1, 2);
+      session.replied("System", reply(2, { records: systemEvents(2) }));
+      const outcome = settled();
+      expect(outcome.status).toBe("partial");
+      if (outcome.status !== "partial") return;
+      expect(outcome.result.counts.total).toBe(2);
+      expect(outcome.result.gaps).toEqual([
+        "System: 2 events arrived in the reply instead of the stream and were not counted",
+      ]);
+    });
+
+    it("treats a reply it cannot read as a failed channel", () => {
+      const session = begin({ channels: ["System"] });
+      session.replied("System", { channels: [] } as unknown as EvtxParseResult);
+      expect(settled()).toMatchObject({ status: "unavailable", reason: "queryFailed" });
+    });
+
+    it("cannot verify completeness without a reported count, and says so", () => {
+      const session = begin({ channels: ["System"] });
+      batch(session, "System", 0, systemEvents(2));
+      session.replied("System", reply(undefined));
+      vi.runAllTimers();
+      const outcome = settled();
+      expect(outcome.status).toBe("partial");
+      if (outcome.status === "partial") {
+        expect(outcome.result.gaps).toContain(
+          "System: the reader did not report how many events it sent"
+        );
+      }
+    });
+  });
+
+  it("reports events stamped outside the previous period as a fault, not as counts", () => {
+    const prior = priorFor();
+    const session = begin({ channels: ["System"] });
+    batch(session, "System", 0, [
+      record({ channel: "System", timestampEpoch: inPrior }),
+      record({ channel: "System", timestampEpoch: prior.toMs + 1 }),
+    ]);
+    terminal(session, "System", 1, 2);
+    session.replied("System", reply(2));
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    expect(outcome.result.counts.total).toBe(1);
+    expect(outcome.result.gaps).toEqual([
+      "1 event the query returned lies outside the previous period and was not counted.",
+    ]);
+  });
+
+  it("does not start for All time or without channels, and publishes why", () => {
+    expect(
+      beginLiveComparison({
+        window: "all",
+        anchorEpoch: ANCHOR,
+        channels,
+        visibility: visibility(),
+        cancelQuery,
+      })
+    ).toBeNull();
+    expect(getComparisonState()).toMatchObject({
+      phase: "settled",
+      outcome: { status: "unavailable", reason: "allTime" },
+    });
+
+    expect(
+      beginLiveComparison({
+        window: "24h",
+        anchorEpoch: ANCHOR,
+        channels: [],
+        visibility: visibility(),
+        cancelQuery,
+      })
+    ).toBeNull();
+    expect(getComparisonState()).toMatchObject({
+      phase: "settled",
+      outcome: { status: "unavailable", reason: "noChannels" },
+    });
+    expect(cancelQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe("publishing a files comparison", () => {
+  beforeEach(() => cancelComparison());
+  afterEach(() => cancelComparison());
+
+  it("publishes the outcome, and cancelling clears it", () => {
+    const prior = priorFor();
+    publishFilesComparison({
+      records: [
+        record({ timestampEpoch: prior.fromMs }),
+        record({ timestampEpoch: prior.toMs }),
+      ],
+      window: "24h",
+      anchorEpoch: ANCHOR,
+      visibility: visibility(),
+    });
+    expect(getComparisonState()).toMatchObject({
+      phase: "settled",
+      outcome: { status: "complete" },
+    });
+
+    cancelComparison();
+    expect(getComparisonState()).toEqual({ phase: "idle" });
+  });
+
+  it("publishes unavailable when the files do not cover the period", () => {
+    publishFilesComparison({
+      records: [record({ timestampEpoch: ANCHOR })],
+      window: "24h",
+      anchorEpoch: ANCHOR,
+      visibility: visibility(),
+    });
+    expect(getComparisonState()).toMatchObject({
+      phase: "settled",
+      outcome: { status: "unavailable", reason: "priorPeriodNotSpanned" },
+    });
+  });
+
+  it("supersedes a live comparison in flight, stopping its query", () => {
+    const cancelQuery = vi.fn();
+    const session = beginLiveComparison({
+      window: "24h",
+      anchorEpoch: ANCHOR,
+      channels: ["System"],
+      visibility: visibility(),
+      cancelQuery,
+    });
+    expect(session).not.toBeNull();
+    publishFilesComparison({
+      records: [],
+      window: "24h",
+      anchorEpoch: ANCHOR,
+      visibility: visibility(),
+    });
+    expect(cancelQuery).toHaveBeenCalledWith(session?.requestId);
   });
 });
