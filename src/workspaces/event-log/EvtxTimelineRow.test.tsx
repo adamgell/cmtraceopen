@@ -592,6 +592,9 @@ describe.each(THEMES)("EvtxTimelineRow rendering in the %s theme", (_id, theme) 
         for (const mark of marks) {
           expect(mark.style.backgroundColor, `${role} highlight fill`).toBe("transparent");
           expect(mark.style.color, `${role} highlight text`).toBe("inherit");
+          // Inside the mark's box, so a cell's clipping cannot cut off the left edge of a match
+          // that starts the cell. An outline takes no layout space.
+          expect(mark.style.outlineOffset, `${role} highlight outline offset`).toBe("-1px");
           // The outline shorthand is reported as written, not normalized to rgb().
           expect(outlineColor(mark), `${role} highlight outline`).toBe(palette.highlight);
           expect(mark.getAttribute("style"), `${role} highlight underline`).toMatch(
@@ -625,6 +628,17 @@ describe("the quick-filter highlight on rows its tint would swallow", () => {
     expect(mark.style.backgroundColor).toBe("transparent");
     const ratio = contrastRatio(toHex(outlineColor(mark), theme), background);
     expect(ratio).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("takes no box space: no padding, margin or border, so no cell's layout changes", () => {
+    renderRow({ record: highlightRecord("Information"), quickFilter: HIGHLIGHT_FILTER, quickFilterMatch: true });
+    const marks = [...document.querySelectorAll<HTMLElement>("mark")];
+    expect(marks.length).toBeGreaterThan(0);
+    for (const mark of marks) {
+      const attribute = mark.getAttribute("style") ?? "";
+      expect(attribute).not.toMatch(/(^|;\s*)(padding|margin|border)(-[a-z]+)?:/);
+      expect(mark.style.outlineOffset).toBe("-1px");
+    }
   });
 
   it("is a visible highlight, not the browser default, on every row of the light theme", () => {
@@ -722,6 +736,7 @@ describe("EvtxTimelineRow layout and typography (spec D1, D4, 8.7)", () => {
           "opcode",
           "processId",
           "threadId",
+          "keywords",
           "mapped:RemoteHost",
           "provider",
           "message",
@@ -738,6 +753,7 @@ describe("EvtxTimelineRow layout and typography (spec D1, D4, 8.7)", () => {
           opcode: 1,
           processId: 4242,
           threadId: 99,
+          keywords: "0x8000000000000000",
           mapped: [{ property: "RemoteHost", text: "host-1", complete: true }],
         }),
       });
@@ -749,11 +765,14 @@ describe("EvtxTimelineRow layout and typography (spec D1, D4, 8.7)", () => {
         /^Opcode:/,
         /^PID:/,
         /^TID:/,
+        /^Keywords:/,
         /^RemoteHost:/,
         /^Provider:/,
       ]) {
         expect(styleOf(cell(label)).fontSize, String(label)).toBe(expected);
       }
+      // Keywords keeps the monospace face; the time is the one cell at f - 1.
+      expect(styleOf(cell(/^Keywords:/)).fontFamily).toBe(LOG_MONOSPACE_FONT_FAMILY);
       // The numeric columns keep the numeric face at that size.
       for (const label of [/^Record ID:/, /^Task:/, /^Opcode:/, /^PID:/, /^TID:/]) {
         expect(styleOf(cell(label)).fontFamily, String(label)).toBe(tokens.fontFamilyNumeric);

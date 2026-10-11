@@ -188,13 +188,18 @@ function escapeRegExp(value: string): string {
  * The browser's default `mark` paints yellow with black text, which is invisible on the classic
  * Warning row (#FFFF00) and close to the light theme's Warning tint. This keeps the row's text
  * color, draws no fill, and marks the term with a 1 px outline and a 2 px underline in the row's
- * primary text color, both of which survive forced colors.
+ * primary text color, both of which survive forced colors. The outline sits inside the term's box
+ * so the cell's clipping cannot cut an edge off it.
  */
 function highlightStyle(color: string): CSSProperties {
   return {
     backgroundColor: "transparent",
     color: "inherit",
     outline: `1px solid ${color}`,
+    // Inside the mark's box. Every text cell clips its content, so an outline drawn outside
+    // would lose its left edge whenever a match starts the cell. An outline does not affect
+    // layout, so this changes no cell's size.
+    outlineOffset: "-1px",
     borderRadius: "2px",
     textDecorationLine: "underline",
     textDecorationColor: color,
@@ -652,9 +657,11 @@ export const EvtxTimelineRow = memo(
               };
               break;
             case "keywords":
+              // The monospace face for a hex bitmask, at the grid font size like every other
+              // text cell; only the time is f - 1 (spec 8.7).
               cellStyle = {
                 fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-                fontSize: `${monoFontSize}px`,
+                fontSize: `${fontSize}px`,
                 color: palette.secondary,
               };
               break;
