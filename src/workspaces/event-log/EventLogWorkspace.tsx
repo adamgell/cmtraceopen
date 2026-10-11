@@ -22,10 +22,9 @@ import { SourcePicker } from "./SourcePicker";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxFilterBar } from "./EvtxFilterBar";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
-import { EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
-import { EvtxDetailPane } from "./EvtxDetailPane";
+import { EvtxInsightsRail } from "./EvtxInsightsRail";
 import { EvtxViewBar } from "./EvtxViewBar";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
 import {
@@ -37,7 +36,6 @@ import {
   MIN_RAIL_WIDTH,
   maxDockHeightFor,
   useEvtxLayoutStore,
-  type EvtxRailTabId,
   type EvtxViewId,
 } from "./evtx-layout-store";
 import { selectVisibleRecords } from "./evtx-filter";
@@ -53,9 +51,6 @@ import {
   EventLogAnalysisCancelled,
 } from "./event-analysis-session";
 
-const DEFAULT_DETAIL_HEIGHT = 300;
-const MIN_DETAIL_HEIGHT = 100;
-const MAX_DETAIL_RATIO = 0.7;
 const DIAGNOSIS_DEBOUNCE_MS = 75;
 
 const NOT_IMPLEMENTED = "Not implemented in this phase";
@@ -69,13 +64,6 @@ interface EvtxViewEntry {
   keepAlive: boolean;
   render: () => ReactNode;
 }
-
-/** Rail contents by tab (Phase 4 replaces these with the Insights, Chains and Details tabs). */
-const RAIL_SLOT_LABELS: Record<EvtxRailTabId, string> = {
-  insights: "Insights",
-  chains: "Chains",
-  details: "Details",
-};
 
 /** Dock contents (Phase 11 replaces this with the correlation dock). */
 const DOCK_SLOT_LABELS: Record<"correlation", string> = {
@@ -223,7 +211,6 @@ export function EventLogWorkspace() {
   const coverageDetails = useEvtxStore((s) => s.coverageDetails);
   const sourceManifest = useEvtxStore((s) => s.sourceManifest);
   const tailCoverageGaps = useEvtxStore((s) => s.tailCoverageGaps);
-  const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
   const diagnosisCoverageGaps = useMemo(
     () =>
       mergeDiagnosisCoverageGaps(
@@ -254,7 +241,6 @@ export function EventLogWorkspace() {
 
   const activeView = useEvtxLayoutStore((s) => s.activeView);
   const panels = useEvtxLayoutStore((s) => s.panels);
-  const railTab = useEvtxLayoutStore((s) => s.railTab);
   const railWidth = useEvtxLayoutStore((s) => s.railWidth);
   const dockHeight = useEvtxLayoutStore((s) => s.dockHeight);
   const setRailWidth = useEvtxLayoutStore((s) => s.setRailWidth);
@@ -270,43 +256,6 @@ export function EventLogWorkspace() {
   const dockMax = maxDockHeightFor(viewportHeight);
   const effectiveDockHeight = Math.min(Math.max(dockHeight, MIN_DOCK_HEIGHT), dockMax);
 
-  const [detailHeight, setDetailHeight] = useState(DEFAULT_DETAIL_HEIGHT);
-  const resizeRef = useRef<{ startY: number; startHeight: number } | null>(
-    null,
-  );
-
-  useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      if (!resizeRef.current) return;
-      const delta = resizeRef.current.startY - e.clientY;
-      const newHeight = Math.max(
-        MIN_DETAIL_HEIGHT,
-        Math.min(
-          resizeRef.current.startHeight + delta,
-          window.innerHeight * MAX_DETAIL_RATIO,
-        ),
-      );
-      setDetailHeight(newHeight);
-    };
-    const onMouseUp = () => {
-      if (resizeRef.current) {
-        resizeRef.current = null;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-      }
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-      if (resizeRef.current) {
-        resizeRef.current = null;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-      }
-    };
-  }, []);
   useEffect(() => {
     const pump = analysisPumpRef.current;
     pump.mounted = true;
@@ -464,8 +413,8 @@ export function EventLogWorkspace() {
         coverageGaps.length > 0 ||
         diagnosisCoverageGaps.length > 0));
 
-  // Today's stack: the unified timeline, the record grid and the detail pane. Phase 4 moves the
-  // detail pane and the diagnosis card into the rail; Phase 7 restyles the grid.
+  // Today's stack: the unified timeline and the record grid. The diagnosis and the record details
+  // live in the rail; Phases 10 and 11 move the unified timeline; Phase 7 restyles the grid.
   const renderTableView = () => (
     <>
       <div
@@ -493,38 +442,6 @@ export function EventLogWorkspace() {
       <div style={{ flex: 1, overflow: "hidden" }}>
         <EvtxTimeline nowEpoch={nowEpoch} />
       </div>
-
-      {/* Resize handle + detail pane */}
-      {selectedRecordId != null && (
-        <>
-          <div
-            style={{
-              height: "4px",
-              cursor: "row-resize",
-              backgroundColor: tokens.colorNeutralStroke2,
-              flexShrink: 0,
-            }}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              resizeRef.current = {
-                startY: e.clientY,
-                startHeight: detailHeight,
-              };
-              document.body.style.cursor = "row-resize";
-              document.body.style.userSelect = "none";
-            }}
-          />
-          <div
-            style={{
-              height: `${detailHeight}px`,
-              flexShrink: 0,
-              overflow: "hidden",
-            }}
-          >
-            <EvtxDetailPane />
-          </div>
-        </>
-      )}
     </>
   );
 
@@ -590,7 +507,6 @@ export function EventLogWorkspace() {
       <EvtxViewBar nowEpoch={nowEpoch} />
       <EvtxFilterBar nowEpoch={nowEpoch} />
       <EvtxCoverageBanner />
-      <EventDiagnosisPanel summary={diagnosis} />
 
       {timelineError && (
         <div
@@ -692,19 +608,20 @@ export function EventLogWorkspace() {
           )}
         </div>
 
-        {/* Hidden, not unmounted, so the rail's future tab state survives a toggle. */}
+        {/* Hidden, not unmounted, so the rail's tab and scroll state survive a toggle. */}
         <aside
           data-evtx-region="rail"
           aria-label="Insights rail"
           style={{
-            display: panels.insights ? "block" : "none",
+            display: panels.insights ? "flex" : "none",
+            flexDirection: "column",
             position: "relative",
             width: `${railWidth}px`,
             flexShrink: 0,
             boxSizing: "border-box",
             borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
             backgroundColor: tokens.colorNeutralBackground2,
-            overflowY: "auto",
+            overflow: "hidden",
           }}
         >
           <EvtxResizeHandle
@@ -716,7 +633,7 @@ export function EventLogWorkspace() {
             direction={-1}
             onChange={setRailWidth}
           />
-          <RegionPlaceholder title={RAIL_SLOT_LABELS[railTab]} />
+          <EvtxInsightsRail summary={diagnosis} records={analysisRecords} />
         </aside>
       </div>
     </div>

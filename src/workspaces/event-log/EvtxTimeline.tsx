@@ -25,6 +25,7 @@ import {
 import type { EvtxRecord, EvtxLevel } from "./types";
 import { visibleColumns } from "./evtx-columns";
 import { EvtxTimelineRow } from "./EvtxTimelineRow";
+import { selectRecordAndShowDetails } from "./evtx-select-record";
 
 const LEVEL_ORDER: Record<EvtxLevel, number> = {
   Critical: 0,
@@ -364,10 +365,10 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
 
       setActiveRowIndex(nextIndex);
       const row = rows[nextIndex];
-      if (row?.kind === "record") setSelectedRecordId(row.record.id);
+      if (row?.kind === "record") selectRecordAndShowDetails(row.record.id);
       focusRow(nextIndex);
     },
-    [activeRowIndex, focusRow, groupBy.length, rows, setSelectedRecordId, toggleGroup]
+    [activeRowIndex, focusRow, groupBy.length, rows, toggleGroup]
   );
 
   if (records.length === 0) {
@@ -522,7 +523,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                 columnConfig={columnConfig}
                 columns={columns}
                 timeZoneMode={timeZoneMode}
-                onSelect={setSelectedRecordId}
+                onSelect={selectRecordAndShowDetails}
                 marker={marker}
                 quickFilter={quickFilter}
                 quickFilterMatch={quickFilterMatch}
