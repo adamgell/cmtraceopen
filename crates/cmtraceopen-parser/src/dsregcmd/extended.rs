@@ -49,10 +49,12 @@ pub fn apply_enrollment_cross_reference(result: &mut DsregcmdAnalysisResult) {
 /// - `Some(true)` when an enrollment with `EnrollmentState` 1 has a GUID that
 ///   matches an observed EnterpriseMgmt task GUID.
 /// - `Some(false)` only when the Enrollments export was read (`Some`), holds no
-///   enrollment (a zero count and an empty list), and no GUID-shaped
-///   EnterpriseMgmt task was observed. Absent and empty task evidence are the
-///   same here: a failed task capture is absence and neither supports nor
-///   blocks the negative.
+///   enrollment (a zero count and an empty list), and no EnterpriseMgmt task
+///   entry was observed (task evidence absent or its list empty). Absent and
+///   empty task evidence are the same here: a failed task capture is absence
+///   and neither supports nor blocks the negative. Any listed task entry
+///   blocks it, even one that is not GUID-shaped, which only makes the
+///   negative rarer.
 /// - `None` otherwise: the export was not collected, an enrollment exists but
 ///   is not confirmed by a task, or an empty registry sits beside an observed
 ///   task GUID (a contradiction, so the answer stays unknown).
@@ -70,8 +72,7 @@ fn registry_mdm_enrollment(result: &DsregcmdAnalysisResult) -> Option<bool> {
         return Some(true);
     }
     let registry_empty = enrollment.enrollment_count == 0 && enrollment.enrollments.is_empty();
-    let task_guid_observed = task_guids.iter().any(|task| unbraced_guid(task).is_some());
-    (registry_empty && !task_guid_observed).then_some(false)
+    (registry_empty && task_guids.is_empty()).then_some(false)
 }
 
 fn observed_task_guids(result: &DsregcmdAnalysisResult) -> &[String] {

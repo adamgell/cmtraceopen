@@ -2106,6 +2106,23 @@ mod tests {
         }
     }
 
+    /// Any listed task entry blocks the negative, even one that is not
+    /// GUID-shaped (the capture never writes one, but a hand-made bundle can):
+    /// only absent or empty task evidence lets an empty registry read as "not
+    /// enrolled".
+    #[test]
+    fn mdm_enrollment_rule_registry_empty_task_list_with_any_entry_is_unknown() {
+        for task_guids in [&["not-a-guid"][..], &["", "Schedule #1"]] {
+            let (result, ids) = analyze_mdm(
+                &mdm_status(Join::Joined, true),
+                registry(vec![]),
+                tasks(task_guids),
+            );
+            assert_eq!(result.derived.mdm_enrolled, None, "{task_guids:?}");
+            assert!(!has(&ids, MISSING_WARNING), "{task_guids:?}");
+        }
+    }
+
     /// Case (b): an empty task capture is absence, not a contradiction.
     #[test]
     fn mdm_enrollment_rule_registry_empty_task_list_empty_is_not_enrolled() {

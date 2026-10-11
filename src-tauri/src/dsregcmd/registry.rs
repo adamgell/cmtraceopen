@@ -247,7 +247,8 @@ pub fn load_proxy_evidence(bundle_path: &Path) -> Option<DsregcmdProxyEvidence> 
 /// - A deeper key (`<guid>\FirstSync`, `<guid>\DMClient\...`) is not an
 ///   enrollment of its own, but it does show that its enrollment exists.
 /// - Braced and unbraced forms of one GUID, in any letter case, are one
-///   enrollment. Its values come from the first of its keys in file order.
+///   enrollment. It takes each value its keys agree on; a value they disagree
+///   on stays unknown, so the order of the keys never changes the evidence.
 ///
 /// Enrollments are counted from the key headers, not from the parsed values,
 /// so an enrollment key with no named values (or only a default `@` value)
@@ -263,24 +264,50 @@ pub fn load_enrollment_evidence(bundle_path: &Path) -> Option<DsregcmdEnrollment
     }
     let registry = parse_reg_snapshot(&content);
 
+    // Each distinct GUID in file order, with its name as first written.
     let mut seen = HashSet::new();
-    let mut enrollments = Vec::new();
+    let mut guids = Vec::new();
     for key_path in reg_key_headers(&content) {
-        let Some((enrollment_key, segment, guid)) = enrollment_key_of(key_path) else {
-            continue;
-        };
-        if !seen.insert(guid.to_ascii_lowercase()) {
-            continue;
+        if let Some((_, segment, guid)) = enrollment_key_of(key_path) {
+            let canonical = guid.to_ascii_lowercase();
+            if seen.insert(canonical.clone()) {
+                guids.push((canonical, segment));
+            }
         }
-        let values = registry.get(enrollment_key);
-        enrollments.push(DsregcmdEnrollmentEntry {
-            guid: Some(segment.to_string()),
-            upn: values.and_then(|values| extract_string_value(values, "UPN")),
-            provider_id: values.and_then(|values| extract_string_value(values, "ProviderID")),
-            enrollment_state: values
-                .and_then(|values| extract_dword_value(values, "EnrollmentState")),
-        });
     }
+
+    // The named values of every first-level key of each GUID.
+    let mut values_by_guid: HashMap<String, Vec<&HashMap<String, RegistryValue>>> = HashMap::new();
+    for (key_path, values) in &registry {
+        if let Some((enrollment_key, _, guid)) = enrollment_key_of(key_path) {
+            if enrollment_key.len() == key_path.len() {
+                values_by_guid
+                    .entry(guid.to_ascii_lowercase())
+                    .or_default()
+                    .push(values);
+            }
+        }
+    }
+
+    let enrollments = guids
+        .into_iter()
+        .map(|(canonical, segment)| {
+            let values = values_by_guid
+                .get(&canonical)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            DsregcmdEnrollmentEntry {
+                guid: Some(segment.to_string()),
+                upn: agreed(values.iter().map(|v| extract_string_value(v, "UPN"))),
+                provider_id: agreed(values.iter().map(|v| extract_string_value(v, "ProviderID"))),
+                enrollment_state: agreed(
+                    values
+                        .iter()
+                        .map(|v| extract_dword_value(v, "EnrollmentState")),
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
 
     let enrollment_count = u32::try_from(enrollments.len()).unwrap_or(u32::MAX);
 
@@ -288,6 +315,20 @@ pub fn load_enrollment_evidence(bundle_path: &Path) -> Option<DsregcmdEnrollment
         enrollment_count,
         enrollments,
     })
+}
+
+/// The one value every present value agrees on: `None` when there is none or
+/// when two of them differ, whatever their order.
+fn agreed<T: PartialEq>(values: impl Iterator<Item = Option<T>>) -> Option<T> {
+    let mut agreed = None;
+    for value in values.flatten() {
+        match &agreed {
+            None => agreed = Some(value),
+            Some(existing) if *existing == value => {}
+            Some(_) => return None,
+        }
+    }
+    agreed
 }
 
 const ENROLLMENTS_ROOT_KEY: &str = "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments";
@@ -946,26 +987,40 @@ mod tests {
     }
 
     /// Braced and unbraced forms of one GUID, in any letter case, and its
-    /// deeper keys are one enrollment. Its values come from its first key.
+    /// deeper keys are one enrollment. It keeps the values its keys agree on
+    /// and leaves a value they disagree on unknown, so the order of the keys
+    /// never changes the evidence.
     #[test]
     fn enrollments_export_guid_variants_count_once() {
-        let evidence = collected(&export_with_root(
-            r#"[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB]
-"EnrollmentState"=dword:00000001
+        let unbraced_state_1 = "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB]\r\n\"EnrollmentState\"=dword:00000001\r\n\"ProviderID\"=\"MS DM Server\"\r\n\r\n";
+        let braced_state_6 = "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\{aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb}]\r\n\"EnrollmentState\"=dword:00000006\r\n\"ProviderID\"=\"MS DM Server\"\r\n\r\n";
+        let braced_no_values = "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\{aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb}]\r\n\r\n";
+        let lower_case_deeper = "[hkey_local_machine\\software\\microsoft\\enrollments\\aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb\\DMClient]\r\n\r\n";
 
-[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\FirstSync]
-"SkipDeviceStatusPage"=dword:00000000
+        // The keys disagree on EnrollmentState, so it is unknown in either order.
+        for body in [
+            format!("{unbraced_state_1}{braced_state_6}{lower_case_deeper}"),
+            format!("{lower_case_deeper}{braced_state_6}{unbraced_state_1}"),
+        ] {
+            let evidence = collected(&export_with_root(&body));
+            assert_eq!(evidence.enrollment_count, 1, "{body}");
+            assert_eq!(evidence.enrollments[0].enrollment_state, None, "{body}");
+            assert_eq!(
+                evidence.enrollments[0].provider_id.as_deref(),
+                Some("MS DM Server"),
+                "{body}"
+            );
+        }
 
-[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\{aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb}]
-"EnrollmentState"=dword:00000006
-
-[hkey_local_machine\software\microsoft\enrollments\aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb\DMClient]
-"#,
-        ));
-
-        assert_eq!(evidence.enrollment_count, 1);
-        assert_eq!(guids(&evidence), ["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB"]);
-        assert_eq!(evidence.enrollments[0].enrollment_state, Some(1));
+        // A key without the value does not disagree with one that has it.
+        for body in [
+            format!("{unbraced_state_1}{braced_no_values}"),
+            format!("{braced_no_values}{unbraced_state_1}"),
+        ] {
+            let evidence = collected(&export_with_root(&body));
+            assert_eq!(evidence.enrollment_count, 1, "{body}");
+            assert_eq!(evidence.enrollments[0].enrollment_state, Some(1), "{body}");
+        }
     }
 
     #[test]
