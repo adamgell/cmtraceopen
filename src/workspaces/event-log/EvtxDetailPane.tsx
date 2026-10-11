@@ -290,13 +290,15 @@ export function EvtxDetailPane({
         lineHeight: `${detailLineHeight}px`,
       }}
     >
-      {/* Summary header: level, id, level word, marker actions, close */}
+      {/* Summary header: level, id, level word, previous, next and close on the first row; the
+          marker actions take the row below, so the close button cannot be pushed off the rail. */}
       <div
         data-evtx-marker-key={evtxMarkerKey(record)}
         style={{
           display: "flex",
+          flexWrap: "wrap",
           alignItems: "center",
-          gap: "8px",
+          gap: "4px 8px",
           padding: "10px 12px 4px",
           flexShrink: 0,
         }}
@@ -306,6 +308,7 @@ export function EvtxDetailPane({
           style={{
             fontSize: `${listFontSize + 1}px`,
             fontWeight: 600,
+            whiteSpace: "nowrap",
             color: tokens.colorNeutralForeground1,
           }}
         >
@@ -320,15 +323,6 @@ export function EvtxDetailPane({
         >
           {record.level}
         </span>
-        <EvtxMarkerControls
-          record={record}
-          marker={marker}
-          markerAddressable={markerAddressable}
-          fontSize={fontSize}
-          variant="detail"
-          onTag={toggleEvtxTag}
-          onBookmark={toggleEvtxBookmark}
-        />
         <span style={{ flex: 1 }} />
         <Button
           size="small"
@@ -360,7 +354,19 @@ export function EvtxDetailPane({
             // rendered, so a keyboard user keeps their place (spec section 10).
             document.getElementById(evtxRailTabId("insights"))?.focus();
           }}
+          style={{ minWidth: "24px", width: "24px", height: "24px", padding: 0 }}
         />
+        <div style={{ flexBasis: "100%" }}>
+          <EvtxMarkerControls
+            record={record}
+            marker={marker}
+            markerAddressable={markerAddressable}
+            fontSize={fontSize}
+            variant="detail"
+            onTag={toggleEvtxTag}
+            onBookmark={toggleEvtxBookmark}
+          />
+        </div>
       </div>
 
       <TabList
