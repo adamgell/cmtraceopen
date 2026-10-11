@@ -34,6 +34,7 @@ import {
 export { selectVisibleRecords } from "./evtx-filter";
 import {
   DEFAULT_QUICK_FILTER,
+  levelsFilteredAtSource,
   parseEventIdSelectors,
   type EvtxBeforeLoadCriteria,
   type EvtxEventIdSelector,
@@ -689,14 +690,9 @@ function buildServerFilter(
     filter.eventIdMode = "include";
   }
 
-  // Information includes an unbounded provider-specific raw-level domain (6..254). The parser
-  // intentionally caps XPath OR expressions, so leave level selection local whenever Information
-  // is selected rather than issuing an over-budget or incomplete server predicate.
-  if (
-    filterLevels.size > 0 &&
-    filterLevels.size < ALL_LEVELS.length &&
-    !filterLevels.has("Information")
-  ) {
+  // `levelsFilteredAtSource` owns the rule (and why Information keeps the selection local), so the
+  // level toggles' counts can tell a level that was never requested from one with no events.
+  if (levelsFilteredAtSource(filterLevels)) {
     filter.levels = [...filterLevels].map((level) => ALL_LEVELS.indexOf(level) + 1);
   }
   return filter;

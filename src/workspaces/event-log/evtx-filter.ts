@@ -33,6 +33,48 @@ const LEVEL_ORDER: Record<EvtxLevel, number> = {
   Verbose: 4,
 };
 
+/** Every level, most severe first: the order the level toggles and the counts use. */
+export const EVTX_LEVELS: readonly EvtxLevel[] = [
+  "Critical",
+  "Error",
+  "Warning",
+  "Information",
+  "Verbose",
+];
+
+/**
+ * How many of `records` sit at each level, in one pass.
+ *
+ * The level toggles show these as the loaded totals, so callers pass the loaded records and not the
+ * visible ones: a toggle's count is what turning it on can show, not what the other filters leave.
+ * A level with no loaded records is zero here. Whether that zero means "none exist" or "none were
+ * requested" is the caller's to decide: see `levelsFilteredAtSource`.
+ */
+export function countByLevel(records: readonly EvtxRecord[]): Record<EvtxLevel, number> {
+  const counts: Record<EvtxLevel, number> = {
+    Critical: 0,
+    Error: 0,
+    Warning: 0,
+    Information: 0,
+    Verbose: 0,
+  };
+  for (const record of records) counts[record.level] += 1;
+  return counts;
+}
+
+/**
+ * True when a live query sends a level predicate to the event service, so records at a deselected
+ * level are never loaded.
+ *
+ * Information is a raw-level domain with no upper bound (6..254), and the XPath compiler caps its OR
+ * expressions, so any selection that includes Information is evaluated locally instead. Only a
+ * strict subset without Information is pushed down. The live query builds its filter from this same
+ * function, so the rule cannot drift from the counts that depend on it.
+ */
+export function levelsFilteredAtSource(levels: ReadonlySet<EvtxLevel>): boolean {
+  return levels.size > 0 && levels.size < EVTX_LEVELS.length && !levels.has("Information");
+}
+
 export function sortRecords(
   records: readonly EvtxRecord[],
   field: EvtxSortField,
