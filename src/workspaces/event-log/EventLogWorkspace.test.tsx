@@ -1071,6 +1071,29 @@ describe("EventLogWorkspace fixtures", () => {
     expect(errorToggle).toHaveAttribute("aria-pressed", "false");
   });
 
+  // Records what the workspace does today, not what it should do: a live reload empties the records
+  // (refreshLoadedChannels), and the early return for `isLoading && records.length === 0` then swaps
+  // the whole workspace, filter row included, for the full-screen spinner. The toggle that was just
+  // pressed unmounts and keyboard focus is lost until the first batch streams in. The in-row busy
+  // state is only reachable after that. Reported to Main as a finding (issue #832); changing the
+  // early return also governs the first live load, so it is not part of Phase 5.
+  it("replaces the workspace with the loading spinner while a level toggle reloads the live channels", async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "evtx_query_channels") return new Promise(() => undefined);
+      if (command === "load_markers") return null;
+      return undefined;
+    });
+    seedFixtureEvents();
+    render(<EventLogWorkspace />);
+    expect(screen.getByRole("group", { name: "Level" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle Verbose events" }));
+
+    await waitFor(() => expect(screen.getByText("Loading event logs...")).toBeInTheDocument());
+    expect(invoke).toHaveBeenCalledWith("evtx_query_channels", expect.anything());
+    expect(screen.queryByRole("group", { name: "Level" })).toBeNull();
+  });
+
   it("mounts the chip row under the filter row with the workspace's visible and loaded counts", () => {
     seedFixtureEvents();
     useEvtxStore.setState({ filterSearch: "no event says this" });
