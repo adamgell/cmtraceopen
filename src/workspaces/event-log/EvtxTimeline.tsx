@@ -152,6 +152,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
   }, [filteredRecords, sortField, sortDirection]);
 
   const parentRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
   const rowElementsRef = useRef(new Set<HTMLElement>());
   const previousUiRowKeysRef = useRef<readonly string[]>([]);
 
@@ -405,6 +406,11 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
       role={groupBy.length > 0 ? "treegrid" : "grid"}
       tabIndex={-1}
       onKeyDown={handleKeyDown}
+      // The header sits outside the scroller, so it follows a sideways scroll by hand and stays
+      // over its columns when the grid is narrower than they are.
+      onScroll={(event) => {
+        if (headerRef.current) headerRef.current.scrollLeft = event.currentTarget.scrollLeft;
+      }}
       aria-label={`Event log timeline - ${sortedRecords.length} records`}
       aria-rowcount={rows.length}
       aria-colcount={columns.length + 1}
@@ -552,6 +558,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
       }}
     >
       <EvtxTimelineHeader
+        ref={headerRef}
         columns={columns}
         columnConfig={columnConfig}
         fontSize={fontSize}

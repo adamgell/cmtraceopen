@@ -20,6 +20,7 @@ import {
 } from "./evtx-columns";
 import {
   buildEvtxRowPalette,
+  evtxRowMinWidth,
   EvtxTimelineHeader,
   EvtxTimelineRow,
   markerSlotWidth,
@@ -663,6 +664,31 @@ describe("EvtxTimelineRow layout and typography (spec D1, D4, 8.7)", () => {
         expect(element.flexShrink).toBe("0");
       }
     }
+  });
+});
+
+describe("EvtxTimelineRow minimum width", () => {
+  it("is the insets, the marker cell, every column with a width, and the gaps", () => {
+    const config = defaultColumnConfig();
+    // 4 + 12 + 12 insets, 150 marker cell, 32 + 154 + 52 + 120 + 162 + 44 widths (the description
+    // has none), and 7 gaps of 10 between the 8 cells.
+    expect(evtxRowMinWidth(config, visibleColumns(config), 10)).toBe(28 + 150 + 564 + 70);
+  });
+
+  it("follows the widths a configuration sets and the columns it shows", () => {
+    const config = sanitizeColumnConfig({
+      order: ["level", "timestamp", "message"],
+      widths: { timestamp: 165, message: 300 },
+    });
+    expect(evtxRowMinWidth(config, visibleColumns(config), 10)).toBe(28 + 150 + (32 + 165 + 300) + 30);
+  });
+
+  it("is applied to the row, so its background spans the columns when the grid scrolls sideways", () => {
+    const config = defaultColumnConfig();
+    renderRow({ columnConfig: config, columns: visibleColumns(config) });
+    expect(styleOf(screen.getByRole("row")).minWidth).toBe(
+      `${evtxRowMinWidth(config, visibleColumns(config), 10)}px`,
+    );
   });
 });
 

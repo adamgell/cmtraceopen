@@ -58,6 +58,29 @@ export function markerSlotWidth(smallFontSize: number): number {
 }
 
 /**
+ * The narrowest a row can be without its columns overlapping: the insets, the marker cell, every
+ * column that has a width, and the gaps. The description has none while it absorbs the remaining
+ * space, so it counts as zero here.
+ *
+ * A row is at least this wide so that its tint, or the selection, still sits behind every column
+ * when the grid is narrower and scrolls sideways. Without it the background stopped at the grid's
+ * edge while the text carried on, and tinted-row text would be drawn on the bare surface.
+ */
+export function evtxRowMinWidth(
+  config: EvtxColumnConfig,
+  columns: readonly EvtxColumnSpec[],
+  smallFontSize: number
+): number {
+  let width =
+    ROW_SLOT_PX +
+    ROW_PADDING_X * 2 +
+    markerSlotWidth(smallFontSize) +
+    ROW_GAP_PX * columns.length;
+  for (const column of columns) width += columnWidth(config, column) ?? 0;
+  return width;
+}
+
+/**
  * Display name for the Channel column: the channel without its `Microsoft-Windows-` prefix, so
  * "Microsoft-Windows-AAD/Operational" reads "AAD/Operational" in a 120 px column. The full name
  * stays in the tooltip, the accessible name and quick-filter search.
@@ -540,7 +563,7 @@ export const EvtxTimelineRow = memo(
           boxSizing: "border-box",
           fontSize: `${fontSize}px`,
           lineHeight,
-          minWidth: 0,
+          minWidth: `${evtxRowMinWidth(columnConfig, columns, smallFontSize)}px`,
           gap: `${ROW_GAP_PX}px`,
         }}
       >
@@ -763,71 +786,77 @@ export interface EvtxTimelineHeaderProps {
  * ("Event Time: ..."), and a header row inside the grid would shift every row's `aria-rowindex`.
  * Sorting stays on the filter bar's Sort control, which is the accessible one.
  */
-export function EvtxTimelineHeader({
-  columns,
-  columnConfig,
-  fontSize,
-  smallFontSize,
-  headerLineHeight,
-  sortField,
-  sortDirection,
-}: EvtxTimelineHeaderProps) {
-  const SortChevron = sortDirection === "desc" ? ChevronDown12Regular : ChevronUp12Regular;
-  return (
-    <div
-      aria-hidden="true"
-      data-evtx-table-header="true"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        flexShrink: 0,
-        boxSizing: "border-box",
-        height: `${headerLineHeight + 2}px`,
-        paddingLeft: `${ROW_PADDING_X + ROW_SLOT_PX}px`,
-        paddingRight: `${ROW_PADDING_X}px`,
-        gap: `${ROW_GAP_PX}px`,
-        backgroundColor: tokens.colorNeutralBackground3,
-        borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
-        color: tokens.colorNeutralForeground2,
-        fontSize: `${fontSize - 1}px`,
-        fontWeight: 600,
-        lineHeight: `${headerLineHeight}px`,
-        overflow: "hidden",
-        // Reserves the same gutter as the scroller below it, so a classic scrollbar does not
-        // push the rows' columns out from under the header.
-        scrollbarGutter: "stable",
-      }}
-    >
+export const EvtxTimelineHeader = forwardRef<HTMLDivElement, EvtxTimelineHeaderProps>(
+  function EvtxTimelineHeader(
+    {
+      columns,
+      columnConfig,
+      fontSize,
+      smallFontSize,
+      headerLineHeight,
+      sortField,
+      sortDirection,
+    },
+    ref
+  ) {
+    const SortChevron = sortDirection === "desc" ? ChevronDown12Regular : ChevronUp12Regular;
+    return (
       <div
-        data-evtx-header-cell="markers"
-        style={{ flexShrink: 0, width: `${markerSlotWidth(smallFontSize)}px`, boxSizing: "border-box" }}
-      />
-      {columns.map((column) => {
-        const centered = column.id === "level" || column.id === "links";
-        return (
-          <div
-            key={column.id}
-            data-evtx-header-cell={column.id}
-            title={column.label}
-            style={{
-              ...columnCellBox(columnConfig, column),
-              display: "flex",
-              alignItems: "center",
-              justifyContent: centered ? "center" : "flex-start",
-              gap: "4px",
-            }}
-          >
-            {column.id === "links" ? (
-              <Link16Regular />
-            ) : (
-              <span style={{ minWidth: 0, ...TRUNCATE }}>{column.label}</span>
-            )}
-            {column.id === "timestamp" && sortField === "time" && (
-              <SortChevron data-evtx-sort-direction={sortDirection} style={{ flex: "none" }} />
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+        ref={ref}
+        aria-hidden="true"
+        data-evtx-table-header="true"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          flexShrink: 0,
+          boxSizing: "border-box",
+          height: `${headerLineHeight + 2}px`,
+          paddingLeft: `${ROW_PADDING_X + ROW_SLOT_PX}px`,
+          paddingRight: `${ROW_PADDING_X}px`,
+          gap: `${ROW_GAP_PX}px`,
+          backgroundColor: tokens.colorNeutralBackground3,
+          borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
+          color: tokens.colorNeutralForeground2,
+          fontSize: `${fontSize - 1}px`,
+          fontWeight: 600,
+          lineHeight: `${headerLineHeight}px`,
+          overflow: "hidden",
+          // Reserves the same gutter as the scroller below it, so a classic scrollbar does not
+          // push the rows' columns out from under the header.
+          scrollbarGutter: "stable",
+        }}
+      >
+        <div
+          data-evtx-header-cell="markers"
+          style={{ flexShrink: 0, width: `${markerSlotWidth(smallFontSize)}px`, boxSizing: "border-box" }}
+        />
+        {columns.map((column) => {
+          const centered = column.id === "level" || column.id === "links";
+          return (
+            <div
+              key={column.id}
+              data-evtx-header-cell={column.id}
+              title={column.label}
+              style={{
+                ...columnCellBox(columnConfig, column),
+                display: "flex",
+                alignItems: "center",
+                justifyContent: centered ? "center" : "flex-start",
+                gap: "4px",
+              }}
+            >
+              {column.id === "links" ? (
+                <Link16Regular />
+              ) : (
+                <span style={{ minWidth: 0, ...TRUNCATE }}>{column.label}</span>
+              )}
+              {column.id === "timestamp" && sortField === "time" && (
+                <SortChevron data-evtx-sort-direction={sortDirection} style={{ flex: "none" }} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+);
