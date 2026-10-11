@@ -116,9 +116,6 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     () => getLogListMetrics(logListFontSize),
     [logListFontSize]
   );
-  const recordRowExtra = columnConfig.order.includes("level") ? 6 : 2;
-  const rowEstimate = metrics.rowHeight + recordRowExtra;
-
 
   const filteredRecords = useMemo(
     () =>
@@ -240,8 +237,8 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (index) =>
-      rows[index]?.kind === "group" ? metrics.rowHeight : rowEstimate,
+    // Every row, record or group, is `getLogListMetrics(...).rowHeight` tall (spec D1).
+    estimateSize: () => metrics.rowHeight,
     getItemKey: (index) => uiRowKeys[index] ?? "row:empty",
     overscan: 10,
   });
@@ -280,7 +277,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     for (const element of rowElementsRef.current) {
       if (element.isConnected) measureConnectedRow(element);
     }
-  }, [metrics.rowHeight, rowEstimate, measureConnectedRow, virtualizer.measure]);
+  }, [metrics.rowHeight, measureConnectedRow, virtualizer.measure]);
 
   // Row filtering and the rolling time-window clock may create a new rows array without changing
   // any rendered identity or dimension. Preserve TanStack's keyed cache in that case. When rows
@@ -519,6 +516,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                 smallFontSize={smallFontSize}
                 monoFontSize={monoFontSize}
                 lineHeight={lineHeight}
+                rowHeight={metrics.rowHeight}
                 columnConfig={columnConfig}
                 columns={columns}
                 timeZoneMode={timeZoneMode}

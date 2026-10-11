@@ -1,8 +1,18 @@
-import { Fragment, memo, forwardRef, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  Fragment,
+  memo,
+  forwardRef,
+  type CSSProperties,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { tokens } from "@fluentui/react-components";
+import { Link12Regular } from "@fluentui/react-icons";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
 } from "../../lib/log-accessibility";
+import { getThemeById, type ThemeId } from "../../lib/themes";
+import { useUiStore } from "../../stores/ui-store";
 import type { Marker } from "../../types/markers";
 import type { EvtxRecord, EvtxLevel } from "./types";
 import {
@@ -16,25 +26,128 @@ import {
   columnValue,
   columnWidth,
   type EvtxColumnConfig,
+  type EvtxColumnId,
   type EvtxColumnSpec,
 } from "./evtx-columns";
 import type { EvtxTimeZoneMode } from "./evtx-time";
+import { buildEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 
-const LEVEL_COLORS: Record<EvtxLevel, string> = {
-  Critical: tokens.colorPaletteRedForeground1,
-  Error: tokens.colorPaletteRedForeground1,
-  Warning: tokens.colorPaletteMarigoldForeground1,
-  Information: tokens.colorBrandForeground1,
-  Verbose: tokens.colorNeutralForeground4,
-};
+/** Width of the left slot: the marker color when a marker is present (spec 8.7). */
+const ROW_SLOT_PX = 4;
+const ROW_PADDING_X = 12;
+const ROW_GAP_PX = 10;
+/** The selection inset (spec 6.2). */
+const SELECTION_INSET_PX = 3;
 
-const LEVEL_SHORT: Record<EvtxLevel, string> = {
-  Critical: "CRIT",
-  Error: "ERR",
-  Warning: "WARN",
-  Information: "INFO",
-  Verbose: "VERB",
-};
+/**
+ * Width of the first cell, which holds the tag and bookmark controls and the "Match" label.
+ *
+ * Fixed so that every row, and the header above them, put each column at the same x. The cell's
+ * content changes width between "Tag" and "Tagged", "Bookmark" and "Bookmarked", and with the
+ * "Match" label, which would otherwise shift every column after it from row to row. 15 em of the
+ * small font holds the widest combination with room to spare.
+ */
+export function markerSlotWidth(smallFontSize: number): number {
+  return Math.ceil(smallFontSize * 15);
+}
+
+/**
+ * Display name for the Channel column: the channel without its `Microsoft-Windows-` prefix, so
+ * "Microsoft-Windows-AAD/Operational" reads "AAD/Operational" in a 120 px column. The full name
+ * stays in the tooltip, the accessible name and quick-filter search.
+ */
+export function shortChannelName(channel: string): string {
+  const prefix = "Microsoft-Windows-";
+  return channel.startsWith(prefix) && channel.length > prefix.length
+    ? channel.slice(prefix.length)
+    : channel;
+}
+
+const visualTokensByTheme = new Map<ThemeId, EvtxVisualTokens>();
+
+/**
+ * The visual token map for a theme, built once per theme id. Every row of a virtualized list of
+ * up to 100,000 records reads it, so it must not be rebuilt per row.
+ */
+function evtxVisualTokensForTheme(themeId: ThemeId): EvtxVisualTokens {
+  let visual = visualTokensByTheme.get(themeId);
+  if (!visual) {
+    visual = buildEvtxVisualTokens(getThemeById(themeId));
+    visualTokensByTheme.set(themeId, visual);
+  }
+  return visual;
+}
+
+/** Every color a row draws, for one level and selection state. */
+export interface EvtxRowPalette {
+  background: string;
+  /** Primary text: ID, channel, message, and the text of tinted and selected rows. */
+  ink: string;
+  /** Time, provider, optional columns, the "Match" label and the marker controls. */
+  secondary: string;
+  /** The links cell. */
+  link: string;
+  /** The level icon. */
+  icon: string;
+  /** Outline for the channel swatch; null on a plain row, where the mark needs none. */
+  swatchOutline: string | null;
+  /** The 3 px selection inset; null when the row is not selected. */
+  selectionInset: string | null;
+}
+
+/**
+ * The colors for a row.
+ *
+ * Every text role on a tinted row is the level's `rowText` (spec D3), and on a selected row the
+ * selection foreground (Q-1, Q-18). Both pairs are measured at 4.5:1 or better in every theme by
+ * the token tests. The Time, Provider, marker and links text deliberately do not keep their
+ * spec 8.7 colors (fg2, fg3, `colorBrandForegroundLink`) on those rows: they measured 2.45:1 on
+ * the classic Error row and 3.72:1 on its selection background (issue #836, Adam's criterion).
+ * A plain row (Information, Verbose) keeps the neutral hierarchy of 8.7, which measures 4.5:1
+ * or better in every theme.
+ */
+export function buildEvtxRowPalette(
+  visual: EvtxVisualTokens,
+  level: EvtxLevel,
+  isSelected: boolean
+): EvtxRowPalette {
+  const levelVisual = visual.levels[level];
+  if (isSelected) {
+    const ink = visual.selection.foreground;
+    return {
+      background: visual.selection.background,
+      ink,
+      secondary: ink,
+      link: ink,
+      icon: levelVisual.selectedIconColor,
+      swatchOutline: visual.markOutline("selected"),
+      selectionInset: visual.selection.border,
+    };
+  }
+  // Plain levels take `colorNeutralBackground1` as their row background; the others are tinted.
+  const tinted = levelVisual.rowBackground !== tokens.colorNeutralBackground1;
+  if (tinted) {
+    const ink = levelVisual.rowText;
+    return {
+      background: levelVisual.rowBackground,
+      ink,
+      secondary: ink,
+      link: ink,
+      icon: levelVisual.iconColor,
+      swatchOutline: visual.markOutline(level),
+      selectionInset: null,
+    };
+  }
+  return {
+    background: levelVisual.rowBackground,
+    ink: levelVisual.rowText,
+    secondary: tokens.colorNeutralForeground2,
+    link: tokens.colorBrandForegroundLink,
+    icon: levelVisual.iconColor,
+    swatchOutline: null,
+    selectionInset: null,
+  };
+}
 
 export type EvtxRowVisualState = "selected" | "marker" | "severity" | "match" | "default";
 export function resolveEvtxRowVisualState(input: {
@@ -84,6 +197,7 @@ export function EvtxMarkerControls({
   markerAddressable,
   fontSize,
   variant,
+  textColor,
   onTag,
   onBookmark,
 }: {
@@ -92,11 +206,21 @@ export function EvtxMarkerControls({
   markerAddressable: boolean;
   fontSize: number;
   variant: "detail" | "timeline";
+  /**
+   * The timeline variant's text color. The grid passes the row's own text color so the controls
+   * stay readable on a tinted or selected row; the state is carried by the label ("Tagged",
+   * "Bookmarked") and `aria-pressed`, not by a hue. Ignored by the detail variant.
+   */
+  textColor?: string;
   onTag?: (record: EvtxRecord) => void;
   onBookmark?: (record: EvtxRecord) => void;
 }) {
   const bookmark = isEvtxBookmark(marker);
   const compact = variant === "timeline";
+  const rowInk = compact ? textColor : undefined;
+  // Disabled controls are exempt from text contrast (WCAG 1.4.3, inactive component). They keep
+  // the row's text color and are set apart by italics, so no color is drawn that was not measured.
+  const disabledStyle = rowInk && !markerAddressable ? ("italic" as const) : undefined;
   const stopPropagation = compact
     ? (event: MouseEvent<HTMLButtonElement>) => event.stopPropagation()
     : undefined;
@@ -141,13 +265,16 @@ export function EvtxMarkerControls({
               ? "pointer"
               : "not-allowed"
             : "pointer",
-          color: compact
-            ? !markerAddressable
-              ? tokens.colorNeutralForeground4
-              : marker && !bookmark
-                ? marker.color
-                : tokens.colorNeutralForeground3
-            : tokens.colorNeutralForeground1,
+          color:
+            rowInk ??
+            (compact
+              ? !markerAddressable
+                ? tokens.colorNeutralForeground4
+                : marker && !bookmark
+                  ? marker.color
+                  : tokens.colorNeutralForeground3
+              : tokens.colorNeutralForeground1),
+          fontStyle: disabledStyle,
           background: "transparent",
           fontSize: `${fontSize}px`,
         }}
@@ -187,15 +314,18 @@ export function EvtxMarkerControls({
               ? "pointer"
               : "not-allowed"
             : "pointer",
-          color: compact
-            ? !markerAddressable
-              ? tokens.colorNeutralForeground4
+          color:
+            rowInk ??
+            (compact
+              ? !markerAddressable
+                ? tokens.colorNeutralForeground4
+                : bookmark
+                  ? "#8b5cf6"
+                  : tokens.colorNeutralForeground3
               : bookmark
                 ? "#8b5cf6"
-                : tokens.colorNeutralForeground3
-            : bookmark
-              ? "#8b5cf6"
-              : tokens.colorNeutralForeground1,
+                : tokens.colorNeutralForeground1),
+          fontStyle: disabledStyle,
           background: "transparent",
           fontSize: `${fontSize}px`,
         }}
@@ -213,6 +343,41 @@ export function EvtxMarkerControls({
   );
 }
 
+const TRUNCATE: CSSProperties = {
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+/** Time, IDs and counts use the numeric face, not the monospace one (spec D4). */
+const NUMERIC: CSSProperties = {
+  fontFamily: tokens.fontFamilyNumeric,
+  fontVariantNumeric: "tabular-nums",
+};
+
+/** Optional numeric columns, which share the numeric face. */
+const NUMERIC_EXTRA_COLUMNS: ReadonlySet<EvtxColumnId> = new Set<EvtxColumnId>([
+  "recordId",
+  "task",
+  "opcode",
+  "processId",
+  "threadId",
+]);
+
+/**
+ * Width behavior of a column cell, shared by the rows and the header so that both place every
+ * column at the same x. A column with no width absorbs the remaining space.
+ */
+export function columnCellBox(
+  config: EvtxColumnConfig,
+  column: EvtxColumnSpec
+): CSSProperties {
+  const width = columnWidth(config, column);
+  return width != null
+    ? { width: `${width}px`, flexShrink: 0, boxSizing: "border-box" }
+    : { flex: 1, minWidth: 0, boxSizing: "border-box" };
+}
+
 export interface EvtxTimelineRowProps {
   record: EvtxRecord;
   dataIndex: number;
@@ -221,6 +386,8 @@ export interface EvtxTimelineRowProps {
   smallFontSize: number;
   monoFontSize: number;
   lineHeight: string;
+  /** `getLogListMetrics(...).rowHeight`: the row's border-box height (spec D1). */
+  rowHeight: number;
   columnConfig: EvtxColumnConfig;
   /** Precomputed by the list, since columnConfig is stable and this renders once per row. */
   columns: EvtxColumnSpec[];
@@ -230,6 +397,18 @@ export interface EvtxTimelineRowProps {
   marker?: Marker | null;
   quickFilter?: EvtxQuickFilter;
   quickFilterMatch?: boolean;
+  /**
+   * Position of the record's channel in channel display order (spec 6.3). Only the channel pane
+   * defines that order; with no index the swatch is omitted rather than given a color that would
+   * disagree with the pane.
+   */
+  channelIndex?: number;
+  /**
+   * Distinct records sharing an Exact or Candidate correlation edge with this one. Only a complete
+   * edge index may supply it: the edges the UI holds are a bounded preview, and a count taken
+   * from a prefix would pass an undercount off as the whole. Omitted, the links cell is empty.
+   */
+  linkCount?: number;
   onTag?: (record: EvtxRecord) => void;
   onBookmark?: (record: EvtxRecord) => void;
   grouped?: boolean;
@@ -248,6 +427,7 @@ export const EvtxTimelineRow = memo(
       smallFontSize,
       monoFontSize,
       lineHeight,
+      rowHeight,
       columnConfig,
       columns,
       timeZoneMode,
@@ -255,6 +435,8 @@ export const EvtxTimelineRow = memo(
       marker = null,
       quickFilter = undefined,
       quickFilterMatch = false,
+      channelIndex,
+      linkCount,
       onTag,
       onBookmark,
       grouped = false,
@@ -264,7 +446,9 @@ export const EvtxTimelineRow = memo(
     },
     ref
   ) {
-    const levelColor = LEVEL_COLORS[record.level];
+    const themeId = useUiStore((s) => s.themeId);
+    const visual = evtxVisualTokensForTheme(themeId);
+    const palette = buildEvtxRowPalette(visual, record.level, isSelected);
     const markerAddressable = isEvtxMarkerAddressable(record);
     const bookmark = isEvtxBookmark(marker);
     const filterMatch = quickFilterMatch;
@@ -285,6 +469,8 @@ export const EvtxTimelineRow = memo(
       filterMatch ? "Quick-filter match" : null,
       markerAddressable ? null : "Markers unavailable: EventRecordID is missing",
     ].filter(Boolean).join("; ");
+    const LevelIcon = visual.levels[record.level].GridIcon;
+    const hasLinks = linkCount !== undefined && Number.isInteger(linkCount) && linkCount > 0;
     return (
       <div
         data-index={dataIndex}
@@ -330,25 +516,26 @@ export const EvtxTimelineRow = memo(
         style={{
           display: "flex",
           alignItems: "center",
-          padding: "2px 12px",
+          // The 4 px left slot belongs to the marker color. An unmarked row keeps its content at
+          // the same x through padding, so the selection inset below sits flush with the edge.
+          paddingLeft: `${marker ? ROW_PADDING_X : ROW_PADDING_X + ROW_SLOT_PX}px`,
+          paddingRight: `${ROW_PADDING_X}px`,
           cursor: "pointer",
-          backgroundColor: isSelected
-            ? tokens.colorNeutralBackground1Selected
-            : marker
-              ? `${marker.color}20`
-              : dataIndex % 2 === 0
-                ? tokens.colorNeutralBackground1
-                : tokens.colorNeutralBackground2,
-          borderLeft: `4px solid ${
-            visualState === "marker" && marker ? marker.color : levelColor
-          }`,
-          borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-          height: "100%",
+          // Severity is the row-wide tint (D3). A marker no longer tints the row: its color is a
+          // user value whose text contrast cannot be measured, so it is the left slot only.
+          backgroundColor: palette.background,
+          color: palette.ink,
+          borderLeft: marker ? `${ROW_SLOT_PX}px solid ${marker.color}` : undefined,
+          borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+          boxShadow: palette.selectionInset
+            ? `inset ${SELECTION_INSET_PX}px 0 0 ${palette.selectionInset}`
+            : undefined,
+          height: `${rowHeight}px`,
           boxSizing: "border-box",
           fontSize: `${fontSize}px`,
           lineHeight,
           minWidth: 0,
-          gap: "10px",
+          gap: `${ROW_GAP_PX}px`,
         }}
       >
         <div
@@ -359,6 +546,8 @@ export const EvtxTimelineRow = memo(
             display: "flex",
             alignItems: "center",
             flexShrink: 0,
+            width: `${markerSlotWidth(smallFontSize)}px`,
+            boxSizing: "border-box",
           }}
         >
           <div
@@ -373,7 +562,7 @@ export const EvtxTimelineRow = memo(
                 style={{
                   fontSize: `${smallFontSize}px`,
                   fontWeight: 600,
-                  color: tokens.colorNeutralForeground2,
+                  color: palette.secondary,
                 }}
               >
                 Match
@@ -385,86 +574,162 @@ export const EvtxTimelineRow = memo(
               markerAddressable={markerAddressable}
               fontSize={smallFontSize}
               variant="timeline"
+              textColor={palette.secondary}
               onTag={onTag}
               onBookmark={onBookmark}
             />
           </div>
         </div>
         {columns.map((column, columnIndex) => {
-          const width = columnWidth(columnConfig, column);
+          const box = columnCellBox(columnConfig, column);
           const value = columnValue(record, column.id, timeZoneMode);
+          const common = {
+            role: "gridcell",
+            "aria-colindex": columnIndex + 2,
+            "aria-label": `${column.label}: ${value || "Empty"}`,
+          } as const;
+          const text = (display: string) =>
+            highlightEnabled
+              ? highlightValue(display, highlightTerms, quickFilter?.caseSensitive ?? false)
+              : display;
 
           if (column.id === "level") {
             return (
               <div
                 key={column.id}
-                role="gridcell"
-                aria-colindex={columnIndex + 2}
-                aria-label={`${column.label}: ${value || "Empty"}`}
-                data-evtx-level-badge="true"
+                {...common}
+                data-evtx-level-cell="true"
                 style={{
-                  fontSize: `${smallFontSize}px`,
-                  fontWeight: 700,
-                  padding: "2px 6px",
-                  borderRadius: "4px",
-                  backgroundColor: levelColor,
-                  color: tokens.colorNeutralForegroundOnBrand,
-                  width: width != null ? `${width}px` : undefined,
-                  textAlign: "center",
-                  flexShrink: 0,
-                  boxSizing: "border-box",
+                  ...box,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: palette.icon,
                 }}
               >
-                {LEVEL_SHORT[record.level]}
+                <LevelIcon aria-label={record.level} />
               </div>
             );
           }
 
-          const isDescription = column.id === "message";
-          const isMono = column.id === "timestamp" || column.id === "keywords";
+          if (column.id === "links") {
+            return (
+              <div
+                key={column.id}
+                {...common}
+                aria-label={hasLinks ? `${column.label}: ${linkCount}` : `${column.label}: Empty`}
+                title={
+                  hasLinks
+                    ? `${linkCount} linked ${linkCount === 1 ? "event" : "events"}`
+                    : undefined
+                }
+                data-evtx-links-cell={hasLinks ? "count" : "empty"}
+                style={{
+                  ...box,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "3px",
+                  ...NUMERIC,
+                  fontSize: `${smallFontSize}px`,
+                  fontWeight: 600,
+                  color: palette.link,
+                }}
+              >
+                {hasLinks && (
+                  <>
+                    <Link12Regular aria-hidden="true" />
+                    <span>{linkCount}</span>
+                  </>
+                )}
+              </div>
+            );
+          }
+
+          if (column.id === "channel") {
+            const name = shortChannelName(value);
+            return (
+              <div
+                key={column.id}
+                {...common}
+                title={value}
+                style={{
+                  ...box,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  fontSize: `${fontSize}px`,
+                  color: palette.ink,
+                }}
+              >
+                {channelIndex !== undefined && (
+                  <span
+                    aria-hidden="true"
+                    data-evtx-channel-swatch="true"
+                    style={{
+                      flex: "none",
+                      width: "7px",
+                      height: "7px",
+                      borderRadius: "2px",
+                      backgroundColor: visual.channelColor(channelIndex),
+                      outline: palette.swatchOutline ? `1px solid ${palette.swatchOutline}` : undefined,
+                    }}
+                  />
+                )}
+                <span style={{ minWidth: 0, ...TRUNCATE }}>{text(name)}</span>
+              </div>
+            );
+          }
+
+          let cellStyle: CSSProperties;
+          switch (column.id) {
+            case "timestamp":
+              cellStyle = {
+                ...NUMERIC,
+                fontSize: `${monoFontSize}px`,
+                color: palette.secondary,
+              };
+              break;
+            case "eventId":
+              cellStyle = {
+                ...NUMERIC,
+                fontSize: `${fontSize}px`,
+                fontWeight: 700,
+                color: palette.ink,
+              };
+              break;
+            case "provider":
+              cellStyle = { fontSize: `${fontSize}px`, color: palette.secondary };
+              break;
+            case "message":
+              cellStyle = {
+                fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                fontSize: `${fontSize}px`,
+                color: palette.ink,
+              };
+              break;
+            case "keywords":
+              cellStyle = {
+                fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                fontSize: `${monoFontSize}px`,
+                color: palette.secondary,
+              };
+              break;
+            default:
+              cellStyle = {
+                ...(NUMERIC_EXTRA_COLUMNS.has(column.id) ? NUMERIC : null),
+                fontSize: `${smallFontSize}px`,
+                color: palette.secondary,
+              };
+          }
 
           return (
             <div
               key={column.id}
-              role="gridcell"
-              aria-colindex={columnIndex + 2}
-              aria-label={`${column.label}: ${value || "Empty"}`}
-              style={
-                isDescription
-                  ? {
-                      // Absorbs the remaining width only while no width has been set for it.
-                      // Ignoring an override meant the Description column could be resized in the
-                      // chooser and never actually change.
-                      ...(width != null
-                        ? { width: `${width}px`, flexShrink: 0 }
-                        : { flex: 1 }),
-                      fontSize: `${fontSize}px`,
-                      fontWeight: isSelected ? 600 : 400,
-                      color: isSelected
-                        ? tokens.colorBrandForeground1
-                        : tokens.colorNeutralForeground1,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      minWidth: 0,
-                    }
-                  : {
-                      width: width != null ? `${width}px` : undefined,
-                      flexShrink: width != null ? 0 : 1,
-                      fontSize: `${isMono ? monoFontSize : smallFontSize}px`,
-                      fontFamily: isMono ? LOG_MONOSPACE_FONT_FAMILY : undefined,
-                      color: tokens.colorNeutralForeground3,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      boxSizing: "border-box",
-                    }
-              }
+              {...common}
+              style={{ ...box, ...TRUNCATE, ...cellStyle }}
               title={value}
             >
-              {highlightEnabled
-                ? highlightValue(value, highlightTerms, quickFilter?.caseSensitive ?? false)
-                : value}
+              {text(value)}
             </div>
           );
         })}
