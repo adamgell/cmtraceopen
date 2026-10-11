@@ -413,7 +413,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
       }}
       aria-label={`Event log timeline - ${sortedRecords.length} records`}
       aria-rowcount={rows.length}
-      aria-colcount={columns.length + 1}
+      aria-colcount={columns.length}
       style={{
         overflowY: "auto",
         // Fills what the header leaves, and reserves the gutter the header reserves too, so a
@@ -493,7 +493,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                   <div
                     role="gridcell"
                     aria-colindex={1}
-                    aria-colspan={columns.length + 1}
+                    aria-colspan={columns.length}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -562,7 +562,6 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
         columns={columns}
         columnConfig={columnConfig}
         fontSize={fontSize}
-        smallFontSize={smallFontSize}
         headerLineHeight={metrics.headerLineHeight}
         sortField={sortField}
         sortDirection={sortDirection}

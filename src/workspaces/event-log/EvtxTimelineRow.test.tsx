@@ -21,9 +21,9 @@ import {
 import {
   buildEvtxRowPalette,
   evtxRowMinWidth,
+  EvtxMarkerControls,
   EvtxTimelineHeader,
   EvtxTimelineRow,
-  markerSlotWidth,
   resolveEvtxRowVisualState,
   shortChannelName,
 } from "./EvtxTimelineRow";
@@ -67,6 +67,9 @@ function renderRow(overrides: Partial<React.ComponentProps<typeof EvtxTimelineRo
     />
   );
 }
+
+/** The quick-filter match icon, which sits in the row's right padding. */
+const matchIcon = () => document.querySelector<HTMLElement>("[data-evtx-filter-match-label]");
 
 const tagged: Marker = {
   lineId: 5,
@@ -127,10 +130,10 @@ describe("EvtxTimelineRow triage state", () => {
       "aria-description",
       expect.stringContaining("Quick-filter match"),
     );
-    expect(screen.getByText("Match")).toBeInTheDocument();
+    expect(matchIcon()).toBeInTheDocument();
   });
 
-  it("keeps selected state ahead of marker state and exposes tag/bookmark actions", () => {
+  it("keeps selected state ahead of marker state and exposes tag and bookmark by key", () => {
     const onTag = vi.fn();
     const onBookmark = vi.fn();
     renderRow({ marker: tagged, isSelected: true, onTag, onBookmark });
@@ -139,31 +142,35 @@ describe("EvtxTimelineRow triage state", () => {
     expect(row).toHaveAttribute("aria-selected", "true");
     expect(row).toHaveAttribute("aria-rowindex", "1");
     expect(row).toHaveAttribute("data-marker-category", "investigate");
-    const tagButton = screen.getByRole("button", { name: "Remove event tag" });
-    const bookmarkButton = screen.getByRole("button", { name: "Bookmark event" });
+    expect(row).toHaveAttribute("data-evtx-visual-state", "selected");
+    expect(row).toHaveAttribute(
+      "aria-description",
+      expect.stringContaining("Tagged investigate"),
+    );
     const cells = screen.getAllByRole("gridcell");
     const columns = visibleColumns(defaultColumnConfig());
-    expect(cells).toHaveLength(columns.length + 1);
+    // One cell per column and no marker cell: the first cell is the first column.
+    expect(cells).toHaveLength(columns.length);
     cells.forEach((cell, index) => {
       expect(cell).toHaveAttribute("aria-colindex", String(index + 1));
     });
-    expect(cells[0]).toHaveAccessibleName("Event markers");
     columns.forEach((column, index) => {
-      expect(cells[index + 1]).toHaveAccessibleName(
-        new RegExp(`^${column.label}: `),
-      );
+      expect(cells[index]).toHaveAccessibleName(new RegExp(`^${column.label}: `));
     });
-    expect(cells[0]).toContainElement(tagButton);
-    expect(cells[0]).toContainElement(bookmarkButton);
-    expect(tagButton).toHaveAttribute("aria-pressed", "true");
-    expect(bookmarkButton).toHaveAttribute("aria-pressed", "false");
-    fireEvent.click(tagButton);
+    fireEvent.keyDown(row, { key: "t" });
     expect(onTag).toHaveBeenCalledWith(expect.objectContaining({ eventRecordId: 42 }));
     fireEvent.keyDown(row, { key: "b" });
     expect(onBookmark).toHaveBeenCalledWith(expect.objectContaining({ eventRecordId: 42 }));
   });
 
-  it("disables marker controls when EventRecordID is unavailable", () => {
+  it("carries no tag or bookmark button and no marker cell (spec 8.7)", () => {
+    renderRow({ marker: tagged, quickFilterMatch: true });
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    expect(screen.queryByRole("gridcell", { name: "Event markers" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Event markers" })).toBeNull();
+  });
+
+  it("ignores the marker shortcuts when EventRecordID is unavailable", () => {
     const onTag = vi.fn();
     const onBookmark = vi.fn();
     renderRow({
@@ -181,16 +188,8 @@ describe("EvtxTimelineRow triage state", () => {
       "aria-description",
       expect.stringContaining("Markers unavailable: EventRecordID is missing")
     );
-    const tag = screen.getByRole("button", {
-      name: "EventRecordID unavailable; tagging is disabled",
-    });
-    const bookmark = screen.getByRole("button", {
-      name: "EventRecordID unavailable; bookmarking is disabled",
-    });
-    expect(tag).toBeDisabled();
-    expect(bookmark).toBeDisabled();
-    fireEvent.click(tag);
-    fireEvent.click(bookmark);
+    fireEvent.keyDown(row, { key: "t" });
+    fireEvent.keyDown(row, { key: "b" });
     expect(onTag).not.toHaveBeenCalled();
     expect(onBookmark).not.toHaveBeenCalled();
   });
@@ -202,7 +201,6 @@ describe("EvtxTimelineRow triage state", () => {
 
     const row = screen.getByRole("row");
     expect(row).toHaveAttribute("aria-level", "1");
-    expect(screen.getByRole("button", { name: "Bookmark event" })).toHaveAttribute("tabindex", "-1");
     row.focus();
     fireEvent.keyDown(row, { key: "t" });
     fireEvent.keyDown(row, { key: "b" });
@@ -230,7 +228,7 @@ describe("EvtxTimelineRow triage state", () => {
     expect(onBookmark).not.toHaveBeenCalled();
   });
 
-  it("keeps ungrouped marker controls out of the nested tab order", () => {
+  it("has no nested tab stop, so the row is the only focus target", () => {
     const onTag = vi.fn();
     const onBookmark = vi.fn();
     renderRow({ onTag, onBookmark, tabIndex: 0 });
@@ -238,8 +236,7 @@ describe("EvtxTimelineRow triage state", () => {
     const row = screen.getByRole("row");
     expect(row).toHaveAttribute("tabindex", "0");
     expect(row).not.toHaveAttribute("aria-level");
-    expect(screen.getByRole("button", { name: "Tag event" })).toHaveAttribute("tabindex", "-1");
-    expect(screen.getByRole("button", { name: "Bookmark event" })).toHaveAttribute("tabindex", "-1");
+    expect(row.querySelectorAll("button, [tabindex]")).toHaveLength(0);
 
     row.focus();
     expect(row).toHaveFocus();
@@ -265,7 +262,7 @@ describe("EvtxTimelineRow triage state", () => {
     expect(screen.queryByLabelText("Quick-filter match")).not.toBeInTheDocument();
     expect(screen.getByRole("row")).toHaveAttribute("data-quick-filter-match", "false");
     expect(screen.getByRole("row")).toHaveAttribute("data-evtx-filter-match", "true");
-    expect(screen.getByText("Match")).toBeInTheDocument();
+    expect(matchIcon()).toBeInTheDocument();
   });
 
   it("highlights only substrings matched by the quick-filter regular expression", () => {
@@ -348,9 +345,7 @@ function textElements() {
     provider: cell(/^Provider:/),
     message: cell(/^Description:/),
     links: cell(/^Links:/),
-    matchLabel: document.querySelector<HTMLElement>("[data-evtx-filter-match-label]")!,
-    tagButton: screen.getByRole("button", { name: /tag/i }),
-    bookmarkButton: screen.getByRole("button", { name: /bookmark/i }),
+    matchIcon: matchIcon()!,
   };
 }
 
@@ -419,7 +414,7 @@ describe.each(THEMES)("row text contrast in the %s theme (issue #836)", (_id, th
     const pairs: [string, string][] = [
       ["time (secondary)", palette.secondary],
       ["provider (secondary)", palette.secondary],
-      ["marker controls and Match label (secondary)", palette.secondary],
+      ["quick-filter match icon (secondary)", palette.secondary],
       ["event ID, channel and message (ink)", palette.ink],
       ["links cell", palette.link],
     ];
@@ -549,9 +544,7 @@ describe.each(THEMES)("EvtxTimelineRow rendering in the %s theme", (_id, theme) 
         provider: palette.secondary,
         message: palette.ink,
         links: palette.link,
-        matchLabel: palette.secondary,
-        tagButton: palette.secondary,
-        bookmarkButton: palette.secondary,
+        matchIcon: palette.secondary,
       };
 
       expect(styleOf(row).backgroundColor).toBe(asStyle(palette.background));
@@ -668,11 +661,11 @@ describe("EvtxTimelineRow layout and typography (spec D1, D4, 8.7)", () => {
 });
 
 describe("EvtxTimelineRow minimum width", () => {
-  it("is the insets, the marker cell, every column with a width, and the gaps", () => {
+  it("is the insets, every column with a width, and the gaps", () => {
     const config = defaultColumnConfig();
-    // 4 + 12 + 12 insets, 150 marker cell, 32 + 154 + 52 + 120 + 162 + 44 widths (the description
-    // has none), and 7 gaps of 10 between the 8 cells.
-    expect(evtxRowMinWidth(config, visibleColumns(config), 10)).toBe(28 + 150 + 564 + 70);
+    // 4 + 12 + 12 insets, 32 + 154 + 52 + 120 + 162 + 44 widths (the description has none), and 6
+    // gaps of 10 between the 7 cells. There is no marker cell.
+    expect(evtxRowMinWidth(config, visibleColumns(config))).toBe(28 + 564 + 60);
   });
 
   it("follows the widths a configuration sets and the columns it shows", () => {
@@ -680,14 +673,23 @@ describe("EvtxTimelineRow minimum width", () => {
       order: ["level", "timestamp", "message"],
       widths: { timestamp: 165, message: 300 },
     });
-    expect(evtxRowMinWidth(config, visibleColumns(config), 10)).toBe(28 + 150 + (32 + 165 + 300) + 30);
+    expect(evtxRowMinWidth(config, visibleColumns(config))).toBe(28 + (32 + 165 + 300) + 20);
+  });
+
+  it("leaves the description its room at 1440 px with the channel pane and the rail open", () => {
+    const config = defaultColumnConfig();
+    const fixed = evtxRowMinWidth(config, visibleColumns(config));
+    // Main column widths: channel pane 250 and rail 340 both open, the pane alone, the rail alone.
+    expect(1440 - 250 - 340 - fixed).toBe(198);
+    expect(1440 - 250 - fixed).toBe(538);
+    expect(1440 - 340 - fixed).toBe(448);
   });
 
   it("is applied to the row, so its background spans the columns when the grid scrolls sideways", () => {
     const config = defaultColumnConfig();
     renderRow({ columnConfig: config, columns: visibleColumns(config) });
     expect(styleOf(screen.getByRole("row")).minWidth).toBe(
-      `${evtxRowMinWidth(config, visibleColumns(config), 10)}px`,
+      `${evtxRowMinWidth(config, visibleColumns(config))}px`,
     );
   });
 });
@@ -788,43 +790,115 @@ describe("EvtxTimelineRow marker slot (spec 8.7)", () => {
     expect(markedX).toBe(16);
   });
 
-  it("gives the marker cell one width in every state, so the columns after it do not move", () => {
-    const widths = new Set<string>();
-    for (const [name, props] of [
-      ["untagged", {}],
-      ["tagged", { marker: tagged }],
-      ["bookmarked", { marker: { ...tagged, category: "bookmark" } as Marker }],
-      ["with the match label", { quickFilterMatch: true }],
-      ["disabled", { record: { ...record(), eventRecordId: 0, eventRecordIdText: "0" } }],
-    ] as const) {
-      const view = renderRow(props as Partial<React.ComponentProps<typeof EvtxTimelineRow>>);
-      widths.add(`${name}: ${styleOf(screen.getAllByRole("gridcell")[0]).width}`);
+  it("lays the columns out the same in every marker state, since no cell changes width", () => {
+    const layouts = new Set<string>();
+    for (const props of [
+      {},
+      { marker: tagged },
+      { marker: { ...tagged, category: "bookmark" } as Marker },
+      { quickFilterMatch: true },
+      { record: { ...record(), eventRecordId: 0, eventRecordIdText: "0" } },
+    ] as Partial<React.ComponentProps<typeof EvtxTimelineRow>>[]) {
+      const view = renderRow(props);
+      const cells = screen.getAllByRole("gridcell");
+      expect(cells[0]).toHaveAccessibleName(/^Level:/);
+      layouts.add(cells.map((cell) => styleOf(cell).width || styleOf(cell).flexGrow).join(","));
       view.unmount();
     }
-    const unique = new Set([...widths].map((entry) => entry.split(": ")[1]));
-    expect(unique).toEqual(new Set([`${markerSlotWidth(10)}px`]));
+    expect(layouts.size).toBe(1);
+  });
+});
+
+describe("EvtxTimelineRow quick-filter match icon", () => {
+  const quickFilter = {
+    mode: "oneString" as const,
+    query: "zzz",
+    scope: "allColumns" as const,
+    action: "show" as const,
+    caseSensitive: false,
+    highlight: true,
+  };
+
+  it("is absent when the row is not a match", () => {
+    renderRow();
+    expect(matchIcon()).toBeNull();
   });
 
-  it("draws the marker controls in the row's text color, with no literal or marker hue", () => {
-    setTheme("classic-cmtrace");
-    renderRow({ record: levelRecord("Error"), marker: tagged, quickFilterMatch: true });
-    const classic = buildEvtxVisualTokens(CLASSIC[0][1]);
-    const ink = asStyle(classic.levels.Error.rowText);
-    expect(styleOf(screen.getByRole("button", { name: /tag/i })).color).toBe(ink);
-    expect(styleOf(screen.getByRole("button", { name: /bookmark/i })).color).toBe(ink);
-    cleanup();
-    // A bookmarked row used a hard-coded violet; it now keeps the row's text color.
-    renderRow({ record: levelRecord("Error"), marker: { ...tagged, category: "bookmark" } });
-    expect(styleOf(screen.getByRole("button", { name: /bookmark/i })).color).toBe(ink);
+  it("is a hidden, titled icon in the row's right padding that takes no column", () => {
+    renderRow({ quickFilterMatch: true });
+    const icon = matchIcon()!;
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+    expect(icon).toHaveAttribute("title", "Matches the quick filter");
+    expect(icon.querySelector("svg")).not.toBeNull();
+    expect(icon).toHaveTextContent("");
+    const style = styleOf(icon);
+    expect(style.position).toBe("absolute");
+    expect(style.right).toBe("0px");
+    expect(style.width).toBe("12px");
+    // The icon is not a cell, so the row's cells and its minimum width are what they were.
+    expect(screen.getAllByRole("gridcell")).toHaveLength(visibleColumns(defaultColumnConfig()).length);
+    expect(screen.getByRole("row")).toContainElement(icon);
+    expect(styleOf(screen.getByRole("row")).position).toBe("relative");
   });
 
-  it("sets a disabled control apart by style, not by an unmeasured color", () => {
-    setTheme("classic-cmtrace");
-    renderRow({ record: { ...levelRecord("Error"), eventRecordId: 0, eventRecordIdText: "0" } });
-    const classic = buildEvtxVisualTokens(CLASSIC[0][1]);
-    const tag = styleOf(screen.getByRole("button", { name: /tagging is disabled/i }));
-    expect(tag.color).toBe(asStyle(classic.levels.Error.rowText));
-    expect(tag.fontStyle).toBe("italic");
+  it("is the only sign of a match when nothing in a visible cell is highlighted", () => {
+    // The match is in EventData or a hidden column, so no visible text carries the term.
+    renderRow({ quickFilter, quickFilterMatch: true });
+    expect(screen.queryByLabelText("Quick-filter match")).not.toBeInTheDocument();
+    expect(matchIcon()).toBeInTheDocument();
+    expect(screen.getByRole("row")).toHaveAttribute(
+      "aria-description",
+      expect.stringContaining("Quick-filter match"),
+    );
+  });
+});
+
+describe("EvtxMarkerControls in the Details pane", () => {
+  it("offers tag and bookmark buttons that call back and reflect the marker", () => {
+    const onTag = vi.fn();
+    const onBookmark = vi.fn();
+    render(
+      <EvtxMarkerControls
+        record={record()}
+        marker={tagged}
+        markerAddressable
+        fontSize={13}
+        variant="detail"
+        onTag={onTag}
+        onBookmark={onBookmark}
+      />,
+    );
+    expect(screen.getByRole("group", { name: "Selected event markers" })).toBeInTheDocument();
+    const tag = screen.getByRole("button", { name: "Remove event tag" });
+    const bookmark = screen.getByRole("button", { name: "Bookmark event" });
+    expect(tag).toHaveTextContent("Tagged: investigate");
+    expect(tag).toHaveAttribute("aria-pressed", "true");
+    expect(bookmark).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(tag);
+    fireEvent.click(bookmark);
+    expect(onTag).toHaveBeenCalledWith(expect.objectContaining({ eventRecordId: 42 }));
+    expect(onBookmark).toHaveBeenCalledWith(expect.objectContaining({ eventRecordId: 42 }));
+  });
+
+  it("disables both buttons when EventRecordID is unavailable", () => {
+    const onTag = vi.fn();
+    render(
+      <EvtxMarkerControls
+        record={record()}
+        marker={null}
+        markerAddressable={false}
+        fontSize={13}
+        variant="detail"
+        onTag={onTag}
+      />,
+    );
+    const tag = screen.getByRole("button", { name: "EventRecordID unavailable; tagging is disabled" });
+    expect(tag).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "EventRecordID unavailable; bookmarking is disabled" }),
+    ).toBeDisabled();
+    fireEvent.click(tag);
+    expect(onTag).not.toHaveBeenCalled();
   });
 });
 
@@ -902,6 +976,19 @@ describe("EvtxTimelineRow links cell (spec 8.7)", () => {
     expect(style.fontFamily).toBe(tokens.fontFamilyNumeric);
   });
 
+  it.each([
+    [MIN_LOG_LIST_FONT_SIZE, "10px"],
+    [13, "10px"],
+    [16, "13px"],
+    [MAX_LOG_LIST_FONT_SIZE, "17px"],
+  ])("sizes the count at the font size minus 3 but never below 10: list font %i gives %s", (fontSize, expected) => {
+    // The Timeline's own small size floors at 9, which at list font 11 is below section 7.1's
+    // caption floor, so the links cell derives its own.
+    const metrics = getLogListMetrics(fontSize);
+    renderRow({ linkCount: 3, fontSize: metrics.fontSize, smallFontSize: Math.max(9, metrics.fontSize - 3) });
+    expect(styleOf(links()).fontSize).toBe(expected);
+  });
+
   it("says one linked event in the singular", () => {
     renderRow({ linkCount: 1 });
     expect(links()).toHaveAttribute("title", "1 linked event");
@@ -942,7 +1029,6 @@ describe("EvtxTimelineHeader (spec 8.7)", () => {
         columns={visibleColumns(config)}
         columnConfig={config}
         fontSize={13}
-        smallFontSize={10}
         headerLineHeight={24}
         sortField="time"
         sortDirection="desc"
@@ -1003,7 +1089,7 @@ describe("EvtxTimelineHeader (spec 8.7)", () => {
     const ids = [...header().querySelectorAll("[data-evtx-header-cell]")].map((element) =>
       element.getAttribute("data-evtx-header-cell"),
     );
-    expect(ids).toEqual(["markers", ...visibleColumns(defaultColumnConfig()).map((c) => c.id)]);
+    expect(ids).toEqual(visibleColumns(defaultColumnConfig()).map((c) => c.id));
     expect(headerCell("timestamp")).toHaveTextContent("Event Time");
     expect(headerCell("provider")).toHaveTextContent("Provider");
     expect(headerCell("message")).toHaveTextContent("Description");
@@ -1028,7 +1114,6 @@ describe("EvtxTimelineHeader (spec 8.7)", () => {
     expect(parseFloat(styleOf(header()).paddingLeft)).toBe(parseFloat(rowStyle.paddingLeft));
     expect(styleOf(header()).paddingRight).toBe(rowStyle.paddingRight);
     expect(styleOf(header()).gap).toBe(rowStyle.gap);
-    expect(styleOf(headerCell("markers")).width).toBe(styleOf(screen.getAllByRole("gridcell")[0]).width);
     for (const column of visibleColumns(config)) {
       const rowCell = styleOf(cell(new RegExp(`^${column.label}:`)));
       const headCell = styleOf(headerCell(column.id));

@@ -1,17 +1,11 @@
-import {
-  Fragment,
-  memo,
-  forwardRef,
-  type CSSProperties,
-  type KeyboardEvent,
-  type MouseEvent,
-} from "react";
+import { Fragment, memo, forwardRef, type CSSProperties } from "react";
 import { tokens } from "@fluentui/react-components";
 import {
   ChevronDown12Regular,
   ChevronUp12Regular,
   Link12Regular,
   Link16Regular,
+  Search12Regular,
 } from "@fluentui/react-icons";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
@@ -46,21 +40,9 @@ const ROW_GAP_PX = 10;
 const SELECTION_INSET_PX = 3;
 
 /**
- * Width of the first cell, which holds the tag and bookmark controls and the "Match" label.
- *
- * Fixed so that every row, and the header above them, put each column at the same x. The cell's
- * content changes width between "Tag" and "Tagged", "Bookmark" and "Bookmarked", and with the
- * "Match" label, which would otherwise shift every column after it from row to row. 15 em of the
- * small font holds the widest combination with room to spare.
- */
-export function markerSlotWidth(smallFontSize: number): number {
-  return Math.ceil(smallFontSize * 15);
-}
-
-/**
- * The narrowest a row can be without its columns overlapping: the insets, the marker cell, every
- * column that has a width, and the gaps. The description has none while it absorbs the remaining
- * space, so it counts as zero here.
+ * The narrowest a row can be without its columns overlapping: the insets, every column that has a
+ * width, and the gaps. The description has none while it absorbs the remaining space, so it counts
+ * as zero here.
  *
  * A row is at least this wide so that its tint, or the selection, still sits behind every column
  * when the grid is narrower and scrolls sideways. Without it the background stopped at the grid's
@@ -68,14 +50,10 @@ export function markerSlotWidth(smallFontSize: number): number {
  */
 export function evtxRowMinWidth(
   config: EvtxColumnConfig,
-  columns: readonly EvtxColumnSpec[],
-  smallFontSize: number
+  columns: readonly EvtxColumnSpec[]
 ): number {
   let width =
-    ROW_SLOT_PX +
-    ROW_PADDING_X * 2 +
-    markerSlotWidth(smallFontSize) +
-    ROW_GAP_PX * columns.length;
+    ROW_SLOT_PX + ROW_PADDING_X * 2 + ROW_GAP_PX * Math.max(0, columns.length - 1);
   for (const column of columns) width += columnWidth(config, column) ?? 0;
   return width;
 }
@@ -112,7 +90,7 @@ export interface EvtxRowPalette {
   background: string;
   /** Primary text: ID, channel, message, and the text of tinted and selected rows. */
   ink: string;
-  /** Time, provider, optional columns, the "Match" label and the marker controls. */
+  /** Time, provider, optional columns, and the quick-filter match icon. */
   secondary: string;
   /** The links cell. */
   link: string;
@@ -129,8 +107,8 @@ export interface EvtxRowPalette {
  *
  * Every text role on a tinted row is the level's `rowText` (spec D3), and on a selected row the
  * selection foreground (Q-1, Q-18). Both pairs are measured at 4.5:1 or better in every theme by
- * the token tests. The Time, Provider, marker and links text deliberately do not keep their
- * spec 8.7 colors (fg2, fg3, `colorBrandForegroundLink`) on those rows: they measured 2.45:1 on
+ * the token tests. The Time, Provider and links text deliberately do not keep their spec 8.7
+ * colors (fg2, `colorBrandForegroundLink`) on those rows: they measured 2.45:1 on
  * the classic Error row and 3.72:1 on its selection background (issue #836, Adam's criterion).
  * A plain row (Information, Verbose) keeps the neutral hierarchy of 8.7, which measures 4.5:1
  * or better in every theme.
@@ -220,13 +198,18 @@ function highlightValue(
   });
 }
 
+/**
+ * Tag and bookmark buttons for the Details pane.
+ *
+ * The table row no longer carries them (spec 8.7: the row keeps only the marker color in its left
+ * slot, and the `t` and `b` keys); this is the pointer route to the same two actions.
+ * `variant` is the one value the Details pane passes, kept so that call is unchanged.
+ */
 export function EvtxMarkerControls({
   record,
   marker,
   markerAddressable,
   fontSize,
-  variant,
-  textColor,
   onTag,
   onBookmark,
 }: {
@@ -234,35 +217,17 @@ export function EvtxMarkerControls({
   marker: Marker | null;
   markerAddressable: boolean;
   fontSize: number;
-  variant: "detail" | "timeline";
-  /**
-   * The timeline variant's text color. The grid passes the row's own text color so the controls
-   * stay readable on a tinted or selected row; the state is carried by the label ("Tagged",
-   * "Bookmarked") and `aria-pressed`, not by a hue. Ignored by the detail variant.
-   */
-  textColor?: string;
+  variant: "detail";
   onTag?: (record: EvtxRecord) => void;
   onBookmark?: (record: EvtxRecord) => void;
 }) {
   const bookmark = isEvtxBookmark(marker);
-  const compact = variant === "timeline";
-  const rowInk = compact ? textColor : undefined;
-  // Disabled controls are exempt from text contrast (WCAG 1.4.3, inactive component). They keep
-  // the row's text color and are set apart by italics, so no color is drawn that was not measured.
-  const disabledStyle = rowInk && !markerAddressable ? ("italic" as const) : undefined;
-  const stopPropagation = compact
-    ? (event: MouseEvent<HTMLButtonElement>) => event.stopPropagation()
-    : undefined;
-  const stopKeyPropagation = compact
-    ? (event: KeyboardEvent<HTMLButtonElement>) => event.stopPropagation()
-    : undefined;
 
-  const controls = (
-    <>
+  return (
+    <div role="group" aria-label="Selected event markers" style={{ display: "flex", gap: "6px" }}>
       <button
         type="button"
         disabled={!markerAddressable}
-        tabIndex={compact ? -1 : undefined}
         aria-label={
           markerAddressable
             ? marker && !bookmark
@@ -274,46 +239,26 @@ export function EvtxMarkerControls({
         title={
           markerAddressable
             ? marker && !bookmark
-              ? compact
-                ? `Remove ${marker.category} tag`
-                : "Remove event tag"
+              ? "Remove event tag"
               : "Tag event"
             : "EventRecordID unavailable; tagging is disabled"
         }
-        onClick={(event) => {
-          stopPropagation?.(event);
-          onTag?.(record);
-        }}
-        onKeyDown={stopKeyPropagation}
+        onClick={() => onTag?.(record)}
         style={{
-          border: compact ? 0 : `1px solid ${tokens.colorNeutralStroke1}`,
-          borderRadius: compact ? "3px" : "4px",
-          padding: compact ? "1px 4px" : "3px 7px",
-          cursor: compact
-            ? markerAddressable
-              ? "pointer"
-              : "not-allowed"
-            : "pointer",
-          color:
-            rowInk ??
-            (compact
-              ? !markerAddressable
-                ? tokens.colorNeutralForeground4
-                : marker && !bookmark
-                  ? marker.color
-                  : tokens.colorNeutralForeground3
-              : tokens.colorNeutralForeground1),
-          fontStyle: disabledStyle,
+          border: `1px solid ${tokens.colorNeutralStroke1}`,
+          borderRadius: "4px",
+          padding: "3px 7px",
+          cursor: "pointer",
+          color: tokens.colorNeutralForeground1,
           background: "transparent",
           fontSize: `${fontSize}px`,
         }}
       >
-        {compact ? (marker && !bookmark ? "Tagged" : "Tag") : marker && !bookmark ? `Tagged: ${marker.category}` : "Tag"}
+        {marker && !bookmark ? `Tagged: ${marker.category}` : "Tag"}
       </button>
       <button
         type="button"
         disabled={!markerAddressable}
-        tabIndex={compact ? -1 : undefined}
         aria-label={
           markerAddressable
             ? bookmark
@@ -329,45 +274,19 @@ export function EvtxMarkerControls({
               : "Bookmark event"
             : "EventRecordID unavailable; bookmarking is disabled"
         }
-        onClick={(event) => {
-          stopPropagation?.(event);
-          onBookmark?.(record);
-        }}
-        onKeyDown={stopKeyPropagation}
+        onClick={() => onBookmark?.(record)}
         style={{
-          border: compact ? 0 : `1px solid ${tokens.colorNeutralStroke1}`,
-          borderRadius: compact ? "3px" : "4px",
-          padding: compact ? "1px 4px" : "3px 7px",
-          cursor: compact
-            ? markerAddressable
-              ? "pointer"
-              : "not-allowed"
-            : "pointer",
-          color:
-            rowInk ??
-            (compact
-              ? !markerAddressable
-                ? tokens.colorNeutralForeground4
-                : bookmark
-                  ? "#8b5cf6"
-                  : tokens.colorNeutralForeground3
-              : bookmark
-                ? "#8b5cf6"
-                : tokens.colorNeutralForeground1),
-          fontStyle: disabledStyle,
+          border: `1px solid ${tokens.colorNeutralStroke1}`,
+          borderRadius: "4px",
+          padding: "3px 7px",
+          cursor: "pointer",
+          color: bookmark ? "#8b5cf6" : tokens.colorNeutralForeground1,
           background: "transparent",
           fontSize: `${fontSize}px`,
         }}
       >
         {bookmark ? "Bookmarked" : "Bookmark"}
       </button>
-    </>
-  );
-  return compact ? (
-    controls
-  ) : (
-    <div role="group" aria-label="Selected event markers" style={{ display: "flex", gap: "6px" }}>
-      {controls}
     </div>
   );
 }
@@ -543,6 +462,7 @@ export const EvtxTimelineRow = memo(
           }
         }}
         style={{
+          position: "relative",
           display: "flex",
           alignItems: "center",
           // The 4 px left slot belongs to the marker color. An unmarked row keeps its content at
@@ -563,58 +483,16 @@ export const EvtxTimelineRow = memo(
           boxSizing: "border-box",
           fontSize: `${fontSize}px`,
           lineHeight,
-          minWidth: `${evtxRowMinWidth(columnConfig, columns, smallFontSize)}px`,
+          minWidth: `${evtxRowMinWidth(columnConfig, columns)}px`,
           gap: `${ROW_GAP_PX}px`,
         }}
       >
-        <div
-          role="gridcell"
-          aria-colindex={1}
-          aria-label="Event markers"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            flexShrink: 0,
-            width: `${markerSlotWidth(smallFontSize)}px`,
-            boxSizing: "border-box",
-          }}
-        >
-          <div
-            role="group"
-            aria-label="Event markers"
-            style={{ display: "flex", gap: "4px", flexShrink: 0 }}
-          >
-            {filterMatch && (
-              <span
-                data-evtx-filter-match-label="true"
-                aria-hidden="true"
-                style={{
-                  fontSize: `${smallFontSize}px`,
-                  fontWeight: 600,
-                  color: palette.secondary,
-                }}
-              >
-                Match
-              </span>
-            )}
-            <EvtxMarkerControls
-              record={record}
-              marker={marker}
-              markerAddressable={markerAddressable}
-              fontSize={smallFontSize}
-              variant="timeline"
-              textColor={palette.secondary}
-              onTag={onTag}
-              onBookmark={onBookmark}
-            />
-          </div>
-        </div>
         {columns.map((column, columnIndex) => {
           const box = columnCellBox(columnConfig, column);
           const value = columnValue(record, column.id, timeZoneMode);
           const common = {
             role: "gridcell",
-            "aria-colindex": columnIndex + 2,
+            "aria-colindex": columnIndex + 1,
             "aria-label": `${column.label}: ${value || "Empty"}`,
           } as const;
           const text = (display: string) =>
@@ -659,7 +537,8 @@ export const EvtxTimelineRow = memo(
                   alignItems: "center",
                   gap: "3px",
                   ...NUMERIC,
-                  fontSize: `${smallFontSize}px`,
+                  // The spec's f - 3, held to the caption floor of 10 (section 7.1).
+                  fontSize: `${Math.max(10, fontSize - 3)}px`,
                   fontWeight: 600,
                   color: palette.link,
                 }}
@@ -762,6 +641,31 @@ export const EvtxTimelineRow = memo(
             </div>
           );
         })}
+        {filterMatch && (
+          // The match marker costs no column. The highlight shows where a term matched in a
+          // visible cell; this is the only sign when it matched in a column that is hidden, in
+          // EventData, in the `Microsoft-Windows-` prefix the channel cell does not show, or when
+          // highlighting is off. It sits in the row's right padding, and the row's own
+          // aria-description ("Quick-filter match") is what assistive technology reads.
+          <span
+            aria-hidden="true"
+            data-evtx-filter-match-label="true"
+            title="Matches the quick filter"
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              bottom: 0,
+              width: `${ROW_PADDING_X}px`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: palette.secondary,
+            }}
+          >
+            <Search12Regular />
+          </span>
+        )}
       </div>
     );
   })
@@ -771,7 +675,6 @@ export interface EvtxTimelineHeaderProps {
   columns: EvtxColumnSpec[];
   columnConfig: EvtxColumnConfig;
   fontSize: number;
-  smallFontSize: number;
   /** `getLogListMetrics(...).headerLineHeight`. The header is that plus 2 px (spec D1). */
   headerLineHeight: number;
   sortField: EvtxSortField;
@@ -782,9 +685,11 @@ export interface EvtxTimelineHeaderProps {
  * The column header (spec 8.7): `colorNeutralBackground3`, a `colorNeutralStroke1` bottom border,
  * 600 weight at the font size minus one. The time header carries the sort direction.
  *
- * Presentational and hidden from assistive technology. Every gridcell already names its column
- * ("Event Time: ..."), and a header row inside the grid would shift every row's `aria-rowindex`.
- * Sorting stays on the filter bar's Sort control, which is the accessible one.
+ * Presentational and hidden from assistive technology, which is acceptable for this phase: every
+ * gridcell already names its column ("Event Time: ..."), and a header row inside the grid would
+ * shift every row's `aria-rowindex`. Sorting stays on the filter bar's Sort control, which is the
+ * accessible one. A `columnheader` row in the grid, with `aria-sort` on the time header, is the
+ * follow-up that replaces this.
  */
 export const EvtxTimelineHeader = forwardRef<HTMLDivElement, EvtxTimelineHeaderProps>(
   function EvtxTimelineHeader(
@@ -792,7 +697,6 @@ export const EvtxTimelineHeader = forwardRef<HTMLDivElement, EvtxTimelineHeaderP
       columns,
       columnConfig,
       fontSize,
-      smallFontSize,
       headerLineHeight,
       sortField,
       sortDirection,
@@ -826,10 +730,6 @@ export const EvtxTimelineHeader = forwardRef<HTMLDivElement, EvtxTimelineHeaderP
           scrollbarGutter: "stable",
         }}
       >
-        <div
-          data-evtx-header-cell="markers"
-          style={{ flexShrink: 0, width: `${markerSlotWidth(smallFontSize)}px`, boxSizing: "border-box" }}
-        />
         {columns.map((column) => {
           const centered = column.id === "level" || column.id === "links";
           return (
