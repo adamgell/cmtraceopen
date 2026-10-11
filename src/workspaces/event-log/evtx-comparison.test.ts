@@ -1367,7 +1367,7 @@ describe("a live comparison", () => {
   it("publishes the channels compared and those whose zero cannot be trusted", () => {
     const session = begin({
       channels: ["System", "Application"],
-      currentPeriodGaps: ["Application: 3 events could not be read and are missing from this view"],
+      currentPeriodGaps: [["Application: 3 events could not be read and are missing from this view"]],
       currentPeriodHoleChannels: ["Application"],
     });
     deliver(session, "System", systemEvents(1));
@@ -1476,8 +1476,8 @@ describe("a live comparison", () => {
   it("is partial, stating each shortfall, when the load reported gaps in the current period", () => {
     const session = begin({
       currentPeriodGaps: [
-        "System: 40 events could not be rendered and are missing from this view",
-        "Application: 3 events could not be read and are missing from this view",
+        ["System: 40 events could not be rendered and are missing from this view"],
+        ["Application: 3 events could not be read and are missing from this view"],
       ],
     });
     deliver(session, "System", systemEvents(1));
@@ -1493,8 +1493,49 @@ describe("a live comparison", () => {
     ]);
   });
 
+  it("limits each cause of a gap on its own, so one flood cannot starve another", () => {
+    const flood = Array.from({ length: 12 }, (_, index) => `Channel${index} was read late`);
+    const session = begin({
+      currentPeriodGaps: [flood, ["System: 3 events could not be read and are missing from this view"]],
+    });
+    deliver(session, "System", systemEvents(1));
+    deliver(session, "Application", []);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    expect(outcome.result.gaps).toEqual([
+      ...flood.slice(0, 5).map((line) => `Current period: ${line}`),
+      "and 7 more not shown.",
+      "Current period: System: 3 events could not be read and are missing from this view",
+    ]);
+  });
+
+  it("limits the lines of the channels' own streams, and the failure detail built from them", () => {
+    const names = ["Healthy", ...Array.from({ length: 11 }, (_, index) => `Broken${index}`)];
+    const session = begin({ channels: names });
+    deliver(session, "Healthy", systemEvents(1, { channel: "Healthy" }));
+    for (const name of names.slice(1)) session.failed(name, "Access is denied.");
+
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    expect(outcome.result.gaps).toHaveLength(6);
+    expect(outcome.result.gaps[5]).toBe("and 6 more not shown.");
+    // Every channel is still listed as unread; only the lines stating why are limited.
+    expect(outcome.result.unreadChannels).toHaveLength(11);
+
+    const allBroken = begin({ channels: names.slice(1) });
+    for (const name of names.slice(1)) allBroken.failed(name, "Access is denied.");
+    const failed = settled();
+    expect(failed.status).toBe("unavailable");
+    if (failed.status === "unavailable") {
+      expect(failed.detail.endsWith("and 6 more not shown.")).toBe(true);
+    }
+  });
+
   it("does not turn a current-period gap into an unavailable comparison when no channel could be read", () => {
-    const session = begin({ currentPeriodGaps: ["System: something"] });
+    const session = begin({ currentPeriodGaps: [["System: something"]] });
     session.failed("System", "Access is denied.");
     session.failed("Application", "Access is denied.");
     expect(settled()).toMatchObject({ status: "unavailable", reason: "queryFailed" });

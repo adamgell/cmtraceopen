@@ -472,7 +472,7 @@ function isoOrUnknown(epochMs: number): string {
 /** The most gap lines one cause may add; the rest are counted, not listed. */
 const MAX_LISTED_GAPS = 5;
 
-function limitGapLines(lines: readonly string[]): string[] {
+export function limitGapLines(lines: readonly string[]): string[] {
   if (lines.length <= MAX_LISTED_GAPS) return [...lines];
   return [
     ...lines.slice(0, MAX_LISTED_GAPS),
@@ -793,10 +793,11 @@ export interface LiveComparisonInput {
   visibility: ComparisonVisibility;
   /**
    * Shortfalls in the CURRENT period that the load reported for the compared channels, already
-   * worded. They make the outcome partial: the previous period can be read cleanly while the
-   * period it is compared with is not.
+   * worded and grouped by cause. They make the outcome partial: the previous period can be read
+   * cleanly while the period it is compared with is not. Each cause is limited on its own, so one
+   * flood of lines cannot starve another.
    */
-  currentPeriodGaps: readonly string[];
+  currentPeriodGaps: ReadonlyArray<readonly string[]>;
   /** The compared channels those gaps concern, whose current count of 0 cannot be trusted. */
   currentPeriodHoleChannels: readonly string[];
   /** Stops the backend read for a comparison that is cancelled or superseded before it settles. */
@@ -836,7 +837,7 @@ interface ActiveSession {
   requestId: string;
   prior: PriorWindow;
   notes: string[];
-  currentPeriodGaps: string[];
+  currentPeriodGaps: string[][];
   currentPeriodHoleChannels: Set<string>;
   /** Whether provider-description gaps can change a count, fixed when the comparison starts. */
   providerGapsMatter: boolean;
@@ -924,7 +925,8 @@ function finishIfSettled(session: ActiveSession): void {
   const channelGaps = session.channels.flatMap(
     (channel) => session.streams.get(channel)?.gaps ?? []
   );
-  const gaps = [...channelGaps];
+  // Every cause is limited, so a comparison of hundreds of channels states a few and counts the rest.
+  const gaps = [...limitGapLines(channelGaps)];
   const unreadChannels = session.channels.filter((channel) => session.streams.get(channel)?.unread);
   if (tally.unplacedRecords > 0) gaps.push(unplacedGap(tally.unplacedRecords, "live"));
   if (tally.outsideWindowRecords > 0) {
@@ -934,7 +936,9 @@ function finishIfSettled(session: ActiveSession): void {
     );
   }
 
-  gaps.push(...session.currentPeriodGaps.map((gap) => `Current period: ${gap}`));
+  for (const cause of session.currentPeriodGaps) {
+    gaps.push(...limitGapLines(cause.map((gap) => `Current period: ${gap}`)));
+  }
 
   // A channel read in full that held no events in the period is a real zero, which an unread
   // channel, one whose stream reported anything missing, or one with an event that could not be
@@ -961,7 +965,7 @@ function finishIfSettled(session: ActiveSession): void {
 
   const outcome: ComparisonOutcome =
     unreadChannels.length === session.channels.length
-      ? { status: "unavailable", reason: "queryFailed", detail: channelGaps.join(" ") }
+      ? { status: "unavailable", reason: "queryFailed", detail: limitGapLines(channelGaps).join(" ") }
       : {
           status: gaps.length === 0 ? "complete" : "partial",
           result: {
@@ -1062,7 +1066,7 @@ export function beginLiveComparison(input: LiveComparisonInput): LiveComparisonS
       ...(input.remote ? ["Periods are computed on this computer's clock"] : []),
       ...input.notes,
     ],
-    currentPeriodGaps: [...input.currentPeriodGaps],
+    currentPeriodGaps: input.currentPeriodGaps.map((cause) => [...cause]),
     currentPeriodHoleChannels: new Set(input.currentPeriodHoleChannels),
     providerGapsMatter: messageTextCriterionActive(input.visibility),
     channels,

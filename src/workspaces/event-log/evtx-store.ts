@@ -2859,12 +2859,14 @@ function incompleteCurrentPeriodDetail(
  *
  * Files are compared from the records already loaded, when they cover the previous period.
  * `nowEpoch` is the workspace's clock, the instant `isWithinTimeWindow` measures the window from,
- * and is used only for files. A live source is anchored where its current period begins to be
- * covered: the earliest instant a compared channel's current read was issued. The workspace clock
- * keeps moving after a load, and a criterion change hours later must not move the comparison with
- * it; neither does a load of a channel the comparison does not include, nor a live tail, which
- * reads only events that have not happened yet. The tail's events stay on the grid and are named in
- * a note as left out.
+ * and is used only for files. A live source's current period ends at the anchor, the earliest
+ * instant a compared channel's current read was issued. A channel read later covers a window that
+ * starts later, and the service evaluates a window at an instant after the invoke that is not
+ * observed, so what each channel may lack from the start of the period is bounded from both sides
+ * and stated. The workspace clock keeps moving after a load, and a criterion change hours later
+ * must not move the comparison with it; neither does a load of a channel the comparison does not
+ * include, nor a live tail, which reads only events that have not happened yet. The tail's events
+ * stay on the grid, are never counted, and are named in a note as left out.
  *
  * A live source is queried again, once per loaded selected channel, with the view's own pushed-down
  * criteria and an explicit `between` window, under a request ID of its own: the events stream into
@@ -2972,12 +2974,15 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
 
   // What is short in the current period of the channels compared. These do not stop a comparison,
   // but a ratio against a clean previous period would otherwise read as complete.
-  const currentPeriodGaps = new Set<string>();
+  // One list per cause, so the comparison limits each on its own.
+  const missingStarts = new Set<string>();
+  const possibleStarts = new Set<string>();
+  const reportedGaps = new Set<string>();
   const currentPeriodHoleChannels = new Set<string>();
   for (const [channel, read] of readEpochs) {
     const startGap = channelStartGap(channel, read, anchorEpoch, windowResult.prior.lengthMs);
     if (startGap !== null) {
-      currentPeriodGaps.add(startGap.text);
+      (startGap.definite ? missingStarts : possibleStarts).add(startGap.text);
       currentPeriodHoleChannels.add(channel);
     }
   }
@@ -2988,7 +2993,7 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
       coverageBelongsToChannel(detail.source, channel, state.remoteMachine)
     );
     if (concerned.length > 0) {
-      currentPeriodGaps.add(formatCoverageGap(detail));
+      reportedGaps.add(formatCoverageGap(detail));
       for (const channel of concerned) currentPeriodHoleChannels.add(channel);
     }
   }
@@ -3014,7 +3019,7 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
     anchorEpoch,
     remote: state.remoteMachine !== null,
     notes,
-    currentPeriodGaps: [...currentPeriodGaps],
+    currentPeriodGaps: [[...missingStarts], [...possibleStarts], [...reportedGaps]],
     currentPeriodHoleChannels: [...currentPeriodHoleChannels],
     channels,
     visibility,

@@ -13,9 +13,11 @@
  * made possible on purpose, with a real load reading the same channel while comparison batches
  * arrive.
  *
- * The live anchor is the instant the current load began, so the tests that assert an exact window
- * freeze `Date` at a fixed anchor. Tests that run a real load do not: the store's own settling
- * grace is measured on `Date`, and a frozen clock would never let it elapse.
+ * The live anchor is the earliest instant a compared channel's current read was issued, so the
+ * tests that assert an exact window freeze `Date` and take that instant from a real load. The
+ * store's own settling grace is measured on `Date`, and a frozen clock would never let it elapse,
+ * so a load on a frozen clock is run with `withClockRunning`, which moves the clock along only
+ * after the work (and with it every stamp taken on its first step) has started.
  *
  * The Tauri bridge is mocked because the store imports it at module scope.
  */
@@ -647,7 +649,19 @@ async function settleComparisonQueries(total: number): Promise<void> {
       query.resolve(reply(0));
     }
     expect(handled.size).toBe(total);
-  });
+  }, { timeout: 5000 });
+}
+
+/**
+ * Waits, on real time, until `count` queries are pending. Unlike `vi.waitFor` it leaves a frozen
+ * clock where the test put it, which matters when the next step stamps a read.
+ */
+async function untilQueries(count: number): Promise<void> {
+  const deadline = performance.now() + 5000;
+  while (queries.length < count) {
+    if (performance.now() > deadline) throw new Error(`only ${queries.length} of ${count} queries`);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
 }
 
 /** A Load of Security that the operator stopped, after System and Application were loaded. */
@@ -973,11 +987,11 @@ describe("what fixes the anchor of a live comparison", () => {
     // The first four reads took 20 minutes, so the service may have evaluated any of their windows
     // up to 20 minutes late; the fifth began 20 minutes after the anchor, which is certain.
     expect(outcome.result.gaps).toEqual([
+      `Current period: Operational was read at ${iso(ANCHOR + 20 * 60 * 1000)}, 20 min after the comparison anchor ${iso(ANCHOR)}, so the first 20 min of its current period is not covered.`,
       ...["System", "Application", "Security", "Setup"].map(
         (name) =>
           `Current period: ${name} may be missing up to 20 min at the start of its current period: the service evaluated its window at some point during a read that took 20 min.`
       ),
-      `Current period: Operational was read at ${iso(ANCHOR + 20 * 60 * 1000)}, 20 min after the comparison anchor ${iso(ANCHOR)}, so the first 20 min of its current period is not covered.`,
     ]);
   });
 
@@ -1110,6 +1124,93 @@ describe("what fixes the anchor of a live comparison", () => {
         `Current period: Application was read at ${iso(ANCHOR + 20 * 60 * 1000)}, 20 min after the comparison anchor ${iso(ANCHOR)}, so the first 20 min of its current period is not covered.`,
       ]);
     }
+  });
+
+  it("does not stamp a channel that a superseded load's pool reads after the current load has", async () => {
+    // Load A has five channels for a pool of four, so its fifth waits. Load B supersedes A and
+    // reads that fifth channel. When A's pool frees, A invokes the channel again, later than B did.
+    // Only a merged result may stamp, and A's is never merged: the stamp is B's.
+    const names = ["System", "Application", "Security", "Setup", "Operational"];
+    useEvtxStore.setState({ channels: names.map(liveInfo), loadedChannels: new Set<string>() });
+    const loadedByB = ANCHOR + HOUR;
+    const invokedByA = ANCHOR + 3 * HOUR;
+    vi.setSystemTime(ANCHOR);
+    const loadA = useEvtxStore.getState().queryChannels(names);
+    await untilQueries(4);
+
+    vi.setSystemTime(loadedByB);
+    const loadB = useEvtxStore.getState().queryChannels(["Operational"]);
+    await untilQueries(5);
+    queries[4].resolve(streamedReply(queries[4].args, []));
+    await withClockRunning(loadB);
+    expect(useEvtxStore.getState().loadedChannels.has("Operational")).toBe(true);
+
+    // A's first reply frees a slot, and its fifth channel is invoked, long after B read it.
+    vi.setSystemTime(invokedByA);
+    queries[0].resolve(reply(0));
+    await untilQueries(6);
+    for (const query of queries) if (query !== queries[4]) query.resolve(reply(0));
+    await withClockRunning(loadA);
+    installBridge();
+    vi.setSystemTime(ANCHOR);
+    useEvtxStore.setState({ selectedChannels: new Set(["Operational"]) });
+
+    await compareAll(1);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") expect(outcome.result.prior.anchorEpoch).toBe(loadedByB);
+  });
+
+  it("limits the lines of a comparison of forty channels read at staggered times", async () => {
+    const names = Array.from({ length: 40 }, (_, index) => `Channel${index}`);
+    useEvtxStore.setState({
+      channels: names.map(liveInfo),
+      selectedChannels: new Set(names),
+      loadedChannels: new Set<string>(),
+    });
+    // Each read answers three minutes after the one before, so the later channels begin well after
+    // the first, by more than one percent of the window.
+    invoke.mockImplementation(async (_name: string, rawArgs: unknown) => {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      vi.setSystemTime(Date.now() + 3 * 60 * 1000);
+      return streamedReply(rawArgs as QueryArgs, []);
+    });
+    await withClockRunning(useEvtxStore.getState().queryChannels(names));
+    installBridge();
+    expect(useEvtxStore.getState().loadedChannels.size).toBe(40);
+
+    await compareAll(40);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    const missing = outcome.result.gaps.filter((gap) => gap.includes("after the comparison anchor"));
+    const summaries = outcome.result.gaps.filter((gap) => /^and \d+ more not shown\.$/.test(gap));
+    // Thirty-two channels began late enough to be certain; five are named and the rest counted.
+    expect(missing).toHaveLength(5);
+    expect(summaries).toEqual(["and 27 more not shown."]);
+    expect(outcome.result.gaps.length).toBeLessThanOrEqual(12);
+    // Every one of those channels is still withheld from a zero, however few lines say so.
+    expect(outcome.result.channelsWithGaps.length).toBeGreaterThanOrEqual(36);
+  });
+
+  it("limits the possible gaps on their own, apart from the certain ones", async () => {
+    // Seven channels each took thirty minutes to answer: seven possible gaps and no certain one.
+    const names = Array.from({ length: 7 }, (_, index) => `Slow${index}`);
+    useEvtxStore.setState({ channels: names.map(liveInfo), loadedChannels: new Set<string>() });
+    for (const name of names) await loadWithReadOf(name, ANCHOR, 30 * 60 * 1000);
+    vi.setSystemTime(ANCHOR);
+    useEvtxStore.setState({ selectedChannels: new Set(names) });
+
+    await compareAll(7);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    expect(outcome.result.gaps).toHaveLength(6);
+    expect(outcome.result.gaps.slice(0, 5).every((gap) => gap.includes("may be missing up to 30 min"))).toBe(true);
+    expect(outcome.result.gaps[5]).toBe("and 2 more not shown.");
   });
 
   it("is unavailable, saying why, for a loaded channel whose read was never recorded", async () => {
