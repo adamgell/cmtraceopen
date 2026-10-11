@@ -40,6 +40,7 @@ import {
   type EvtxGroupField,
   type EvtxQuickFilter,
 } from "./evtx-filter";
+import { isLossShapedTailGap } from "./evtx-channel-stats";
 import {
   defaultColumnConfig,
   moveColumn,
@@ -522,12 +523,16 @@ function beginRequest(): string {
   // Drop the visible tail identity before any asynchronous stale-stop completion can observe it.
   // Some load paths (notably channel enumeration) do not otherwise rewrite these fields.
   tailStopGapOwners.clear();
-  useEvtxStore.setState({
+  // Every load starts here, so this is where a tail's lost events are carried into the persistent
+  // coverage before the tail's own list is reset. A load that replaces the records also replaces
+  // the coverage, which drops them with the records they qualified.
+  useEvtxStore.setState((state) => ({
     tailMode: null,
     tailRequestId: null,
     tailChannels: new Set<string>(),
+    coverageGaps: carryTailLoss(state),
     tailCoverageGaps: [],
-  });
+  }));
   for (const [requestId, channels] of cleanupRequests) {
     for (const channel of channels) observeStaleTailStop(requestId, channel);
   }
@@ -829,6 +834,19 @@ function hasStructuredEvtxBasename(value: string, channel: string): boolean {
     if (suffix === undefined || suffix === ":" || suffix.trim() === "") return true;
   }
   return false;
+}
+
+/**
+ * The persistent coverage with the live tail's loss-shaped gaps added. The tail's own gap list is
+ * reset whenever a tail starts or a load begins, but the records the tail delivered stay loaded,
+ * and a batch that was lost is still missing from them. Carrying those gaps into `coverageGaps`
+ * keeps them for as long as the records stay: they are cleared exactly as every other channel's
+ * gap is, when that channel reloads or is cleared. A gap that lost nothing (a tail that could not
+ * start) is not carried.
+ */
+function carryTailLoss(state: Pick<EvtxState, "coverageGaps" | "tailCoverageGaps">): string[] {
+  const lost = state.tailCoverageGaps.filter(isLossShapedTailGap);
+  return lost.length === 0 ? state.coverageGaps : mergeCoverageGaps(state.coverageGaps, lost);
 }
 
 function coverageBelongsToChannel(
@@ -1706,7 +1724,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     const channels = [...state.loadedChannels];
     if (channels.length === 0) return [];
     tailStopGapOwners.clear();
-    set({ tailCoverageGaps: [] });
+    set((current) => ({ coverageGaps: carryTailLoss(current), tailCoverageGaps: [] }));
 
     const sourceRequestId = activeRequestId;
     const filterSnapshot = snapshotFilterInputs(

@@ -2499,3 +2499,54 @@ describe("channel eligibility", () => {
     ]);
   });
 });
+
+describe("a live tail's lost events outlive the tail", () => {
+  const LOST = "System: live tail batch 12 was not received";
+  const UNAVAILABLE = "System: live tail unavailable (not supported)";
+
+  beforeEach(() => {
+    invoke.mockReset();
+    useEvtxStore.setState({
+      records: [streamedRecord("System", 1)],
+      channels: [
+        { name: "System", eventCount: 1, sourceType: "live", enabledState: "enabled" },
+        { name: "Application", eventCount: 0, sourceType: "live", enabledState: "enabled" },
+      ],
+      coverageGaps: [],
+      coverageDetails: [],
+      sourceManifest: null,
+      sourceMode: "live",
+      loadedChannels: new Set(["System"]),
+      selectedChannels: new Set(["System"]),
+      tailMode: "subscription",
+      tailRequestId: "event-log-tail-1",
+      tailChannels: new Set(["System"]),
+      tailCoverageGaps: [LOST, UNAVAILABLE],
+    });
+  });
+
+  it("keeps a lost batch, and only a lost batch, when a load of another channel tears the tail down", async () => {
+    invoke.mockResolvedValueOnce(result("Application", []));
+
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    const state = useEvtxStore.getState();
+    expect(state.tailCoverageGaps).toEqual([]);
+    // The records the tail delivered are still loaded, so the hole in them still shows. A tail that
+    // merely could not start lost nothing and is not carried.
+    expect(state.coverageGaps).toContain(LOST);
+    expect(state.coverageGaps).not.toContain(UNAVAILABLE);
+    expect(state.records.map((record) => record.channel)).toContain("System");
+  });
+
+  it("drops it when that channel is loaded again, as it drops any other gap", async () => {
+    invoke.mockResolvedValueOnce(result("Application", []));
+    await useEvtxStore.getState().queryChannels(["Application"]);
+    expect(useEvtxStore.getState().coverageGaps).toContain(LOST);
+
+    invoke.mockResolvedValueOnce(result("System", []));
+    await useEvtxStore.getState().queryChannels(["System"]);
+
+    expect(useEvtxStore.getState().coverageGaps).not.toContain(LOST);
+  });
+});

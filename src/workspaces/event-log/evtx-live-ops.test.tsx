@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deferred } from "../../test-utils/deferred";
 import type { EvtxRecord } from "./types";
@@ -572,6 +572,86 @@ describe("event-log live operations", () => {
     const statuses = await secondStart;
     expect(statuses).toHaveLength(1);
     expect(useEvtxStore.getState().tailRequestId).toBe(secondRequestId);
+  });
+
+  it("keeps a lossy tail's gap through Pause and Resume, so the row stays partial", async () => {
+    useEvtxStore.setState({ records: [tailRecord(1)] });
+    render(<ChannelPicker />);
+    const rowState = () =>
+      document
+        .querySelector('[data-channel-row="Application"]')
+        ?.getAttribute("data-channel-state");
+    expect(rowState()).toBe("read");
+
+    await act(async () => {
+      await useEvtxStore.getState().startLiveTail();
+    });
+    const handler = listeners.get("evtx-tail-batch")!;
+    const requestId = useEvtxStore.getState().tailRequestId;
+    // Sequence 0 arrives, then 3: batches 1 and 2 were never received.
+    act(() => {
+      handler({
+        payload: {
+          requestId,
+          channel: "Application",
+          sequence: 0,
+          mode: "subscription",
+          records: [tailRecord(2)],
+          coverageGaps: [],
+        },
+      });
+      handler({
+        payload: {
+          requestId,
+          channel: "Application",
+          sequence: 3,
+          mode: "subscription",
+          records: [tailRecord(3)],
+          coverageGaps: [],
+        },
+      });
+    });
+    expect(rowState()).toBe("partial");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Pause live tail" }));
+    await waitFor(() => expect(useEvtxStore.getState().tailMode).toBeNull());
+    expect(rowState()).toBe("partial");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Resume live tail" }));
+    await waitFor(() => expect(useEvtxStore.getState().tailMode).not.toBeNull());
+    // Resume resets the tail's own list, yet the events with the hole are still in the view.
+    expect(useEvtxStore.getState().tailCoverageGaps).toEqual([]);
+    expect(rowState()).toBe("partial");
+    expect(
+      document.getElementById(
+        document
+          .querySelector('[data-channel-row="Application"] input[type="checkbox"]')!
+          .getAttribute("aria-describedby")!,
+      )?.textContent,
+    ).toContain("live tail batch 1 was not received");
+  });
+
+  it("does not carry a gap that lost nothing across a restart", async () => {
+    useEvtxStore.setState({ tailCoverageGaps: ["Application: live tail unavailable (not supported)"] });
+
+    await useEvtxStore.getState().startLiveTail();
+
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+  });
+
+  it("clears the carried gap when its channel is cleared", async () => {
+    useEvtxStore.setState({
+      records: [tailRecord(1)],
+      tailCoverageGaps: ["Application: live tail batch 4 was not received"],
+    });
+    await useEvtxStore.getState().startLiveTail();
+    expect(useEvtxStore.getState().coverageGaps).toContain(
+      "Application: live tail batch 4 was not received",
+    );
+
+    await useEvtxStore.getState().clearChannel("Application", true);
+
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
   });
 
   it("accepts sequence zero after restarting the live tail with a fresh request", async () => {
