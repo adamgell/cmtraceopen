@@ -5,18 +5,29 @@
  * workspace is one line and no figure reads a store. Meant to be loaded with
  * `React.lazy` (default export).
  *
- * Spike (spec 8.10, Library choice): all four figures are token-styled
- * markup. `HeatMapChart` takes hex color stops and interpolates them in d3, so
- * the `color-mix()` heat steps cannot be passed through (the interpolated
- * stop comes out as a mangled `color-mix` string), and it has no cell gap,
- * radius, cell size or empty-cell props. `VerticalStackedBarChart` takes
- * token colors but draws its own axes, tick sizes, legend and tooltip, which
- * would need `styles` overrides to follow `f - 4`, and it sizes from measured
- * width and canvas text, which jsdom cannot test. Figures 3 and 4 also share
- * one 24-column hour axis here, so they line up.
+ * Library spike record (spec 8.10, Library choice; quote in the PR):
+ * - Figure 3 (heat map) is token-styled markup (HTML and CSS grid, not SVG).
+ *   `HeatMapChart` cannot match the spec through public props:
+ *   `rangeValuesForColorScale` takes hex colors only (d3 interpolates the
+ *   stops), and there are no cell gap, radius, cell size or empty-cell props.
+ *   Spec 8.10 asks for 2 px gaps, radius 2, 18 px cells and a defined empty
+ *   cell.
+ * - Figure 4 uses `VerticalStackedBarChart`, with public props: `hideLegend`,
+ *   `hideLabels`, `barGapMax`, `barMinimumHeight`, `barCornerRadius`,
+ *   `maxBarWidth`, `xAxisInnerPadding`, `tickValues`, `margins`,
+ *   `isCalloutForStack` and `onRenderCalloutPerStack`. Two things needed
+ *   more than public props in 9.3.27, both observed in a rendered capture:
+ *   the chart ignores `height` and sizes itself from its root element, so a
+ *   fixed-height host element with CSS makes the root fill it; and the
+ *   `styles` class names are not applied to the axes, so tick text size
+ *   (spec 7.1, max(9, f - 4)) and color come from CSS on that host. The y
+ *   axis cannot be hidden through props and is shown. The footer legend, the
+ *   Peak readout and the hidden data table are ours.
+ * - Figures 1 and 2 are token-styled rows, as the spec recommends.
  */
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { tokens } from "@fluentui/react-components";
+import { makeStyles, tokens } from "@fluentui/react-components";
+import { VerticalStackedBarChart, type VerticalStackedChartProps } from "@fluentui/react-charts";
 import {
   LOG_UI_FONT_FAMILY,
   type LogListMetrics,
@@ -416,6 +427,46 @@ function HeatMapFigure({
 
 const COLUMN_HEIGHT = 120;
 const MIN_SEGMENT = 2;
+const CHART_MARGINS = { top: 4, right: 4, bottom: 24, left: 28 };
+/** The library sizes itself from its root element, so the root carries this height. */
+const CHART_HEIGHT = COLUMN_HEIGHT + CHART_MARGINS.top + CHART_MARGINS.bottom;
+const AXIS_TICKS = ["00:00", "06:00", "12:00", "18:00"];
+
+const useChartStyles = makeStyles({
+  // The library sizes itself from its root element, so the host fixes the height and the
+  // root and wrapper fill it. The chart's `styles` class names are not applied to its axes in
+  // 9.3.27, so tick text follows the font setting through this host instead.
+  chart: {
+    minWidth: 0,
+    height: `${CHART_HEIGHT}px`,
+    overflow: "hidden",
+    "& .fui-cart__root, & .fui-cart__chartWrapper": { height: "100%" },
+    "& .tick text": {
+      fontSize: "var(--evtx-chart-axis-font)",
+      fill: tokens.colorNeutralForeground3,
+    },
+    "& .tick line, & .domain": { stroke: tokens.colorNeutralStroke2 },
+  },
+});
+
+/** One stack per hour, Error first so it draws at the bottom, Warning on top. */
+export function hourlyStacks(
+  hourly: EvtxChartData["hourly"],
+  visualTokens: EvtxVisualTokens,
+): VerticalStackedChartProps[] {
+  return hourly.map((b) => ({
+    xAxisPoint: `${hh(b.hour)}:00`,
+    chartData: [
+      { legend: "Error", data: b.errors, color: visualTokens.levels.Error.barColor },
+      { legend: "Warning", data: b.warnings, color: visualTokens.levels.Warning.barColor },
+    ],
+  }));
+}
+
+function hourlyTooltip(stack: VerticalStackedChartProps): string {
+  const [errors, warnings] = stack.chartData;
+  return `${stack.xAxisPoint} \u00b7 ${errors.data} errors, ${warnings.data} warnings`;
+}
 
 function HourlyFigure({
   data,
@@ -430,9 +481,8 @@ function HourlyFigure({
 }) {
   const f = metrics.fontSize;
   const small = Math.max(10, f - 3);
-  const max = data.hourly.reduce((m, b) => Math.max(m, b.errors + b.warnings), 0);
-  const scale = (n: number) =>
-    n === 0 || max === 0 ? 0 : Math.max(MIN_SEGMENT, Math.round((n / max) * COLUMN_HEIGHT));
+  const classes = useChartStyles();
+  const stacks = useMemo(() => hourlyStacks(data.hourly, visualTokens), [data.hourly, visualTokens]);
   const qualifier = [`hour of day, ${timeZoneLabel(timeZoneMode)}`, unplacedNote(data.unplacedCount)]
     .filter(Boolean)
     .join(" · ");
@@ -452,38 +502,31 @@ function HourlyFigure({
     >
       <div
         aria-hidden="true"
-        style={{ display: "grid", gridTemplateColumns: `repeat(${HOURS_PER_DAY}, minmax(0, 1fr))`, gap: 2, height: COLUMN_HEIGHT, alignItems: "end" }}
+        className={classes.chart}
+        style={{ "--evtx-chart-axis-font": `${Math.max(9, f - 4)}px` } as CSSProperties}
       >
-        {data.hourly.map((b) => (
-          <div
-            key={b.hour}
-            data-hour={b.hour}
-            title={`${hh(b.hour)}:00 · ${b.errors} errors, ${b.warnings} warnings`}
-            style={{ display: "flex", flexDirection: "column-reverse", height: "100%" }}
-          >
-            {b.errors > 0 ? (
-              <span
-                data-segment="error"
-                style={{ height: scale(b.errors), background: visualTokens.levels.Error.barColor, borderRadius: "0 0 2px 2px", flex: "0 0 auto" }}
-              />
-            ) : null}
-            {b.warnings > 0 ? (
-              <span
-                data-segment="warning"
-                style={{
-                  height: scale(b.warnings),
-                  background: visualTokens.levels.Warning.barColor,
-                  borderBottom: b.errors > 0 ? `1px solid ${tokens.colorNeutralBackground1}` : undefined,
-                  boxSizing: "content-box",
-                  borderRadius: "2px 2px 0 0",
-                  flex: "0 0 auto",
-                }}
-              />
-            ) : null}
-          </div>
-        ))}
+        <VerticalStackedBarChart
+          data={stacks}
+          height={CHART_HEIGHT}
+          margins={CHART_MARGINS}
+          tickValues={AXIS_TICKS}
+          hideLegend
+          hideLabels
+          barGapMax={1}
+          barMinimumHeight={MIN_SEGMENT}
+          barCornerRadius={2}
+          maxBarWidth={32}
+          xAxisInnerPadding={0.12}
+          xAxisOuterPadding={0}
+          yAxisTickCount={3}
+          isCalloutForStack
+          onRenderCalloutPerStack={(stack) => (
+            <span style={{ ...numeric, fontSize: f - 2, color: tokens.colorNeutralForeground1 }}>
+              {stack ? hourlyTooltip(stack) : null}
+            </span>
+          )}
+        />
       </div>
-      <HourAxis metrics={metrics} leading={0} />
       <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, fontSize: small, color: tokens.colorNeutralForeground3 }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
