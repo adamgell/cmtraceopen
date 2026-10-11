@@ -322,14 +322,38 @@ describe("the links column", () => {
     expect(columnValue(record(), "links")).toBe("");
   });
 
-  it("is invisible to quick-filter search", () => {
-    const quickFilter = { ...DEFAULT_QUICK_FILTER, query: "0", scope: "visibleColumns" as const };
-    expect(matchesQuickFilter(record(), quickFilter, ["links"], "utc")).toBe(false);
-    // Control: the same search finds a real column that holds the digit.
-    expect(matchesQuickFilter(record(), quickFilter, ["eventId", "recordId"], "utc")).toBe(false);
-    expect(
-      matchesQuickFilter(record({ eventId: 4100 }), quickFilter, ["links", "eventId"], "utc"),
-    ).toBe(true);
+  describe("quick-filter search", () => {
+    // Every searched value of this record is free of the digit 0 (the time renders as
+    // 2111-11-11 11:11:11.111 in UTC), so a "0" could only come from the links column.
+    const zeroless = record({
+      timestampEpoch: Date.UTC(2111, 10, 11, 11, 11, 11, 111),
+      computer: "HOST-A",
+    });
+    const search = (scope: "visibleColumns" | "allColumns") => ({
+      ...DEFAULT_QUICK_FILTER,
+      query: "0",
+      scope,
+    });
+
+    it("never finds a value in the links column of the visible columns", () => {
+      expect(matchesQuickFilter(zeroless, search("visibleColumns"), ["links"], "utc")).toBe(false);
+      // Control: the matcher does find the digit in a visible column that holds it.
+      expect(
+        matchesQuickFilter({ ...zeroless, eventId: 4100 }, search("visibleColumns"), ["links", "eventId"], "utc"),
+      ).toBe(true);
+      expect(
+        matchesQuickFilter(zeroless, search("visibleColumns"), ["eventId", "recordId"], "utc"),
+      ).toBe(false);
+    });
+
+    it("never finds a value in the links column under the all-columns scope either", () => {
+      // The all-columns scope reaches every column the chooser offers, links included.
+      expect(matchesQuickFilter(zeroless, search("allColumns"), undefined, "utc")).toBe(false);
+      // Control: the same scope does find the digit once another column holds it.
+      expect(
+        matchesQuickFilter({ ...zeroless, eventId: 4100 }, search("allColumns"), undefined, "utc"),
+      ).toBe(true);
+    });
   });
 });
 
