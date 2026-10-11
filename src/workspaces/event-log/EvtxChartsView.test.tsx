@@ -186,6 +186,17 @@ describe("EvtxChartsView", () => {
     expect(screen.getByText("Peak: 02:00 (3)")).toBeInTheDocument();
   });
 
+  it("labels the hourly figure every six hours as HH:00, in hour order", () => {
+    render(<EvtxChartsView {...props()} />);
+    const figure = screen.getByRole("figure", { name: /^Errors and warnings per hour/ });
+    const axis = [...figure.querySelectorAll("span")]
+      .filter((el) => !el.closest("table") && /^\d\d:00$/.test(el.textContent ?? ""))
+      .map((el) => el.textContent);
+    expect(axis).toEqual(["00:00", "06:00", "12:00", "18:00"]);
+    const hours = [...figure.querySelectorAll<HTMLElement>("[data-hour]")].map((el) => el.dataset.hour);
+    expect(hours).toEqual(Array.from({ length: 24 }, (_, i) => String(i)));
+  });
+
   it("provides a visually hidden table behind the heat map", () => {
     render(<EvtxChartsView {...props()} />);
     const table = screen.getByRole("table", { name: "Events per hour of day by channel" });

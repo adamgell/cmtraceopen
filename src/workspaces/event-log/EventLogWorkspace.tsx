@@ -573,7 +573,7 @@ export function EventLogWorkspace() {
       textLogCount={analysisStatus?.logItems ?? 0}
       metrics={chartMetrics}
       visualTokens={visualTokens}
-      />
+    />
   );
 
   const views: Record<EvtxViewId, EvtxViewEntry> = {

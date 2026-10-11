@@ -144,7 +144,7 @@ describe("EventLogWorkspace three-column shell", () => {
     await useEvtxLayoutStore.persist.rehydrate();
     render(<EventLogWorkspace />);
     expect(screen.getByRole("tab", { name: "Charts" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("Charts view")).toBeVisible();
+    expect(await screen.findByTestId("evtx-charts-view", {}, { timeout: 10_000 })).toBeVisible();
     expect(region("channels")).not.toBeVisible();
     expect(region("rail")).toHaveStyle({ width: "400px" });
     expect(region("dock")).toHaveStyle({ height: "250px" });

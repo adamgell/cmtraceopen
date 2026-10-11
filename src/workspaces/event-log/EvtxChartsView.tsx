@@ -5,15 +5,28 @@
  * workspace is one line and no figure reads a store. Meant to be loaded with
  * `React.lazy` (default export).
  *
- * Spike (spec 8.10, Library choice): all four figures are token-styled
- * markup. `HeatMapChart` takes hex color stops and interpolates them in d3, so
- * the `color-mix()` heat steps cannot be passed through (the interpolated
- * stop comes out as a mangled `color-mix` string), and it has no cell gap,
- * radius, cell size or empty-cell props. `VerticalStackedBarChart` takes
- * token colors but draws its own axes, tick sizes, legend and tooltip, which
- * would need `styles` overrides to follow `f - 4`, and it sizes from measured
- * width and canvas text, which jsdom cannot test. Figures 3 and 4 also share
- * one 24-column hour axis here, so they line up.
+ * Library spike record (spec 8.10, Library choice; quote in the PR). Figures 3
+ * and 4 fall back to token-styled markup (HTML and CSS, not SVG), because the
+ * Fluent charts cannot match the spec's density without overrides beyond their
+ * public props. Evidence, with `@fluentui/react-charts` 9.3.27:
+ * - `HeatMapChart`: `rangeValuesForColorScale` takes hex colors only and d3
+ *   interpolates the stops, so the `color-mix()` heat steps (D11) cannot be
+ *   passed. There are no cell gap, radius, cell size or empty-cell props, and
+ *   the chart draws its own axes. Spec 8.10 needs 2 px gaps, radius 2, 18 px
+ *   cells and a defined empty cell.
+ * - `VerticalStackedBarChart` was built and captured through public props
+ *   (`hideLegend`, `barGapMax`, `barMinimumHeight`, `barCornerRadius`,
+ *   `maxBarWidth`, `xAxisInnerPadding`, `tickValues`, `margins`, a stack
+ *   callout). It still needed three overrides outside them: (1) `height` is
+ *   ignored, the chart sizes from its root element, so a fixed-height host
+ *   plus CSS on the library's `.fui-cart__root` and `.fui-cart__chartWrapper`
+ *   was required (`parentRef` left both axes empty); (2) the `styles` class
+ *   names are not applied to the axes, so tick text at max(9, f - 4) (spec
+ *   7.1) needed CSS on the library's `.tick text`; (3) the Y axis cannot be
+ *   hidden by props and is drawn, which the spec's figure does not show. It
+ *   also sorted numeric-looking string x values wrongly ("10" to "23" before
+ *   "00" to "09"), worked around with "HH:00" labels.
+ * - Figures 1 and 2 are token-styled rows, as the spec recommends.
  */
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { tokens } from "@fluentui/react-components";
@@ -310,14 +323,23 @@ function unplacedNote(count: number): string | null {
   return `${count.toLocaleString()} ${count === 1 ? "event has" : "events have"} no timestamp and ${count === 1 ? "is" : "are"} not placed`;
 }
 
-function HourAxis({ metrics, leading }: { metrics: LogListMetrics; leading: number }) {
+function HourAxis({
+  metrics,
+  leading,
+  suffix = "",
+}: {
+  metrics: LogListMetrics;
+  leading: number;
+  /** Appended to each label, for example ":00". */
+  suffix?: string;
+}) {
   return (
     <div aria-hidden="true" style={{ display: "flex", gap: 8, fontSize: Math.max(9, metrics.fontSize - 4), color: tokens.colorNeutralForeground3 }}>
       {leading > 0 ? <span style={{ flex: `0 0 ${leading}px` }} /> : null}
       <div style={{ ...numeric, flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: `repeat(${HOURS_PER_DAY}, minmax(0, 1fr))`, gap: 2 }}>
         {Array.from({ length: HOURS_PER_DAY }, (_, hour) => (
           <span key={hour} style={{ overflow: "visible", whiteSpace: "nowrap" }}>
-            {hour % 6 === 0 ? hh(hour) : ""}
+            {hour % 6 === 0 ? `${hh(hour)}${suffix}` : ""}
           </span>
         ))}
       </div>
@@ -483,7 +505,7 @@ function HourlyFigure({
           </div>
         ))}
       </div>
-      <HourAxis metrics={metrics} leading={0} />
+      <HourAxis metrics={metrics} leading={0} suffix=":00" />
       <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, fontSize: small, color: tokens.colorNeutralForeground3 }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
