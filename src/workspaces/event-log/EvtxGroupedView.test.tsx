@@ -14,6 +14,7 @@ import { useUiStore } from "../../stores/ui-store";
 import {
   EvtxGroupedTable,
   EvtxGroupedView,
+  GROUPED_DEBOUNCE_MS,
   GROUPED_OVERSCAN,
   groupedRowHeights,
 } from "./EvtxGroupedView";
@@ -572,5 +573,30 @@ describe("EvtxGroupedView", () => {
       "Warning",
       "Information",
     ]);
+  });
+
+  it(`applies a stream of changes every ${GROUPED_DEBOUNCE_MS} ms, never waiting for it to go quiet`, () => {
+    vi.useFakeTimers();
+    try {
+      const all = sampleRecords();
+      const only = (...ids: number[]) => all.filter((record) => ids.includes(record.eventId));
+      useEvtxStore.setState({ records: all, sourceMode: "files", timeWindow: "all" });
+      const view = (records: EvtxRecord[]) => (
+        <EvtxGroupedView records={records} nowEpoch={NOW} readThroughMs={NOW} />
+      );
+      const { rerender } = render(view(only(7036)));
+      expect(groupRows()).toHaveLength(1);
+
+      // A change every 50 ms, each inside the previous one's wait.
+      rerender(view(only(7036, 1000)));
+      act(() => vi.advanceTimersByTime(50));
+      rerender(view(only(7036, 1000, 4625)));
+      act(() => vi.advanceTimersByTime(30));
+      // 80 ms after the first change: the newest value has applied, although the stream went on.
+      expect(groupRows()).toHaveLength(3);
+      expect(screen.getByRole("table")).toHaveAccessibleName(/^Grouped events, 3 groups/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

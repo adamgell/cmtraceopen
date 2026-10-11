@@ -881,14 +881,23 @@ export function EvtxGroupedTable({
   );
 }
 
-/** The first value is used at once; later changes settle for `ms` before they apply. */
+/**
+ * The first value is used at once; a later change applies the newest value `ms` after the change
+ * that started the wait. Changes during the wait do not restart it, so a live tail that never goes
+ * quiet still updates the view every `ms` instead of starving it.
+ */
 function useSettledValue<T>(value: T, ms: number): T {
   const [settled, setSettled] = useState(value);
+  const latest = useRef(value);
   useEffect(() => {
-    if (Object.is(settled, value)) return undefined;
-    const timer = setTimeout(() => setSettled(value), ms);
+    latest.current = value;
+  });
+  const pending = !Object.is(settled, value);
+  useEffect(() => {
+    if (!pending) return undefined;
+    const timer = setTimeout(() => setSettled(latest.current), ms);
     return () => clearTimeout(timer);
-  }, [value, settled, ms]);
+  }, [pending, settled, ms]);
   return settled;
 }
 
