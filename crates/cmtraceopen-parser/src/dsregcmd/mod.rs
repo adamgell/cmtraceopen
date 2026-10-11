@@ -2,6 +2,7 @@ use chrono::DateTime;
 use chrono::Utc;
 
 pub mod derive;
+mod event_links;
 pub mod extended;
 pub mod models;
 pub mod parser;
@@ -65,6 +66,7 @@ pub fn analyze_text_with_evidence(
     extended.append(&mut rules::build_active_diagnostics_rules(&result));
     extended.append(&mut rules::build_event_log_diagnostics(&result));
     result.diagnostics.append(&mut extended);
+    event_links::link_event_log_entries(&mut result);
 
     Ok(redaction::redacted_analysis(&result))
 }

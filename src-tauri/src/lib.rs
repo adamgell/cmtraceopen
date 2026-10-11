@@ -489,6 +489,10 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::analysis_session::evtx_query_analysis_timeline,
             #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_query_analysis_timeline_window,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_query_analysis_edges,
+            #[cfg(feature = "event-log")]
             event_log::analysis_session::evtx_diagnose_analysis_session,
             #[cfg(feature = "event-log")]
             event_log::analysis_session::evtx_close_analysis_session,

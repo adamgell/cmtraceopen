@@ -50,14 +50,13 @@ Prefer the installed GitHub connector for PR metadata, replies, and ordinary PR 
 
 ## Clean-Cycle Gate
 
-Do not claim completion from resolved old threads alone. The gate is all of:
+Do not claim completion from resolved old threads alone. Whether the PR is a draft or ready for review is the repository owner's workflow choice and is not part of the gate; the gate is `approved_at_head` plus the other items listed here. The gate is all of:
 
 - local and remote branch heads match;
 - relevant checks pass;
 - every handled thread is resolved or explicitly dispositioned;
 - a new CodeRabbit review completed after the last request or push;
 - that review is anchored to the latest head SHA and the snapshot's `base_sha` still equals the current GitHub `baseRefOid`;
-- the PR is still a draft;
 - its effective substantive verdict is APPROVED at the current head (`approved_at_head` true); a COMMENTED review alone cannot establish approval;
 - it produced no new actionable threads.
 

@@ -21,6 +21,26 @@ export interface LogSeverityPalette {
   /** Fixed 8-color palette for merge tab / section identification (OQ-2). */
   mergeColors: [string, string, string, string, string, string, string, string];
 
+  /** Event Logs level marks (bars, dots, icons) and channel colors, tuned per theme. */
+  eventLog: {
+    critical: string;
+    error: string;
+    warning: string;
+    information: string;
+    verbose: string;
+    /** Level words and counts drawn as text off the row tint (4.5:1). */
+    text: {
+      critical: string;
+      error: string;
+      warning: string;
+      information: string;
+      verbose: string;
+    };
+    /** 8.1 live source pill label and dot (green; global status.success is unchanged). */
+    live: string;
+    channels: readonly [string, string, string, string, string, string];
+  };
+
   /** Semi-transparent overlay color for WhatIf badge background (OQ-3). */
   whatifOverlay: string;
   /** Opaque text color for WhatIf badges (OQ-3). */

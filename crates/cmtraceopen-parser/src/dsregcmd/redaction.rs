@@ -550,6 +550,8 @@ impl Projection {
                 evidence: self.texts(&diagnostic.evidence),
                 next_checks: self.texts(&diagnostic.next_checks),
                 suggested_fixes: self.texts(&diagnostic.suggested_fixes),
+                // Hex status codes are not identity values; nothing to mask.
+                related_error_codes: diagnostic.related_error_codes.clone(),
             })
             .collect()
     }

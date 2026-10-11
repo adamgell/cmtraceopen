@@ -62,13 +62,7 @@ function isRed(hex: string): boolean {
 const MIN_RED_CHROMA = 30;
 const MIN_ROW_DELTA_E = 10;
 
-// hotdog-stand is excluded because its removal is in flight in #878. Typed as
-// plain strings so this compiles both before and after that theme leaves the
-// ThemeId union. Remove this constant once #878 lands.
-const EXCLUDED_THEMES: readonly string[] = ["hotdog-stand"];
-const themeIds = (Object.keys(themeSeverityPalettes) as ThemeId[]).filter(
-  (id) => !EXCLUDED_THEMES.includes(id),
-);
+const themeIds = Object.keys(themeSeverityPalettes) as ThemeId[];
 // Every kind LogRow.tsx renders from the palette (rowStyle and the dot color).
 const rowKinds = ["error", "warning", "info", "success"] as const;
 

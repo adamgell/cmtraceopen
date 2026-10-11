@@ -233,6 +233,7 @@ export function analysisResult(): DsregcmdAnalysisResult {
         evidence: ["azureAdPrt=YES"],
         nextChecks: ["dsregcmd /status"],
         suggestedFixes: ["Sign out and sign in again"],
+        relatedErrorCodes: [],
       },
     ],
     policyEvidence: policyEvidence(),

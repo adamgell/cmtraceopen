@@ -75,3 +75,8 @@ loginventory/
 * copy.*
 * copy [0-9].*
 * copy [0-9][0-9].*
+e2e/.server-identity/
+
+# Interrupted capture-event-log-replies.mjs publish leftovers (staged/backup files, suffixed with the pid).
+e2e/fixtures/*.staged-*
+e2e/fixtures/*.backup-*
