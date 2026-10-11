@@ -365,7 +365,7 @@ Each subsection gives the mockup reference, the structure, the data source and t
   - pressed style per §6.2;
   - drive `toggleFilterLevel`;
   - counts come from the loaded `records` before level filtering, computed by `countByLevel` in `evtx-filter.ts` *(new function)*.
-  - **[Unverified]** Whether toggling a level re-queries in live mode, given that levels are before-load criteria (`EvtxBeforeLoadCriteria.levels`). The UI must not imply instant local toggling if a re-query occurs. Show the existing loading affordance.
+  - **[Verified, Phase 5, #832]** Toggling a level re-queries in live mode. With at least one loaded channel, `toggleFilterLevel` calls `refreshBeforeLoad`, which runs `refreshLoadedChannels`: it empties `records`, sets `isLoading` and queries every loaded channel again, whether or not the level predicate is sent. The predicate is sent only for a strict subset without Information (`levelsFilteredAtSource`); Information stays a local filter. File mode toggles are local and query nothing. The row therefore marks the level group `aria-busy`, shows a spinner beside it, says in each toggle's description that it reloads, and shows a count as "?" while records are emptied or when the query left the level out, because an unloaded level is unknown, not zero.
 - **Time window:** a `Dropdown`, 28 px, with Last 1 h, Last 24 h, Last 7 days, Last 30 days and All. It maps to `EvtxTimeWindow` `1h | 24h | 7d | 30d | all` **[Verified]**. The mockup's "Custom…" option depends on Q-2.
 - **More filters · {n}:** a 28 px secondary button that opens a popover (`shadow8`). The popover holds:
   - event IDs (`setFilterEventIds`);
@@ -962,7 +962,7 @@ This applies to all workspaces (Q-7).
 
 | Item | Phase |
 |---|---|
-| Whether level toggles re-query in live mode (`EvtxBeforeLoadCriteria.levels`) | 5 |
+| Whether level toggles re-query in live mode (`EvtxBeforeLoadCriteria.levels`): yes, see 8.3 | 5 |
 | The persistence mechanism for layout state and saved views | 3, 16 |
 | How streamed query batches are routed in `evtx-store.ts`, so that comparison records never reach `records` | 17a |
 | Whether the text-log open path switches the active workspace | 19 |
