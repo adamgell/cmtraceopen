@@ -1,3 +1,4 @@
+import { Button } from "@fluentui/react-components";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAllThemes } from "../../lib/themes";
@@ -10,6 +11,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { EvtxFilterBar, eventLogTimeWindowSnapshotLabel } from "./EvtxFilterBar";
+import { buildFilterChips, type EvtxFilterChipInput } from "./EvtxFilterChips";
 import { moreFiltersActiveCount } from "./EvtxMoreFilters";
 import { EVTX_LEVELS } from "./evtx-filter";
 import { useSavedFilterStore } from "./evtx-filter-store";
@@ -66,6 +68,9 @@ function seed(state: EvtxStateValues = {}) {
     ...state,
   });
 }
+
+/** The spec's glyph for a value with no source (section 15.1), as an escape like Phase 8's. */
+const UNKNOWN = "\u2014";
 
 const toggle = (level: EvtxLevel) => screen.getByRole("button", { name: `Toggle ${level} events` });
 const visibleCount = (button: HTMLElement) => {
@@ -181,9 +186,11 @@ describe("level toggles", () => {
     });
     render(<EvtxFilterBar nowEpoch={0} />);
 
-    expect(visibleCount(toggle("Information"))).toBe("?");
-    expect(toggle("Information")).toHaveAccessibleDescription(
-      /Count unavailable: the live query leaves out Information events/,
+    expect(visibleCount(toggle("Information"))).toBe(UNKNOWN);
+    // Read out as "count not available" for a screen reader; the reason is the sighted tooltip.
+    expect(toggle("Information")).toHaveAccessibleDescription(/^Count not available/);
+    expect(toggle("Information").querySelector("[title]")?.getAttribute("title")).toMatch(
+      /live query leaves out Information events/,
     );
     // Levels that were requested are real counts, including a real zero.
     expect(visibleCount(toggle("Error"))).toBe("4");
@@ -221,12 +228,17 @@ describe("level toggles", () => {
     expect(invoke).not.toHaveBeenCalled();
     expect(useEvtxStore.getState().isLoading).toBe(false);
     expect(toggle("Verbose")).not.toHaveAccessibleDescription(/reloads/);
+    expect(toggle("Information")).not.toHaveAccessibleDescription(/reloads/);
   });
 
   describe("live mode (issue #832: do the toggles re-query?)", () => {
     const queryCalls = () => invoke.mock.calls.filter(([name]) => name === "evtx_query_channels");
+    const settle = () =>
+      act(async () => {
+        for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+      });
 
-    it("re-queries every loaded channel on a toggle, empties the records, and shows the loading state", async () => {
+    it("re-queries every loaded channel when a toggle changes what is sent, and shows the loading state", async () => {
       const reply = deferred<unknown>();
       invoke.mockImplementation(async (name: string) =>
         name === "evtx_query_channels" ? reply.promise : undefined,
@@ -234,41 +246,53 @@ describe("level toggles", () => {
       seed({ sourceMode: "live" });
       render(<EvtxFilterBar nowEpoch={0} />);
 
-      // Said before the click: each toggle names the reload, in its tooltip and its description.
-      expect(toggle("Verbose")).toHaveAccessibleDescription(/Changing a level reloads the loaded channels/);
-      expect(toggle("Verbose").title).toMatch(/reloads the loaded channels/);
+      // Said before the click: deselecting Information pushes a level subset to the service, so
+      // that toggle names the reload, in its tooltip and its description.
+      expect(toggle("Information")).toHaveAccessibleDescription(/Changing this level reloads the loaded channels/);
+      expect(toggle("Information").title).toMatch(/reloads the loaded channels/);
       expect(screen.getByRole("group", { name: "Level" })).toHaveAttribute("aria-busy", "false");
 
-      fireEvent.click(toggle("Verbose"));
+      fireEvent.click(toggle("Information"));
       await waitFor(() => expect(queryCalls()).toHaveLength(1));
 
-      const [, args] = queryCalls()[0] as [string, { channels: string[]; filter: Record<string, unknown> }];
+      const [, args] = queryCalls()[0] as [string, { channels: string[]; filter: { levels?: number[] } }];
       expect(args.channels).toEqual(["Application"]);
-      // Information is still selected, so the level stays a local filter and is not sent: the
-      // reload happens anyway.
-      expect(args.filter).not.toHaveProperty("levels");
+      expect(args.filter.levels).toEqual([1, 2, 3, 5]);
       expect(useEvtxStore.getState().isLoading).toBe(true);
       expect(useEvtxStore.getState().records).toEqual([]);
 
       // The row does not pretend the toggle was instant.
       expect(screen.getByRole("group", { name: "Level" })).toHaveAttribute("aria-busy", "true");
       expect(screen.getByRole("progressbar", { name: "Reloading events" })).toBeInTheDocument();
-      // And an emptied record list is unknown, never zero.
-      expect(EVTX_LEVELS.map((level) => visibleCount(toggle(level)))).toEqual(["?", "?", "?", "?", "?"]);
-      expect(toggle("Error")).toHaveAccessibleDescription(/Count unavailable while events load/);
+      // And an emptied record list is not available, never zero.
+      expect(EVTX_LEVELS.map((level) => visibleCount(toggle(level)))).toEqual(Array(5).fill(UNKNOWN));
+      expect(toggle("Error")).toHaveAccessibleDescription(/^Count not available/);
     });
 
-    it("sends the level predicate once Information is deselected", async () => {
-      invoke.mockImplementation(
-        async (name: string) => (name === "evtx_query_channels" ? new Promise(() => undefined) : undefined),
+    it("does not re-query when the toggle leaves the server filter alone, and does not claim it will", async () => {
+      invoke.mockImplementation(async (name: string) =>
+        name === "evtx_query_channels" ? new Promise(() => undefined) : undefined,
       );
       seed({ sourceMode: "live" });
       render(<EvtxFilterBar nowEpoch={0} />);
 
-      fireEvent.click(toggle("Information"));
-      await waitFor(() => expect(queryCalls()).toHaveLength(1));
-      const [, args] = queryCalls()[0] as [string, { filter: { levels?: number[] } }];
-      expect(args.filter.levels).toEqual([1, 2, 3, 5]);
+      // Information stays selected, so the level predicate is not sent either way.
+      expect(toggle("Verbose")).not.toHaveAccessibleDescription(/reloads/);
+      expect(toggle("Verbose").title).not.toMatch(/reloads/);
+
+      fireEvent.click(toggle("Verbose"));
+      await settle();
+      expect(queryCalls()).toHaveLength(0);
+      expect(useEvtxStore.getState().isLoading).toBe(false);
+      expect(toggle("Verbose")).toHaveAttribute("aria-pressed", "false");
+      expect(screen.getByRole("group", { name: "Level" })).toHaveAttribute("aria-busy", "false");
+    });
+
+    it("names the reload on a toggle that changes the pushed subset while Information is hidden", () => {
+      seed({ sourceMode: "live", filterLevels: new Set<EvtxLevel>(["Critical", "Error"]) });
+      render(<EvtxFilterBar nowEpoch={0} />);
+      expect(toggle("Warning")).toHaveAccessibleDescription(/reloads the loaded channels/);
+      expect(toggle("Critical")).toHaveAccessibleDescription(/reloads the loaded channels/);
     });
   });
 });
@@ -328,27 +352,54 @@ describe("More filters", () => {
     return screen.findByRole("dialog", { name: "More filters" });
   };
 
-  it("counts the event IDs and the quick filter, and nothing else", () => {
-    const quick = { ...useEvtxStore.getState().quickFilter };
-    expect(moreFiltersActiveCount("", quick)).toBe(0);
-    expect(moreFiltersActiveCount("  ", { ...quick, query: "  " })).toBe(0);
-    expect(moreFiltersActiveCount("4624", quick)).toBe(1);
-    expect(moreFiltersActiveCount("", { ...quick, query: "bitlocker" })).toBe(1);
-    expect(moreFiltersActiveCount("4624", { ...quick, query: "bitlocker" })).toBe(2);
-    // Options of the quick filter are not criteria.
+  it("counts every active criterion that is not a level toggle, the search box or the time window", () => {
+    const base: EvtxFilterChipInput = {
+      filterEventIds: "",
+      filterSearch: "",
+      quickFilter: { ...useEvtxStore.getState().quickFilter },
+      selectedChannels: new Set(["System", "Application"]),
+      heldChannels: new Set(["System", "Application"]),
+    };
+    const count = (overrides: Partial<EvtxFilterChipInput> = {}) =>
+      moreFiltersActiveCount(buildFilterChips({ ...base, ...overrides }));
+    const quick = (overrides: Partial<EvtxFilterChipInput["quickFilter"]>) => ({
+      ...base.quickFilter,
+      ...overrides,
+    });
+
+    expect(count()).toBe(0);
+    expect(count({ filterEventIds: "  ", quickFilter: quick({ query: "  " }) })).toBe(0);
+    expect(count({ filterEventIds: "4624" })).toBe(1);
+    expect(count({ quickFilter: quick({ query: "bitlocker" }) })).toBe(1);
+    // A channel subset is a criterion too (spec 8.4 gives it a chip).
+    expect(count({ selectedChannels: new Set(["System"]) })).toBe(1);
     expect(
-      moreFiltersActiveCount("", { ...quick, caseSensitive: true, highlight: false, action: "hide" }),
-    ).toBe(0);
+      count({
+        filterEventIds: "4624",
+        quickFilter: quick({ query: "bitlocker" }),
+        selectedChannels: new Set(["System"]),
+      }),
+    ).toBe(3);
+    // The search box is on the row, so it never counts.
+    expect(count({ filterSearch: "logon" })).toBe(0);
+    // Options of the quick filter are not criteria.
+    expect(count({ quickFilter: quick({ caseSensitive: true, highlight: false, action: "hide" }) })).toBe(0);
   });
 
-  it("shows the active count on the button", () => {
+  it("shows the active count on the button, a channel subset included", () => {
     seed({
       filterEventIds: "4624",
       quickFilter: { ...useEvtxStore.getState().quickFilter, query: "bitlocker" },
       filterSearch: "ignored here",
+      sourceMode: "files",
+      channels: [
+        { name: "Application", eventCount: 1, sourceType: "live" },
+        { name: "System", eventCount: 1, sourceType: "live" },
+      ],
+      selectedChannels: new Set(["Application"]),
     });
     render(<EvtxFilterBar nowEpoch={0} />);
-    expect(screen.getByRole("button", { name: "More filters · 2" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "More filters · 3" })).toBeInTheDocument();
   });
 
   it("holds every control the old filter bar had besides Group by, Columns and Export", async () => {
@@ -379,7 +430,9 @@ describe("More filters", () => {
     render(<EvtxFilterBar nowEpoch={0} />);
     const popover = within(await openPopover());
 
-    fireEvent.change(popover.getByRole("textbox", { name: "Event IDs" }), { target: { value: "4624-4626" } });
+    const eventIds = popover.getByRole("textbox", { name: "Event IDs" });
+    fireEvent.change(eventIds, { target: { value: "4624-4626" } });
+    fireEvent.keyDown(eventIds, { key: "Enter" });
     expect(useEvtxStore.getState().filterEventIds).toBe("4624-4626");
 
     fireEvent.change(popover.getByRole("textbox", { name: "Quick filter query" }), {
@@ -391,6 +444,84 @@ describe("More filters", () => {
     expect(quick.query).toBe("gpsvc");
     expect(quick.caseSensitive).toBe(true);
     expect(quick.highlight).toBe(false);
+  });
+
+  describe("Event IDs are a draft until committed", () => {
+    it("does not touch the store per keystroke, and commits on Enter", async () => {
+      seed();
+      render(<EvtxFilterBar nowEpoch={0} />);
+      const eventIds = within(await openPopover()).getByRole("textbox", { name: "Event IDs" });
+
+      for (const typed of ["4", "46", "462", "4624"]) {
+        fireEvent.change(eventIds, { target: { value: typed } });
+        expect(useEvtxStore.getState().filterEventIds).toBe("");
+      }
+      expect(eventIds).toHaveValue("4624");
+
+      fireEvent.keyDown(eventIds, { key: "Enter" });
+      expect(useEvtxStore.getState().filterEventIds).toBe("4624");
+    });
+
+    it("commits on blur", async () => {
+      seed();
+      render(<EvtxFilterBar nowEpoch={0} />);
+      const eventIds = within(await openPopover()).getByRole("textbox", { name: "Event IDs" });
+      fireEvent.change(eventIds, { target: { value: "7036" } });
+      expect(useEvtxStore.getState().filterEventIds).toBe("");
+      fireEvent.blur(eventIds);
+      expect(useEvtxStore.getState().filterEventIds).toBe("7036");
+    });
+
+    it("never commits an invalid list, on Enter or on blur, and says it is invalid while typing", async () => {
+      seed({ filterEventIds: "7036" });
+      render(<EvtxFilterBar nowEpoch={0} />);
+      const popover = within(await openPopover());
+      const eventIds = popover.getByRole("textbox", { name: "Event IDs" });
+
+      fireEvent.change(eventIds, { target: { value: "7036,abc" } });
+      expect(popover.getByRole("alert", { name: "Invalid Event IDs" })).toBeVisible();
+      fireEvent.keyDown(eventIds, { key: "Enter" });
+      fireEvent.blur(eventIds);
+      expect(useEvtxStore.getState().filterEventIds).toBe("7036");
+
+      fireEvent.change(eventIds, { target: { value: "7036,7040" } });
+      expect(popover.queryByRole("alert")).toBeNull();
+      fireEvent.keyDown(eventIds, { key: "Enter" });
+      expect(useEvtxStore.getState().filterEventIds).toBe("7036,7040");
+    });
+
+    it("follows the store when something else changes the list, such as a chip or Clear all", async () => {
+      seed({ filterEventIds: "7036" });
+      render(<EvtxFilterBar nowEpoch={0} />);
+      const eventIds = within(await openPopover()).getByRole("textbox", { name: "Event IDs" });
+      expect(eventIds).toHaveValue("7036");
+
+      act(() => useEvtxStore.getState().setFilterEventIds(""));
+      expect(eventIds).toHaveValue("");
+    });
+
+    it("keeps the popover open and sends one query on commit in live mode", async () => {
+      invoke.mockImplementation(async (name: string) =>
+        name === "evtx_query_channels" ? new Promise(() => undefined) : undefined,
+      );
+      seed({ sourceMode: "live" });
+      render(<EvtxFilterBar nowEpoch={0} />);
+      const eventIds = within(await openPopover()).getByRole("textbox", { name: "Event IDs" });
+
+      for (const typed of ["4", "46", "462", "4624"]) {
+        fireEvent.change(eventIds, { target: { value: typed } });
+      }
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(invoke).not.toHaveBeenCalledWith("evtx_query_channels", expect.anything());
+
+      fireEvent.keyDown(eventIds, { key: "Enter" });
+      await waitFor(() =>
+        expect(invoke.mock.calls.filter(([name]) => name === "evtx_query_channels")).toHaveLength(1),
+      );
+      expect(screen.getByRole("dialog", { name: "More filters" })).toBeInTheDocument();
+    });
   });
 
   it("changes the quick filter grammar, scope and action without closing the popover", async () => {
@@ -695,5 +826,126 @@ describe("the level toggle in forced-colors mode", () => {
     render(<EvtxFilterBar nowEpoch={0} />);
     const dot = toggle("Error").querySelector<HTMLElement>(`.${DOT}`)!;
     expect(forced(dot, "", "", "forced-color-adjust")).toEqual(["none"]);
+  });
+});
+
+/**
+ * Styles the filter row takes from Fluent or overrides, read from the rules each element carries
+ * (jsdom has no layout, so this is how a regression in them is caught).
+ */
+describe("the filter row's Fluent-default styles", () => {
+  interface CssHit {
+    selector: string;
+    css: string;
+    forcedColors: boolean;
+    /** Where the rule sits in the document's stylesheets: a later rule of equal weight wins. */
+    order: number;
+  }
+  /** Every rule, including those inside @media blocks, whose selector targets one of the element's classes. */
+  function rulesFor(element: Element): CssHit[] {
+    const classes = Array.from(element.classList);
+    const hits: CssHit[] = [];
+    let order = 0;
+    const visit = (rules: CSSRuleList, forcedColors: boolean) => {
+      for (const rule of Array.from(rules)) {
+        order += 1;
+        if (rule instanceof CSSStyleRule) {
+          if (classes.some((name) => rule.selectorText.includes(`.${name}`))) {
+            hits.push({ selector: rule.selectorText, css: rule.cssText, forcedColors, order });
+          }
+        } else if (rule instanceof CSSMediaRule) {
+          visit(rule.cssRules, forcedColors || rule.media.mediaText.includes("forced-colors: active"));
+        }
+      }
+    };
+    for (const sheet of Array.from(document.styleSheets)) visit(sheet.cssRules, false);
+    return hits;
+  }
+  const RING = /\[data-fui-focus-visible\]::after/;
+
+  beforeEach(() => seed({ filterLevels: new Set<EvtxLevel>(["Error"]), filterSearch: "logon" }));
+
+  it("gives More filters Fluent's default secondary appearance at 28 px", () => {
+    render(
+      <>
+        <EvtxFilterBar nowEpoch={0} />
+        <Button size="small" data-reference>
+          reference
+        </Button>
+      </>,
+    );
+    const trigger = screen.getByRole("button", { name: /^More filters/ });
+    const reference = document.querySelector<HTMLElement>("[data-reference]")!;
+    // The same Griffel classes as a plain small Button: no outline, subtle or primary appearance.
+    expect(trigger.className).toBe(reference.className);
+    expect(trigger.style.minHeight).toBe("28px");
+  });
+
+  it("draws the search box with a 1 px colorNeutralStroke1 border all round, bottom edge included", () => {
+    render(<EvtxFilterBar nowEpoch={0} />);
+    const root = screen.getByRole("textbox", { name: "Search events" }).parentElement!;
+    const hits = rulesFor(root);
+    const bottom = (pseudo: string, token: string) =>
+      hits.filter(
+        (hit) =>
+          hit.selector.endsWith(pseudo) &&
+          /border-bottom-color/.test(hit.css) &&
+          hit.css.includes(`var(--${token})`),
+      );
+    // Fluent's own rule for the same edge, which is the accessible stroke the spec does not want.
+    const fluentBottom = hits.filter(
+      (hit) => /border-bottom-color/.test(hit.css) && hit.css.includes("colorNeutralStrokeAccessible)"),
+    );
+    expect(fluentBottom.length).toBeGreaterThan(0);
+
+    for (const [pseudo, token, fluent] of [
+      ["", "colorNeutralStroke1", "colorNeutralStrokeAccessible)"],
+      [":hover", "colorNeutralStroke1Hover", "colorNeutralStrokeAccessibleHover)"],
+      [":focus-within", "colorNeutralStroke1Pressed", "colorNeutralStrokeAccessiblePressed)"],
+    ] as const) {
+      const override = bottom(pseudo, token);
+      expect(override.length, `${pseudo || "rest"} bottom edge ${token}`).toBe(1);
+      const theirs = hits.filter(
+        (hit) =>
+          /border-bottom-color/.test(hit.css) &&
+          hit.css.includes(fluent) &&
+          (pseudo === "" ? !/:hover|:focus-within|:active/.test(hit.selector) : hit.selector.includes(pseudo)),
+      );
+      if (pseudo === "") {
+        // Fluent draws the rest edge from a reset style, which cannot be replaced by class: ours
+        // is the later rule of equal weight, so it wins.
+        for (const rule of theirs) expect(override[0].order).toBeGreaterThan(rule.order);
+      } else {
+        // The hover and focus keys are Fluent's own atomic classes, so ours replaced them outright.
+        expect(theirs, `${pseudo} left Fluent's accessible stroke on the element`).toEqual([]);
+      }
+    }
+  });
+
+  it("draws the toggle's focus ring with Fluent's focus indicator, not a custom outline", () => {
+    render(<EvtxFilterBar nowEpoch={0} />);
+    for (const level of ["Error", "Warning"] as const) {
+      const hits = rulesFor(toggle(level)).filter((hit) => !hit.forcedColors);
+      const ring = hits.filter((hit) => RING.test(hit.selector));
+      expect(ring.map((hit) => hit.css).join(" "), `${level} ring`).toMatch(/colorStrokeFocus2/);
+      // No hand-written :focus-visible outline in the toggle's own classes.
+      expect(
+        hits.filter((hit) => /:focus-visible/.test(hit.selector) && /outline-color/.test(hit.css) && /colorStrokeFocus2/.test(hit.css)),
+        `${level} custom outline`,
+      ).toEqual([]);
+    }
+  });
+
+  it("keeps the ring visible in forced colors on a pressed toggle that is not color-adjusted", () => {
+    render(<EvtxFilterBar nowEpoch={0} />);
+    const pressed = toggle("Error");
+    expect(pressed).toHaveAttribute("aria-pressed", "true");
+    const forced = rulesFor(pressed).filter((hit) => hit.forcedColors);
+    // The block opts out of forced colors, which would also exempt a ring left on its theme color.
+    expect(forced.some((hit) => /forced-color-adjust:\s*none/.test(hit.css))).toBe(true);
+    // So the ring is drawn in a system color that contrasts with the page behind the block.
+    const ring = forced.filter((hit) => RING.test(hit.selector));
+    expect(ring.map((hit) => hit.css).join(" ")).toMatch(/canvastext/i);
+    expect(ring.map((hit) => hit.css).join(" ")).not.toMatch(/\bHighlight\b(?!Text)/i);
   });
 });

@@ -515,6 +515,18 @@ export function EventLogWorkspace() {
     [analysisStatus],
   );
 
+  // The full-screen spinner is for a source's first load only: until this mounted workspace has
+  // shown records for the current source. A later refresh (a live level or Event ID change empties
+  // the records and reloads the loaded channels) keeps the view bar, filter row, chip row, channel
+  // pane and rail mounted, so the control that was just used keeps its focus, an open popover stays
+  // open, and the filter row shows its own busy state. `sourceMode === null` is no source (reset, or
+  // a file parse that has not finished), which makes the next load a first load again.
+  const shownRecordsRef = useRef(false);
+  useEffect(() => {
+    if (sourceMode === null) shownRecordsRef.current = false;
+    else if (records.length > 0) shownRecordsRef.current = true;
+  }, [sourceMode, records.length]);
+
   const hasData =
     scopedLogEntries.length > 0 ||
     (sourceMode !== null &&
@@ -599,7 +611,7 @@ export function EventLogWorkspace() {
     return <SourcePicker />;
   }
 
-  if (isLoading && records.length === 0) {
+  if (isLoading && records.length === 0 && !shownRecordsRef.current) {
     return (
       <div
         style={{

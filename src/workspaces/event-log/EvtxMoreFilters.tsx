@@ -6,7 +6,7 @@
  * stay reachable, so they sit in a "Display" section here. They are not criteria and do not count
  * toward the button's number.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Button,
   Checkbox,
@@ -24,11 +24,11 @@ import {
   EVTX_QUICK_FILTER_MODES,
   EVTX_QUICK_FILTER_SCOPES,
   parseEventIdSelectors,
-  type EvtxQuickFilter,
   type EvtxQuickFilterAction,
   type EvtxQuickFilterMode,
   type EvtxQuickFilterScope,
 } from "./evtx-filter";
+import { useFilterChips, type EvtxFilterChip } from "./EvtxFilterChips";
 import { useSavedFilterStore } from "./evtx-filter-store";
 import { orderFilters, sanitizeCriteria } from "./evtx-saved-filters";
 import { timeZoneLabel } from "./evtx-time";
@@ -67,16 +67,14 @@ const QUICK_FILTER_ACTION_LABELS: Record<EvtxQuickFilterAction, string> = {
 };
 
 /**
- * Active criteria that only this popover controls: the event IDs and the quick filter. The level
- * toggles, the search box and the time window are on the row itself, and the channel selection has
- * its own pane, so counting them here would show a number that opening the popover cannot explain.
- * Case, highlight, mode, scope and action tune the quick filter and are not criteria of their own.
+ * The number on the button: every active criterion that is not visible on the filter row as a level
+ * toggle, the search box or the time window (spec 8.3). Those are the chips other than the search
+ * text: a channel subset, Event IDs and the quick filter, and later the transient time range and
+ * record scope. Case, highlight, mode, scope and action tune the quick filter and are not criteria
+ * of their own, and sort and the time zone are not criteria at all.
  */
-export function moreFiltersActiveCount(
-  filterEventIds: string,
-  quickFilter: EvtxQuickFilter,
-): number {
-  return (filterEventIds.trim() ? 1 : 0) + (quickFilter.query.trim() ? 1 : 0);
+export function moreFiltersActiveCount(chips: readonly EvtxFilterChip[]): number {
+  return chips.filter((chip) => chip.id !== "search").length;
 }
 
 interface EvtxMoreFiltersProps {
@@ -99,15 +97,26 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
   const setBeforeLoadCriteria = useEvtxStore((s) => s.setBeforeLoadCriteria);
   const setFilterSearch = useEvtxStore((s) => s.setFilterSearch);
 
+  // Event IDs are a before-load criterion: committing a list refetches the loaded channels in live
+  // mode. So the field edits a draft, and the list is committed on Enter or blur, never per
+  // keystroke, and never while it is invalid ("4624,abc" would otherwise be sent on the way to a
+  // valid list). The draft follows the store when something else changes it: a chip, Clear all or
+  // a saved filter.
+  const [eventIdsDraft, setEventIdsDraft] = useState(filterEventIds);
+  useEffect(() => setEventIdsDraft(filterEventIds), [filterEventIds]);
   const eventIdInputInvalid = useMemo(
-    () => parseEventIdSelectors(filterEventIds).invalid,
-    [filterEventIds],
+    () => parseEventIdSelectors(eventIdsDraft).invalid,
+    [eventIdsDraft],
   );
+  const commitEventIds = () => {
+    if (eventIdInputInvalid || eventIdsDraft === filterEventIds) return;
+    setFilterEventIds(eventIdsDraft);
+  };
   const quickEventIdInputInvalid = useMemo(
     () => quickFilter.mode === "eventIds" && parseEventIdSelectors(quickFilter.query).invalid,
     [quickFilter.mode, quickFilter.query],
   );
-  const activeCount = moreFiltersActiveCount(filterEventIds, quickFilter);
+  const activeCount = moreFiltersActiveCount(useFilterChips().chips);
 
   const savedFilters = useSavedFilterStore((s) => s.savedFilters);
   const saveFilter = useSavedFilterStore((s) => s.save);
@@ -174,7 +183,6 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
       <PopoverTrigger disableButtonEnhancement>
         <Button
           size="small"
-          appearance="outline"
           title="Event IDs, the quick filter, saved filters, sort and time zone"
           style={{
             minWidth: "auto",
@@ -206,8 +214,12 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
               aria-invalid={eventIdInputInvalid}
               aria-describedby={eventIdInputInvalid ? "event-id-filter-error" : undefined}
               title={eventIdInputInvalid ? EVENT_ID_VALIDATION_HELP : undefined}
-              value={filterEventIds}
-              onChange={(_, data) => setFilterEventIds(data.value)}
+              value={eventIdsDraft}
+              onChange={(_, data) => setEventIdsDraft(data.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") commitEventIds();
+              }}
+              onBlur={commitEventIds}
               placeholder="Event IDs (comma sep.)"
               size="small"
               style={{

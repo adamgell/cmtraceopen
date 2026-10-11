@@ -6,24 +6,21 @@
  * the view bar in Phase 3. Event IDs, the quick filter, saved filters, sort and the time zone are
  * in the More filters popover (`EvtxMoreFilters`), one open away.
  *
- * Do the level toggles re-query in live mode? Yes, verified in Phase 5 (issue #832). In live mode
- * with at least one loaded channel, every toggle calls `refreshBeforeLoad` in `evtx-store.ts`, which
- * runs `refreshLoadedChannels`: it empties `records`, sets `isLoading` and queries every loaded
- * channel again. The level predicate only reaches the service when it is a strict subset without
- * Information (`levelsFilteredAtSource`); the reload happens either way. In file mode a toggle is a
- * local filter and nothing is queried.
- *
- * What the operator sees in the full workspace: the emptied records make `EventLogWorkspace` return
- * its full-screen "Loading event logs..." spinner (`isLoading && records.length === 0`), which
- * unmounts this row, the toggle just pressed and keyboard focus until the first batch streams in
- * (pinned in EventLogWorkspace.test.tsx; a finding for Main, not changed here because the early
- * return also governs the first live load). This row's own loading state shows once batches
- * repopulate `records` while `isLoading` continues: the group is `aria-busy`, a spinner shows beside
- * it, the counts read as unknown rather than zero, and each toggle's description says it reloads.
+ * Do the level toggles re-query in live mode? Only when they change what the service is asked for
+ * (verified in Phase 5, issue #832). In live mode with a loaded channel, a before-load change that
+ * alters `serverFilterKey` makes the store refetch every loaded channel: it empties `records` and
+ * sets `isLoading`. While Information is selected the level predicate is never sent
+ * (`levelsFilteredAtSource`), so toggling any other level is a local filter and nothing reloads;
+ * toggling Information, or a level while it is deselected, changes the pushed subset and reloads.
+ * File mode never reloads. The row says which toggles reload (tooltip and description). The
+ * workspace keeps this row mounted through a refresh, so while it runs the group is `aria-busy`, a
+ * spinner shows beside it and the counts read as not available rather than zero.
  */
 import { useMemo, type CSSProperties } from "react";
 import {
   Badge,
+  createCustomFocusIndicatorStyle,
+  createFocusOutlineStyle,
   Dropdown,
   Input,
   Option,
@@ -34,7 +31,12 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { Search16Regular } from "@fluentui/react-icons";
-import { countByLevel, EVTX_LEVELS, levelsFilteredAtSource } from "./evtx-filter";
+import {
+  countByLevel,
+  EVTX_LEVELS,
+  levelsAfterToggle,
+  levelsFilteredAtSource,
+} from "./evtx-filter";
 import {
   LEVEL_TOGGLE_BACKGROUNDS,
   LEVEL_TOGGLE_STATES,
@@ -43,11 +45,12 @@ import {
   type LevelToggleStateVisual,
 } from "./evtx-level-toggle";
 import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
+import { EVTX_SEARCH_INPUT_ID } from "./EvtxFilterChips";
 import { EvtxMoreFilters } from "./EvtxMoreFilters";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
-import { useEvtxStore } from "./evtx-store";
+import { serverFilterKey, useEvtxStore } from "./evtx-store";
 import type { EvtxLevel, EvtxTimeWindow } from "./types";
 import { EVTX_TIME_WINDOW_LABELS } from "./types";
 
@@ -62,10 +65,14 @@ const LEVEL_TOGGLE_LABELS: Record<EvtxLevel, string> = {
   Verbose: "Verbose",
 };
 
-/** Shown in place of a count that is not known. Never zero: unknown is not "none". */
-const UNKNOWN_COUNT = "?";
+/**
+ * Shown in place of a count that is not available: the spec's glyph for a value with no source
+ * (section 15.1), written as an escape. Never zero: unknown is not "none".
+ */
+const UNKNOWN_COUNT = "\u2014";
+const UNKNOWN_COUNT_TEXT = "Count not available";
 
-const RELOAD_NOTE = "Changing a level reloads the loaded channels from the live log.";
+const RELOAD_NOTE = "Changing this level reloads the loaded channels from the live log.";
 
 /** Plain class names on the dot and the count, so a toggle's state rules can reach them. */
 const DOT_CLASS = "evtx-level-dot";
@@ -79,6 +86,12 @@ const COUNT_CLASS = "evtx-level-count";
  * level color inside a CanvasText ring, and a dot on a pressed toggle rings in HighlightText.
  */
 const FORCED_COLORS = "@media (forced-colors: active)";
+// Fluent's focus ring is a Highlight pseudo-element, and on a Highlight block it would disappear into
+// the block (the block is not forced-color-adjusted, so the theme would not rescue it). CanvasText
+// is drawn against the page behind the ring and the block.
+const FORCED_PRESSED_FOCUS = createCustomFocusIndicatorStyle({
+  "::after": { ...shorthands.borderColor("CanvasText") },
+});
 const FORCED_PRESSED = {
   backgroundColor: "Highlight",
   ...shorthands.borderColor("Highlight"),
@@ -134,12 +147,8 @@ const useStyles = makeStyles({
       [`& .${COUNT_CLASS}`]: { color: "var(--evtx-level-count-active)" },
       [`& .${DOT_CLASS}`]: { outlineColor: "var(--evtx-level-ring-active)" },
     },
-    ":focus-visible": {
-      outlineStyle: "solid",
-      outlineWidth: "2px",
-      outlineColor: tokens.colorStrokeFocus2,
-      outlineOffset: "1px",
-    },
+    // Fluent's default focus indicator, a ring drawn around this positioned box.
+    ...createFocusOutlineStyle(),
     [FORCED_COLORS]: {
       [`& .${DOT_CLASS}`]: { outlineColor: "CanvasText" },
       ":hover": { [`& .${DOT_CLASS}`]: { outlineColor: "CanvasText" } },
@@ -175,6 +184,7 @@ const useStyles = makeStyles({
       ...FORCED_PRESSED,
       ":hover": FORCED_PRESSED,
       ":active": FORCED_PRESSED,
+      ...FORCED_PRESSED_FOCUS,
     },
   },
   dot: {
@@ -200,6 +210,14 @@ const useStyles = makeStyles({
     overflow: "hidden",
     clipPath: "inset(50%)",
     whiteSpace: "nowrap",
+  },
+  // Fluent's outline Input draws its bottom edge in colorNeutralStrokeAccessible; spec 8.3 asks for a
+  // plain 1 px colorNeutralStroke1 border all round, so only the bottom edge is overridden here.
+  search: {
+    borderBottomColor: tokens.colorNeutralStroke1,
+    ":hover": { borderBottomColor: tokens.colorNeutralStroke1Hover },
+    // The key must match Fluent's own (no space after the comma) so that this replaces its class.
+    ":active,:focus-within": { borderBottomColor: tokens.colorNeutralStroke1Pressed },
   },
   searchSlot: {
     display: "flex",
@@ -248,6 +266,8 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   const setFilterSearch = useEvtxStore((s) => s.setFilterSearch);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
   const setTimeWindow = useEvtxStore((s) => s.setTimeWindow);
+  const filterEventIds = useEvtxStore((s) => s.filterEventIds);
+  const loadedChannels = useEvtxStore((s) => s.loadedChannels);
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const isLoading = useEvtxStore((s) => s.isLoading);
 
@@ -274,6 +294,14 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   const leftOutAtSource = live && levelsFilteredAtSource(filterLevels);
   const countIsKnown = (level: EvtxLevel) =>
     !isLoading && (!leftOutAtSource || filterLevels.has(level));
+  // A toggle reloads the loaded channels only when it changes what the service is asked for. The
+  // store makes the same comparison (`serverFilterKey`) before it refetches.
+  const currentServerKey = serverFilterKey(timeWindow, filterEventIds, filterLevels);
+  const reloadsOnToggle = (level: EvtxLevel) =>
+    live &&
+    loadedChannels.size > 0 &&
+    serverFilterKey(timeWindow, filterEventIds, levelsAfterToggle(filterLevels, level)) !==
+      currentServerKey;
 
   const timeWindowSnapshotLabel = useMemo(
     () => eventLogTimeWindowSnapshotLabel(timeWindow, nowEpoch),
@@ -299,6 +327,8 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
     >
       <div className={styles.searchSlot}>
         <Input
+          id={EVTX_SEARCH_INPUT_ID}
+          className={styles.search}
           aria-label="Search events"
           contentBefore={<Search16Regular aria-hidden />}
           input={{ style: { fontSize: controlFontSize } }}
@@ -325,11 +355,14 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
           const pressed = filterLevels.has(level);
           const known = countIsKnown(level);
           const descriptionId = `evtx-level-count-${level}`;
-          const description = known
+          const countText = known
             ? `${levelCounts[level].toLocaleString()} ${levelCounts[level] === 1 ? "event" : "events"} loaded`
-            : isLoading
-              ? "Count unavailable while events load"
-              : `Count unavailable: the live query leaves out ${level} events while this level is hidden`;
+            : UNKNOWN_COUNT_TEXT;
+          // Why the count is not available, for a sighted operator's tooltip.
+          const unknownReason = isLoading
+            ? "Events are loading"
+            : `The live query leaves out ${level} events while this level is hidden`;
+          const reloads = reloadsOnToggle(level);
           return (
             <button
               key={level}
@@ -338,7 +371,7 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
               aria-label={`Toggle ${level} events`}
               aria-pressed={pressed}
               aria-describedby={descriptionId}
-              title={live ? `Toggle ${level} events. ${RELOAD_NOTE}` : `Toggle ${level} events`}
+              title={reloads ? `Toggle ${level} events. ${RELOAD_NOTE}` : `Toggle ${level} events`}
               onClick={() => toggleFilterLevel(level)}
               style={{ fontSize: toggleFontSize }}
             >
@@ -351,12 +384,12 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
               <span
                 aria-hidden
                 className={mergeClasses(COUNT_CLASS, styles.count)}
-                title={known ? undefined : description}
+                title={known ? undefined : unknownReason}
               >
                 {known ? levelCounts[level].toLocaleString() : UNKNOWN_COUNT}
               </span>
               <span id={descriptionId} className={styles.visuallyHidden}>
-                {live ? `${description}. ${RELOAD_NOTE}` : description}
+                {reloads ? `${countText}. ${RELOAD_NOTE}` : countText}
               </span>
             </button>
           );

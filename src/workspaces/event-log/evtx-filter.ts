@@ -75,6 +75,20 @@ export function levelsFilteredAtSource(levels: ReadonlySet<EvtxLevel>): boolean 
   return levels.size > 0 && levels.size < EVTX_LEVELS.length && !levels.has("Information");
 }
 
+/**
+ * The level selection after one toggle: the level flips, and emptying the selection selects every
+ * level again, since "no level" is never a view the operator wants.
+ */
+export function levelsAfterToggle(
+  levels: ReadonlySet<EvtxLevel>,
+  level: EvtxLevel,
+): Set<EvtxLevel> {
+  const next = new Set(levels);
+  if (next.has(level)) next.delete(level);
+  else next.add(level);
+  return next.size === 0 ? new Set(EVTX_LEVELS) : next;
+}
+
 export function sortRecords(
   records: readonly EvtxRecord[],
   field: EvtxSortField,

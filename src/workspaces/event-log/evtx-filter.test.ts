@@ -3,6 +3,7 @@ import {
   countByLevel,
   EVTX_LEVELS,
   isWithinTimeWindow,
+  levelsAfterToggle,
   levelsFilteredAtSource,
   parseEventIdSelectors,
   selectVisibleRecords,
@@ -46,7 +47,7 @@ const visible = (
   selectVisibleRecords({
     records,
     selectedChannels: new Set(["Application"]),
-    filterLevels: new Set(["Critical", "Error", "Warning", "Information", "Verbose"]),
+    filterLevels: new Set(EVTX_LEVELS),
     filterEventIds: "",
     filterSearch: "",
     quickFilter,
@@ -345,5 +346,21 @@ describe("levelsFilteredAtSource", () => {
 
   it("is false for an empty selection, which the store never sends", () => {
     expect(levelsFilteredAtSource(set())).toBe(false);
+  });
+});
+
+describe("levelsAfterToggle", () => {
+  const set = (...levels: EvtxLevel[]) => new Set<EvtxLevel>(levels);
+
+  it("flips one level without touching the others or the input", () => {
+    const before = set(...EVTX_LEVELS);
+    const after = levelsAfterToggle(before, "Verbose");
+    expect([...after]).toEqual(["Critical", "Error", "Warning", "Information"]);
+    expect(before.has("Verbose")).toBe(true);
+    expect(levelsAfterToggle(after, "Verbose").has("Verbose")).toBe(true);
+  });
+
+  it("selects every level again when the last one is toggled off", () => {
+    expect([...levelsAfterToggle(set("Error"), "Error")].sort()).toEqual([...EVTX_LEVELS].sort());
   });
 });
