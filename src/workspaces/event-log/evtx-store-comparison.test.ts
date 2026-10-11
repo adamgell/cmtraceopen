@@ -224,6 +224,9 @@ describe("routing comparison batches", () => {
     const session = beginLiveComparison({
       window: "24h",
       anchorEpoch: ANCHOR,
+      anchorBasis: "load",
+      remote: false,
+      currentPeriodGaps: [],
       channels: ["System"],
       visibility: sharedVisibility,
       cancelQuery: vi.fn(),
@@ -619,6 +622,7 @@ describe("comparing loaded files with their previous period", () => {
       fileRecord({ timestampEpoch: PRIOR_FROM }),
       fileRecord({ timestampEpoch: PRIOR_FROM + HOUR, level: "Error", eventId: 55 }),
       fileRecord({ timestampEpoch: PRIOR_TO }),
+      fileRecord({ timestampEpoch: ANCHOR }),
     ];
     resetStore({ sourceMode: "files", records, loadedChannels: new Set<string>() });
 

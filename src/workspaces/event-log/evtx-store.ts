@@ -2790,6 +2790,8 @@ export async function comparePreviousPeriod(anchorEpoch: number): Promise<void> 
       window: state.timeWindow,
       anchorEpoch,
       visibility,
+      coverageDetails: state.coverageDetails,
+      sourceCoverage: state.sourceManifest?.coverage ?? [],
     });
     return;
   }
@@ -2823,6 +2825,9 @@ export async function comparePreviousPeriod(anchorEpoch: number): Promise<void> 
   const session = beginLiveComparison({
     window: state.timeWindow,
     anchorEpoch,
+    anchorBasis: "load",
+    remote: state.remoteMachine !== null,
+    currentPeriodGaps: [],
     channels,
     visibility,
     cancelQuery: (requestId) => {

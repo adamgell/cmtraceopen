@@ -20,6 +20,8 @@ import { assertParseResultShape, formatCoverageGap } from "./evtx-coverage";
 import { selectVisibleRecords, type VisibleRecordsInput } from "./evtx-filter";
 import {
   EVTX_TIME_WINDOW_MS,
+  type EventLogSourceCoverage,
+  type EvtxCoverageGap,
   type EvtxLevel,
   type EvtxParseResult,
   type EvtxRecord,
@@ -58,11 +60,19 @@ export type PriorWindowResult =
 /**
  * The previous period for a current window, anchored at `anchorEpoch`.
  *
- * `anchorEpoch` is the instant the current window is measured from: the workspace's `nowEpoch`,
- * the same value `isWithinTimeWindow` subtracts the window from. The current window owns
- * `[anchor - length, ...)`. The service treats both `between` bounds as inclusive, so the previous
- * period ends at `anchor - length - 1` ms; ending it at `anchor - length` would count an event
- * stamped on that exact millisecond in both periods.
+ * `anchorEpoch` is the instant the current window was measured from. For a live source that is the
+ * instant its load evaluated the window, because the workspace's `nowEpoch` keeps moving after the
+ * load; for loaded files it is the workspace's `nowEpoch`, the value `isWithinTimeWindow`
+ * subtracts the window from. The current window owns `[anchor - length, ...)`. The service treats
+ * both `between` bounds as inclusive, so the previous period ends at `anchor - length - 1` ms;
+ * ending it at `anchor - length` would count an event stamped on that exact millisecond in both
+ * periods.
+ *
+ * Both periods are computed on this computer's clock. For a local source that is the clock that
+ * stamps the events. For a remote source, skew between the two machines shifts the boundary: the
+ * current period was cut by the target's clock (a `last` window is evaluated there) while the
+ * previous period is cut by this one. The comparison cannot measure that skew, so the outcome for
+ * a remote source carries a note saying whose clock the periods use.
  *
  * "All time" has no length and so no previous period. That is a different answer from "the files
  * do not cover it", and the caller words the two differently.
@@ -84,6 +94,14 @@ export function computePriorWindow(window: EvtxTimeWindow, anchorEpoch: number):
     };
   }
   const fromMs = anchorEpoch - 2 * lengthMs;
+  // Whole-millisecond bounds, with a known hole. The service compares @SystemTime at (inferred, not
+  // yet verified on Windows) 100 ns resolution, while the native parser truncates an event's time
+  // to whole milliseconds. An event stamped strictly between this bound and `anchor - length`, for
+  // example 11:59:59.9995 against a bound of 11:59:59.999, is excluded by the inclusive `to` sent
+  // to the service, and its truncated epoch puts it before the current window, so on a live source
+  // it can fall in neither period. The sliver is under one millisecond wide. Closing it means
+  // sending a seven-digit bound (...9999999Z) once the Windows lab has confirmed the service
+  // accepts one; until then a test pins the millisecond form.
   const toMs = anchorEpoch - lengthMs - 1;
   if (
     !Number.isSafeInteger(anchorEpoch) ||
@@ -220,16 +238,32 @@ export function createAggregator(
 
 export type ComparisonMode = "files" | "live";
 
+/**
+ * Where the anchor came from. `load` is the instant the current load evaluated its window, `tail`
+ * the latest live-tail batch after it, and `clock` the workspace's `nowEpoch` (loaded files).
+ * `result.prior.anchorEpoch` is the anchor itself.
+ */
+export type ComparisonAnchorBasis = "load" | "tail" | "clock";
+
 export interface ComparisonResult {
   mode: ComparisonMode;
   /** The current window, for copy such as "vs prior 24 h". */
   window: ComparableWindow;
   prior: PriorWindow;
+  anchorBasis: ComparisonAnchorBasis;
   counts: ComparisonCounts;
-  /** Why the counts may understate the previous period. Empty exactly when the status is complete. */
+  /**
+   * Why the counts may understate the previous period or misrepresent the current one. Empty
+   * exactly when the status is complete.
+   */
   gaps: string[];
+  /** Context the reader should see that is not a shortfall, such as whose clock cut the periods. */
+  notes: string[];
   unplacedRecords: number;
-  /** Queried channels that could not be read. Absent from `counts.channels`, never counted as 0. */
+  /**
+   * Queried channels that could not be read. Absent from `counts.channels`, never counted as 0. A
+   * channel that was read in full and held no events is present with a count of 0.
+   */
   unreadChannels: string[];
 }
 
@@ -250,8 +284,16 @@ export type ComparisonOutcome =
 
 const FILES_NOT_COVERED = "The loaded files do not cover the previous period.";
 
+/** One loaded capture: the events of one channel from one source, and the span they cover. */
+export interface FilesCapture {
+  source: string;
+  channel: string;
+  earliestMs: number;
+  latestMs: number;
+}
+
 export type FilesCoverage =
-  | { covered: true }
+  | { covered: true; captures: FilesCapture[] }
   | {
       covered: false;
       reason: "noTimedRecords" | "priorPeriodNotSpanned";
@@ -263,52 +305,61 @@ export type FilesCoverage =
  *
  * A capture covers the period when its earliest timed event is at or before the period's start and
  * its latest timed event is at or after the period's end: the log was already running when the
- * period began and was still being written when it finished, so a quiet stretch inside it is a
- * real absence of events and not a hole in the capture.
+ * period began and was still being written when it finished, so a quiet stretch inside it is a real
+ * absence of events. That holds only while the load itself reported no hole, such as a damaged
+ * chunk or an exhausted record budget; `compareLoadedFiles` carries those as gaps.
  *
  * Event logs roll over per channel, and two files can share a channel name, so the test is made per
  * (source, channel) over the selected channels. Pooled, one deep capture would vouch for a shallow
  * one. Records without a usable timestamp are excluded from the span and cannot prove anything.
+ *
+ * The spans are returned so the caller can also ask whether each capture reaches the anchor, which
+ * is where the current period ends.
  */
 export function checkFilesCoverage(
   records: readonly EvtxRecord[],
   selectedChannels: ReadonlySet<string>,
   prior: PriorWindow
 ): FilesCoverage {
-  const spans = new Map<string, { earliest: number; latest: number }>();
+  const captures = new Map<string, FilesCapture>();
   for (const candidate of records) {
     if (!selectedChannels.has(candidate.channel)) continue;
     const key = `${candidate.sourceLabel}\u0000${candidate.channel}`;
-    let span = spans.get(key);
-    if (!span) {
-      span = { earliest: Number.POSITIVE_INFINITY, latest: Number.NEGATIVE_INFINITY };
-      spans.set(key, span);
+    let capture = captures.get(key);
+    if (!capture) {
+      capture = {
+        source: candidate.sourceLabel,
+        channel: candidate.channel,
+        earliestMs: Number.POSITIVE_INFINITY,
+        latestMs: Number.NEGATIVE_INFINITY,
+      };
+      captures.set(key, capture);
     }
     if (!hasUsableTimestamp(candidate.timestampEpoch)) continue;
-    span.earliest = Math.min(span.earliest, candidate.timestampEpoch);
-    span.latest = Math.max(span.latest, candidate.timestampEpoch);
+    capture.earliestMs = Math.min(capture.earliestMs, candidate.timestampEpoch);
+    capture.latestMs = Math.max(capture.latestMs, candidate.timestampEpoch);
   }
 
-  if (spans.size === 0) {
+  if (captures.size === 0) {
     return {
       covered: false,
       reason: "noTimedRecords",
       detail: "No events are loaded for the selected channels.",
     };
   }
-  for (const span of spans.values()) {
-    if (span.earliest === Number.POSITIVE_INFINITY) {
+  for (const capture of captures.values()) {
+    if (capture.earliestMs === Number.POSITIVE_INFINITY) {
       return {
         covered: false,
         reason: "noTimedRecords",
         detail: "A loaded capture has no event with a usable timestamp.",
       };
     }
-    if (span.earliest > prior.fromMs || span.latest < prior.toMs) {
+    if (capture.earliestMs > prior.fromMs || capture.latestMs < prior.toMs) {
       return { covered: false, reason: "priorPeriodNotSpanned", detail: FILES_NOT_COVERED };
     }
   }
-  return { covered: true };
+  return { covered: true, captures: [...captures.values()] };
 }
 
 function plural(count: number, singular: string, pluralForm: string): string {
@@ -321,15 +372,82 @@ function unplacedGap(count: number, scope: "files" | "live"): string {
     : `${count} ${plural(count, "event has", "events have")} no usable timestamp and could not be placed in the previous period.`;
 }
 
+/** A length of time as the largest two units that matter, for gap text. */
+function formatSpan(ms: number): string {
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))} ms`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds} s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) {
+    const rest = minutes % 60;
+    return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+  }
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return restHours === 0 ? `${days} d` : `${days} d ${restHours} h`;
+}
+
+function isoOrUnknown(epochMs: number): string {
+  return Number.isNaN(new Date(epochMs).getTime()) ? "an unknown time" : new Date(epochMs).toISOString();
+}
+
+/** The most gap lines one cause may add; the rest are counted, not listed. */
+const MAX_LISTED_GAPS = 5;
+
+function limitGapLines(lines: readonly string[]): string[] {
+  if (lines.length <= MAX_LISTED_GAPS) return [...lines];
+  return [
+    ...lines.slice(0, MAX_LISTED_GAPS),
+    `and ${lines.length - MAX_LISTED_GAPS} more not shown.`,
+  ];
+}
+
+/**
+ * Whether a text criterion could be silently changing the count.
+ *
+ * A provider-description gap means an event's message text was not rendered. That leaves every
+ * count intact until a criterion reads the message: a search, or a quick filter whose scope
+ * includes the message column. Then an event can drop out of the view on text it never had.
+ */
+export function messageTextCriterionActive(visibility: ComparisonVisibility): boolean {
+  if (visibility.filterSearch.trim() !== "") return true;
+  const quick = visibility.quickFilter;
+  if (!quick || quick.query.trim() === "" || quick.mode === "eventIds") return false;
+  return (
+    quick.scope === "allColumns" ||
+    visibility.visibleColumns === undefined ||
+    visibility.visibleColumns.includes("message")
+  );
+}
+
+/** A coverage gap that can change a count, or that could while a text criterion is active. */
+function gapAffectsCounts(kind: EvtxCoverageGap["kind"], visibility: ComparisonVisibility): boolean {
+  return kind !== "provider" || messageTextCriterionActive(visibility);
+}
+
 export interface FilesComparisonInput {
   records: readonly EvtxRecord[];
   window: EvtxTimeWindow;
+  /** The workspace's `nowEpoch`: the instant the current window is measured from. */
   anchorEpoch: number;
   visibility: ComparisonVisibility;
+  /** Structured gaps the load recorded (damaged chunks and records, XML, record budget). */
+  coverageDetails: readonly EvtxCoverageGap[];
+  /** Sources the manifest could not read or truncated. */
+  sourceCoverage: readonly EventLogSourceCoverage[];
 }
 
 /**
  * The previous-period counts computed from the records already loaded, or why they cannot be.
+ *
+ * The outcome is `partial`, with the shortfall stated, when:
+ * - a loaded capture ends before the anchor, so part of the current period is not in the files (a
+ *   capture older than the anchor never covers the current period it is compared with);
+ * - the load reported a hole in a selected source (a damaged chunk, an exhausted record budget, a
+ *   source it could not read); or
+ * - visible events have no usable timestamp.
  *
  * Pure, so a caller can ask it whether the comparison is available (to disable a button) without
  * publishing anything.
@@ -347,15 +465,62 @@ export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutco
   const aggregator = createAggregator(prior, input.visibility);
   aggregator.add(input.records);
   const tally = aggregator.finish();
-  const gaps = tally.unplacedRecords > 0 ? [unplacedGap(tally.unplacedRecords, "files")] : [];
+
+  const gaps: string[] = [];
+  const shortCaptures = coverage.captures
+    .filter((capture) => capture.latestMs < prior.anchorEpoch)
+    .sort((a, b) => a.latestMs - b.latestMs);
+  gaps.push(
+    ...limitGapLines(
+      shortCaptures.map(
+        (capture) =>
+          `${capture.source} (${capture.channel}) has no events after ${isoOrUnknown(capture.latestMs)}, so the last ${formatSpan(prior.anchorEpoch - capture.latestMs)} of the current period is not covered.`
+      )
+    )
+  );
+
+  // Holes the load itself reported. A source the loaded records never mention might hold any of the
+  // selected channels, so its gaps are carried; a source whose records are all in unselected
+  // channels is not what this comparison counts.
+  const knownSources = new Set<string>();
+  const selectedSources = new Set<string>();
+  for (const candidate of input.records) {
+    knownSources.add(candidate.sourceLabel);
+    if (input.visibility.selectedChannels.has(candidate.channel)) {
+      selectedSources.add(candidate.sourceLabel);
+    }
+  }
+  const carried = new Map<string, string>();
+  for (const gap of input.coverageDetails) {
+    if (!gapAffectsCounts(gap.kind, input.visibility)) continue;
+    if (knownSources.has(gap.source) && !selectedSources.has(gap.source)) continue;
+    carried.set(formatCoverageGap(gap), gap.source);
+  }
+  for (const entry of input.sourceCoverage) carried.set(`${entry.path}: ${entry.reason}`, entry.path);
+  gaps.push(...limitGapLines([...carried.keys()]));
+
+  if (tally.unplacedRecords > 0) gaps.push(unplacedGap(tally.unplacedRecords, "files"));
+
+  // A channel read in full that held no events in the period is a real zero; a capture with a
+  // reported hole is not known to be.
+  const counted = new Map(tally.counts.channels);
+  const gapSources = new Set(carried.values());
+  for (const capture of coverage.captures) {
+    if (!counted.has(capture.channel) && !gapSources.has(capture.source)) {
+      counted.set(capture.channel, 0);
+    }
+  }
+
   return {
     status: gaps.length === 0 ? "complete" : "partial",
     result: {
       mode: "files",
       window: prior.window,
       prior,
-      counts: tally.counts,
+      anchorBasis: "clock",
+      counts: { ...tally.counts, channels: counted },
       gaps,
+      notes: [],
       unplacedRecords: tally.unplacedRecords,
       unreadChannels: [],
     },
@@ -368,7 +533,17 @@ export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutco
 
 export type ComparisonState =
   | { phase: "idle" }
-  | { phase: "running"; mode: "live"; requestId: string; prior: PriorWindow }
+  | {
+      phase: "running";
+      mode: "live";
+      requestId: string;
+      prior: PriorWindow;
+      /**
+       * Events the query has scanned so far, across channels. Progress of the work, not a count of
+       * anything: the previous period's totals are published only when it settles.
+       */
+      scanned: number;
+    }
   | { phase: "settled"; outcome: ComparisonOutcome };
 
 /**
@@ -438,12 +613,25 @@ export function isComparisonRequestId(requestId: string): boolean {
  */
 const COMPARISON_STRAGGLER_GRACE_MS = 250;
 
+/** What fixed the live anchor: the load that evaluated the window, or a later live-tail batch. */
+export type LiveAnchorBasis = Exclude<ComparisonAnchorBasis, "clock">;
+
 export interface LiveComparisonInput {
   window: EvtxTimeWindow;
+  /** The instant the current load evaluated its window, or the latest live-tail batch after it. */
   anchorEpoch: number;
+  anchorBasis: LiveAnchorBasis;
+  /** True for a remote machine, whose clock this computer's clock is compared against. */
+  remote: boolean;
   /** The channels to read, each queried under the session's request ID. */
   channels: readonly string[];
   visibility: ComparisonVisibility;
+  /**
+   * Shortfalls in the CURRENT period that the load reported for the compared channels, already
+   * worded. They make the outcome partial: the previous period can be read cleanly while the
+   * period it is compared with is not.
+   */
+  currentPeriodGaps: readonly string[];
   /** Stops the backend read for a comparison that is cancelled or superseded before it settles. */
   cancelQuery: (requestId: string) => void;
 }
@@ -469,6 +657,8 @@ interface ChannelStream {
   terminal?: { sequenceCount: number; totalRecords: number };
   reply?: { expected: number | null; gaps: string[]; replyRecords: number };
   failure?: string;
+  /** Events the query reports having scanned so far (progress events). */
+  fetched: number;
   settled: boolean;
   timer?: ReturnType<typeof setTimeout>;
   gaps: string[];
@@ -478,6 +668,11 @@ interface ChannelStream {
 interface ActiveSession {
   requestId: string;
   prior: PriorWindow;
+  anchorBasis: LiveAnchorBasis;
+  notes: string[];
+  currentPeriodGaps: string[];
+  /** Whether provider-description gaps can change a count, fixed when the comparison starts. */
+  providerGapsMatter: boolean;
   channels: string[];
   streams: Map<string, ChannelStream>;
   aggregator: ComparisonAggregator;
@@ -559,7 +754,10 @@ function finishIfSettled(session: ActiveSession): void {
   for (const stream of session.streams.values()) if (!stream.settled) return;
 
   const tally = session.aggregator.finish();
-  const gaps = session.channels.flatMap((channel) => session.streams.get(channel)?.gaps ?? []);
+  const channelGaps = session.channels.flatMap(
+    (channel) => session.streams.get(channel)?.gaps ?? []
+  );
+  const gaps = [...channelGaps];
   const unreadChannels = session.channels.filter((channel) => session.streams.get(channel)?.unread);
   if (tally.unplacedRecords > 0) gaps.push(unplacedGap(tally.unplacedRecords, "live"));
   if (tally.outsideWindowRecords > 0) {
@@ -569,17 +767,28 @@ function finishIfSettled(session: ActiveSession): void {
     );
   }
 
+  gaps.push(...session.currentPeriodGaps.map((gap) => `Current period: ${gap}`));
+
+  // A channel read in full that held no events in the period is a real zero, which an unread
+  // channel is not.
+  const counted = new Map(tally.counts.channels);
+  for (const channel of session.channels) {
+    if (!counted.has(channel) && !unreadChannels.includes(channel)) counted.set(channel, 0);
+  }
+
   const outcome: ComparisonOutcome =
     unreadChannels.length === session.channels.length
-      ? { status: "unavailable", reason: "queryFailed", detail: gaps.join(" ") }
+      ? { status: "unavailable", reason: "queryFailed", detail: channelGaps.join(" ") }
       : {
           status: gaps.length === 0 ? "complete" : "partial",
           result: {
             mode: "live",
             window: session.prior.window,
             prior: session.prior,
-            counts: tally.counts,
+            anchorBasis: session.anchorBasis,
+            counts: { ...tally.counts, channels: counted },
             gaps,
+            notes: session.notes,
             unplacedRecords: tally.unplacedRecords,
             unreadChannels,
           },
@@ -664,11 +873,22 @@ export function beginLiveComparison(input: LiveComparisonInput): LiveComparisonS
   const session: ActiveSession = {
     requestId,
     prior,
+    anchorBasis: input.anchorBasis,
+    notes: input.remote ? ["Periods are computed on this computer's clock"] : [],
+    currentPeriodGaps: [...input.currentPeriodGaps],
+    providerGapsMatter: messageTextCriterionActive(input.visibility),
     channels,
     streams: new Map(
       channels.map((channel) => [
         channel,
-        { received: 0, sequences: new Set<number>(), settled: false, gaps: [], unread: false },
+        {
+          received: 0,
+          fetched: 0,
+          sequences: new Set<number>(),
+          settled: false,
+          gaps: [],
+          unread: false,
+        },
       ])
     ),
     aggregator: createAggregator(prior, input.visibility),
@@ -677,7 +897,7 @@ export function beginLiveComparison(input: LiveComparisonInput): LiveComparisonS
     resolveDone,
   };
   activeSession = session;
-  publish({ phase: "running", mode: "live", requestId, prior });
+  publish({ phase: "running", mode: "live", requestId, prior, scanned: 0 });
 
   return {
     requestId,
@@ -691,9 +911,10 @@ export function beginLiveComparison(input: LiveComparisonInput): LiveComparisonS
         const checked = assertParseResultShape(result);
         stream.reply = {
           expected: checked.totalRecords,
-          // Provider-description failures leave every count intact; anything else may not.
+          // A provider-description failure leaves every count intact unless a criterion reads the
+          // message text, in which case an event can drop out of the count for text it never had.
           gaps: checked.coverageGaps
-            .filter((coverageGap) => coverageGap.kind !== "provider")
+            .filter((coverageGap) => coverageGap.kind !== "provider" || session.providerGapsMatter)
             .map(formatCoverageGap),
           replyRecords: checked.records.length,
         };
@@ -754,4 +975,31 @@ export function observeComparisonComplete(complete: ComparisonStreamComplete): v
     totalRecords: complete.totalRecords,
   };
   trySettleChannel(session, complete.channel, stream);
+}
+
+export interface ComparisonProgress {
+  requestId: string;
+  channel: string;
+  fetched: number;
+}
+
+/**
+ * Takes a channel's scan progress for the active comparison and publishes the total scanned so far.
+ * The query is unbounded, so this is the only sign of life a long scan gives; it carries no counts.
+ */
+export function observeComparisonProgress(progress: ComparisonProgress): void {
+  const session = activeSession;
+  if (!session || session.requestId !== progress.requestId) return;
+  const stream = session.streams.get(progress.channel);
+  if (!stream || stream.settled || !Number.isFinite(progress.fetched)) return;
+  stream.fetched = Math.max(stream.fetched, progress.fetched);
+  let scanned = 0;
+  for (const each of session.streams.values()) scanned += each.fetched;
+  publish({
+    phase: "running",
+    mode: "live",
+    requestId: session.requestId,
+    prior: session.prior,
+    scanned,
+  });
 }

@@ -9,8 +9,10 @@ import {
   eventIdentityKey,
   getComparisonState,
   isComparisonRequestId,
+  messageTextCriterionActive,
   observeComparisonBatch,
   observeComparisonComplete,
+  observeComparisonProgress,
   publishFilesComparison,
   useComparisonStore,
   type ComparisonVisibility,
@@ -20,6 +22,7 @@ import {
 import { DEFAULT_QUICK_FILTER, isWithinTimeWindow } from "./evtx-filter";
 import {
   EVTX_TIME_WINDOW_MS,
+  type EventLogSourceCoverage,
   type EvtxCoverageGap,
   type EvtxLevel,
   type EvtxParseResult,
@@ -108,6 +111,18 @@ describe("computePriorWindow", () => {
       expect(isWithinTimeWindow(firstOfCurrent, window, ANCHOR)).toBe(true);
       expect(isWithinTimeWindow(prior.toMs, window, ANCHOR)).toBe(false);
     }
+  });
+
+  it("sends the previous period's end at millisecond precision, a known sub-millisecond hole", () => {
+    // The service compares at a finer resolution than a whole millisecond, so an event stamped in
+    // the last fraction of a millisecond before the current window can fall in neither period on a
+    // live source. A record's epoch is whole milliseconds, so the model cannot represent such an
+    // event in a test; what can be pinned is the bound that leaves the hole. Closing it means a
+    // seven-digit bound, to be adopted once the Windows lab confirms the service accepts one.
+    const prior = priorFor("24h");
+    expect(prior.to).toMatch(/T\d{2}:\d{2}:\d{2}\.999Z$/);
+    expect(prior.to).toHaveLength("2026-08-09T11:59:59.999Z".length);
+    expect(Date.parse(prior.to)).toBe(prior.toMs);
   });
 
   it("has no previous period for All time and says so rather than inventing one", () => {
@@ -250,6 +265,52 @@ describe("createAggregator", () => {
   });
 });
 
+describe("messageTextCriterionActive", () => {
+  const quick = (overrides: Partial<typeof DEFAULT_QUICK_FILTER>) => ({
+    ...DEFAULT_QUICK_FILTER,
+    ...overrides,
+  });
+
+  it("is off when nothing reads message text", () => {
+    expect(messageTextCriterionActive(visibility())).toBe(false);
+    expect(messageTextCriterionActive(visibility({ filterSearch: "   " }))).toBe(false);
+    expect(messageTextCriterionActive(visibility({ quickFilter: quick({ query: "  " }) }))).toBe(
+      false
+    );
+  });
+
+  it("is on for a search, and for a quick filter that reads the message column", () => {
+    expect(messageTextCriterionActive(visibility({ filterSearch: "timeout" }))).toBe(true);
+    expect(messageTextCriterionActive(visibility({ quickFilter: quick({ query: "x" }) }))).toBe(
+      true
+    );
+    expect(
+      messageTextCriterionActive(
+        visibility({
+          quickFilter: quick({ query: "x", scope: "visibleColumns" }),
+          visibleColumns: ["timestamp", "message"],
+        })
+      )
+    ).toBe(true);
+  });
+
+  it("is off for a quick filter that cannot read the message", () => {
+    expect(
+      messageTextCriterionActive(
+        visibility({ quickFilter: quick({ query: "4624", mode: "eventIds" }) })
+      )
+    ).toBe(false);
+    expect(
+      messageTextCriterionActive(
+        visibility({
+          quickFilter: quick({ query: "x", scope: "visibleColumns" }),
+          visibleColumns: ["timestamp", "level"],
+        })
+      )
+    ).toBe(false);
+  });
+});
+
 describe("checkFilesCoverage", () => {
   const selected = new Set(["System", "Application"]);
 
@@ -262,7 +323,16 @@ describe("checkFilesCoverage", () => {
 
   it("is covered when the capture starts exactly at the previous period's start and reaches its end", () => {
     const prior = priorFor();
-    expect(checkFilesCoverage(spanning(prior), selected, prior)).toEqual({ covered: true });
+    const coverage = checkFilesCoverage(spanning(prior), selected, prior);
+    expect(coverage).toMatchObject({ covered: true });
+    expect(coverage.covered && coverage.captures).toEqual([
+      {
+        source: "System.evtx",
+        channel: "System",
+        earliestMs: prior.fromMs,
+        latestMs: prior.toMs,
+      },
+    ]);
   });
 
   it("is not covered when the earliest event is one millisecond after the period starts", () => {
@@ -351,7 +421,33 @@ describe("checkFilesCoverage", () => {
       ...spanning(prior, { channel: "System" }),
       record({ channel: "Security", sourceLabel: "Security.evtx", timestampEpoch: ANCHOR }),
     ];
-    expect(checkFilesCoverage(records, selected, prior)).toEqual({ covered: true });
+    expect(checkFilesCoverage(records, selected, prior)).toMatchObject({ covered: true });
+  });
+
+  it("reads coverage per channel as well as per source, so one export's deep channel cannot vouch for its shallow one", () => {
+    // One container, such as an archive, holds several channels under a single source label.
+    const prior = priorFor();
+    const records = [
+      ...spanning(prior, { sourceLabel: "export.zip", channel: "System" }),
+      record({ sourceLabel: "export.zip", channel: "Application", timestampEpoch: ANCHOR }),
+    ];
+    expect(checkFilesCoverage(records, selected, prior)).toMatchObject({
+      covered: false,
+      reason: "priorPeriodNotSpanned",
+    });
+  });
+
+  it("reads coverage per source as well as per channel when two sources share a channel", () => {
+    const prior = priorFor();
+    const records = [
+      ...spanning(prior, { sourceLabel: "a.evtx", channel: "System" }),
+      ...spanning(prior, { sourceLabel: "b.evtx", channel: "System" }),
+    ];
+    const coverage = checkFilesCoverage(records, selected, prior);
+    expect(coverage.covered && coverage.captures.map((c) => c.source).sort()).toEqual([
+      "a.evtx",
+      "b.evtx",
+    ]);
   });
 });
 
@@ -362,15 +458,19 @@ describe("compareLoadedFiles", () => {
       window: "24h" as const,
       anchorEpoch: ANCHOR,
       visibility: visibility(),
+      coverageDetails: [] as EvtxCoverageGap[],
+      sourceCoverage: [] as EventLogSourceCoverage[],
       ...overrides,
     };
   }
 
+  /** Spans the previous period and reaches the anchor, so nothing about it is short. */
   function coveringRecords(prior: PriorWindow): EvtxRecord[] {
     return [
       record({ timestampEpoch: prior.fromMs, level: "Error", eventId: 1, provider: "A" }),
       record({ timestampEpoch: prior.fromMs + HOUR, level: "Warning", eventId: 2, provider: "A" }),
       record({ timestampEpoch: prior.toMs, level: "Error", eventId: 1, provider: "A" }),
+      record({ timestampEpoch: ANCHOR }),
     ];
   }
 
@@ -441,6 +541,223 @@ describe("compareLoadedFiles", () => {
     expect(outcome.result.counts.total).toBe(2);
     expect(outcome.result.counts.levels.Warning).toBe(0);
   });
+
+  describe("the current period", () => {
+    /** Spans the previous period, then stops `endsBefore` ms short of the anchor. */
+    function captureEndingBefore(prior: PriorWindow, endsBefore: number, overrides = {}) {
+      return [
+        record({ timestampEpoch: prior.fromMs, ...overrides }),
+        record({ timestampEpoch: prior.toMs, ...overrides }),
+        record({ timestampEpoch: ANCHOR - endsBefore, ...overrides }),
+      ];
+    }
+
+    it("is partial, stating the span it lacks, for an export captured 20 hours before the anchor", () => {
+      const prior = priorFor();
+      const outcome = compareLoadedFiles(input(captureEndingBefore(prior, 20 * HOUR)));
+
+      expect(outcome.status).toBe("partial");
+      if (outcome.status !== "partial") return;
+      // The previous period is whole, so a decline against it would be a capture artifact.
+      expect(outcome.result.counts.total).toBe(2);
+      expect(outcome.result.gaps).toEqual([
+        `System.evtx (System) has no events after ${new Date(ANCHOR - 20 * HOUR).toISOString()}, so the last 20 h of the current period is not covered.`,
+      ]);
+      expect(outcome.result.anchorBasis).toBe("clock");
+      expect(outcome.result.prior.anchorEpoch).toBe(ANCHOR);
+    });
+
+    it("is complete only when every capture reaches the anchor, to the millisecond", () => {
+      const prior = priorFor();
+      expect(compareLoadedFiles(input(captureEndingBefore(prior, 0))).status).toBe("complete");
+
+      const oneShort = compareLoadedFiles(input(captureEndingBefore(prior, 1)));
+      expect(oneShort.status).toBe("partial");
+      if (oneShort.status === "partial") {
+        expect(oneShort.result.gaps[0]).toContain("the last 1 ms of the current period");
+      }
+    });
+
+    it("names only the captures that stop short, and states the longest shortfall first", () => {
+      const prior = priorFor();
+      const reaches = captureEndingBefore(prior, 0, { sourceLabel: "a.evtx", channel: "System" });
+      const short = captureEndingBefore(prior, 90 * 60 * 1000, {
+        sourceLabel: "b.evtx",
+        channel: "Application",
+      });
+      const shorter = captureEndingBefore(prior, 5 * 60 * 1000, {
+        sourceLabel: "c.evtx",
+        channel: "Setup",
+      });
+      const outcome = compareLoadedFiles(
+        input([...reaches, ...short, ...shorter], {
+          visibility: visibility({ selectedChannels: new Set(["System", "Application", "Setup"]) }),
+        })
+      );
+      expect(outcome.status).toBe("partial");
+      if (outcome.status !== "partial") return;
+      expect(outcome.result.gaps).toHaveLength(2);
+      expect(outcome.result.gaps[0]).toContain("b.evtx (Application)");
+      expect(outcome.result.gaps[0]).toContain("the last 1 h 30 min");
+      expect(outcome.result.gaps[1]).toContain("c.evtx (Setup)");
+      expect(outcome.result.gaps[1]).toContain("the last 5 min");
+    });
+
+    it("lists a few short captures and counts the rest", () => {
+      const prior = priorFor();
+      const records = Array.from({ length: 8 }, (_, index) =>
+        captureEndingBefore(prior, HOUR * (index + 1), {
+          sourceLabel: `f${index}.evtx`,
+          channel: `Channel${index}`,
+        })
+      ).flat();
+      const outcome = compareLoadedFiles(
+        input(records, {
+          visibility: visibility({
+            selectedChannels: new Set(Array.from({ length: 8 }, (_, i) => `Channel${i}`)),
+          }),
+        })
+      );
+      expect(outcome.status).toBe("partial");
+      if (outcome.status === "partial") {
+        expect(outcome.result.gaps).toHaveLength(6);
+        expect(outcome.result.gaps[5]).toBe("and 3 more not shown.");
+      }
+    });
+  });
+
+  describe("holes the load reported", () => {
+    const chunkGap = (overrides: Partial<EvtxCoverageGap> = {}): EvtxCoverageGap => ({
+      source: "System.evtx",
+      kind: "chunk",
+      reason: "chunk 12 could not be parsed",
+      chunkId: 12,
+      ...overrides,
+    });
+
+    it("makes the comparison partial for a damaged chunk inside the previous period", () => {
+      const prior = priorFor();
+      const outcome = compareLoadedFiles(
+        input(coveringRecords(prior), { coverageDetails: [chunkGap()] })
+      );
+      expect(outcome.status).toBe("partial");
+      if (outcome.status !== "partial") return;
+      expect(outcome.result.gaps).toEqual(["System.evtx chunk 12: chunk 12 could not be parsed"]);
+      expect(outcome.result.counts.total).toBe(3);
+    });
+
+    it("carries record, XML and record-budget gaps, and a source the manifest could not read", () => {
+      const prior = priorFor();
+      const outcome = compareLoadedFiles(
+        input(coveringRecords(prior), {
+          coverageDetails: [
+            chunkGap({ kind: "record", reason: "record 9 unreadable", chunkId: undefined }),
+            chunkGap({ kind: "xml", reason: "event XML could not be parsed: bad", chunkId: undefined }),
+            chunkGap({
+              kind: "limit",
+              reason:
+                "source manifest record budget of 1000000 records was exhausted; later records/files were omitted",
+              chunkId: undefined,
+            }),
+          ],
+          sourceCoverage: [
+            { kind: "accessDenied", path: "C:/logs/Security.evtx", reason: "access denied" },
+          ],
+        })
+      );
+      expect(outcome.status).toBe("partial");
+      if (outcome.status !== "partial") return;
+      expect(outcome.result.gaps).toHaveLength(4);
+      expect(outcome.result.gaps).toContain("C:/logs/Security.evtx: access denied");
+    });
+
+    it("does not hold a gap in a source of unselected channels against this comparison", () => {
+      const prior = priorFor();
+      const records = [
+        ...coveringRecords(prior),
+        record({ sourceLabel: "Security.evtx", channel: "Security", timestampEpoch: ANCHOR }),
+      ];
+      const outcome = compareLoadedFiles(
+        input(records, { coverageDetails: [chunkGap({ source: "Security.evtx" })] })
+      );
+      expect(outcome.status).toBe("complete");
+    });
+
+    it("does carry a gap from a source no loaded record mentions, which might hold a selected channel", () => {
+      const prior = priorFor();
+      const outcome = compareLoadedFiles(
+        input(coveringRecords(prior), { coverageDetails: [chunkGap({ source: "Lost.evtx" })] })
+      );
+      expect(outcome.status).toBe("partial");
+    });
+
+    it("ignores a provider-description gap unless a criterion reads the message", () => {
+      const prior = priorFor();
+      const providerGap = chunkGap({
+        kind: "provider",
+        reason: "message text unavailable",
+        chunkId: undefined,
+      });
+      const plain = compareLoadedFiles(
+        input(coveringRecords(prior), { coverageDetails: [providerGap] })
+      );
+      expect(plain.status).toBe("complete");
+
+      for (const active of [
+        visibility({ filterSearch: "timeout" }),
+        visibility({ quickFilter: { ...DEFAULT_QUICK_FILTER, query: "timeout" } }),
+      ]) {
+        const searched = compareLoadedFiles(
+          input(coveringRecords(prior), { coverageDetails: [providerGap], visibility: active })
+        );
+        expect(searched.status).toBe("partial");
+        if (searched.status === "partial") {
+          expect(searched.result.gaps).toEqual(["System.evtx: message text unavailable"]);
+        }
+      }
+    });
+  });
+
+  describe("channels with no events", () => {
+    function twoChannels(prior: PriorWindow, overrides = {}) {
+      return [
+        record({ channel: "System", sourceLabel: "System.evtx", timestampEpoch: prior.fromMs }),
+        record({ channel: "System", sourceLabel: "System.evtx", timestampEpoch: ANCHOR }),
+        record({ channel: "Setup", sourceLabel: "Setup.evtx", timestampEpoch: prior.fromMs - HOUR, ...overrides }),
+        record({ channel: "Setup", sourceLabel: "Setup.evtx", timestampEpoch: ANCHOR, ...overrides }),
+      ];
+    }
+
+    it("counts a channel read in full with no events in the period as 0, unlike an unread one", () => {
+      const prior = priorFor();
+      const outcome = compareLoadedFiles(
+        input(twoChannels(prior), {
+          visibility: visibility({ selectedChannels: new Set(["System", "Setup"]) }),
+        })
+      );
+      expect(outcome.status).toBe("complete");
+      if (outcome.status !== "complete") return;
+      expect(outcome.result.counts.channels.get("System")).toBe(1);
+      expect(outcome.result.counts.channels.get("Setup")).toBe(0);
+      expect(outcome.result.counts.channels.has("Application")).toBe(false);
+    });
+
+    it("does not call a channel 0 when its source reported a hole", () => {
+      const prior = priorFor();
+      const outcome = compareLoadedFiles(
+        input(twoChannels(prior), {
+          visibility: visibility({ selectedChannels: new Set(["System", "Setup"]) }),
+          coverageDetails: [
+            { source: "Setup.evtx", kind: "chunk", reason: "chunk 3 unreadable", chunkId: 3 },
+          ],
+        })
+      );
+      expect(outcome.status).toBe("partial");
+      if (outcome.status !== "partial") return;
+      expect(outcome.result.counts.channels.get("System")).toBe(1);
+      expect(outcome.result.counts.channels.has("Setup")).toBe(false);
+    });
+  });
 });
 
 function reply(
@@ -483,6 +800,9 @@ describe("a live comparison", () => {
     const session = beginLiveComparison({
       window: "24h",
       anchorEpoch: ANCHOR,
+      anchorBasis: "load",
+      remote: false,
+      currentPeriodGaps: [],
       channels,
       visibility: visibility(),
       cancelQuery,
@@ -693,6 +1013,155 @@ describe("a live comparison", () => {
     if (outcome.status === "complete") expect(outcome.result.counts.total).toBe(1);
   });
 
+  it("records the anchor and its basis, and counts a channel with no events as 0", () => {
+    const session = begin({ anchorBasis: "tail" });
+    deliver(session, "System", systemEvents(2));
+    deliver(session, "Application", []);
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status !== "complete") return;
+    expect(outcome.result.anchorBasis).toBe("tail");
+    expect(outcome.result.prior.anchorEpoch).toBe(ANCHOR);
+    expect(outcome.result.counts.channels.get("System")).toBe(2);
+    expect(outcome.result.counts.channels.get("Application")).toBe(0);
+    expect(outcome.result.notes).toEqual([]);
+  });
+
+  it("notes whose clock cut the periods for a remote source, without calling it a gap", () => {
+    const session = begin({ remote: true });
+    deliver(session, "System", systemEvents(1));
+    deliver(session, "Application", []);
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") {
+      expect(outcome.result.notes).toEqual(["Periods are computed on this computer's clock"]);
+      expect(outcome.result.gaps).toEqual([]);
+    }
+  });
+
+  it("is partial, stating each shortfall, when the load reported gaps in the current period", () => {
+    const session = begin({
+      currentPeriodGaps: [
+        "System: 40 events could not be rendered and are missing from this view",
+        "live tail batch 3 was not received",
+      ],
+    });
+    deliver(session, "System", systemEvents(1));
+    deliver(session, "Application", []);
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    // The previous period read cleanly; it is the period it is compared with that is short.
+    expect(outcome.result.counts.total).toBe(1);
+    expect(outcome.result.gaps).toEqual([
+      "Current period: System: 40 events could not be rendered and are missing from this view",
+      "Current period: live tail batch 3 was not received",
+    ]);
+  });
+
+  it("does not turn a current-period gap into an unavailable comparison when no channel could be read", () => {
+    const session = begin({ currentPeriodGaps: ["System: something"] });
+    session.failed("System", "Access is denied.");
+    session.failed("Application", "Access is denied.");
+    expect(settled()).toMatchObject({ status: "unavailable", reason: "queryFailed" });
+    const outcome = settled();
+    if (outcome.status === "unavailable") {
+      expect(outcome.detail).toBe("System: Access is denied. Application: Access is denied.");
+    }
+  });
+
+  it("counts a provider-description gap as a gap while a search reads the message text", () => {
+    const providerGap = gap({
+      kind: "provider",
+      reason: "message text unavailable",
+      source: "System",
+    });
+    const quiet = begin({ channels: ["System"] });
+    batch(quiet, "System", 0, systemEvents(1));
+    terminal(quiet, "System", 1, 1);
+    quiet.replied("System", reply(1, { coverageGaps: [providerGap] }));
+    expect(settled().status).toBe("complete");
+
+    const searching = begin({
+      channels: ["System"],
+      visibility: visibility({ filterSearch: "timeout" }),
+    });
+    batch(searching, "System", 0, systemEvents(1, { message: "a timeout" }));
+    terminal(searching, "System", 1, 1);
+    searching.replied("System", reply(1, { coverageGaps: [providerGap] }));
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status === "partial") {
+      expect(outcome.result.gaps).toEqual(["System: message text unavailable"]);
+    }
+  });
+
+  it("ignores the end-of-stream marker of a comparison that was superseded", () => {
+    const first = begin({ channels: ["System"] });
+    const second = begin({ channels: ["System"] });
+
+    // The old marker promises five batches. It arrives after the new session's own marker, where
+    // taking it would overwrite the right one and turn a clean channel into "batches were not
+    // received".
+    batch(second, "System", 0, systemEvents(2));
+    terminal(second, "System", 1, 2);
+    terminal(first, "System", 5, 99);
+    second.replied("System", reply(2));
+
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") {
+      expect(outcome.result.gaps).toEqual([]);
+      expect(outcome.result.counts.total).toBe(2);
+    }
+  });
+
+  describe("progress", () => {
+    function progress(session: LiveComparisonSession, channel: string, fetched: number) {
+      observeComparisonProgress({ requestId: session.requestId, channel, fetched });
+    }
+    const running = () => {
+      const state = getComparisonState();
+      if (state.phase !== "running") throw new Error(`expected running, got ${state.phase}`);
+      return state;
+    };
+
+    it("publishes the events scanned so far, summed across channels, and no counts", () => {
+      const session = begin();
+      expect(running().scanned).toBe(0);
+
+      progress(session, "System", 300);
+      progress(session, "Application", 50);
+      progress(session, "System", 700);
+      expect(running().scanned).toBe(750);
+      expect(Object.keys(running()).sort()).toEqual(
+        ["mode", "phase", "prior", "requestId", "scanned"].sort()
+      );
+    });
+
+    it("never moves backwards for a channel", () => {
+      const session = begin();
+      progress(session, "System", 700);
+      progress(session, "System", 100);
+      expect(running().scanned).toBe(700);
+    });
+
+    it("ignores progress for another request, an unknown channel, a settled channel and a cancelled comparison", () => {
+      const session = begin();
+      observeComparisonProgress({ requestId: "event-log-compare-0", channel: "System", fetched: 9 });
+      progress(session, "Security", 9);
+      expect(running().scanned).toBe(0);
+
+      deliver(session, "System", systemEvents(1));
+      progress(session, "System", 99);
+      expect(running().scanned).toBe(0);
+
+      cancelComparison();
+      progress(session, "Application", 5);
+      expect(getComparisonState()).toEqual({ phase: "idle" });
+    });
+  });
+
   describe("cancelling", () => {
     it("stops the query, clears the state and resolves done", async () => {
       const session = begin();
@@ -895,6 +1364,9 @@ describe("a live comparison", () => {
       beginLiveComparison({
         window: "all",
         anchorEpoch: ANCHOR,
+        anchorBasis: "load",
+        remote: false,
+        currentPeriodGaps: [],
         channels,
         visibility: visibility(),
         cancelQuery,
@@ -909,6 +1381,9 @@ describe("a live comparison", () => {
       beginLiveComparison({
         window: "24h",
         anchorEpoch: ANCHOR,
+        anchorBasis: "load",
+        remote: false,
+        currentPeriodGaps: [],
         channels: [],
         visibility: visibility(),
         cancelQuery,
@@ -932,10 +1407,13 @@ describe("publishing a files comparison", () => {
       records: [
         record({ timestampEpoch: prior.fromMs }),
         record({ timestampEpoch: prior.toMs }),
+        record({ timestampEpoch: ANCHOR }),
       ],
       window: "24h",
       anchorEpoch: ANCHOR,
       visibility: visibility(),
+      coverageDetails: [],
+      sourceCoverage: [],
     });
     expect(getComparisonState()).toMatchObject({
       phase: "settled",
@@ -952,6 +1430,8 @@ describe("publishing a files comparison", () => {
       window: "24h",
       anchorEpoch: ANCHOR,
       visibility: visibility(),
+      coverageDetails: [],
+      sourceCoverage: [],
     });
     expect(getComparisonState()).toMatchObject({
       phase: "settled",
@@ -964,6 +1444,9 @@ describe("publishing a files comparison", () => {
     const session = beginLiveComparison({
       window: "24h",
       anchorEpoch: ANCHOR,
+      anchorBasis: "load",
+      remote: false,
+      currentPeriodGaps: [],
       channels: ["System"],
       visibility: visibility(),
       cancelQuery,
@@ -974,6 +1457,8 @@ describe("publishing a files comparison", () => {
       window: "24h",
       anchorEpoch: ANCHOR,
       visibility: visibility(),
+      coverageDetails: [],
+      sourceCoverage: [],
     });
     expect(cancelQuery).toHaveBeenCalledWith(session?.requestId);
   });
