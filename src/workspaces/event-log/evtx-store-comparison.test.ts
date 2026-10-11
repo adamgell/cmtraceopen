@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   beginLiveComparison,
   cancelComparison,
+  countCurrentPeriod,
   getComparisonState,
   isComparisonRequestId,
   useComparisonStore,
@@ -42,7 +43,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
-const { comparePreviousPeriod, noteChannelRead, useEvtxStore } = await import("./evtx-store");
+const { comparePreviousPeriod, useEvtxStore } = await import("./evtx-store");
 
 const ALL_LEVELS: EvtxLevel[] = ["Critical", "Error", "Warning", "Information", "Verbose"];
 const ANCHOR = Date.parse("2026-08-10T12:00:00.000Z");
@@ -169,19 +170,83 @@ function liveInfo(name: string): EvtxChannelInfo {
   return { name, eventCount: 0, sourceType: "live", enabledState: "enabled" };
 }
 
+const LIVE_CHANNELS = ["System", "Application", "Security"];
+
 /**
- * A live view as a load leaves it: `reset` is a load boundary that fixes the anchor at the current
- * (faked) time, and each channel is stamped as read at that same moment.
+ * Moves a frozen `Date` forward. The store measures its own settling grace on `Date`, so a load
+ * run on a frozen clock would wait for ever unless the clock is moved past it. A no-op on the
+ * real clock.
  */
-function resetStore(overrides: Record<string, unknown> = {}) {
+function advanceFrozenClock(ms: number): void {
+  if (vi.isFakeTimers()) vi.setSystemTime(Date.now() + ms);
+}
+
+/**
+ * Awaits `work` while a frozen clock is moved along. The work has already started when this is
+ * called, so anything it stamped on its first step was stamped before the clock moved.
+ */
+async function withClockRunning<T>(work: Promise<T>): Promise<T> {
+  const timer = setInterval(() => advanceFrozenClock(50), 10);
+  try {
+    return await work;
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+/** A reply whose records travelled as batches, with its end-of-stream marker delivered first. */
+function streamedReply(args: QueryArgs, rows: EvtxRecord[], coverageGaps: unknown[] = []) {
+  const channelName = args.channels[0];
+  if (rows.length > 0) deliver(channelName, 0, rows, args.requestId);
+  complete(channelName, rows.length > 0 ? 1 : 0, rows.length, args.requestId);
+  return reply(rows.length, {
+    channels: [{ name: channelName, eventCount: rows.length, sourceType: "live" as const }],
+    coverageGaps,
+  });
+}
+
+/**
+ * Runs a real load of `names` against empty replies, the way an operator's Load does. This is the
+ * only way a channel gets its read time, so every test that needs a loaded channel goes through it.
+ */
+async function loadLive(names: string[]): Promise<void> {
+  const previous = invoke.getMockImplementation();
+  invoke.mockImplementation(async (_name: string, rawArgs: unknown) =>
+    streamedReply(rawArgs as QueryArgs, [])
+  );
+  await withClockRunning(useEvtxStore.getState().queryChannels(names));
+  if (previous) invoke.mockImplementation(previous);
+}
+
+/** Runs a real load with `Date` frozen at `epoch`, which is therefore when each channel was read. */
+async function loadLiveAt(names: string[], epoch: number): Promise<void> {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(epoch);
+  await loadLive(names);
+  vi.setSystemTime(epoch);
+}
+
+/**
+ * A live view as a load leaves it: a real load of System, Application and Security, then the
+ * criteria and selection a test starts from, with `overrides` on top.
+ */
+async function resetStore(overrides: Record<string, unknown> = {}) {
   cancelComparison();
   useEvtxStore.getState().reset();
-  noteChannelRead(["System", "Application", "Security"], Date.now());
+  useEvtxStore.setState({
+    sourceMode: "live",
+    channels: LIVE_CHANNELS.map(liveInfo),
+    selectedChannels: new Set(LIVE_CHANNELS),
+    remoteMachine: null,
+    timeWindow: "24h",
+  });
+  await loadLive(LIVE_CHANNELS);
   useEvtxStore.setState({
     records: [],
     channels: [liveInfo("System"), liveInfo("Application")],
     coverageGaps: [],
     coverageDetails: [],
+    tailCoverageGaps: [],
     sourceManifest: null,
     sourcePaths: [],
     loadedChannels: new Set(["System", "Application"]),
@@ -200,6 +265,8 @@ function resetStore(overrides: Record<string, unknown> = {}) {
     selectedRecordId: null,
     ...overrides,
   });
+  // The load that set the view up is not part of what a test observes of the bridge.
+  invoke.mockClear();
 }
 
 function settled(): ComparisonOutcome {
@@ -208,16 +275,17 @@ function settled(): ComparisonOutcome {
   return state.outcome;
 }
 
-/** Freezes `Date` at the anchor, then starts from a freshly loaded live view. */
-function freezeClockAtAnchor(): void {
+/** Freezes `Date` at the anchor and loads, so each channel was read exactly at the anchor. */
+async function freezeClockAtAnchor(): Promise<void> {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(ANCHOR);
-  resetStore();
+  await resetStore();
+  vi.setSystemTime(ANCHOR);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   installBridge();
-  resetStore();
+  await resetStore();
 });
 
 // A test that leaves a comparison running must not have the next test's setup stop it.
@@ -241,7 +309,7 @@ describe("routing comparison batches", () => {
 
   /** A load reading System, and a comparison reading the same channel at the same time. */
   async function loadAndCompareSystem() {
-    resetStore({ selectedChannels: new Set(["System"]), loadedChannels: new Set<string>() });
+    await resetStore({ selectedChannels: new Set(["System"]), loadedChannels: new Set<string>() });
     const load = useEvtxStore.getState().queryChannels(["System"], 100);
     await vi.waitFor(() => expect(queries).toHaveLength(1));
     const mainQuery = queries[0];
@@ -249,8 +317,8 @@ describe("routing comparison batches", () => {
     const session = beginLiveComparison({
       window: "24h",
       anchorEpoch: ANCHOR,
-      anchorBasis: "load",
       remote: false,
+      notes: [],
       currentPeriodGaps: [],
       channels: ["System"],
       visibility: sharedVisibility,
@@ -378,7 +446,7 @@ describe("comparing a live source with its previous period", () => {
   });
 
   it("keeps the ordinary load's window in the shape it always had", async () => {
-    resetStore({ loadedChannels: new Set<string>() });
+    await resetStore({ loadedChannels: new Set<string>() });
     void useEvtxStore.getState().queryChannels(["System"]);
     await vi.waitFor(() => expect(queries).toHaveLength(1));
     expect(JSON.stringify(queries[0].args.filter.time)).toBe(
@@ -427,7 +495,7 @@ describe("comparing a live source with its previous period", () => {
   });
 
   it("pushes the view's own criteria into the query and replaces only the window", async () => {
-    resetStore({
+    await resetStore({
       filterLevels: new Set<EvtxLevel>(["Critical", "Error"]),
       filterEventIds: "4624, 100-200",
     });
@@ -445,7 +513,7 @@ describe("comparing a live source with its previous period", () => {
   });
 
   it("uses the remote command, with the machine, for a remote source", async () => {
-    resetStore({ remoteMachine: "SRV01" });
+    await resetStore({ remoteMachine: "SRV01" });
     void startComparison();
     await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
 
@@ -457,7 +525,7 @@ describe("comparing a live source with its previous period", () => {
   });
 
   it("reads only the channels that are both selected and loaded", async () => {
-    resetStore({
+    await resetStore({
       selectedChannels: new Set(["System", "Security"]),
       loadedChannels: new Set(["System", "Application"]),
     });
@@ -499,189 +567,125 @@ describe("when a comparison cannot be made", () => {
   }
 
   it("says so while the source is loading", async () => {
-    resetStore({ isLoading: true });
+    await resetStore({ isLoading: true });
     await comparePreviousPeriod(ANCHOR);
     expectUnavailable("notReady");
     expect(settled()).toMatchObject({ detail: "Events are still loading." });
   });
 
   it("says so when no source is open", async () => {
-    resetStore({ sourceMode: null });
+    await resetStore({ sourceMode: null });
     await comparePreviousPeriod(ANCHOR);
     expectUnavailable("notReady");
     expect(settled()).toMatchObject({ detail: "No source is open." });
   });
 
   it("says so when the event ID filter is not valid, as the load itself reads nothing then", async () => {
-    resetStore({ filterEventIds: "not-an-id" });
+    await resetStore({ filterEventIds: "not-an-id" });
     await comparePreviousPeriod(ANCHOR);
     expectUnavailable("notReady");
     expect(settled()).toMatchObject({ detail: "The event ID filter is not valid." });
   });
 
   it("says All time has no previous period, in either mode", async () => {
-    resetStore({ timeWindow: "all" });
+    await resetStore({ timeWindow: "all" });
     await comparePreviousPeriod(ANCHOR);
     expectUnavailable("allTime");
 
-    resetStore({ timeWindow: "all", sourceMode: "files", records: [] });
+    await resetStore({ timeWindow: "all", sourceMode: "files", records: [] });
     await comparePreviousPeriod(ANCHOR);
     expectUnavailable("allTime");
   });
 
   it("says so when none of the selected channels is loaded", async () => {
-    resetStore({ loadedChannels: new Set<string>() });
+    await resetStore({ loadedChannels: new Set<string>() });
     await comparePreviousPeriod(ANCHOR);
     expectUnavailable("noChannels");
   });
 });
 
-describe("when the current period is not fully loaded", () => {
-  const AUTO_LOAD_MAX_EVENTS = 2_000;
+const AUTO_LOAD_MAX_EVENTS = 2_000;
+const CAP_DETAIL_TAIL = "so the current period is only partly loaded.";
 
-  /** A reply whose records travelled as batches, with its end-of-stream marker delivered first. */
-  function streamedReply(args: QueryArgs, rows: EvtxRecord[], coverageGaps: unknown[] = []) {
-    const channelName = args.channels[0];
-    if (rows.length > 0) deliver(channelName, 0, rows, args.requestId);
-    complete(channelName, rows.length > 0 ? 1 : 0, rows.length, args.requestId);
-    return reply(rows.length, {
-      channels: [{ name: channelName, eventCount: rows.length, sourceType: "live" as const }],
-      coverageGaps,
-    });
-  }
+/** The way a stopped load leaves a channel: its rows on screen, the channel not loaded. */
+const STOPPED_GAP = {
+  source: "Security",
+  kind: "cancelled" as const,
+  reason: "operator stopped the load after 3 events were fetched (the channel may hold more)",
+};
 
-  /** Reads Security with the automatic load, which stops at the per-channel bound. */
-  async function autoLoadSecurity(rowCount: number) {
-    invoke.mockReset();
-    invoke.mockImplementation(async (name: string, rawArgs: unknown) => {
-      if (name === "evtx_enumerate_channels") return [liveInfo("Security")];
-      return streamedReply(
-        rawArgs as QueryArgs,
-        Array.from({ length: rowCount }, () => record("Security"))
-      );
-    });
-    resetStore({ sourceMode: null, selectedChannels: new Set<string>(), loadedChannels: new Set<string>(), channels: [] });
-    // Nothing but this load's own read may say how far Security's current period reaches.
-    noteChannelRead(["Security"], 1);
-    await useEvtxStore.getState().enumerateChannels();
-    installBridge();
-  }
-
-  it("is unavailable for a channel a stopped load left partly on screen, which the grid still counts", async () => {
-    invoke.mockReset();
-    invoke.mockImplementation(async (_name: string, rawArgs: unknown) =>
-      streamedReply(rawArgs as QueryArgs, [record("Security"), record("Security"), record("Security")], [
-        {
-          source: "Security",
-          kind: "cancelled",
-          reason: "operator stopped the load after 3 events were fetched (the channel may hold more)",
-        },
-      ])
+/** Reads each named core channel with the automatic load, which stops at its per-channel bound. */
+async function autoLoad(counts: Record<string, number>): Promise<void> {
+  await resetStore({
+    sourceMode: null,
+    selectedChannels: new Set<string>(),
+    loadedChannels: new Set<string>(),
+    channels: [],
+  });
+  invoke.mockImplementation(async (name: string, rawArgs: unknown) => {
+    if (name === "evtx_enumerate_channels") return Object.keys(counts).map(liveInfo);
+    const args = rawArgs as QueryArgs;
+    const channel = args.channels[0];
+    return streamedReply(
+      args,
+      Array.from({ length: counts[channel] }, () => record(channel))
     );
-    resetStore({
+  });
+  await withClockRunning(useEvtxStore.getState().enumerateChannels());
+  installBridge();
+}
+
+/** Resolves every comparison query the way an empty previous period would, as each one appears. */
+async function settleComparisonQueries(total: number): Promise<void> {
+  const handled = new Set<PendingQuery>();
+  await vi.waitFor(() => {
+    for (const query of comparisonQueries()) {
+      if (handled.has(query)) continue;
+      handled.add(query);
+      complete(query.args.channels[0], 0, 0, query.args.requestId);
+      query.resolve(reply(0));
+    }
+    expect(handled.size).toBe(total);
+  });
+}
+
+/** A Load of Security that the operator stopped, after System and Application were loaded. */
+async function stoppedLoadOfSecurity(): Promise<void> {
+  invoke.mockImplementation(async (_name: string, rawArgs: unknown) =>
+    streamedReply(
+      rawArgs as QueryArgs,
+      [record("Security"), record("Security"), record("Security")],
+      [STOPPED_GAP]
+    )
+  );
+  await withClockRunning(useEvtxStore.getState().queryChannels(["Security"]));
+  installBridge();
+  expect(useEvtxStore.getState().loadedChannels.has("Security")).toBe(false);
+}
+
+describe("when the current period is not fully loaded", () => {
+  it("is unavailable for a channel a stopped load left partly on screen, and names Load", async () => {
+    await resetStore({
       channels: [liveInfo("Security")],
       selectedChannels: new Set(["Security"]),
       loadedChannels: new Set<string>(),
     });
-    await useEvtxStore.getState().queryChannels(["Security"]);
+    await stoppedLoadOfSecurity();
     expect(useEvtxStore.getState().records).toHaveLength(3);
-    expect(useEvtxStore.getState().loadedChannels.has("Security")).toBe(false);
-    installBridge();
 
     await comparePreviousPeriod(ANCHOR);
 
     expect(settled()).toEqual({
       status: "unavailable",
       reason: "currentPeriodIncomplete",
-      detail:
-        "Security was not read in full, so the current period is only partly loaded. Deselect Security to compare the other channels.",
+      detail: `Security was not read in full, ${CAP_DETAIL_TAIL} Load Security to read it in full.`,
     });
     expect(queryCommandCalls()).toBe(0);
   });
 
-  it("is not moved by a stopped load of a channel the comparison leaves out", async () => {
-    // System and Application were read three hours ago. A Load of Security then began and was
-    // stopped; following the advice to deselect Security must not make the older, untouched
-    // channels look three hours short of an anchor that load set.
-    const earlier = Date.now() - 3 * HOUR;
-    invoke.mockReset();
-    invoke.mockImplementation(async (_name: string, rawArgs: unknown) =>
-      streamedReply(rawArgs as QueryArgs, [record("Security"), record("Security")], [
-        {
-          source: "Security",
-          kind: "cancelled",
-          reason: "operator stopped the load after 2 events were fetched (the channel may hold more)",
-        },
-      ])
-    );
-    resetStore({
-      channels: [liveInfo("System"), liveInfo("Application"), liveInfo("Security")],
-      selectedChannels: new Set(["System", "Application", "Security"]),
-      loadedChannels: new Set(["System", "Application"]),
-    });
-    noteChannelRead(["System", "Application"], earlier);
-    await useEvtxStore.getState().queryChannels(["Security"]);
-    installBridge();
-    useEvtxStore.getState().setSelectedChannels(new Set(["System", "Application"]));
-
-    const run = comparePreviousPeriod(Date.now());
-    await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
-    for (const query of comparisonQueries()) {
-      complete(query.args.channels[0], 0, 0, query.args.requestId);
-      query.resolve(reply(0));
-    }
-    await run;
-
-    const outcome = settled();
-    expect(outcome.status).toBe("complete");
-    if (outcome.status === "complete") {
-      expect(outcome.result.prior.anchorEpoch).toBe(earlier);
-      expect(outcome.result.gaps).toEqual([]);
-    }
-  });
-
-  it("treats the channels of one load as read together, even when the pool starts the last one later", async () => {
-    // Five channels through a pool of four: the fifth starts only when a read finishes, later than
-    // the first four. They are one load, so none of them is short of the others' anchor.
-    const names = ["System", "Application", "Security", "Setup", "Operational"];
-    invoke.mockReset();
-    invoke.mockImplementation(async (_name: string, rawArgs: unknown) => {
-      const args = rawArgs as QueryArgs;
-      if (args.channels[0] !== "Operational") {
-        await new Promise((resolve) => setTimeout(resolve, 40));
-      }
-      return streamedReply(args, []);
-    });
-    resetStore({
-      channels: names.map(liveInfo),
-      selectedChannels: new Set(names),
-      loadedChannels: new Set<string>(),
-    });
-    await useEvtxStore.getState().queryChannels(names);
-    expect([...useEvtxStore.getState().loadedChannels].sort()).toEqual([...names].sort());
-    installBridge();
-
-    const run = comparePreviousPeriod(Date.now());
-    const handled = new Set<PendingQuery>();
-    await vi.waitFor(() => {
-      for (const query of comparisonQueries()) {
-        if (handled.has(query)) continue;
-        handled.add(query);
-        complete(query.args.channels[0], 0, 0, query.args.requestId);
-        query.resolve(reply(0));
-      }
-      expect(handled.size).toBe(names.length);
-    });
-    await run;
-
-    const outcome = settled();
-    expect(outcome.status).toBe("complete");
-    if (outcome.status === "complete") expect(outcome.result.gaps).toEqual([]);
-  });
-
-  it("is unavailable for a channel the automatic load cut off at its bound", async () => {
-    await autoLoadSecurity(AUTO_LOAD_MAX_EVENTS);
-    expect(useEvtxStore.getState().loadedChannels.has("Security")).toBe(true);
+  it("is unavailable for a channel the automatic load cut off, and says to deselect it while others remain", async () => {
+    await autoLoad({ Security: AUTO_LOAD_MAX_EVENTS, System: 5 });
+    expect([...useEvtxStore.getState().loadedChannels].sort()).toEqual(["Security", "System"]);
     expect(
       useEvtxStore.getState().coverageGaps.some((gap) => gap.includes("may hold more"))
     ).toBe(true);
@@ -691,38 +695,99 @@ describe("when the current period is not fully loaded", () => {
     expect(settled()).toEqual({
       status: "unavailable",
       reason: "currentPeriodIncomplete",
-      detail:
-        "Security reached the automatic load's cap of 2,000 events, so the current period is only partly loaded. Deselect Security to compare the other channels.",
+      detail: `Security reached the automatic load's cap of 2,000 events, ${CAP_DETAIL_TAIL} Deselect Security to compare the other channels.`,
     });
     // No control reads a capped channel in full, so the copy must not offer one.
-    const detail = (settled() as { detail: string }).detail;
-    expect(detail).not.toMatch(/load it in full|load .* in full/i);
+    expect((settled() as { detail: string }).detail).not.toMatch(/\bLoad\b/);
     expect(queryCommandCalls()).toBe(0);
   });
 
-  it("compares a channel the automatic load read to its end, even though it used the bound", async () => {
-    await autoLoadSecurity(AUTO_LOAD_MAX_EVENTS - 1);
+  it("says no channel can be compared when every selected channel is at the cap", async () => {
+    await autoLoad({ Security: AUTO_LOAD_MAX_EVENTS, System: AUTO_LOAD_MAX_EVENTS });
+
+    await comparePreviousPeriod(ANCHOR);
+
+    expect(settled()).toEqual({
+      status: "unavailable",
+      reason: "currentPeriodIncomplete",
+      detail: `System, Security reached the automatic load's cap of 2,000 events, ${CAP_DETAIL_TAIL} No channel can be compared while every selected channel is at the cap.`,
+    });
+    expect((settled() as { detail: string }).detail).not.toContain("Deselect");
+  });
+
+  it("names Load for a stopped channel and Deselect for a capped one, when others remain", async () => {
+    await autoLoad({ Security: AUTO_LOAD_MAX_EVENTS, System: 5 });
+    invoke.mockImplementation(async (_name: string, rawArgs: unknown) =>
+      streamedReply(rawArgs as QueryArgs, [record("Setup")], [{ ...STOPPED_GAP, source: "Setup" }])
+    );
+    await withClockRunning(useEvtxStore.getState().queryChannels(["Setup"]));
+    installBridge();
+    useEvtxStore.setState({ selectedChannels: new Set(["System", "Security", "Setup"]) });
+
+    await comparePreviousPeriod(ANCHOR);
+
+    expect(settled()).toEqual({
+      status: "unavailable",
+      reason: "currentPeriodIncomplete",
+      detail: `Security reached the automatic load's cap of 2,000 events; Setup was not read in full, ${CAP_DETAIL_TAIL} Load Setup to read it in full. Deselect Security to compare the other channels.`,
+    });
+  });
+
+  it("says a capped channel cannot be compared, rather than to deselect it, when nothing else would remain", async () => {
+    await autoLoad({ Security: AUTO_LOAD_MAX_EVENTS });
+    invoke.mockImplementation(async (_name: string, rawArgs: unknown) =>
+      streamedReply(rawArgs as QueryArgs, [record("Setup")], [{ ...STOPPED_GAP, source: "Setup" }])
+    );
+    await withClockRunning(useEvtxStore.getState().queryChannels(["Setup"]));
+    installBridge();
+    useEvtxStore.setState({ selectedChannels: new Set(["Security", "Setup"]) });
+
+    await comparePreviousPeriod(ANCHOR);
+
+    expect(settled()).toEqual({
+      status: "unavailable",
+      reason: "currentPeriodIncomplete",
+      detail: `Security reached the automatic load's cap of 2,000 events; Setup was not read in full, ${CAP_DETAIL_TAIL} Load Setup to read it in full. Security cannot be compared while at the cap.`,
+    });
+  });
+
+  it("compares a channel the automatic load read to its end, anchored where that load read it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(ANCHOR);
+    await autoLoad({ Security: AUTO_LOAD_MAX_EVENTS - 1 });
     expect(
       useEvtxStore.getState().coverageGaps.some((gap) => gap.includes("may hold more"))
     ).toBe(false);
+    // The comparison is anchored by the instant this load read Security. An earlier read, such as
+    // the one that set the view up, must not be what the anchor comes from.
+    const readAt = ANCHOR + 10 * HOUR;
+    vi.setSystemTime(readAt);
+    invoke.mockImplementation(async (name: string, rawArgs: unknown) => {
+      if (name === "evtx_enumerate_channels") return [liveInfo("Security")];
+      return streamedReply(
+        rawArgs as QueryArgs,
+        Array.from({ length: AUTO_LOAD_MAX_EVENTS - 1 }, () => record("Security"))
+      );
+    });
+    useEvtxStore.setState({ sourceMode: null, loadedChannels: new Set<string>() });
+    await withClockRunning(useEvtxStore.getState().enumerateChannels());
+    installBridge();
 
     const run = startComparison();
-    await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(1));
-    const query = comparisonQueries()[0];
-    expect(query.args.channels).toEqual(["Security"]);
-
-    // The load's own read is what says how far the current period reaches: with it the comparison
-    // is complete, without it the channel's coverage of the current period would be unknown.
-    complete("Security", 0, 0, query.args.requestId);
-    query.resolve(reply(0));
+    await settleComparisonQueries(1);
     await run;
+
+    expect(comparisonQueries()[0].args.channels).toEqual(["Security"]);
     const outcome = settled();
     expect(outcome.status).toBe("complete");
-    if (outcome.status === "complete") expect(outcome.result.gaps).toEqual([]);
+    if (outcome.status === "complete") {
+      expect(outcome.result.gaps).toEqual([]);
+      expect(outcome.result.prior.anchorEpoch).toBe(readAt);
+    }
   });
 
   it("refuses All time before it looks at completeness, since no load could fix that", async () => {
-    await autoLoadSecurity(AUTO_LOAD_MAX_EVENTS);
+    await autoLoad({ Security: AUTO_LOAD_MAX_EVENTS });
     useEvtxStore.setState({ timeWindow: "all" });
 
     await comparePreviousPeriod(ANCHOR);
@@ -732,7 +797,7 @@ describe("when the current period is not fully loaded", () => {
   });
 
   it("does not hold a partly loaded channel against a comparison that does not include it", async () => {
-    resetStore({
+    await resetStore({
       records: [record("Security")],
       selectedChannels: new Set(["System"]),
       loadedChannels: new Set(["System"]),
@@ -742,6 +807,184 @@ describe("when the current period is not fully loaded", () => {
     void startComparison();
     await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(1));
     expect(comparisonQueries()[0].args.channels).toEqual(["System"]);
+  });
+});
+
+describe("what fixes the anchor of a live comparison", () => {
+  beforeEach(freezeClockAtAnchor);
+
+  const iso = (epoch: number) => new Date(epoch).toISOString();
+
+  async function compareAll(total: number): Promise<void> {
+    const run = comparePreviousPeriod(Date.now());
+    await settleComparisonQueries(total);
+    await run;
+  }
+
+  it("is not moved by a stopped load of a channel the comparison leaves out", async () => {
+    // System and Application were read three hours before the Load of Security that was stopped.
+    // Following the advice to deselect Security must not make them look short of that load.
+    await loadLiveAt(["System", "Application"], ANCHOR - 3 * HOUR);
+    vi.setSystemTime(ANCHOR);
+    useEvtxStore.setState({ selectedChannels: new Set(["System", "Application", "Security"]) });
+    await stoppedLoadOfSecurity();
+    useEvtxStore.getState().setSelectedChannels(new Set(["System", "Application"]));
+
+    await compareAll(2);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") {
+      expect(outcome.result.prior.anchorEpoch).toBe(ANCHOR - 3 * HOUR);
+      expect(outcome.result.gaps).toEqual([]);
+    }
+  });
+
+  it("follows a refresh, which reads the loaded channels again", async () => {
+    const refreshedAt = ANCHOR + 2 * HOUR;
+    vi.setSystemTime(refreshedAt);
+    invoke.mockImplementation(async (_name: string, rawArgs: unknown) =>
+      streamedReply(rawArgs as QueryArgs, [])
+    );
+    await withClockRunning(useEvtxStore.getState().refreshLoadedChannels());
+    installBridge();
+    vi.setSystemTime(refreshedAt);
+
+    await compareAll(2);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") expect(outcome.result.prior.anchorEpoch).toBe(refreshedAt);
+  });
+
+  it("does not take a stamp from a load that was superseded before it finished", async () => {
+    // Load A reads Security at one instant and is superseded by Load B at a later one. A's reply
+    // arrives last; it must not rewrite the instant B's current read set.
+    useEvtxStore.setState({ selectedChannels: new Set(["Security"]), loadedChannels: new Set<string>() });
+    const earlier = ANCHOR + HOUR;
+    const later = ANCHOR + 2 * HOUR;
+    vi.setSystemTime(earlier);
+    const loadA = useEvtxStore.getState().queryChannels(["Security"]);
+    await vi.waitFor(() => expect(queries).toHaveLength(1));
+    vi.setSystemTime(later);
+    const loadB = useEvtxStore.getState().queryChannels(["Security"]);
+    await vi.waitFor(() => expect(queries).toHaveLength(2));
+
+    queries[1].resolve(streamedReply(queries[1].args, []));
+    await withClockRunning(loadB);
+    queries[0].resolve(reply(0));
+    await withClockRunning(loadA);
+    expect(useEvtxStore.getState().loadedChannels.has("Security")).toBe(true);
+    useEvtxStore.setState({ selectedChannels: new Set(["Security"]) });
+
+    await compareAll(1);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") expect(outcome.result.prior.anchorEpoch).toBe(later);
+  });
+
+  it("is the earliest read among the compared channels, and states each later one's missing start", async () => {
+    // Application was read three hours after System. Its own window starts three hours later, so
+    // the first three hours of the comparison's current period are not in what it loaded.
+    await loadLiveAt(["System"], ANCHOR - 3 * HOUR);
+    await loadLiveAt(["Application"], ANCHOR);
+    vi.setSystemTime(ANCHOR);
+
+    await compareAll(2);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    expect(outcome.result.prior.anchorEpoch).toBe(ANCHOR - 3 * HOUR);
+    expect(outcome.result.gaps).toEqual([
+      `Current period: Application was read at ${iso(ANCHOR)}, 3 h after the comparison anchor ${iso(ANCHOR - 3 * HOUR)}, so the first 3 h of its current period is not covered.`,
+    ]);
+  });
+
+  it("reports only the part of a missing start that falls inside the window", async () => {
+    // Last hour, with Application read ten hours after System: the whole window is missing, not ten
+    // hours of it.
+    useEvtxStore.setState({ timeWindow: "1h" });
+    await loadLiveAt(["System"], ANCHOR);
+    await loadLiveAt(["Application"], ANCHOR + 10 * HOUR);
+    vi.setSystemTime(ANCHOR);
+    useEvtxStore.setState({ timeWindow: "1h" });
+
+    await compareAll(2);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status === "partial") {
+      expect(outcome.result.gaps[0]).toContain("10 h after the comparison anchor");
+      expect(outcome.result.gaps[0]).toContain("so the first 1 h of its current period is not covered");
+    }
+  });
+
+  async function loadFiveThroughThePool(staggerMs: number): Promise<void> {
+    // Five channels through a pool of four: the fifth is read only when one of the first four has
+    // answered, `staggerMs` after they began.
+    const names = ["System", "Application", "Security", "Setup", "Operational"];
+    useEvtxStore.setState({ channels: names.map(liveInfo), selectedChannels: new Set(names) });
+    const started = Date.now();
+    invoke.mockImplementation(async (_name: string, rawArgs: unknown) => {
+      const args = rawArgs as QueryArgs;
+      if (args.channels[0] === "Operational") return streamedReply(args, []);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      vi.setSystemTime(started + staggerMs);
+      return streamedReply(args, []);
+    });
+    const load = useEvtxStore.getState().queryChannels(names);
+    // The fifth read is issued when one of the first four has answered. Only then does the clock
+    // start moving, so that read is stamped at exactly the stagger.
+    while (queryCommandCalls() < names.length) await new Promise((resolve) => setTimeout(resolve, 5));
+    await withClockRunning(load);
+    installBridge();
+    vi.setSystemTime(started);
+    expect([...useEvtxStore.getState().loadedChannels].sort()).toEqual([...names].sort());
+  }
+
+  it("states a later channel's missing start once it exceeds one percent of the window", async () => {
+    // One percent of 24 h is 14.4 minutes.
+    await loadFiveThroughThePool(20 * 60 * 1000);
+
+    await compareAll(5);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    expect(outcome.result.gaps).toEqual([
+      `Current period: Operational was read at ${iso(ANCHOR + 20 * 60 * 1000)}, 20 min after the comparison anchor ${iso(ANCHOR)}, so the first 20 min of its current period is not covered.`,
+    ]);
+  });
+
+  it("lets a later channel's start pass unremarked below one percent of the window", async () => {
+    await loadFiveThroughThePool(5 * 60 * 1000);
+
+    await compareAll(5);
+
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") {
+      expect(outcome.result.gaps).toEqual([]);
+      expect(outcome.result.prior.anchorEpoch).toBe(ANCHOR);
+    }
+  });
+
+  it("is unavailable, saying why, for a loaded channel whose read was never recorded", async () => {
+    useEvtxStore.setState({
+      selectedChannels: new Set(["System", "Mystery"]),
+      loadedChannels: new Set(["System", "Mystery"]),
+    });
+
+    await comparePreviousPeriod(ANCHOR);
+
+    expect(settled()).toEqual({
+      status: "unavailable",
+      reason: "notReady",
+      detail: "When Mystery was read is not recorded, so the current period cannot be compared.",
+    });
+    expect(queryCommandCalls()).toBe(0);
   });
 });
 
@@ -757,7 +1000,7 @@ describe("comparing loaded files with their previous period", () => {
       fileRecord({ timestampEpoch: PRIOR_TO }),
       fileRecord({ timestampEpoch: ANCHOR }),
     ];
-    resetStore({ sourceMode: "files", records, loadedChannels: new Set<string>() });
+    await resetStore({ sourceMode: "files", records, loadedChannels: new Set<string>() });
 
     await comparePreviousPeriod(ANCHOR);
 
@@ -778,7 +1021,7 @@ describe("comparing loaded files with their previous period", () => {
       fileRecord({ timestampEpoch: PRIOR_TO }),
       fileRecord({ timestampEpoch: ANCHOR }),
     ];
-    resetStore({
+    await resetStore({
       sourceMode: "files",
       records,
       loadedChannels: new Set<string>(),
@@ -805,7 +1048,7 @@ describe("comparing loaded files with their previous period", () => {
   });
 
   it("is partial, stating the span, for an export captured before the anchor", async () => {
-    resetStore({
+    await resetStore({
       sourceMode: "files",
       records: [
         fileRecord({ timestampEpoch: PRIOR_FROM }),
@@ -827,7 +1070,7 @@ describe("comparing loaded files with their previous period", () => {
   });
 
   it("is unavailable, not zero, when the files do not reach back to the previous period", async () => {
-    resetStore({
+    await resetStore({
       sourceMode: "files",
       records: [fileRecord({ timestampEpoch: PRIOR_TO + 1 }), fileRecord({ timestampEpoch: ANCHOR })],
     });
@@ -927,19 +1170,46 @@ describe("the anchor of a live comparison", () => {
       to: iso(anchor - DAY - 1),
     });
 
-  async function runAndSettle(anchorArg: number) {
-    const run = comparePreviousPeriod(anchorArg);
-    await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
-    const requestId = comparisonQueries()[0].args.requestId;
-    for (const query of comparisonQueries()) {
-      complete(query.args.channels[0], 0, 0, requestId);
-      query.resolve(reply(0));
-    }
+  async function runAndSettle(nowEpoch: number) {
+    const run = comparePreviousPeriod(nowEpoch);
+    await settleComparisonQueries(2);
     await run;
     return comparisonQueries()[0].args.filter.time;
   }
 
-  it("is the instant the current load began, not the time the caller passes", async () => {
+  /** Lets a test start and stop a live tail through the real store actions. */
+  function installTailBridge(): void {
+    const base = invoke.getMockImplementation();
+    invoke.mockImplementation((name: string, rawArgs: unknown) => {
+      const args = rawArgs as { channel: string; requestId: string };
+      if (name === "evtx_start_tail" || name === "evtx_stop_tail") {
+        return Promise.resolve({
+          requestId: args.requestId,
+          channel: args.channel,
+          mode: "subscription",
+          active: name === "evtx_start_tail",
+          nextSequence: 0,
+          coverageGaps: [],
+        });
+      }
+      return base ? base(name, rawArgs) : Promise.resolve(undefined);
+    });
+  }
+
+  function tailBatch(channel: string, records: EvtxRecord[]): void {
+    listeners.get("evtx-tail-batch")?.({
+      payload: {
+        requestId: useEvtxStore.getState().tailRequestId,
+        channel,
+        sequence: 0,
+        mode: "subscription",
+        records,
+        coverageGaps: [],
+      },
+    });
+  }
+
+  it("is when the channels were read, not the time the caller passes", async () => {
     vi.setSystemTime(ANCHOR + 3 * HOUR);
 
     const time = await runAndSettle(ANCHOR + 3 * HOUR);
@@ -950,6 +1220,7 @@ describe("the anchor of a live comparison", () => {
     if (outcome.status === "complete") {
       expect(outcome.result.prior.anchorEpoch).toBe(ANCHOR);
       expect(outcome.result.anchorBasis).toBe("load");
+      expect(outcome.result.notes).toEqual([]);
     }
   });
 
@@ -967,157 +1238,102 @@ describe("the anchor of a live comparison", () => {
 
   it("follows a new load, which evaluates its window again", async () => {
     vi.setSystemTime(ANCHOR + 3 * HOUR);
-    resetStore();
+    await resetStore();
+    vi.setSystemTime(ANCHOR + 3 * HOUR);
 
     const time = await runAndSettle(ANCHOR);
 
     expect(JSON.stringify(time)).toBe(windowJson(ANCHOR + 3 * HOUR));
   });
 
-  it("moves to the latest live-tail batch while a tail is running, and says so", async () => {
-    invoke.mockImplementation((name: string, rawArgs: unknown) => {
-      if (name === "evtx_start_tail") {
-        const args = rawArgs as { channel: string; requestId: string };
-        return Promise.resolve({
-          requestId: args.requestId,
-          channel: args.channel,
-          mode: "subscription",
-          active: true,
-          nextSequence: 0,
-          coverageGaps: [],
-        });
-      }
-      if (name === "evtx_query_channels" || name === "evtx_query_remote_channels") {
-        return new Promise((resolve, reject) =>
-          queries.push({ name, args: rawArgs as QueryArgs, resolve, reject })
-        );
-      }
-      return Promise.resolve(undefined);
-    });
-    await useEvtxStore.getState().startLiveTail();
-    const tailRequestId = useEvtxStore.getState().tailRequestId;
-    expect(tailRequestId).not.toBeNull();
-
-    vi.setSystemTime(ANCHOR + HOUR);
-    listeners.get("evtx-tail-batch")?.({
-      payload: {
-        requestId: tailRequestId,
-        channel: "System",
-        sequence: 0,
-        mode: "subscription",
-        records: [record("System")],
-        coverageGaps: [],
-      },
-    });
-    vi.setSystemTime(ANCHOR + 2 * HOUR);
-
-    const time = await runAndSettle(ANCHOR + 2 * HOUR);
-
-    expect(JSON.stringify(time)).toBe(windowJson(ANCHOR + HOUR));
-    const outcome = settled();
-    expect(outcome.status).toBe("complete");
-    if (outcome.status === "complete") expect(outcome.result.anchorBasis).toBe("tail");
-  });
-
-  it("returns to the load once the tail has stopped, though its last batch is still on record", async () => {
-    invoke.mockImplementation((name: string, rawArgs: unknown) => {
-      if (name === "evtx_start_tail") {
-        const args = rawArgs as { channel: string; requestId: string };
-        return Promise.resolve({
-          requestId: args.requestId,
-          channel: args.channel,
-          mode: "subscription",
-          active: true,
-          nextSequence: 0,
-          coverageGaps: [],
-        });
-      }
-      if (name === "evtx_query_channels") {
-        return new Promise((resolve, reject) =>
-          queries.push({ name, args: rawArgs as QueryArgs, resolve, reject })
-        );
-      }
-      return Promise.resolve(undefined);
-    });
-    await useEvtxStore.getState().startLiveTail();
-    vi.setSystemTime(ANCHOR + HOUR);
-    listeners.get("evtx-tail-batch")?.({
-      payload: {
-        requestId: useEvtxStore.getState().tailRequestId,
-        channel: "System",
-        sequence: 0,
-        mode: "subscription",
-        records: [record("System")],
-        coverageGaps: [],
-      },
-    });
-    useEvtxStore.setState({ tailRequestId: null, tailChannels: new Set<string>() });
-    vi.setSystemTime(ANCHOR + 2 * HOUR);
-
-    const time = await runAndSettle(ANCHOR + 2 * HOUR);
-
-    expect(JSON.stringify(time)).toBe(windowJson(ANCHOR));
-  });
-
-  it("is partial, stating the span, for a channel last read before the load the anchor comes from", async () => {
-    // System was read three hours before Application, so its current period stops three hours
-    // short of the anchor the newer load fixed.
-    noteChannelRead(["System"], ANCHOR - 3 * HOUR);
-
-    const run = comparePreviousPeriod(ANCHOR);
-    await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
-    const requestId = comparisonQueries()[0].args.requestId;
-    for (const query of comparisonQueries()) {
-      complete(query.args.channels[0], 0, 0, requestId);
-      query.resolve(reply(0));
-    }
-    await run;
-
-    const outcome = settled();
-    expect(outcome.status).toBe("partial");
-    if (outcome.status !== "partial") return;
-    expect(outcome.result.gaps).toEqual([
-      `Current period: System was read at ${iso(ANCHOR - 3 * HOUR)}, 3 h before the comparison anchor ${iso(ANCHOR)}, so the last 3 h of its current period is not covered.`,
-    ]);
-  });
-
-  it("does not let its own queries refresh when a channel was last read", async () => {
-    noteChannelRead(["System"], ANCHOR - 3 * HOUR);
+  it("does not count its own queries as a read of the current period", async () => {
+    await loadLiveAt(["System"], ANCHOR - 3 * HOUR);
     vi.setSystemTime(ANCHOR + HOUR);
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const run = comparePreviousPeriod(ANCHOR + HOUR);
       await vi.waitFor(() => expect(comparisonQueries().length).toBeGreaterThanOrEqual(2));
-      const batchOfQueries = comparisonQueries().slice(-2);
-      const requestId = batchOfQueries[0].args.requestId;
-      for (const query of batchOfQueries) {
-        complete(query.args.channels[0], 0, 0, requestId);
+      const latest = comparisonQueries().slice(-2);
+      for (const query of latest) {
+        complete(query.args.channels[0], 0, 0, query.args.requestId);
         query.resolve(reply(0));
       }
       await run;
-      // A comparison reads the previous period; it is not a read of the current one.
+      // Application was read three hours after System, however often the previous period is read.
       expect(settled().status).toBe("partial");
     }
   });
 
-  it("is partial, saying so, for a loaded channel with no recorded read time", async () => {
-    noteChannelRead(["Application"], Number.NaN);
-    useEvtxStore.setState({ selectedChannels: new Set(["Application"]) });
+  describe("with a live tail", () => {
+    it("stays at the load when the tail starts after it, and does not claim the span the tail never read", async () => {
+      // The tail subscribes to events that have not happened yet. Two hours after the load it
+      // starts, so nothing between the load and the tail's start is in the records or in a gap.
+      installTailBridge();
+      vi.setSystemTime(ANCHOR + 2 * HOUR);
+      await useEvtxStore.getState().startLiveTail();
+      const tailEvent = record("System", { timestampEpoch: ANCHOR + 2 * HOUR + 60_000 });
+      tailBatch("System", [tailEvent]);
+      vi.setSystemTime(ANCHOR + 3 * HOUR);
 
-    const run = comparePreviousPeriod(ANCHOR);
-    await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(1));
-    const query = comparisonQueries()[0];
-    complete("Application", 0, 0, query.args.requestId);
-    query.resolve(reply(0));
-    await run;
+      const time = await runAndSettle(ANCHOR + 3 * HOUR);
 
-    const outcome = settled();
-    expect(outcome.status).toBe("partial");
-    if (outcome.status === "partial") {
-      expect(outcome.result.gaps).toEqual([
-        "Current period: Application was read at an unknown time, so how much of its current period is covered is unknown.",
+      expect(JSON.stringify(time)).toBe(windowJson(ANCHOR));
+      const outcome = settled();
+      expect(outcome.status).toBe("complete");
+      if (outcome.status !== "complete") return;
+      expect(outcome.result.prior.anchorEpoch).toBe(ANCHOR);
+      expect(outcome.result.anchorBasis).toBe("load");
+      expect(outcome.result.notes).toEqual([
+        `Events after ${iso(ANCHOR)} (live tail) are not included.`,
       ]);
-    }
+      // The tail's event is on the grid and in `records`, and outside the period compared.
+      expect(useEvtxStore.getState().records).toContain(tailEvent);
+      const current = countCurrentPeriod(
+        useEvtxStore.getState().records,
+        outcome.result.prior,
+        {
+          selectedChannels: useEvtxStore.getState().selectedChannels,
+          filterLevels: useEvtxStore.getState().filterLevels,
+          filterEventIds: "",
+          filterSearch: "",
+          quickFilter: DEFAULT_QUICK_FILTER,
+        }
+      );
+      expect(current.counts.total).toBe(0);
+      expect(current.outsideWindowRecords).toBe(1);
+    });
+
+    it("keeps saying so after the tail is stopped, since its events remain on the grid", async () => {
+      installTailBridge();
+      vi.setSystemTime(ANCHOR + HOUR);
+      await useEvtxStore.getState().startLiveTail();
+      tailBatch("System", [record("System", { timestampEpoch: ANCHOR + HOUR })]);
+      await useEvtxStore.getState().stopLiveTail();
+      expect(useEvtxStore.getState().tailRequestId).toBeNull();
+      vi.setSystemTime(ANCHOR + 2 * HOUR);
+
+      const time = await runAndSettle(ANCHOR + 2 * HOUR);
+
+      expect(JSON.stringify(time)).toBe(windowJson(ANCHOR));
+      const outcome = settled();
+      expect(outcome.status).toBe("complete");
+      if (outcome.status === "complete") {
+        expect(outcome.result.notes).toEqual([
+          `Events after ${iso(ANCHOR)} (live tail) are not included.`,
+        ]);
+      }
+    });
+
+    it("adds no note while the tail has appended nothing", async () => {
+      installTailBridge();
+      await useEvtxStore.getState().startLiveTail();
+
+      await runAndSettle(ANCHOR);
+
+      const outcome = settled();
+      expect(outcome.status).toBe("complete");
+      if (outcome.status === "complete") expect(outcome.result.notes).toEqual([]);
+    });
   });
 });
 
@@ -1143,7 +1359,7 @@ describe("the current period's own gaps", () => {
   };
 
   it("makes the comparison partial, with the gap stated, for a loaded channel that is missing events", async () => {
-    resetStore({ coverageDetails: [renderGap] });
+    await resetStore({ coverageDetails: [renderGap] });
 
     const outcome = await compareAndSettle();
 
@@ -1156,7 +1372,7 @@ describe("the current period's own gaps", () => {
   });
 
   it("makes the comparison partial for a live-tail gap", async () => {
-    resetStore({ tailCoverageGaps: ["System: live tail batch 3 was not received"] });
+    await resetStore({ tailCoverageGaps: ["System: live tail batch 3 was not received"] });
 
     const outcome = await compareAndSettle();
 
@@ -1169,7 +1385,7 @@ describe("the current period's own gaps", () => {
   });
 
   it("does not count a gap that belongs to a channel the comparison does not read", async () => {
-    resetStore({
+    await resetStore({
       coverageDetails: [{ ...renderGap, source: "Security" }],
       selectedChannels: new Set(["System"]),
     });
@@ -1182,10 +1398,10 @@ describe("the current period's own gaps", () => {
       kind: "provider" as const,
       reason: "message text unavailable",
     };
-    resetStore({ coverageDetails: [providerGap] });
+    await resetStore({ coverageDetails: [providerGap] });
     expect((await compareAndSettle()).status).toBe("complete");
 
-    resetStore({ coverageDetails: [providerGap], filterSearch: "timeout" });
+    await resetStore({ coverageDetails: [providerGap], filterSearch: "timeout" });
     const outcome = await compareAndSettle();
     expect(outcome.status).toBe("partial");
     if (outcome.status === "partial") {
@@ -1198,7 +1414,7 @@ describe("a remote source", () => {
   beforeEach(freezeClockAtAnchor);
 
   it("notes whose clock cut the periods, without calling it a gap", async () => {
-    resetStore({ remoteMachine: "SRV01" });
+    await resetStore({ remoteMachine: "SRV01" });
     const run = comparePreviousPeriod(ANCHOR);
     await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
     for (const query of comparisonQueries()) {

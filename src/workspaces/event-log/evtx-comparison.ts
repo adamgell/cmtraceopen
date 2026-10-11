@@ -37,10 +37,11 @@ export interface PriorWindow {
   lengthMs: number;
   /**
    * The instant the current window was measured from, and where the current period ends. The
-   * current period is `[anchorEpoch - lengthMs, anchorEpoch]`. For a live source it is the start of
-   * the load the data came from, not the workspace clock, so it does not equal `nowEpoch`; a
-   * consumer must count its current side over this period (`countCurrentPeriod`) and not over a
-   * window measured from `nowEpoch`, or the two sides stop meeting.
+   * current period is `[anchorEpoch - lengthMs, anchorEpoch]`. For a live source it is the earliest
+   * instant a compared channel's current read was issued, not the workspace clock, so it does not
+   * equal `nowEpoch`; a consumer must count its current side over this period
+   * (`countCurrentPeriod`) and not over a window measured from `nowEpoch`, or the two sides stop
+   * meeting. Events a live tail appended after it are outside the period and are not counted.
    */
   anchorEpoch: number;
   /** Inclusive epoch-millisecond bounds. */
@@ -263,11 +264,12 @@ export function countCurrentPeriod(
 export type ComparisonMode = "files" | "live";
 
 /**
- * Where the anchor came from. `load` is the instant the current load evaluated its window, `tail`
- * the latest live-tail batch after it, and `clock` the workspace's `nowEpoch` (loaded files).
- * `result.prior.anchorEpoch` is the anchor itself.
+ * Where the anchor came from. `load` is the earliest instant a compared channel's current read was
+ * issued, and `clock` the workspace's `nowEpoch` (loaded files). A live tail never sets it: the
+ * tail reads only events that have not happened yet, so what lies between a read and the tail's
+ * start is in neither the records nor a gap. `result.prior.anchorEpoch` is the anchor itself.
  */
-export type ComparisonAnchorBasis = "load" | "tail" | "clock";
+export type ComparisonAnchorBasis = "load" | "clock";
 
 export interface ComparisonResult {
   mode: ComparisonMode;
@@ -429,24 +431,34 @@ function limitGapLines(lines: readonly string[]): string[] {
 }
 
 /**
- * What is short in one channel's current period, or null when its read reaches the anchor.
- *
- * `reachEpoch` is the instant the channel's current-period data runs to: when it was read, or the
- * latest live-tail batch if a tail has extended it. A channel read before the anchor was fixed has
- * no events from the gap between, so a count that treats it as whole would understate the current
- * period.
+ * The share of the window a compared channel's current read may begin after the anchor before the
+ * missing start is stated. The anchor is the earliest read among the compared channels, and a read
+ * that waited its turn in the pool, or behind a slow enumeration, began later. Its own window then
+ * starts later too, so the first part of the comparison's current period is not in what it loaded.
+ * Under this share that band is a documented tolerance, in the same spirit as the sub-millisecond
+ * sliver at the previous period's end: real, small, and not worth a gap on every comparison. Above
+ * it the band is stated. Recorded for Adam as a policy choice (1% of the window).
  */
-export function channelReachGap(
+const MAX_UNREPORTED_START_BAND_SHARE = 0.01;
+
+/**
+ * What is missing from the start of one channel's current period, or null when it is within the
+ * tolerance above.
+ *
+ * The comparison's current period is `[anchor - length, anchor]`, anchored at the earliest read
+ * among the compared channels. A channel read `readEpoch - anchorEpoch` later loaded
+ * `[readEpoch - length, readEpoch]`, so the first part of the comparison's period is not in it. The
+ * missing part is stated as at most the whole window.
+ */
+export function channelStartGap(
   channel: string,
-  reachEpoch: number | undefined,
-  anchorEpoch: number
+  readEpoch: number,
+  anchorEpoch: number,
+  lengthMs: number
 ): string | null {
-  if (reachEpoch === undefined || !Number.isFinite(reachEpoch)) {
-    return `${channel} was read at an unknown time, so how much of its current period is covered is unknown.`;
-  }
-  if (reachEpoch >= anchorEpoch) return null;
-  const span = formatSpan(anchorEpoch - reachEpoch);
-  return `${channel} was read at ${isoOrUnknown(reachEpoch)}, ${span} before the comparison anchor ${isoOrUnknown(anchorEpoch)}, so the last ${span} of its current period is not covered.`;
+  const band = readEpoch - anchorEpoch;
+  if (band <= lengthMs * MAX_UNREPORTED_START_BAND_SHARE) return null;
+  return `${channel} was read at ${isoOrUnknown(readEpoch)}, ${formatSpan(band)} after the comparison anchor ${isoOrUnknown(anchorEpoch)}, so the first ${formatSpan(Math.min(band, lengthMs))} of its current period is not covered.`;
 }
 
 /**
@@ -546,12 +558,18 @@ export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutco
 
   if (tally.unplacedRecords > 0) gaps.push(unplacedGap(tally.unplacedRecords, "files"));
 
-  // A channel read in full that held no events in the period is a real zero; a capture with a
-  // reported hole is not known to be.
+  // A channel read in full that held no events in the period is a real zero. A channel is read in
+  // full only if none of the sources that hold it reported a hole: a clean capture of System does
+  // not make System zero when another capture of System lost a chunk.
   const counted = new Map(tally.counts.channels);
   const gapSources = new Set(carried.values());
+  const channelsWithAHole = new Set(
+    coverage.captures
+      .filter((capture) => gapSources.has(capture.source))
+      .map((capture) => capture.channel)
+  );
   for (const capture of coverage.captures) {
-    if (!counted.has(capture.channel) && !gapSources.has(capture.source)) {
+    if (!counted.has(capture.channel) && !channelsWithAHole.has(capture.channel)) {
       counted.set(capture.channel, 0);
     }
   }
@@ -658,16 +676,14 @@ export function isComparisonRequestId(requestId: string): boolean {
  */
 const COMPARISON_STRAGGLER_GRACE_MS = 250;
 
-/** What fixed the live anchor: the load that evaluated the window, or a later live-tail batch. */
-export type LiveAnchorBasis = Exclude<ComparisonAnchorBasis, "clock">;
-
 export interface LiveComparisonInput {
   window: EvtxTimeWindow;
-  /** The instant the current load evaluated its window, or the latest live-tail batch after it. */
+  /** The earliest instant a compared channel's current read was issued. */
   anchorEpoch: number;
-  anchorBasis: LiveAnchorBasis;
   /** True for a remote machine, whose clock this computer's clock is compared against. */
   remote: boolean;
+  /** Context for the reader that is not a shortfall, such as events deliberately left out. */
+  notes: readonly string[];
   /** The channels to read, each queried under the session's request ID. */
   channels: readonly string[];
   visibility: ComparisonVisibility;
@@ -713,7 +729,6 @@ interface ChannelStream {
 interface ActiveSession {
   requestId: string;
   prior: PriorWindow;
-  anchorBasis: LiveAnchorBasis;
   notes: string[];
   currentPeriodGaps: string[];
   /** Whether provider-description gaps can change a count, fixed when the comparison starts. */
@@ -815,10 +830,13 @@ function finishIfSettled(session: ActiveSession): void {
   gaps.push(...session.currentPeriodGaps.map((gap) => `Current period: ${gap}`));
 
   // A channel read in full that held no events in the period is a real zero, which an unread
-  // channel is not.
+  // channel, or one whose stream reported anything missing, is not.
   const counted = new Map(tally.counts.channels);
   for (const channel of session.channels) {
-    if (!counted.has(channel) && !unreadChannels.includes(channel)) counted.set(channel, 0);
+    const stream = session.streams.get(channel);
+    if (!counted.has(channel) && stream !== undefined && stream.gaps.length === 0) {
+      counted.set(channel, 0);
+    }
   }
 
   const outcome: ComparisonOutcome =
@@ -830,7 +848,7 @@ function finishIfSettled(session: ActiveSession): void {
             mode: "live",
             window: session.prior.window,
             prior: session.prior,
-            anchorBasis: session.anchorBasis,
+            anchorBasis: "load",
             counts: { ...tally.counts, channels: counted },
             gaps,
             notes: session.notes,
@@ -918,8 +936,10 @@ export function beginLiveComparison(input: LiveComparisonInput): LiveComparisonS
   const session: ActiveSession = {
     requestId,
     prior,
-    anchorBasis: input.anchorBasis,
-    notes: input.remote ? ["Periods are computed on this computer's clock"] : [],
+    notes: [
+      ...(input.remote ? ["Periods are computed on this computer's clock"] : []),
+      ...input.notes,
+    ],
     currentPeriodGaps: [...input.currentPeriodGaps],
     providerGapsMatter: messageTextCriterionActive(input.visibility),
     channels,

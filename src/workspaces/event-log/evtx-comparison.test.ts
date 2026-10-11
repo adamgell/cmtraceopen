@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   beginLiveComparison,
   cancelComparison,
+  channelStartGap,
   checkFilesCoverage,
   compareLoadedFiles,
   computePriorWindow,
@@ -315,6 +316,37 @@ describe("countCurrentPeriod", () => {
       visibility({ filterLevels: new Set<EvtxLevel>(["Error"]) })
     );
     expect(current.counts.total).toBe(1);
+  });
+});
+
+describe("channelStartGap", () => {
+  const LENGTH = EVTX_TIME_WINDOW_MS["24h"];
+  const ONE_PERCENT = LENGTH / 100;
+  const iso = (epoch: number) => new Date(epoch).toISOString();
+
+  it("is silent for a channel read at the anchor, and up to one percent of the window after it", () => {
+    expect(channelStartGap("System", ANCHOR, ANCHOR, LENGTH)).toBeNull();
+    expect(channelStartGap("System", ANCHOR + ONE_PERCENT, ANCHOR, LENGTH)).toBeNull();
+  });
+
+  it("states the missing start as soon as it exceeds one percent of the window", () => {
+    expect(channelStartGap("System", ANCHOR + ONE_PERCENT + 1, ANCHOR, LENGTH)).toBe(
+      `System was read at ${iso(ANCHOR + ONE_PERCENT + 1)}, 14 min after the comparison anchor ${iso(ANCHOR)}, so the first 14 min of its current period is not covered.`
+    );
+  });
+
+  it("reports at most the whole window as missing", () => {
+    const gapText = channelStartGap("System", ANCHOR + 10 * HOUR, ANCHOR, HOUR);
+    expect(gapText).toContain("10 h after the comparison anchor");
+    expect(gapText).toContain("so the first 1 h of its current period is not covered");
+  });
+
+  it("scales the tolerance with the window", () => {
+    // One percent of an hour is 36 seconds; of 30 days, 7.2 hours.
+    expect(channelStartGap("System", ANCHOR + 40_000, ANCHOR, HOUR)).not.toBeNull();
+    expect(channelStartGap("System", ANCHOR + 30_000, ANCHOR, HOUR)).toBeNull();
+    expect(channelStartGap("System", ANCHOR + 7 * HOUR, ANCHOR, EVTX_TIME_WINDOW_MS["30d"])).toBeNull();
+    expect(channelStartGap("System", ANCHOR + 8 * HOUR, ANCHOR, EVTX_TIME_WINDOW_MS["30d"])).not.toBeNull();
   });
 });
 
@@ -795,6 +827,30 @@ describe("compareLoadedFiles", () => {
       expect(outcome.result.counts.channels.has("Application")).toBe(false);
     });
 
+    it("does not call a channel 0 when any of its sources reported a hole", () => {
+      const prior = priorFor();
+      const records = [
+        // Both captures span the previous period and neither holds an event inside it.
+        record({ channel: "System", sourceLabel: "a.evtx", timestampEpoch: prior.fromMs - HOUR }),
+        record({ channel: "System", sourceLabel: "a.evtx", timestampEpoch: ANCHOR }),
+        record({ channel: "System", sourceLabel: "b.evtx", timestampEpoch: prior.fromMs - HOUR }),
+        record({ channel: "System", sourceLabel: "b.evtx", timestampEpoch: ANCHOR }),
+      ];
+      const outcome = compareLoadedFiles(
+        input(records, {
+          visibility: visibility({ selectedChannels: new Set(["System"]) }),
+          coverageDetails: [
+            { source: "a.evtx", kind: "chunk", reason: "chunk 3 unreadable", chunkId: 3 },
+          ],
+        })
+      );
+      expect(outcome.status).toBe("partial");
+      if (outcome.status === "partial") {
+        // b.evtx is clean, but System also lives in a.evtx, whose damaged chunk may hold events.
+        expect(outcome.result.counts.channels.has("System")).toBe(false);
+      }
+    });
+
     it("does not call a channel 0 when its source reported a hole", () => {
       const prior = priorFor();
       const outcome = compareLoadedFiles(
@@ -853,8 +909,8 @@ describe("a live comparison", () => {
     const session = beginLiveComparison({
       window: "24h",
       anchorEpoch: ANCHOR,
-      anchorBasis: "load",
       remote: false,
+      notes: [],
       currentPeriodGaps: [],
       channels,
       visibility: visibility(),
@@ -1066,18 +1122,72 @@ describe("a live comparison", () => {
     if (outcome.status === "complete") expect(outcome.result.counts.total).toBe(1);
   });
 
-  it("records the anchor and its basis, and counts a channel with no events as 0", () => {
-    const session = begin({ anchorBasis: "tail" });
+  it("records the anchor and that it comes from the load, and counts a channel with no events as 0", () => {
+    const session = begin();
     deliver(session, "System", systemEvents(2));
     deliver(session, "Application", []);
     const outcome = settled();
     expect(outcome.status).toBe("complete");
     if (outcome.status !== "complete") return;
-    expect(outcome.result.anchorBasis).toBe("tail");
+    expect(outcome.result.anchorBasis).toBe("load");
     expect(outcome.result.prior.anchorEpoch).toBe(ANCHOR);
     expect(outcome.result.counts.channels.get("System")).toBe(2);
     expect(outcome.result.counts.channels.get("Application")).toBe(0);
     expect(outcome.result.notes).toEqual([]);
+  });
+
+  it("carries the caller's notes after the remote one, without calling any of them a gap", () => {
+    const session = begin({
+      remote: true,
+      notes: ["Events after 2026-08-10T12:00:00.000Z (live tail) are not included."],
+    });
+    deliver(session, "System", systemEvents(1));
+    deliver(session, "Application", []);
+    const outcome = settled();
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") {
+      expect(outcome.result.notes).toEqual([
+        "Periods are computed on this computer's clock",
+        "Events after 2026-08-10T12:00:00.000Z (live tail) are not included.",
+      ]);
+      expect(outcome.result.gaps).toEqual([]);
+    }
+  });
+
+  it("does not call a channel 0 when its stream lost batches, even if nothing it did deliver is counted", () => {
+    // Two batches were promised and one arrived, holding an event the view's criteria hide. The
+    // channel's count is unknown, not zero.
+    const session = begin({
+      channels: ["System"],
+      visibility: visibility({ filterLevels: new Set<EvtxLevel>(["Error"]) }),
+    });
+    batch(session, "System", 0, systemEvents(1, { level: "Information" }));
+    terminal(session, "System", 2, 3);
+    session.replied("System", reply(3));
+    vi.runAllTimers();
+
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status !== "partial") return;
+    expect(outcome.result.counts.total).toBe(0);
+    expect(outcome.result.counts.channels.has("System")).toBe(false);
+    expect(outcome.result.gaps.length).toBeGreaterThan(0);
+  });
+
+  it("does not call a channel 0 when its reply reported a hole, though events arrived", () => {
+    const session = begin({
+      channels: ["System"],
+      visibility: visibility({ filterLevels: new Set<EvtxLevel>(["Error"]) }),
+    });
+    batch(session, "System", 0, systemEvents(1, { level: "Information" }));
+    terminal(session, "System", 1, 1);
+    session.replied("System", reply(1, { coverageGaps: [gap({ kind: "record" })] }));
+
+    const outcome = settled();
+    expect(outcome.status).toBe("partial");
+    if (outcome.status === "partial") {
+      expect(outcome.result.counts.channels.has("System")).toBe(false);
+    }
   });
 
   it("notes whose clock cut the periods for a remote source, without calling it a gap", () => {
@@ -1417,8 +1527,8 @@ describe("a live comparison", () => {
       beginLiveComparison({
         window: "all",
         anchorEpoch: ANCHOR,
-        anchorBasis: "load",
         remote: false,
+        notes: [],
         currentPeriodGaps: [],
         channels,
         visibility: visibility(),
@@ -1434,8 +1544,8 @@ describe("a live comparison", () => {
       beginLiveComparison({
         window: "24h",
         anchorEpoch: ANCHOR,
-        anchorBasis: "load",
         remote: false,
+        notes: [],
         currentPeriodGaps: [],
         channels: [],
         visibility: visibility(),
@@ -1497,8 +1607,8 @@ describe("publishing a files comparison", () => {
     const session = beginLiveComparison({
       window: "24h",
       anchorEpoch: ANCHOR,
-      anchorBasis: "load",
       remote: false,
+      notes: [],
       currentPeriodGaps: [],
       channels: ["System"],
       visibility: visibility(),
