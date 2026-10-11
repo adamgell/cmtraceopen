@@ -65,7 +65,6 @@ function summaries(records: EvtxRecord[], overrides: Partial<GroupSummariesInput
     timeZoneMode: "utc",
     timeWindow: "24h",
     nowMs: NOW,
-    readThroughMs: NOW,
     sourceMode: "live",
     channelRead: () => "complete",
     ...overrides,
@@ -312,7 +311,8 @@ describe("EvtxGroupedTable: the trend sparkline", () => {
       [...bars, ...zeros].map((mark) => Number(mark.getAttribute("data-bin"))),
     );
     for (let bin = 0; bin < 12; bin += 1) expect(drawnBins.has(bin), `bin ${bin}`).toBe(false);
-    expect(screen.getByText(/24 h trend: 2 of 24 intervals had events, busiest 1; 12 intervals not read/)).toBeInTheDocument();
+    // Unread: the 12 bins before the oldest kept event and the 3 after System's newest event.
+    expect(screen.getByText(/24 h trend: 2 of 24 intervals had events, busiest 1; 15 intervals not read/)).toBeInTheDocument();
   });
 
   it("fills the bars with the group's level bar color", () => {
@@ -356,6 +356,19 @@ describe("EvtxGroupedTable: virtualization", () => {
     expect(values).toContain(result.summaries[4999].value);
     expect(values).not.toContain(result.summaries[0].value);
     expect(groupRows().length).toBeLessThanOrEqual(visible + 2 * GROUPED_OVERSCAN + 1);
+  });
+
+  it("keeps one tab stop in the DOM after the active control scrolls out of the rendered window", () => {
+    const result = manyGroups(5000);
+    renderTable({ result });
+    const scroller = document.querySelector<HTMLElement>("[data-evtx-grouped-scroller]")!;
+    act(() => {
+      scroller.scrollTop = 5000 * groupedRowHeights(metrics13).group - 600;
+      fireEvent.scroll(scroller);
+    });
+    const stops = document.querySelectorAll('button[tabindex="0"]');
+    expect(stops).toHaveLength(1);
+    expect(scroller.contains(stops[0])).toBe(true);
   });
 
   it("keeps the bound with a group expanded, and renders no other group's items", () => {
@@ -513,7 +526,7 @@ describe.each(THEMES)("contrast in the %s theme", (_id, theme) => {
     useUiStore.setState({ themeId: theme.id });
     render(
       <div style={{ backgroundColor: tokens.colorNeutralBackground1 }}>
-        <EvtxGroupedView records={[]} nowEpoch={NOW} readThroughMs={NOW} />
+        <EvtxGroupedView records={[]} nowEpoch={NOW} />
       </div>,
     );
     const status = screen.getByRole("status");
@@ -535,14 +548,14 @@ describe("EvtxGroupedView", () => {
 
   it("says it is loading rather than showing no groups while records load", () => {
     useEvtxStore.setState({ isLoading: true, records: [] });
-    render(<EvtxGroupedView records={[]} nowEpoch={NOW} readThroughMs={NOW} />);
+    render(<EvtxGroupedView records={[]} nowEpoch={NOW} />);
     expect(screen.getByRole("status")).toHaveTextContent("Loading events...");
     expect(screen.queryByRole("table")).toBeNull();
   });
 
   it("says when the filters leave nothing to group", () => {
     useEvtxStore.setState({ records: sampleRecords(), sourceMode: "files", timeWindow: "all" });
-    render(<EvtxGroupedView records={[]} nowEpoch={NOW} readThroughMs={NOW} />);
+    render(<EvtxGroupedView records={[]} nowEpoch={NOW} />);
     expect(screen.getByRole("status")).toHaveTextContent("No records match the current filters.");
   });
 
@@ -555,7 +568,7 @@ describe("EvtxGroupedView", () => {
       groupBy: [],
       filterEventIds: "1000,7036",
     });
-    render(<EvtxGroupedView records={records} nowEpoch={NOW} readThroughMs={NOW} />);
+    render(<EvtxGroupedView records={records} nowEpoch={NOW} />);
     expect(screen.getByRole("columnheader", { name: "All loaded trend" })).toBeInTheDocument();
     fireEvent.click(disclosure(/^Event ID 7036/));
     fireEvent.click(screen.getByRole("button", { name: "Show all 12 in table" }));
@@ -566,7 +579,7 @@ describe("EvtxGroupedView", () => {
   it("follows the first Group by field", () => {
     const records = sampleRecords();
     useEvtxStore.setState({ records, sourceMode: "files", timeWindow: "all", groupBy: ["level", "provider"] });
-    render(<EvtxGroupedView records={records} nowEpoch={NOW} readThroughMs={NOW} />);
+    render(<EvtxGroupedView records={records} nowEpoch={NOW} />);
     expect(screen.getAllByRole("columnheader")[3]).toHaveTextContent("Level");
     expect([...groupRows()].map((row) => row.dataset.groupValue)).toEqual([
       "Error",
@@ -582,7 +595,7 @@ describe("EvtxGroupedView", () => {
       const only = (...ids: number[]) => all.filter((record) => ids.includes(record.eventId));
       useEvtxStore.setState({ records: all, sourceMode: "files", timeWindow: "all" });
       const view = (records: EvtxRecord[]) => (
-        <EvtxGroupedView records={records} nowEpoch={NOW} readThroughMs={NOW} />
+        <EvtxGroupedView records={records} nowEpoch={NOW} />
       );
       const { rerender } = render(view(only(7036)));
       expect(groupRows()).toHaveLength(1);

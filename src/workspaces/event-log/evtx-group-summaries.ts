@@ -12,8 +12,9 @@
  * across the whole bin; otherwise it is `null`, unknown, and must not be drawn as zero. What
  * "read" means comes from the coverage the store holds (see `classifyChannelReads`).
  *
- * Nothing here reads a clock; the caller passes `nowMs` and `readThroughMs`.
+ * Nothing here reads a clock; the caller passes `nowMs`.
  */
+import { formatCoverageGap } from "./evtx-coverage";
 import { buildGroupedRows, type EvtxGroupField } from "./evtx-filter";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import {
@@ -160,10 +161,17 @@ export function classifyChannelReads(input: ChannelReadInput): (channel: string)
     return owners;
   };
 
-  const gaps: SourcedReason[] = [
-    ...input.coverageDetails.map(({ source, kind, reason }) => ({ source, kind, reason })),
+  const structured: EvtxCoverageGap[] = [
+    ...input.coverageDetails,
     ...input.manifestCoverage.map(({ path, kind, reason }) => ({ source: path, kind, reason })),
+  ];
+  // The store also writes each structured gap as a string (`formatCoverageGap`). That twin says
+  // nothing new, and read without its kind it would turn a gap that loses no event into a loss.
+  const twins = new Set(structured.map(formatCoverageGap));
+  const gaps: SourcedReason[] = [
+    ...structured.map(({ source, kind, reason }) => ({ source, kind, reason })),
     ...[...input.legacyCoverage, ...input.tailCoverage]
+      .filter((text) => !twins.has(text.trim()))
       .map(parseGapString)
       .filter((gap): gap is SourcedReason => gap !== null),
   ];
@@ -230,8 +238,6 @@ export interface GroupSummariesInput {
   timeWindow: EvtxTimeWindow;
   /** The workspace clock snapshot: a finite window ends here. */
   nowMs: number;
-  /** Live mode: when the loaded records were last read. Bins after it were not. */
-  readThroughMs: number;
   sourceMode: "files" | "live" | null;
   channelRead: (channel: string) => ChannelReadKind;
 }
@@ -267,9 +273,16 @@ interface Interval {
 
 /**
  * The time each channel was read across, or null where nothing about its empty bins is known.
- * A live query covered the window up to the last read (from the oldest kept event when the load
- * kept the newest only). A file holds a contiguous run of events, so it covers its oldest to its
- * newest event and nothing either side.
+ *
+ * It ends at the channel's newest loaded event in every mode. The store keeps no time for a
+ * channel's last read, and the records changing is no proof either: loading another channel or a
+ * tail batch for another channel changes them too. So nothing after a channel's newest event is
+ * claimed, and a quiet channel's latest bins are left unknown rather than shown as zero.
+ *
+ * It starts at the window's start for a live channel read whole under a time window (the query
+ * asked for the whole window). Otherwise it starts at the channel's oldest event: a load that kept
+ * the newest events only, a query with no window (what came before the oldest retained event is
+ * unknown), and a file, which holds a contiguous run of events and nothing either side of it.
  */
 function channelIntervals(
   input: GroupSummariesInput,
@@ -294,14 +307,9 @@ function channelIntervals(
     const own = bounds.get(channel);
     let interval: Interval | null = null;
     if (read !== "incomplete" && own !== undefined) {
-      if (input.sourceMode === "live") {
-        interval = {
-          startMs: read === "newestOnly" ? own.startMs : span.startMs,
-          endMs: input.readThroughMs,
-        };
-      } else {
-        interval = { startMs: own.startMs, endMs: own.endMs };
-      }
+      const fromWindowStart =
+        input.sourceMode === "live" && read === "complete" && input.timeWindow !== "all";
+      interval = { startMs: fromWindowStart ? span.startMs : own.startMs, endMs: own.endMs };
     }
     cache.set(channel, interval);
     return interval;

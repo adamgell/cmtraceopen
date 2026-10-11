@@ -515,6 +515,12 @@ export function EvtxGroupedTable({
   const keyLabel = keyColumnLabel(field);
   const zoneLabel = timeZoneLabel(timeZoneMode);
   const virtualRows = virtualizer.getVirtualItems();
+  // The one tab stop must be in the DOM. When the active control has scrolled out of the rendered
+  // window, the first rendered control takes it, so Tab never skips the view.
+  const tabStop = virtualRows.some((virtualRow) => virtualRow.index === activeIndex)
+    ? activeIndex
+    : (virtualRows.find((virtualRow) => rows[virtualRow.index] && isFocusable(rows[virtualRow.index]))
+        ?.index ?? activeIndex);
 
   const headerCell = (label: string, width: number | null, hidden = false, alignEnd = false) => (
     <div
@@ -570,7 +576,7 @@ export function EvtxGroupedTable({
             className={styles.disclosure}
             aria-expanded={row.expanded}
             aria-label={name}
-            tabIndex={index === activeIndex ? 0 : -1}
+            tabIndex={index === tabStop ? 0 : -1}
             onFocus={() => setActiveKey(rowKeys[index])}
           >
             {row.expanded ? (
@@ -702,7 +708,8 @@ export function EvtxGroupedTable({
         alignItems: "center",
         height: `${rowHeight(row, heights)}px`,
         boxSizing: "border-box",
-        padding: `${first ? ITEMS_PADDING_TOP : 0}px ${ROW_PADDING_X}px ${last ? ITEMS_PADDING_BOTTOM : 0}px ${ITEMS_INDENT}px`,
+        // Spec 8.8: the container's padding is 4px 0 6px 56px.
+        padding: `${first ? ITEMS_PADDING_TOP : 0}px 0 ${last ? ITEMS_PADDING_BOTTOM : 0}px ${ITEMS_INDENT}px`,
         borderBottom: last ? `1px solid ${tokens.colorNeutralStroke2}` : undefined,
         backgroundColor: palette.items.background,
         color: palette.items.ink,
@@ -789,7 +796,7 @@ export function EvtxGroupedTable({
       <button
         type="button"
         className={styles.showAll}
-        tabIndex={index === activeIndex ? 0 : -1}
+        tabIndex={index === tabStop ? 0 : -1}
         onFocus={() => setActiveKey(rowKeys[index])}
         onClick={() => onShowAll?.(row.summary.eventIds[0])}
         // Inline, so the color is explicit where it is measured; hover and focus are in the class.
@@ -906,12 +913,10 @@ export interface EvtxGroupedViewProps {
   records: EvtxRecord[];
   /** The workspace clock snapshot: a finite time window ends here. */
   nowEpoch: number;
-  /** When the loaded records last changed, that is, when they were last read. */
-  readThroughMs: number;
 }
 
 /** The Grouped view, wired to the Event Logs stores. */
-export function EvtxGroupedView({ records, nowEpoch, readThroughMs }: EvtxGroupedViewProps) {
+export function EvtxGroupedView({ records, nowEpoch }: EvtxGroupedViewProps) {
   const loadedRecords = useEvtxStore((s) => s.records);
   const isLoading = useEvtxStore((s) => s.isLoading);
   const groupBy = useEvtxStore((s) => s.groupBy);
@@ -953,7 +958,6 @@ export function EvtxGroupedView({ records, nowEpoch, readThroughMs }: EvtxGroupe
       timeZoneMode,
       timeWindow,
       nowMs: nowEpoch,
-      readThroughMs,
       sourceMode,
       channelRead,
     }),
@@ -964,7 +968,6 @@ export function EvtxGroupedView({ records, nowEpoch, readThroughMs }: EvtxGroupe
       timeZoneMode,
       timeWindow,
       nowEpoch,
-      readThroughMs,
       sourceMode,
       channelRead,
     ],

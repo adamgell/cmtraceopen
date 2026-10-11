@@ -9,6 +9,7 @@ import {
   type ChannelReadKind,
   type GroupSummariesInput,
 } from "./evtx-group-summaries";
+import { formatCoverageGap } from "./evtx-coverage";
 import { buildGroupedRows } from "./evtx-filter";
 import type { EvtxLevel, EvtxRecord } from "./types";
 
@@ -50,7 +51,6 @@ function input(overrides: Partial<GroupSummariesInput>): GroupSummariesInput {
     timeZoneMode: "utc",
     timeWindow: "24h",
     nowMs: NOW,
-    readThroughMs: NOW,
     sourceMode: "live",
     channelRead: complete,
     ...overrides,
@@ -233,6 +233,8 @@ describe("buildGroupSummaries: the 24-bin trend", () => {
       rec({ at: DAY_START + 30 * 60 * 1000 }),
       rec({ at: DAY_START + 30 * 60 * 1000 + 1 }),
       rec({ at: DAY_START + 5 * HOUR + 1 }),
+      // Another System event at the end of the window: System was read up to then.
+      rec({ eventId: 1, at: NOW }),
     ];
     const result = buildGroupSummaries(input({ records }));
     expect(result.span).toEqual({ startMs: DAY_START, endMs: NOW });
@@ -289,6 +291,7 @@ describe("buildGroupSummaries: a trend never draws an unread span as zero (soul.
     const records = [
       rec({ eventId: 7036, at: DAY_START + 12 * HOUR + 1 }),
       rec({ eventId: 7036, at: DAY_START + 20 * HOUR }),
+      rec({ eventId: 7036, at: DAY_START + 23 * HOUR + 59 * 60 * 1000 }),
     ];
     const result = buildGroupSummaries(
       input({ records, channelRead: (channel) => (channel === "System" ? "newestOnly" : "complete") }),
@@ -305,7 +308,8 @@ describe("buildGroupSummaries: a trend never draws an unread span as zero (soul.
     }
     expect(trend[13]).toBe(0);
     expect(trend[20]).toBe(1);
-    expect(trend[23]).toBe(0);
+    expect(trend[22]).toBe(0);
+    expect(trend[23]).toBe(1);
   });
 
   it("leaves every empty bin unknown for a channel with a gap that has no time", () => {
@@ -334,16 +338,40 @@ describe("buildGroupSummaries: a trend never draws an unread span as zero (soul.
     expect(mixed?.trend.slice(0, 18).every((bin) => bin === null)).toBe(true);
     expect(mixed?.trend[18]).toBe(0);
     expect(mixed?.trend[20]).toBe(1);
+    // System's newest loaded event is at 20:00, so nothing after it is known for the group.
+    expect(mixed?.trend[21]).toBeNull();
+    expect(mixed?.trend[22]).toBe(1);
   });
 
-  it("leaves bins after the last read unknown in live mode", () => {
-    // Loaded at 20:00; the clock has since moved to midnight without another read.
-    const records = [rec({ at: DAY_START + 10 * HOUR })];
-    const [summary] = buildGroupSummaries(
-      input({ records, readThroughMs: DAY_START + 20 * HOUR }),
-    ).summaries;
-    expect(summary.trend[19]).toBe(0);
-    expect(summary.trend.slice(20).every((bin) => bin === null)).toBe(true);
+  it("leaves a live channel's bins after its newest loaded event unknown, whatever other channels hold", () => {
+    // System was read until 23:00; Application's newest event is at 09:00. Nothing the store holds
+    // says Application was read after that (another channel's later load or tail batch does not).
+    const records = [
+      rec({ eventId: 1, channel: "System", at: DAY_START + 23 * HOUR }),
+      rec({ eventId: 1000, channel: "Application", at: DAY_START + 2 * HOUR }),
+      rec({ eventId: 1000, channel: "Application", at: DAY_START + 9 * HOUR }),
+    ];
+    const result = buildGroupSummaries(input({ records }));
+    const application = result.summaries.find((summary) => summary.value === "1000");
+    // A complete live read covered the window from its start.
+    expect(application?.trend[0]).toBe(0);
+    expect(application?.trend[2]).toBe(1);
+    expect(application?.trend[8]).toBe(0);
+    expect(application?.trend[9]).toBe(1);
+    expect(application?.trend.slice(10).every((bin) => bin === null)).toBe(true);
+  });
+
+  it("starts a live channel at its oldest event when there is no window: the query asked for no start", () => {
+    const records = [
+      rec({ eventId: 1, channel: "System", at: DAY_START }),
+      rec({ eventId: 1, channel: "System", at: DAY_START + 24 * HOUR }),
+      rec({ eventId: 2, channel: "Application", at: DAY_START + 6 * HOUR }),
+      rec({ eventId: 2, channel: "Application", at: DAY_START + 24 * HOUR }),
+    ];
+    const result = buildGroupSummaries(input({ records, timeWindow: "all" }));
+    const application = result.summaries.find((summary) => summary.value === "2");
+    expect(application?.trend.slice(0, 6).every((bin) => bin === null)).toBe(true);
+    expect(application?.trend[7]).toBe(0);
   });
 
   it("knows a file only from its oldest to its newest event", () => {
@@ -421,6 +449,22 @@ describe("classifyChannelReads", () => {
       ],
     });
     expect(read("System")).toBe("incomplete");
+  });
+
+  it("does not count a gap string twice when it repeats a structured gap", () => {
+    const provider = { source: "System", kind: "provider" as const, reason: "message unavailable" };
+    const chunk = { source: "C:/logs/App.evtx", kind: "chunk" as const, reason: "bad chunk", chunkId: 3 };
+    const read = classifyChannelReads({
+      ...base,
+      channels: [
+        { name: "Application", eventCount: 1, sourceType: { file: { path: "C:/logs/App.evtx" } } },
+      ],
+      coverageDetails: [provider, chunk],
+      legacyCoverage: [formatCoverageGap(provider), formatCoverageGap(chunk)],
+    });
+    // The provider gap leaves every event in place; its string twin must not undo that.
+    expect(read("System")).toBe("complete");
+    expect(read("Application")).toBe("incomplete");
   });
 
   it("ignores gaps that leave every event in place", () => {
