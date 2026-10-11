@@ -5,6 +5,36 @@ use crate::intune::apps::windows::ime::models::IntuneDiagnosticSeverity;
 
 use super::derive::issue;
 
+/// The bare `8-4-4-4-12` hex form of an enrollment GUID, accepting at most one
+/// pair of surrounding braces; `None` when the value is not GUID-shaped.
+///
+/// Windows names the Enrollments subkeys and the EnterpriseMgmt task folders
+/// with the unbraced GUID (the ESP corpus,
+/// `tests/fixtures/esp/edge-cases.json`, has the same shape), while older
+/// fixtures and hand-made bundles use braces, so both forms have to meet.
+pub fn unbraced_guid(value: &str) -> Option<&str> {
+    let bare = match value.strip_prefix('{') {
+        Some(inner) => inner.strip_suffix('}')?,
+        None => value,
+    };
+    let mut groups = bare.split('-');
+    let shaped = [8, 4, 4, 4, 12].iter().all(|&len| {
+        groups.next().is_some_and(|group| {
+            group.len() == len && group.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    }) && groups.next().is_none();
+    shaped.then_some(bare)
+}
+
+/// Whether two values name the same GUID, ignoring braces and letter case.
+/// A value that is not GUID-shaped matches nothing.
+pub fn same_enrollment_guid(left: &str, right: &str) -> bool {
+    match (unbraced_guid(left), unbraced_guid(right)) {
+        (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
+        _ => false,
+    }
+}
+
 /// Set the registry-confirmed `mdm_enrolled` from the enrollment evidence.
 ///
 /// `Some(true)` when an enrollment with `EnrollmentState` 1 matches an
@@ -26,7 +56,7 @@ pub fn apply_enrollment_cross_reference(result: &mut DsregcmdAnalysisResult) {
                         tasks
                             .enterprise_mgmt_guids
                             .iter()
-                            .any(|t| t.eq_ignore_ascii_case(g))
+                            .any(|t| same_enrollment_guid(t, g))
                     })
             })
         });
@@ -186,7 +216,7 @@ pub fn build_extended_diagnostics(
                         tasks
                             .enterprise_mgmt_guids
                             .iter()
-                            .any(|t| t.eq_ignore_ascii_case(g))
+                            .any(|t| same_enrollment_guid(t, g))
                     });
                 if guid_matched {
                     let guid_display = entry.guid.as_deref().unwrap_or("(unknown)");
@@ -497,4 +527,50 @@ pub fn build_event_log_diagnostics(
     }
 
     diagnostics
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{same_enrollment_guid, unbraced_guid};
+
+    #[test]
+    fn unbraced_guid_accepts_both_forms_and_rejects_other_shapes() {
+        let bare = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+        assert_eq!(unbraced_guid(bare), Some(bare));
+        assert_eq!(unbraced_guid(&format!("{{{bare}}}")), Some(bare));
+        assert_eq!(
+            unbraced_guid("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        );
+
+        for not_a_guid in [
+            "",
+            "Context",
+            "Status",
+            "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+            "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}",
+            "{{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}}",
+            "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEE",
+            "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEEE",
+            "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE-0000",
+            "GAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+            "AAAAAAAABBBBCCCCDDDDEEEEEEEEEEEE",
+        ] {
+            assert_eq!(unbraced_guid(not_a_guid), None, "{not_a_guid:?}");
+        }
+    }
+
+    #[test]
+    fn same_enrollment_guid_ignores_braces_and_case_only() {
+        let upper = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+        let lower_braced = "{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}";
+        assert!(same_enrollment_guid(upper, lower_braced));
+        assert!(same_enrollment_guid(lower_braced, upper));
+        assert!(!same_enrollment_guid(
+            upper,
+            "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEF"
+        ));
+        // Equal text that is not GUID-shaped is not an enrollment match.
+        assert!(!same_enrollment_guid("Context", "Context"));
+    }
 }
