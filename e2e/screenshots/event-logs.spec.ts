@@ -262,4 +262,24 @@ test.describe("event-logs screenshots", () => {
       animations: "disabled",
     });
   });
+
+  test("event-logs insights lower cards", async ({ page }) => {
+    // The finding cards fill the top of the rail; scroll the panel to its end so the coverage
+    // disclosure, level mix, top event IDs and correlation summary are reviewable.
+    const panel = page.locator("#evtx-rail-panel-insights");
+    await expect(panel).toBeVisible();
+    await panel.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    const rail = await page.locator('[data-evtx-region="rail"]').boundingBox();
+    // The rail is 340 px wide at its default (spec 5.2).
+    expect(Math.round(rail?.width ?? 0)).toBe(340);
+    await expect(page.getByRole("region", { name: "Level mix" })).toBeVisible();
+    await assertNoHostPaths(page);
+    await page.screenshot({
+      path: outPath("event-logs-insights.png"),
+      animations: "disabled",
+    });
+  });
 });
+
