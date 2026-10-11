@@ -189,7 +189,27 @@ describe("EvtxChartsView", () => {
     const heat = screen.getByRole("figure", { name: /heat map/ });
     expect(heat).toHaveTextContent("1 event has no timestamp and is not placed");
     const hourly = screen.getByRole("figure", { name: /^Errors and warnings per hour/ });
-    expect(hourly).toHaveTextContent("3 events have no timestamp and are not placed");
+    // The two unplaced text-log lines are Information; only the fixture's unplaced Error counts here.
+    expect(hourly).toHaveTextContent("1 error or warning has no timestamp and is not placed");
+  });
+
+  it("words figure 4's unplaced note for errors and warnings", () => {
+    const unplaced = (level: "Error" | "Warning") =>
+      rec({ level, timestampEpoch: 0, timestamp: "", originKind: "log", channel: "a.log", sourceLabel: "a.log" });
+    const { rerender } = render(<EvtxChartsView {...props({ records: [...records, unplaced("Error")] })} />);
+    // `records` already holds one unplaced Error event, so the log line makes two.
+    const hourly = () => screen.getByRole("figure", { name: /^Errors and warnings per hour/ });
+    expect(hourly()).toHaveTextContent("2 errors and warnings have no timestamp and are not placed");
+    vi.useFakeTimers();
+    try {
+      rerender(<EvtxChartsView {...props({ records: [rec({ hour: 3, level: "Error" }), unplaced("Warning")] })} />);
+      act(() => {
+        vi.advanceTimersByTime(CHART_DATA_DEBOUNCE_MS);
+      });
+      expect(hourly()).toHaveTextContent("1 error or warning has no timestamp and is not placed");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not show the omitted line when every channel fits", () => {
@@ -239,9 +259,10 @@ describe("EvtxChartsView", () => {
 
   it("says unplaced events are not placed in an hour", () => {
     render(<EvtxChartsView {...props()} />);
+    expect(screen.getAllByText(/1 event has no timestamp and is not placed/)).toHaveLength(1);
     expect(
-      screen.getAllByText(/1 event has no timestamp and is not placed/),
-    ).toHaveLength(2);
+      screen.getAllByText(/1 error or warning has no timestamp and is not placed/),
+    ).toHaveLength(1);
     // The unplaced error is not in hour 0.
     const table = screen.getByRole("table", { name: "Errors and warnings per hour of day" });
     const hour0 = within(table).getByRole("row", { name: /^00:00/ });

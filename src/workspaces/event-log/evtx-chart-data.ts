@@ -10,9 +10,11 @@
  *   put in hour 0. "Usable" mirrors the engine (`parsed_timestamp_epoch` in
  *   `src-tauri/src/event_log/timeline.rs`): a non-zero epoch, or text that
  *   parses as RFC 3339 (the date and time may be separated by "T", "t" or a
- *   space, as chrono accepts) or as `%Y-%m-%dT%H:%M:%S%.f` read as UTC. One
- *   deliberate narrowing: second 60 (a leap second, which chrono accepts) stays
- *   unplaced, because JavaScript cannot represent it. Display text such as
+ *   space, and the offset may use the U+2212 minus sign, as chrono accepts) or
+ *   as `%Y-%m-%dT%H:%M:%S%.f` read as UTC. Hours are 00 to 23 in both, as in
+ *   chrono (`T24:00:00` stays unplaced). One deliberate narrowing: second 60 (a
+ *   leap second, which chrono accepts) stays unplaced, because JavaScript
+ *   cannot represent it. Display text such as
  *   "2026-11-01 01:30:00.000" is never guessed at.
  * - Archived text-log lines (`originKind: "log"`) are not Windows events. They
  *   count toward the visible total and the level counts and hours, which
@@ -72,9 +74,12 @@ export interface EvtxChartInput {
   /** Channel display order (spec 8.6); an index here is the channel's color index. */
   channelOrder: readonly string[];
   timeZoneMode: EvtxTimeZoneMode;
-  /** Loaded channels (the channel pane's count), as in the 8.14 status bar. */
+  /**
+   * Loaded channels, from `loadedChannelCountFor`: live mode counts the channels whose load
+   * completed; files mode counts the distinct channel names of the loaded event records.
+   */
   loadedChannelCount: number;
-  /** Text logs in the analysis session (`EventLogAnalysisSessionStatus.logItems`). */
+  /** Distinct text-log sources, from `countTextLogSources` (sources, not lines). */
   textLogCount: number;
 }
 
@@ -151,6 +156,8 @@ export interface EvtxChartData {
   unplacedCount: number;
   /** The same, events only: the rows figure 3 would draw. */
   unplacedEventCount: number;
+  /** Unplaced rows at level Error or Warning (events and text-log lines): the rows figure 4 would draw. */
+  unplacedErrorWarningCount: number;
   /** Text-log lines among the visible rows. They have no channel, so figures 1 and 3 omit them. */
   textLogLineCount: number;
 }
@@ -190,19 +197,24 @@ export function countTextLogSources(
 }
 
 /**
- * Loaded channels as the 8.14 status bar counts them. Live mode counts the
- * channels whose load completed (`loadedChannels`, not every enumerated
- * channel). Files mode counts the parse result's channels, which is exactly the
- * set the opened files contributed.
+ * Loaded channels. Live mode counts the channels whose load completed
+ * (`loadedChannels`, not every enumerated channel). Files mode counts the
+ * distinct channel names of the loaded EVENT records: an archived text log is not
+ * a channel (its record's channel is its source label), a channel present in
+ * several files (a rotated `Archive-System-*.evtx` beside `System.evtx`) counts
+ * once, and a file with no records adds nothing.
  */
 export function loadedChannelCountFor(input: {
   sourceMode: "files" | "live" | null;
   loadedChannels: ReadonlySet<string>;
-  channels: readonly unknown[];
+  records: readonly Pick<EvtxChartRecord, "channel" | "originKind">[];
 }): number {
-  return input.sourceMode === "live"
-    ? input.loadedChannels.size
-    : input.channels.length;
+  if (input.sourceMode === "live") return input.loadedChannels.size;
+  const names = new Set<string>();
+  for (const record of input.records) {
+    if (record.originKind !== "log") names.add(record.channel);
+  }
+  return names.size;
 }
 
 const pad2 = (value: number) => String(value).padStart(2, "0");
@@ -212,15 +224,16 @@ function plural(count: number, one: string, many: string): string {
 }
 
 const RFC3339 =
-  /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
-const NAIVE_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
+  /^\d{4}-\d{2}-\d{2}[Tt ](?:[01]\d|2[0-3]):\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
+const NAIVE_ISO = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):\d{2}:\d{2}(?:\.\d+)?$/;
 
 /**
  * The event time in epoch milliseconds, or null when the engine would call it
  * missing. Mirrors `parsed_timestamp_epoch`: a non-zero epoch is taken as is;
  * a zero epoch falls back to the text, which must be RFC 3339 (separator "T",
- * "t" or a space) or a zone-less `T` ISO form read as UTC. Second 60 stays
- * unplaced (see the module header). Never `Date.parse` on a display string.
+ * "t" or a space; a U+2212 minus sign in the offset is read as "-"; hours 00 to
+ * 23) or a zone-less `T` ISO form read as UTC. Second 60 stays unplaced (see the
+ * module header). Never `Date.parse` on a display string.
  */
 export function placedEpochMs(
   record: Pick<EvtxChartRecord, "timestamp" | "timestampEpoch">,
@@ -228,7 +241,7 @@ export function placedEpochMs(
   const epoch = record.timestampEpoch;
   if (typeof epoch !== "number" || !Number.isFinite(epoch)) return null;
   if (epoch !== 0) return epoch;
-  const text = record.timestamp?.trim() ?? "";
+  const text = (record.timestamp?.trim() ?? "").replace(/\u2212/g, "-");
   if (RFC3339.test(text)) {
     const parsed = Date.parse(text.replace(/^(\d{4}-\d{2}-\d{2})[Tt ]/, "$1T").toUpperCase());
     return Number.isNaN(parsed) ? null : parsed;
@@ -370,6 +383,7 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
   );
   let unplacedCount = 0;
   let unplacedEventCount = 0;
+  let unplacedErrorWarningCount = 0;
   let textLogLineCount = 0;
 
   for (const record of records) {
@@ -384,6 +398,9 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
     const hour = hourOfDay(record, timeZoneMode);
     if (hour === null) unplacedCount += 1;
     if (hour === null && isEvent) unplacedEventCount += 1;
+    if (hour === null && (record.level === "Error" || record.level === "Warning")) {
+      unplacedErrorWarningCount += 1;
+    }
     if (!isEvent) textLogLineCount += 1;
     if (hour !== null) {
       if (record.level === "Error") hourly[hour].errors += 1;
@@ -545,6 +562,7 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
     peak,
     unplacedCount,
     unplacedEventCount,
+    unplacedErrorWarningCount,
     textLogLineCount,
   };
 }

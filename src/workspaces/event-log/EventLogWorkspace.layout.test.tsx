@@ -232,10 +232,29 @@ describe("EventLogWorkspace Charts view wiring", () => {
 
   const logLine = (filePath: string) => ({ filePath }) as unknown as LogEntry;
 
-  it("counts the parse result's channels in files mode, and the window as all loaded", async () => {
+  it("counts distinct event-record channels in files mode, and the window as all loaded", async () => {
+    const system = (id: number, sourceLabel: string): EvtxRecord => ({
+      ...fresh,
+      id,
+      eventRecordId: 100 + id,
+      channel: "System",
+      sourceLabel,
+    });
+    const archivedLog: EvtxRecord = {
+      ...fresh,
+      id: 9,
+      originKind: "log",
+      channel: "bundle.zip::logs/agent.log",
+      sourceLabel: "bundle.zip::logs/agent.log",
+    };
+    useEvtxStore.setState({
+      // Two files share the channel name "System"; an archived text log's channel is its label;
+      // the parse result also lists channels of files that contributed no records.
+      records: [fresh, system(2, "System.evtx"), system(3, "Archive-System-2026.evtx"), archivedLog],
+    });
     const tile = await eventsTile();
     expect(tile).toHaveTextContent("Events (all loaded)");
-    expect(tile).toHaveTextContent("3 channels · 0 text logs");
+    expect(tile).toHaveTextContent("2 channels · 1 text log");
   });
 
   it("counts completed loads (not enumerated channels) in live mode", async () => {
@@ -249,12 +268,12 @@ describe("EventLogWorkspace Charts view wiring", () => {
     useLogStore.setState({
       entries: [logLine("C:/logs/a.log"), logLine("C:/logs/a.log"), logLine("C:/logs/a.log")],
     });
-    expect(await eventsTile()).toHaveTextContent("3 channels · 1 text log");
+    expect(await eventsTile()).toHaveTextContent("1 channel · 1 text log");
   });
 
   it("counts two text-log sources as text logs", async () => {
     useLogStore.setState({ entries: [logLine("C:/logs/a.log"), logLine("C:/logs/b.log")] });
-    expect(await eventsTile()).toHaveTextContent("3 channels · 2 text logs");
+    expect(await eventsTile()).toHaveTextContent("1 channel · 2 text logs");
   });
 
   it("shows n/a for the chains tile until a timeline page exists", async () => {

@@ -554,6 +554,26 @@ describe("text-log lines in the figures", () => {
     );
     expect(data.unplacedCount).toBe(3);
     expect(data.unplacedEventCount).toBe(1);
+    // None of them is an error or a warning.
+    expect(data.unplacedErrorWarningCount).toBe(0);
+  });
+});
+
+describe("unplaced error and warning rows", () => {
+  it("counts Error and Warning rows from events and text-log lines, whatever the origin", () => {
+    const none = { timestampEpoch: 0, timestamp: "" };
+    const data = buildEvtxChartData(
+      input([
+        record({ level: "Error", ...none }),
+        record({ level: "Warning", ...none }),
+        record({ level: "Information", ...none }),
+        record({ level: "Error", originKind: "log", channel: "a.log", sourceLabel: "a.log", ...none }),
+        record({ level: "Critical", ...none }),
+        record({ level: "Error", hour: 3 }),
+      ]),
+    );
+    expect(data.unplacedErrorWarningCount).toBe(3);
+    expect(data.unplacedCount).toBe(5);
   });
 });
 
@@ -596,6 +616,17 @@ describe("RFC 3339 text for a zero epoch", () => {
     expect(hourOfDay(zero("2026-11-01t01:30:00z"), "utc")).toBe(1);
   });
 
+  it("accepts the U+2212 minus sign in an offset, as chrono does", () => {
+    expect(hourOfDay(zero("2026-11-01T01:30:00\u221205:00"), "utc")).toBe(6);
+    expect(hourOfDay(zero("2026-11-01 01:30:00\u221205:30"), "utc")).toBe(7);
+  });
+
+  it("rejects hour 24 in both forms instead of rolling to the next day", () => {
+    expect(hourOfDay(zero("2026-11-01T24:00:00Z"), "utc")).toBeNull();
+    expect(hourOfDay(zero("2026-11-01T24:00:00"), "utc")).toBeNull();
+    expect(hourOfDay(zero("2026-11-01T23:59:59Z"), "utc")).toBe(23);
+  });
+
   it("still rejects a space without an offset, and leap seconds", () => {
     expect(hourOfDay(zero("2026-11-01 01:30:00.000"), "utc")).toBeNull();
     expect(hourOfDay(zero("2026-06-30T23:59:60Z"), "utc")).toBeNull();
@@ -612,21 +643,47 @@ describe("wiring helpers", () => {
   });
 
   it("counts text-log sources across both origins without double counting", () => {
-    const entries = [{ filePath: "a.log" }, { filePath: "a.log" }, { filePath: "b.log" }];
+    // Attached log entries carry file paths; archived text records carry their
+    // `{archive}::{member}` label. The same member can arrive both ways only when the
+    // strings are equal, which is the overlap that is de-duplicated.
+    const label = "bundle.zip::logs/agent.log";
+    const entries = [
+      { filePath: "C:/logs/a.log" },
+      { filePath: "C:/logs/a.log" },
+      { filePath: label },
+    ];
     const records = [
-      record({ originKind: "log", sourceLabel: "a.log" }),
-      record({ originKind: "log", sourceLabel: "c.log" }),
+      record({ originKind: "log", sourceLabel: label }),
+      record({ originKind: "log", sourceLabel: "bundle.zip::logs/other.log" }),
       record({ originKind: "event", sourceLabel: "live" }),
     ];
     expect(countTextLogSources(entries, records)).toBe(3);
     expect(countTextLogSources([], [])).toBe(0);
   });
 
-  it("counts loaded channels per mode", () => {
+  it("live mode counts completed loads, not enumerated channels or records", () => {
     const loadedChannels = new Set(["A"]);
-    const channels = [{}, {}, {}];
-    expect(loadedChannelCountFor({ sourceMode: "live", loadedChannels, channels })).toBe(1);
-    expect(loadedChannelCountFor({ sourceMode: "files", loadedChannels, channels })).toBe(3);
-    expect(loadedChannelCountFor({ sourceMode: null, loadedChannels, channels })).toBe(3);
+    const records = [record({ channel: "A" }), record({ channel: "B" })];
+    expect(loadedChannelCountFor({ sourceMode: "live", loadedChannels, records })).toBe(1);
+  });
+
+  it("files mode counts distinct event-record channels only", () => {
+    const loadedChannels = new Set<string>();
+    const records = [
+      // Two files sharing the channel name "System" (a rotated archive beside the live file).
+      record({ channel: "System", sourceLabel: "System.evtx" }),
+      record({ channel: "System", sourceLabel: "Archive-System-2026.evtx" }),
+      record({ channel: "Application", sourceLabel: "Application.evtx" }),
+      // An archived text log: its record's channel is its source label, and it is not a channel.
+      record({
+        originKind: "log",
+        channel: "bundle.zip::logs/agent.log",
+        sourceLabel: "bundle.zip::logs/agent.log",
+      }),
+    ];
+    // A zero-record file adds no record, so it adds no channel.
+    expect(loadedChannelCountFor({ sourceMode: "files", loadedChannels, records })).toBe(2);
+    expect(loadedChannelCountFor({ sourceMode: null, loadedChannels, records })).toBe(2);
+    expect(loadedChannelCountFor({ sourceMode: "files", loadedChannels, records: [] })).toBe(0);
   });
 });

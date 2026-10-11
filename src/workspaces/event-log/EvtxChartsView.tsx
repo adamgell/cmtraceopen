@@ -7,8 +7,9 @@
  *
  * Library spike record (spec 8.10, Library choice; quote in the PR). Figures 3
  * and 4 are token-styled markup (HTML and CSS) rather than the SVG 8.10 names,
- * per Main's ruling, because the Fluent charts cannot match the spec's density
- * without overrides beyond their public props. Evidence, with `@fluentui/react-charts` 9.3.27:
+ * because spec 8.10's fallback rule applies (the Fluent charts cannot match the
+ * mockup's density without style overrides beyond their public props); the PR
+ * description records the decision. Evidence, with `@fluentui/react-charts` 9.3.27:
  * - `HeatMapChart`: it interpolates a continuous d3 color scale between its
  *   range stops instead of drawing six fixed D11 steps. There are no cell gap,
  *   radius, cell size or empty-cell props, and the chart draws its own axes.
@@ -50,9 +51,9 @@ export interface EvtxChartsViewProps {
   hideRules: EvtxChartInput["hideRules"];
   channelOrder: EvtxChartInput["channelOrder"];
   timeZoneMode: EvtxTimeZoneMode;
-  /** Loaded channels, the channel pane's count (matches the 8.14 status bar). */
+  /** Loaded channels from `loadedChannelCountFor` (live: loaded channels; files: distinct event-record channels). */
   loadedChannelCount: EvtxChartInput["loadedChannelCount"];
-  /** Text logs in the analysis session (`EventLogAnalysisSessionStatus.logItems`). */
+  /** Distinct text-log sources from `countTextLogSources`, not lines. */
   textLogCount: EvtxChartInput["textLogCount"];
   /** The loaded window, for the Events KPI label, for example "24 h". */
   windowLabel?: string;
@@ -364,6 +365,13 @@ function HourAxis({
   );
 }
 
+function unplacedErrorWarningNote(count: number): string | null {
+  if (count === 0) return null;
+  return count === 1
+    ? "1 error or warning has no timestamp and is not placed"
+    : `${count.toLocaleString()} errors and warnings have no timestamp and are not placed`;
+}
+
 function HeatMapFigure({
   data,
   metrics,
@@ -473,7 +481,7 @@ function HourlyFigure({
   const max = data.hourly.reduce((m, b) => Math.max(m, b.errors + b.warnings), 0);
   const scale = (n: number) =>
     n === 0 || max === 0 ? 0 : Math.max(MIN_SEGMENT, Math.round((n / max) * COLUMN_HEIGHT));
-  const qualifier = [`hour of day, ${timeZoneLabel(timeZoneMode)}`, unplacedNote(data.unplacedCount)]
+  const qualifier = [`hour of day, ${timeZoneLabel(timeZoneMode)}`, unplacedErrorWarningNote(data.unplacedErrorWarningCount)]
     .filter(Boolean)
     .join(" · ");
   const swatch = (color: string): CSSProperties => ({

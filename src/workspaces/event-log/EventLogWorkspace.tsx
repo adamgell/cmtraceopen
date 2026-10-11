@@ -556,10 +556,10 @@ export function EventLogWorkspace() {
     [channels],
   );
   const loadedChannels = useEvtxStore((s) => s.loadedChannels);
-  const chartLoadedChannelCount = loadedChannelCountFor({ sourceMode, loadedChannels, channels });
+  const chartLoadedChannelCount = loadedChannelCountFor({ sourceMode, loadedChannels, records });
   const chartTextLogCount = useMemo(
-    () => countTextLogSources(scopedLogEntries, visibleRecords),
-    [scopedLogEntries, visibleRecords],
+    () => countTextLogSources(scopedLogEntries, records),
+    [scopedLogEntries, records],
   );
   const chartHideRules = useMemo(() => [quickFilter], [quickFilter]);
   // Phase 10c replaces this with the shared chain model. Until then the Charts chains KPI builds
