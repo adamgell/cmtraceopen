@@ -243,15 +243,29 @@ test.describe("event-logs screenshots", () => {
 
   test("event-logs selected record", async ({ page }) => {
     const grid = page.getByRole("grid", { name: timelineGridName });
-    // Newest first, the first Error record (MsiInstaller 11708) is the 39th row, below the fold of
-    // a virtualized list, so scroll it into the rendered window before clicking.
-    await grid.evaluate((el) => {
-      el.scrollTop = 36 * 36;
-    });
+    // Newest first, the first Error record (MsiInstaller 11708) is below the fold of a virtualized
+    // list, so scroll it into the rendered window before clicking. Its index comes from the
+    // fixture and the row height from the page, so this does not depend on either row height or
+    // where the record falls.
+    const newestFirst = [...buildParseResult().records].sort(
+      (a, b) => b.timestampEpoch - a.timestampEpoch,
+    );
+    const targetIndex = newestFirst.findIndex((record) =>
+      record.message.includes("Installation failed."),
+    );
+    expect(targetIndex, "the fixture holds the Installation failed. record").toBeGreaterThanOrEqual(0);
+    const rowHeight = await grid
+      .getByRole("row")
+      .first()
+      .evaluate((el) => el.getBoundingClientRect().height);
+    await grid.evaluate((el, top) => {
+      el.scrollTop = top;
+    }, targetIndex * rowHeight);
     const row = grid
       .getByRole("row")
       .filter({ hasText: "Installation failed." })
       .first();
+    await row.scrollIntoViewIfNeeded();
     await row.click();
     await expect(
       page.getByRole("region", { name: "Event log details" }),
