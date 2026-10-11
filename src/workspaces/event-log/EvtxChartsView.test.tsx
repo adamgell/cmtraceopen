@@ -1,6 +1,6 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import { tokens } from "@fluentui/react-components";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { contrastRatio, parseHex } from "../../lib/color-contrast";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { getAllThemes } from "../../lib/themes";
@@ -10,6 +10,7 @@ import { DEFAULT_QUICK_FILTER } from "./evtx-filter";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import EvtxChartsViewDefault, {
   EvtxChartsView,
+  CHART_DATA_DEBOUNCE_MS,
   HEAT_EMPTY_CELL,
   type EvtxChartsViewProps,
 } from "./EvtxChartsView";
@@ -60,6 +61,8 @@ function props(overrides: Partial<EvtxChartsViewProps> = {}): EvtxChartsViewProp
     hideRules: [{ ...DEFAULT_QUICK_FILTER, mode: "eventIds", query: "7036 16384", action: "hide" }],
     channelOrder: ["System", "Application"],
     timeZoneMode: "utc",
+    loadedChannelCount: 2,
+    textLogCount: 0,
     windowLabel: "24 h",
     metrics: getLogListMetrics(13),
     visualTokens: lightTokens,
@@ -116,8 +119,61 @@ describe("EvtxChartsView", () => {
   it("builds the top-IDs caption from the hide rules", () => {
     const { rerender } = render(<EvtxChartsView {...props()} />);
     expect(screen.getByText("excluding 7036 / 16384")).toBeInTheDocument();
-    rerender(<EvtxChartsView {...props({ hideRules: [] })} />);
-    expect(screen.queryByText(/excluding/)).toBeNull();
+    vi.useFakeTimers();
+    try {
+      rerender(<EvtxChartsView {...props({ hideRules: [] })} />);
+      // Debounced: the previous derivation stays until the settle time passes.
+      expect(screen.getByText("excluding 7036 / 16384")).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(CHART_DATA_DEBOUNCE_MS);
+      });
+      expect(screen.queryByText(/excluding/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows n/a for the chains tile when there is no chain model", () => {
+    render(<EvtxChartsView {...props({ chains: null })} />);
+    expect(screen.getByTestId("kpi-value-chains").textContent).toBe("n/a");
+  });
+
+  it("qualifies a zero chain count that comes from a loaded subset of edges", () => {
+    render(
+      <EvtxChartsView
+        {...props({
+          chains: {
+            counts: { exact: 0, candidate: 0, ambiguous: 3, coverageBlocked: 0 },
+            edgeInputComplete: false,
+          },
+        })}
+      />,
+    );
+    expect(screen.getByTestId("kpi-value-chains").textContent).toBe("0");
+    expect(screen.getByText("0 exact, loaded edges only")).toBeInTheDocument();
+  });
+
+  it("discloses channels beyond the cap in figure 1, figure 3 and the heat-map table", () => {
+    const many = Array.from({ length: 15 }, (_, i) =>
+      rec({ channel: `ch${String(i).padStart(2, "0")}`, hour: 3 }),
+    );
+    render(<EvtxChartsView {...props({ records: many, channelOrder: [] })} />);
+    expect(screen.getAllByText("+3 more channels (3 events) not shown")).toHaveLength(2);
+    const table = screen.getByRole("table", { name: /Events per hour of day by channel/ });
+    expect(table).toHaveAccessibleName(/\+3 more channels \(3 events\) not shown/);
+    expect(within(table).getAllByRole("row")).toHaveLength(13);
+  });
+
+  it("does not show the omitted line when every channel fits", () => {
+    render(<EvtxChartsView {...props()} />);
+    expect(screen.queryByText(/more channel/)).toBeNull();
+  });
+
+  it("names the heat map without a dark or light encoding", () => {
+    render(<EvtxChartsView {...props()} />);
+    const heat = screen.getByRole("figure", { name: /heat map/ });
+    expect(heat).toHaveAccessibleName(/from fewer to more events/);
+    expect(heat).not.toHaveAccessibleName(/dark/);
   });
 
   it("provides a visually hidden table of hourly counts", () => {
@@ -254,6 +310,7 @@ describe("heat map empty cell (Adam's acceptance criterion, all themes)", () => 
       const { container } = render(<EvtxChartsView {...props({ visualTokens: visual })} />);
       const filled = container.querySelector<HTMLElement>('[data-cell^="step-"]')!;
       const step = Number(filled.dataset.cell!.replace("step-", ""));
+      expect(css(visual.heatSteps[step])).not.toBe("");
       expect(filled.style.background).toBe(css(visual.heatSteps[step]));
       expect(visual.heatSteps).toHaveLength(6);
     },

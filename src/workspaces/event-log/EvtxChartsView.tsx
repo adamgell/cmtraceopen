@@ -15,7 +15,7 @@
  * width and canvas text, which jsdom cannot test. Figures 3 and 4 also share
  * one 24-column hour axis here, so they line up.
  */
-import { useMemo, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { tokens } from "@fluentui/react-components";
 import {
   LOG_UI_FONT_FAMILY,
@@ -38,6 +38,10 @@ export interface EvtxChartsViewProps {
   hideRules: EvtxChartInput["hideRules"];
   channelOrder: EvtxChartInput["channelOrder"];
   timeZoneMode: EvtxTimeZoneMode;
+  /** Loaded channels, the channel pane's count (matches the 8.14 status bar). */
+  loadedChannelCount: EvtxChartInput["loadedChannelCount"];
+  /** Text logs in the analysis session (`EventLogAnalysisSessionStatus.logItems`). */
+  textLogCount: EvtxChartInput["textLogCount"];
   /** The loaded window, for the Events KPI label, for example "24 h". */
   windowLabel?: string;
   metrics: LogListMetrics;
@@ -168,6 +172,26 @@ function KpiCard({
   );
 }
 
+function OmittedChannelsNote({
+  data,
+  metrics,
+}: {
+  data: EvtxChartData;
+  metrics: LogListMetrics;
+}) {
+  if (data.omittedChannels.channels === 0) return null;
+  return (
+    <div style={{ fontSize: Math.max(10, metrics.fontSize - 3), color: tokens.colorNeutralForeground3 }}>
+      {omittedChannelsText(data)}
+    </div>
+  );
+}
+
+function omittedChannelsText(data: EvtxChartData): string {
+  const { channels, events } = data.omittedChannels;
+  return `+${channels} more ${channels === 1 ? "channel" : "channels"} (${events.toLocaleString()} events) not shown`;
+}
+
 function ChannelFigure({
   data,
   metrics,
@@ -179,7 +203,6 @@ function ChannelFigure({
 }) {
   const f = metrics.fontSize;
   const max = data.channels.reduce((m, c) => Math.max(m, c.count), 0);
-  const { channels, events } = data.omittedChannels;
   return (
     <Figure
       label={`Events by channel: ${data.channels.length} channels, bar length is the event count`}
@@ -219,11 +242,7 @@ function ChannelFigure({
           );
         })}
       </ul>
-      {channels > 0 ? (
-        <div style={{ fontSize: Math.max(10, f - 3), color: tokens.colorNeutralForeground3 }}>
-          {`+${channels} more ${channels === 1 ? "channel" : "channels"} (${events.toLocaleString()} events) not shown`}
-        </div>
-      ) : null}
+      <OmittedChannelsNote data={data} metrics={metrics} />
     </Figure>
   );
 }
@@ -324,7 +343,7 @@ function HeatMapFigure({
     .join(" · ");
   return (
     <Figure
-      label="Activity by hour of day and channel, heat map: darker cells have more events"
+      label="Activity by hour of day and channel, heat map from fewer to more events"
       title="Activity by hour and channel"
       qualifier={qualifier}
       metrics={metrics}
@@ -365,8 +384,13 @@ function HeatMapFigure({
         ))}
         <span>More</span>
       </div>
+      <OmittedChannelsNote data={data} metrics={metrics} />
       <table style={visuallyHidden}>
-        <caption>Events per hour of day by channel</caption>
+        <caption>
+          {data.omittedChannels.channels > 0
+            ? `Events per hour of day by channel. ${omittedChannelsText(data)}.`
+            : "Events per hour of day by channel"}
+        </caption>
         <thead>
           <tr>
             <th scope="col">Channel</th>
@@ -500,20 +524,38 @@ function HourlyFigure({
   );
 }
 
+/** Spec 11: chart data is debounced at 75 ms during live tail (DIAGNOSIS_DEBOUNCE_MS precedent). */
+export const CHART_DATA_DEBOUNCE_MS = 75;
+
+/** The first value is used at once; later changes settle for `ms` before they apply. */
+function useSettledValue<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    if (Object.is(settled, value)) return undefined;
+    const timer = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(timer);
+  }, [value, settled, ms]);
+  return settled;
+}
+
 export function EvtxChartsView({
   records,
   chains,
   hideRules,
   channelOrder,
   timeZoneMode,
+  loadedChannelCount,
+  textLogCount,
   windowLabel,
   metrics,
   visualTokens,
 }: EvtxChartsViewProps) {
-  const data = useMemo(
-    () => buildEvtxChartData({ records, chains, hideRules, channelOrder, timeZoneMode }),
-    [records, chains, hideRules, channelOrder, timeZoneMode],
+  const input = useMemo<EvtxChartInput>(
+    () => ({ records, chains, hideRules, channelOrder, timeZoneMode, loadedChannelCount, textLogCount }),
+    [records, chains, hideRules, channelOrder, timeZoneMode, loadedChannelCount, textLogCount],
   );
+  const settled = useSettledValue(input, CHART_DATA_DEBOUNCE_MS);
+  const data = useMemo(() => buildEvtxChartData(settled), [settled]);
 
   if (data.totalEvents === 0) {
     return (

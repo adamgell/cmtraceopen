@@ -50,6 +50,8 @@ function input(
     hideRules: [],
     channelOrder: [],
     timeZoneMode: "utc",
+    loadedChannelCount: 2,
+    textLogCount: 1,
     ...overrides,
   };
 }
@@ -108,11 +110,17 @@ describe("KPIs", () => {
       originKind: "log",
       channel: "setup.log",
       sourceLabel: "setup.log",
+      provider: "Setup",
+      eventId: 0,
+      level: "Warning",
     }),
     record({
       originKind: "log",
       channel: "setup.log",
       sourceLabel: "setup.log",
+      provider: "Setup",
+      eventId: 0,
+      level: "Warning",
     }),
   ];
   const data = buildEvtxChartData(
@@ -135,7 +143,9 @@ describe("KPIs", () => {
   });
 
   it("Warnings sublabel is the share of the top two IDs", () => {
-    expect(kpi(data, "warnings").value).toBe(4);
+    // 6 visible warning rows, 4 of them events: the two text-log warning lines are
+    // in the count but have no event ID, so they are outside the share.
+    expect(kpi(data, "warnings").value).toBe(6);
     // A/10 has 2 and B/11 has 1 (tie with C/12 broken by event ID): 3 of 4.
     expect(kpi(data, "warnings").sublabel).toBe("Top 2 IDs = 75%");
   });
@@ -194,6 +204,21 @@ describe("KPIs", () => {
     expect(kpi(partial, "chains").sublabel).toBe("1 exact, loaded edges only");
   });
 
+  it("Correlation chains never reads a zero from a loaded subset as definite", () => {
+    const zero = buildEvtxChartData(
+      input([record()], {
+        chains: {
+          counts: { exact: 0, candidate: 0, ambiguous: 7, coverageBlocked: 0 },
+          edgeInputComplete: false,
+        },
+      }),
+    );
+    expect(kpi(zero, "chains").value).toBe(0);
+    expect(kpi(zero, "chains").sublabel).toBe("0 exact, loaded edges only");
+    const complete = buildEvtxChartData(input([record()]));
+    expect(kpi(complete, "chains").sublabel).toBeNull();
+  });
+
   it("Correlation chains has no value without a chain model", () => {
     const none = buildEvtxChartData(input([record()], { chains: null }));
     expect(kpi(none, "chains").value).toBeNull();
@@ -215,7 +240,7 @@ describe("channel bars", () => {
         record({ channel: "B", level: "Error" }),
         record({ channel: "B", level: "Warning" }),
         record({ channel: "B", level: "Critical" }),
-      ]),
+      ], { channelOrder: ["A", "B"] }),
     );
     expect(data.channels).toEqual([
       { channel: "B", colorIndex: 1, count: 3, errors: 1, warnings: 1 },
@@ -235,7 +260,7 @@ describe("channel bars", () => {
     ]);
   });
 
-  it("puts channels missing from the display order after it, by name", () => {
+  it("puts channels missing from the display order after it", () => {
     const data = buildEvtxChartData(
       input(
         [record({ channel: "Zed" }), record({ channel: "Alpha" }), record({ channel: "Known" })],
@@ -245,7 +270,9 @@ describe("channel bars", () => {
     const index = Object.fromEntries(
       data.channels.map((c) => [c.channel, c.colorIndex]),
     );
-    expect(index).toEqual({ Known: 0, Alpha: 1, Zed: 2 });
+    expect(index.Known).toBe(0);
+    expect(index.Alpha).toBeGreaterThanOrEqual(1);
+    expect(index.Zed).toBeGreaterThanOrEqual(1);
   });
 
   it("breaks count ties by channel name", () => {
@@ -348,33 +375,58 @@ describe("hours and unplaced events", () => {
     const epoch = Date.UTC(2026, 9, 8, 23, 30);
     const r = record({ timestampEpoch: epoch, level: "Error" });
     expect(hourOfDay(r, "utc")).toBe(23);
-    const local = new Date(epoch).getHours();
-    expect(hourOfDay(r, "local")).toBe(local);
+    // Built from local wall-clock parts, so the expectation does not reuse getHours on the epoch.
+    const localNoon = new Date(2026, 9, 8, 12, 15).getTime();
+    expect(hourOfDay(record({ timestampEpoch: localNoon }), "local")).toBe(12);
   });
 
-  it("counts an event without a timestamp as unplaced, never as hour 0", () => {
+  it("counts an event without a usable time as unplaced, never as hour 0", () => {
     const data = buildEvtxChartData(
       input([
         record({ level: "Error", hour: 5 }),
-        record({ level: "Error", timestampEpoch: undefined, timestamp: "" }),
+        record({ level: "Error", timestampEpoch: 0, timestamp: "" }),
         record({ level: "Error", timestampEpoch: null }),
         record({ level: "Error", timestampEpoch: Number.NaN }),
-        record({ level: "Error", timestampEpoch: 0, timestamp: "" }),
+        // CBS fall-back hour: display text kept, epoch 0 (the parser could not resolve it).
+        record({ level: "Error", timestampEpoch: 0, timestamp: "2026-11-01 01:30:00.000" }),
+        // An EVTX TimeCreated that failed to parse.
+        record({ level: "Error", timestampEpoch: 0, timestamp: "not a time" }),
+        record({ level: "Error", timestampEpoch: 0, timestamp: "2026-11-01T01:30:00+0500" }),
       ]),
     );
-    expect(data.unplacedCount).toBe(4);
+    expect(data.unplacedCount).toBe(6);
     expect(data.hourly[0].errors).toBe(0);
+    expect(data.hourly[1].errors).toBe(0);
     expect(data.hourly[5].errors).toBe(1);
     expect(data.heatMap.rows[0].counts[0]).toBe(0);
     // They still count in the totals that need no time.
-    expect(kpi(data, "errors").value).toBe(5);
-    expect(data.channels[0].count).toBe(5);
+    expect(kpi(data, "errors").value).toBe(7);
+    expect(data.channels[0].count).toBe(7);
   });
 
-  it("treats a real epoch 0 with timestamp text as 1970, placed", () => {
-    expect(
-      hourOfDay({ timestamp: "1970-01-01T00:00:00Z", timestampEpoch: 0 }, "utc"),
-    ).toBe(0);
+  it("recovers a zero epoch only from the engine's two text formats", () => {
+    const zero = (timestamp: string) => ({ timestamp, timestampEpoch: 0 });
+    expect(hourOfDay(zero("2026-11-01T01:30:00Z"), "utc")).toBe(1);
+    expect(hourOfDay(zero("2026-11-01T01:30:00.123456+02:00"), "utc")).toBe(23);
+    // Zone-less ISO is read as UTC, as the backend does.
+    expect(hourOfDay(zero("2026-11-01T01:30:00.250"), "utc")).toBe(1);
+    expect(hourOfDay(zero("2026-11-01 01:30:00.000"), "utc")).toBeNull();
+    expect(hourOfDay(zero("1970-01-01T00:00:00Z"), "utc")).toBe(0);
+  });
+
+  it("gives an off-order channel the same color index whatever else is visible", () => {
+    const only = buildEvtxChartData(
+      input([record({ channel: "B.evtx" })], { channelOrder: ["System"] }),
+    );
+    const both = buildEvtxChartData(
+      input([record({ channel: "B.evtx" }), record({ channel: "A.evtx" })], {
+        channelOrder: ["System"],
+      }),
+    );
+    const index = (d: typeof only) =>
+      d.channels.find((c) => c.channel === "B.evtx")!.colorIndex;
+    expect(index(only)).toBe(index(both));
+    expect(index(only)).toBeGreaterThanOrEqual(1);
   });
 
   it("builds the hour by channel matrix", () => {

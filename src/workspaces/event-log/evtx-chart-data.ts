@@ -7,7 +7,15 @@
  *   Comparative sublabels ("vs prior 24 h") need Phase 17b's comparison and
  *   are not produced here.
  * - An event without a usable timestamp is counted as unplaced. It is never
- *   put in hour 0.
+ *   put in hour 0. "Usable" mirrors the engine (`parsed_timestamp_epoch` in
+ *   `src-tauri/src/event_log/timeline.rs`): a non-zero epoch, or text that
+ *   parses as RFC 3339 or as `%Y-%m-%dT%H:%M:%S%.f` read as UTC. Display text
+ *   such as "2026-11-01 01:30:00.000" is never guessed at.
+ * - Archived text-log lines (`originKind: "log"`) are not Windows events. They
+ *   count toward the visible total and the level counts and hours, which
+ *   follow the visible rows, but not toward anything keyed by event ID or
+ *   channel: distinct IDs, top IDs, the Warnings and Critical sublabels, and
+ *   the channel figures.
  * - Hide rules that are not understood or that do not filter (an invalid
  *   Event ID list) are not reported as exclusions.
  */
@@ -24,6 +32,18 @@ export const HOURS_PER_DAY = 24;
 /** Matches `heatSteps.length` in the visual tokens (six fixed steps, D11). */
 export const HEAT_STEP_COUNT = 6;
 const QUALIFIER_QUERY_LIMIT = 32;
+/** Off-order channels spread over this many color indexes after the ordered ones. */
+const OFF_ORDER_SPAN = 6;
+
+/** FNV-1a over UTF-16 code units: a small, stable, dependency-free hash. */
+function stableNameHash(name: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < name.length; i += 1) {
+    hash ^= name.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash;
+}
 
 /** The record fields the Charts view reads. `EvtxRecord` satisfies it. */
 export type EvtxChartRecord = Pick<
@@ -49,6 +69,10 @@ export interface EvtxChartInput {
   /** Channel display order (spec 8.6); an index here is the channel's color index. */
   channelOrder: readonly string[];
   timeZoneMode: EvtxTimeZoneMode;
+  /** Loaded channels (the channel pane's count), as in the 8.14 status bar. */
+  loadedChannelCount: number;
+  /** Text logs in the analysis session (`EventLogAnalysisSessionStatus.logItems`). */
+  textLogCount: number;
 }
 
 export type EvtxChartKpiId =
@@ -130,15 +154,41 @@ function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
+const RFC3339 =
+  /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
+const NAIVE_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
+
+/**
+ * The event time in epoch milliseconds, or null when the engine would call it
+ * missing. Mirrors `parsed_timestamp_epoch`: a non-zero epoch is taken as is;
+ * a zero epoch falls back to the text, which must be RFC 3339 or a zone-less
+ * ISO form read as UTC (never `Date.parse` on a display string).
+ */
+export function placedEpochMs(
+  record: Pick<EvtxChartRecord, "timestamp" | "timestampEpoch">,
+): number | null {
+  const epoch = record.timestampEpoch;
+  if (typeof epoch !== "number" || !Number.isFinite(epoch)) return null;
+  if (epoch !== 0) return epoch;
+  const text = record.timestamp?.trim() ?? "";
+  if (RFC3339.test(text)) {
+    const parsed = Date.parse(text);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  if (NAIVE_ISO.test(text)) {
+    const parsed = Date.parse(`${text}Z`);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
 /** The hour of day (0 to 23) of an event, or null when it has no usable time. */
 export function hourOfDay(
   record: Pick<EvtxChartRecord, "timestamp" | "timestampEpoch">,
   mode: EvtxTimeZoneMode,
 ): number | null {
-  const epoch = record.timestampEpoch;
-  if (typeof epoch !== "number" || !Number.isFinite(epoch)) return null;
-  // A zero epoch with no timestamp text is a default value, not 1970.
-  if (epoch === 0 && !record.timestamp?.trim()) return null;
+  const epoch = placedEpochMs(record);
+  if (epoch === null) return null;
   const date = new Date(epoch);
   const hour = mode === "utc" ? date.getUTCHours() : date.getHours();
   return Number.isNaN(hour) ? null : hour;
@@ -232,7 +282,15 @@ function bump(tally: Map<string, IdTally>, record: EvtxChartRecord): void {
 }
 
 export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
-  const { records, chains, hideRules, channelOrder, timeZoneMode } = input;
+  const {
+    records,
+    chains,
+    hideRules,
+    channelOrder,
+    timeZoneMode,
+    loadedChannelCount,
+    textLogCount,
+  } = input;
 
   const byLevel: Record<EvtxLevel, number> = {
     Critical: 0,
@@ -244,8 +302,6 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
   const allIds = new Map<string, IdTally>();
   const warningIds = new Map<string, IdTally>();
   const criticalIds = new Map<string, IdTally>();
-  const channelNames = new Set<string>();
-  const textLogs = new Set<string>();
   const perChannel = new Map<
     string,
     { count: number; errors: number; warnings: number; hours: number[] }
@@ -258,13 +314,19 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
 
   for (const record of records) {
     byLevel[record.level] += 1;
-    bump(allIds, record);
-    if (record.level === "Warning") bump(warningIds, record);
-    if (record.level === "Critical") bump(criticalIds, record);
+    const isEvent = record.originKind !== "log";
+    if (isEvent) {
+      bump(allIds, record);
+      if (record.level === "Warning") bump(warningIds, record);
+      if (record.level === "Critical") bump(criticalIds, record);
+    }
 
-    if (record.originKind === "log") textLogs.add(record.sourceLabel);
-    else channelNames.add(record.channel);
+    const hour = hourOfDay(record, timeZoneMode);
+    if (hour === null) unplacedCount += 1;
+    else if (record.level === "Error") hourly[hour].errors += 1;
+    else if (record.level === "Warning") hourly[hour].warnings += 1;
 
+    if (!isEvent) continue;
     let channel = perChannel.get(record.channel);
     if (!channel) {
       channel = {
@@ -278,27 +340,24 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
     channel.count += 1;
     if (record.level === "Error") channel.errors += 1;
     else if (record.level === "Warning") channel.warnings += 1;
-
-    const hour = hourOfDay(record, timeZoneMode);
-    if (hour === null) {
-      unplacedCount += 1;
-      continue;
-    }
-    channel.hours[hour] += 1;
-    if (record.level === "Error") hourly[hour].errors += 1;
-    else if (record.level === "Warning") hourly[hour].warnings += 1;
+    if (hour !== null) channel.hours[hour] += 1;
   }
 
   // Colors follow display order, so a channel keeps its color when a filter
-  // empties others. Channels outside the display order follow it, by name.
+  // empties others. A channel outside the display order gets an index derived
+  // from its own name only (never from which other channels are visible), so
+  // its color is stable across filters. `channelColor` cycles every six, so an
+  // off-order channel can share a color with a pane channel; the label next to
+  // each bar, not the color, identifies it.
   const orderIndex = new Map<string, number>();
   channelOrder.forEach((name, index) => {
     if (!orderIndex.has(name)) orderIndex.set(name, index);
   });
-  const extras = [...perChannel.keys()]
-    .filter((name) => !orderIndex.has(name))
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  extras.forEach((name, i) => orderIndex.set(name, channelOrder.length + i));
+  for (const name of perChannel.keys()) {
+    if (!orderIndex.has(name)) {
+      orderIndex.set(name, channelOrder.length + stableNameHash(name) % OFF_ORDER_SPAN);
+    }
+  }
 
   const ranked: EvtxChartChannelBar[] = [...perChannel.entries()]
     .map(([channel, tally]) => ({
@@ -335,12 +394,14 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
     }
   }
 
+  // The share is of warning events: text-log warning lines have no event ID.
   const rankedWarnings = rankIds(warningIds);
+  const eventWarnings = rankedWarnings.reduce((sum, t) => sum + t.count, 0);
   const warningSublabel =
     rankedWarnings.length >= 2
       ? `Top 2 IDs = ${Math.round(
           ((rankedWarnings[0].count + rankedWarnings[1].count) /
-            byLevel.Warning) *
+            eventWarnings) *
             100,
         )}%`
       : null;
@@ -348,10 +409,15 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
 
   const exact = chains?.counts.exact ?? 0;
   const chainCount = chains ? exact + chains.counts.candidate : null;
-  const chainsSublabel =
-    chains && chainCount! > 0
-      ? `${exact} exact${chains.edgeInputComplete ? "" : ", loaded edges only"}`
-      : null;
+  // A zero from a bounded edge preview is not a definite zero: whenever the
+  // edges are a loaded subset the qualifier shows, whatever the count.
+  const chainsSublabel = !chains
+    ? null
+    : !chains.edgeInputComplete
+      ? `${exact} exact, loaded edges only`
+      : chainCount! > 0
+        ? `${exact} exact`
+        : null;
 
   const kpis: EvtxChartKpi[] = [
     {
@@ -361,8 +427,8 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
       sublabel:
         records.length === 0
           ? null
-          : `${plural(channelNames.size, "channel", "channels")} · ${plural(
-              textLogs.size,
+          : `${plural(loadedChannelCount, "channel", "channels")} \u00b7 ${plural(
+              textLogCount,
               "text log",
               "text logs",
             )}`,
