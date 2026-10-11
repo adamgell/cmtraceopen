@@ -837,7 +837,7 @@ mod tests {
 
     #[test]
     fn quoted_delimiters_and_message_openers_remain_literal() {
-        let content = r#"<![LOG[Literal <![LOG[ in message]LOG]!><time="23:42:01.2570860" date="4-7-2026" component="AgentExecutor" context="a > b <![LOG[ literal" type="1" thread="7" file="source>name">"#;
+        let content = r#"<![LOG[Literal <![LOG[ in message]LOG]!><time="23:42:01.2570860" date="4-7-2026" component="AgentExecutor" context="a > b <![LOG[ literal <![LOG[example]LOG]!><> tail" type="1" thread="7" file="source>name">"#;
         let (entries, errors) = parse_ime_entries(content, "AgentExecutor.log");
         assert_eq!(errors, 0);
         assert_eq!(entries.len(), 1);
