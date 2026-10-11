@@ -402,6 +402,25 @@ describe("More filters", () => {
     expect(screen.getByRole("button", { name: "More filters · 3" })).toBeInTheDocument();
   });
 
+  it("keeps the More filters number through a live refetch that empties the loaded channels", () => {
+    seed({
+      sourceMode: "live",
+      channels: [
+        { name: "System", eventCount: 1, sourceType: "live" },
+        { name: "Application", eventCount: 1, sourceType: "live" },
+      ],
+      loadedChannels: new Set(["System", "Application"]),
+      selectedChannels: new Set(["System"]),
+    });
+    render(<EvtxFilterBar nowEpoch={0} />);
+    expect(screen.getByRole("button", { name: "More filters · 1" })).toBeInTheDocument();
+
+    act(() =>
+      useEvtxStore.setState({ isLoading: true, records: [], loadedChannels: new Set<string>() }),
+    );
+    expect(screen.getByRole("button", { name: "More filters · 1" })).toBeInTheDocument();
+  });
+
   it("holds every control the old filter bar had besides Group by, Columns and Export", async () => {
     seed();
     render(<EvtxFilterBar nowEpoch={0} />);

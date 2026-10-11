@@ -258,6 +258,65 @@ describe("EvtxFilterChips", () => {
     expect(screen.queryByRole("list", { name: "Active filters" })).toBeNull();
   });
 
+  describe("in live mode during a refetch", () => {
+    const liveSeed = () =>
+      seed({
+        sourceMode: "live",
+        channels: [
+          { name: "System", eventCount: 1, sourceType: "live" },
+          { name: "Application", eventCount: 1, sourceType: "live" },
+        ],
+        loadedChannels: new Set(["System", "Application"]),
+        selectedChannels: new Set(["System"]),
+        filterEventIds: "4624",
+      });
+    /** What a live refetch does to the store: loading, nothing loaded, selection untouched. */
+    const startRefetch = () =>
+      act(() => useEvtxStore.setState({ isLoading: true, records: [], loadedChannels: new Set<string>() }));
+    const finishRefetch = () =>
+      act(() =>
+        useEvtxStore.setState({ isLoading: false, loadedChannels: new Set(["System", "Application"]) }),
+      );
+    const labels = () => screen.getAllByRole("listitem").map((item) => item.textContent);
+
+    it("keeps the channel chip while the refetch has emptied the loaded channels", () => {
+      liveSeed();
+      render(<EvtxFilterChips visibleCount={1} loadedCount={2} />);
+      expect(labels()).toEqual(["Channels: 1 of 2", "Event IDs: 4624"]);
+
+      startRefetch();
+      expect(labels()).toEqual(["Channels: 1 of 2", "Event IDs: 4624"]);
+
+      finishRefetch();
+      expect(labels()).toEqual(["Channels: 1 of 2", "Event IDs: 4624"]);
+    });
+
+    it("keeps the row, and the focused channel chip's button, when it is the only chip", () => {
+      liveSeed();
+      useEvtxStore.setState({ filterEventIds: "" });
+      render(<EvtxFilterChips visibleCount={1} loadedCount={2} />);
+      const button = screen.getByRole("button", { name: "Remove Channels: 1 of 2" });
+      button.focus();
+
+      startRefetch();
+      expect(screen.getByRole("button", { name: "Remove Channels: 1 of 2" })).toBe(button);
+      expect(button).toHaveFocus();
+    });
+
+    it("follows a real change to the loaded channels once the refetch is over", () => {
+      liveSeed();
+      render(<EvtxFilterChips visibleCount={1} loadedCount={2} />);
+      startRefetch();
+      act(() =>
+        useEvtxStore.setState({
+          isLoading: false,
+          loadedChannels: new Set(["System", "Application", "Setup"]),
+        }),
+      );
+      expect(labels()[0]).toBe("Channels: 1 of 3");
+    });
+  });
+
   it("says Loading instead of a count while events load, never Showing 0", () => {
     seed({ filterSearch: "logon", isLoading: true });
     // The workspace passes an empty visible list while loading.
@@ -325,6 +384,21 @@ describe("EvtxFilterChips", () => {
       renderWithSearch();
       clickRemove("Event IDs: 4624");
       expect(remove("Quick filter: x")).toHaveFocus();
+    });
+
+    it("moves to the Search chip's remove button, not the search box, when Search is the next chip", () => {
+      // The search chip's id must not be read as "focus the search box".
+      seed({ filterEventIds: "4624", filterSearch: "logon" });
+      renderWithSearch();
+      clickRemove("Event IDs: 4624");
+      expect(remove("Search: logon")).toHaveFocus();
+      expect(screen.getByRole("textbox", { name: "Search events" })).not.toHaveFocus();
+
+      cleanup();
+      seedThree();
+      renderWithSearch();
+      clickRemove("Quick filter: x");
+      expect(remove("Search: logon")).toHaveFocus();
     });
 
     it("moves to the previous chip's remove button when the last chip is removed", () => {

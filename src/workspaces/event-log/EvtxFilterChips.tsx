@@ -10,7 +10,7 @@
  * the time window are on the filter row, so only the search text has a chip; levels and the time
  * window never do.
  */
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   createFocusOutlineStyle,
   Link,
@@ -117,12 +117,21 @@ export function useFilterChips(): {
   const channels = useEvtxStore((s) => s.channels);
   const loadedChannels = useEvtxStore((s) => s.loadedChannels);
   const sourceMode = useEvtxStore((s) => s.sourceMode);
+  const isLoading = useEvtxStore((s) => s.isLoading);
 
-  const heldChannels = useMemo(
+  const currentHeld = useMemo(
     () =>
       sourceMode === "live" ? loadedChannels : new Set(channels.map((channel) => channel.name)),
     [sourceMode, loadedChannels, channels],
   );
+  // A live refetch empties `loadedChannels` for its whole duration, though the selection has not
+  // changed. The rows stay mounted through it, so the channel chip (and the More filters number)
+  // would drop out and come back, moving the grid twice and unmounting a focused remove button. So
+  // while loading, the channels are the ones from before the load began. The state is adjusted while
+  // rendering, which has no effect lag.
+  const [settledHeld, setSettledHeld] = useState(currentHeld);
+  if (!isLoading && settledHeld !== currentHeld) setSettledHeld(currentHeld);
+  const heldChannels = isLoading ? settledHeld : currentHeld;
   const chips = useMemo(
     () =>
       buildFilterChips({
@@ -224,7 +233,8 @@ interface EvtxFilterChipsProps {
   loadedCount: number;
 }
 
-type FocusTarget = EvtxFilterChipId | "search";
+/** A chip's remove button, or the search box. The search chip has its own id, so the box is not a string. */
+type FocusTarget = { chip: EvtxFilterChipId } | { searchBox: true };
 
 export function EvtxFilterChips({ visibleCount, loadedCount }: EvtxFilterChipsProps) {
   const styles = useStyles();
@@ -256,9 +266,9 @@ export function EvtxFilterChips({ visibleCount, loadedCount }: EvtxFilterChipsPr
     if (target === null) return;
     pendingFocus.current = null;
     const chipButton =
-      target === "search"
-        ? null
-        : rowRef.current?.querySelector<HTMLElement>(`[data-evtx-chip="${target}"] button`);
+      "chip" in target
+        ? rowRef.current?.querySelector<HTMLElement>(`[data-evtx-chip="${target.chip}"] button`)
+        : null;
     (chipButton ?? document.getElementById(EVTX_SEARCH_INPUT_ID))?.focus();
   });
 
@@ -285,7 +295,8 @@ export function EvtxFilterChips({ visibleCount, loadedCount }: EvtxFilterChipsPr
   };
   const removeOne = (id: EvtxFilterChipId) => {
     const index = chips.findIndex((chip) => chip.id === id);
-    pendingFocus.current = (chips[index + 1] ?? chips[index - 1])?.id ?? "search";
+    const neighbour = chips[index + 1] ?? chips[index - 1];
+    pendingFocus.current = neighbour ? { chip: neighbour.id } : { searchBox: true };
     removeChip(id);
   };
   const clearable = chips.filter((chip) => chip.clearedByClearAll);
@@ -321,7 +332,7 @@ export function EvtxFilterChips({ visibleCount, loadedCount }: EvtxFilterChipsPr
           style={{ fontSize, fontWeight: 600 }}
           onClick={() => {
             // Clear all unmounts itself once nothing clearable is left, so focus goes to the search.
-            pendingFocus.current = "search";
+            pendingFocus.current = { searchBox: true };
             for (const chip of clearable) removeChip(chip.id);
           }}
         >
