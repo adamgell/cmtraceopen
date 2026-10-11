@@ -29,6 +29,7 @@ import { UnifiedTimelineView } from "./UnifiedTimelineView";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import { EvtxViewBar } from "./EvtxViewBar";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
+import { effectiveResizeRange, useRowCappedSize } from "./use-row-capped-size";
 import {
   EVTX_VIEW_LABELS,
   EVTX_VIEW_PANEL_ID,
@@ -316,6 +317,15 @@ export function EventLogWorkspace() {
   const railWidth = useEvtxLayoutStore((s) => s.railWidth);
   const dockHeight = useEvtxLayoutStore((s) => s.dockHeight);
   const setRailWidth = useEvtxLayoutStore((s) => s.setRailWidth);
+  // The rail is capped to a share of the body row (see its style), so the handle reports and
+  // steps from the width actually rendered and its maximum never exceeds the cap.
+  const railRef = useRef<HTMLElement | null>(null);
+  const railRange = effectiveResizeRange(
+    railWidth,
+    MIN_RAIL_WIDTH,
+    MAX_RAIL_WIDTH,
+    useRowCappedSize(railRef, 1),
+  );
   const setDockHeight = useEvtxLayoutStore((s) => s.setDockHeight);
   const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
   useEffect(() => {
@@ -732,6 +742,7 @@ export function EventLogWorkspace() {
         {/* Hidden, not unmounted, so the rail's future tab state survives a toggle. */}
         <aside
           id={EVTX_RAIL_ID}
+          ref={railRef}
           data-evtx-region="rail"
           aria-label="Insights rail"
           style={{
@@ -752,9 +763,9 @@ export function EventLogWorkspace() {
             edge="start"
             label="Resize insights rail"
             controls={EVTX_RAIL_ID}
-            value={railWidth}
-            min={MIN_RAIL_WIDTH}
-            max={MAX_RAIL_WIDTH}
+            value={railRange.value}
+            min={railRange.min}
+            max={railRange.max}
             direction={-1}
             onChange={setRailWidth}
           />
