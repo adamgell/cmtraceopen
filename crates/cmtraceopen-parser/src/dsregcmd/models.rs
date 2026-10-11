@@ -236,14 +236,22 @@ pub struct DsregcmdDerived {
     pub phase_summary: String,
     pub capture_confidence: DsregcmdCaptureConfidence,
     pub capture_confidence_reason: String,
-    /// Registry-confirmed enrollment. `Some(true)` only when the enrollments
-    /// registry shows an enrollment that matches an EnterpriseMgmt scheduled
-    /// task; `Some(false)` only when that registry was read and holds no
-    /// enrollment; `None` when the registry evidence is missing or unreadable.
+    /// Registry-confirmed enrollment:
+    /// - `Some(true)` when an enrollment in `EnrollmentState` 1 has a GUID that
+    ///   matches an EnterpriseMgmt scheduled task GUID (ignoring braces and
+    ///   case).
+    /// - `Some(false)` only when the Enrollments export was read, holds no
+    ///   enrollment, and no EnterpriseMgmt task GUID was observed.
+    /// - `None` otherwise: the export is missing, unreadable or lacks its root
+    ///   key; an enrollment exists that no task confirms; or an empty registry
+    ///   sits beside an observed task GUID (conflicting evidence).
+    ///
+    /// URL presence never sets it; see `mdm_urls_present`.
     pub mdm_enrolled: Option<bool>,
     /// Whether the dsregcmd capture shows an `MdmUrl` or `MdmComplianceUrl`.
-    /// `Some(true)` or `None` (the capture does not show the fields). URL
-    /// presence does not prove enrollment; see `mdm_enrolled`.
+    /// `Some(true)` or `None`: `None` when the capture does not show the fields
+    /// or shows them empty, `-` or `n/a`. URL presence does not prove
+    /// enrollment; see `mdm_enrolled`.
     pub mdm_urls_present: Option<bool>,
     pub missing_mdm: Option<bool>,
     pub compliance_url_present: Option<bool>,

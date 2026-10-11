@@ -145,15 +145,21 @@ The crate also carries the pure-analysis layers the app builds on top of parsing
 
 ### 0.4.0 API migration (unreleased)
 
-Windows Firewall support (#814) and DsRegCmd event-log linking (#870), and the DsRegCmd MDM split (#869) add public Rust fields and enum variants. Downstream source changes may be required even though older JSON payloads remain readable:
+Windows Firewall support (#814), DsRegCmd event-log linking (#870) and the DsRegCmd MDM split (#869) add public Rust fields and enum variants. Downstream source changes may be required even though older JSON payloads remain readable:
 
 - `LogEntry` struct literals need `firewall: None` for other formats, or a `..Default::default()` update. Serialized entries omit absent firewall metadata; deserialization defaults a missing field to `None`.
 - `ParseResult` and `ParsedChunk` struct literals need `firewall_coverage: None` when no firewall coverage exists. Exhaustive destructuring must include the field or use `..`.
 - Exhaustive matches on `ParserKind` and `ParserImplementation` must handle `WindowsFirewall`. `LogFormat` has no new variant; use parser selection to distinguish Windows Firewall records.
 - A firewall wall-clock value without a confirmed UTC basis has no absolute `timestamp`. Preserve its display value and time-basis metadata instead of assigning the viewer's timezone.
 - `DsregcmdDiagnosticInsight` struct literals need `related_error_codes: Vec::new()`. The field lists the `0x` error codes a DsRegCmd rule matched on token boundaries in the fields it reads, and the analyzer uses it to link event-log entries to diagnostics. JSON without the field still deserializes to an empty list, and `DsregcmdAnalysisResult` now fills `correlation_links` on its event-log analysis, replacing any links the bundle carried. Exhaustive destructuring of the struct must include the field or use `..`.
-- `DsregcmdDerived` struct literals need `mdm_urls_present: None` (or the computed value). The new field is `Some(true)` when the capture shows `MdmUrl` or `MdmComplianceUrl`, and `None` when it does not; it is never `Some(false)`. JSON without the field deserializes to `None`. Exhaustive destructuring must include the field or use `..`.
-- `DsregcmdDerived::mdm_enrolled` changed meaning. It no longer follows URL presence: it is `Some(true)` only when the enrollments registry holds an enrollment with `EnrollmentState` 1 that matches an EnterpriseMgmt scheduled task GUID, `Some(false)` only when that registry was read and holds no enrollment, and `None` when the evidence is missing or unreadable. Callers that read `mdm_enrolled` as "an MDM URL is present" must read `mdm_urls_present`. `analyze_text` without bundle evidence now returns `mdm_enrolled: None`. Because the `enrollment-missing-on-joined` rule no longer sees a URL-derived `Some(true)`, it fires for a joined device whose enrollments registry was read and is empty, even when MDM URLs are present.
+- `DsregcmdDerived` struct literals need `mdm_urls_present: None` (or the computed value). The new field is `Some(true)` when the capture shows `MdmUrl` or `MdmComplianceUrl`, and `None` when it does not or shows them empty, `-` or `n/a`; it is never `Some(false)`. JSON without the field deserializes to `None`. Exhaustive destructuring must include the field or use `..`.
+- `DsregcmdDerived::mdm_enrolled` changed meaning. It no longer follows URL presence:
+  - `Some(true)` when the Enrollments registry holds an enrollment with `EnrollmentState` 1 whose GUID matches an EnterpriseMgmt scheduled task GUID, ignoring braces and case.
+  - `Some(false)` only when the Enrollments export was read, holds no enrollment, and no EnterpriseMgmt task GUID was observed. Empty and absent task evidence count the same.
+  - `None` otherwise: the export is missing, unreadable or lacks its root key; an enrollment exists that no task confirms; or an empty registry sits beside an observed task GUID.
+
+  Callers that read `mdm_enrolled` as "an MDM URL is present" must read `mdm_urls_present`. `analyze_text` without bundle evidence now returns `mdm_enrolled: None`. The `enrollment-missing-on-joined` rule fires exactly when `mdm_enrolled` is `Some(false)` on an Entra-joined device, so it can fire when MDM URLs are present and never fires on missing, unreadable or conflicting evidence.
+- New public helpers `dsregcmd::extended::unbraced_guid` and `dsregcmd::extended::same_enrollment_guid` give the enrollment GUID identity the analyzer uses: the unbraced `8-4-4-4-12` form, compared ignoring braces and case. They are additions and need no source change.
 
 These source API changes require the parser version to advance to `0.4.0`. Crate publication remains a separate step.
 

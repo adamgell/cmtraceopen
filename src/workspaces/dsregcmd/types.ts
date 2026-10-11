@@ -185,12 +185,17 @@ export interface DsregcmdDerived {
   captureConfidence: DsregcmdCaptureConfidence;
   captureConfidenceReason: string;
   /**
-   * Registry-confirmed enrollment: true on a matched enrollment, false only
-   * when the enrollments registry was read and is empty, null when the registry
-   * evidence is missing or unreadable. URL presence never sets it.
+   * Registry-confirmed enrollment: true when an enrollment in state 1 matches
+   * an EnterpriseMgmt task GUID; false only when the Enrollments export was
+   * read, holds no enrollment, and no task GUID was observed; null otherwise
+   * (missing or unreadable export, an enrollment no task confirms, or an empty
+   * registry beside a task GUID). URL presence never sets it.
    */
   mdmEnrolled: boolean | null;
-  /** true when dsregcmd shows an MdmUrl or MdmComplianceUrl, null when it does not. */
+  /**
+   * true when dsregcmd shows an MdmUrl or MdmComplianceUrl; null when it does
+   * not, or shows them empty, "-" or "n/a".
+   */
   mdmUrlsPresent: boolean | null;
   missingMdm: boolean | null;
   complianceUrlPresent: boolean | null;
