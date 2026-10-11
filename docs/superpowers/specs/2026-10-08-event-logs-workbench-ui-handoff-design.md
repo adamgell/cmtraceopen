@@ -275,7 +275,7 @@ All names below were verified as exports of the installed `@fluentui/react-icons
 | Error level | `ErrorCircle12Regular` / `ErrorCircle16Regular` |
 | Warning level | `Warning12Regular` / `Warning16Regular` |
 | Information level | `Info12Regular` / `Info16Regular` |
-| Verbose level | `Circle12Regular` |
+| Verbose level | `Circle12Regular` / `Circle16Regular` |
 | ⛓ links column / count | `Link12Regular` (cell), `Link16Regular` (header) |
 | ✓ on panel toggles | `Checkmark12Regular` |
 | × chip remove, dock close | `Dismiss12Regular` |

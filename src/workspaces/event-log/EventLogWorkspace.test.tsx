@@ -160,6 +160,7 @@ import { EventLogWorkspace } from "./EventLogWorkspace";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import { EvtxFilterBar } from "./EvtxFilterBar";
+import { EvtxViewBar } from "./EvtxViewBar";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { SourcePicker } from "./SourcePicker";
 import {
@@ -885,7 +886,7 @@ describe("EventLogWorkspace fixtures", () => {
       return undefined;
     });
 
-    render(<EvtxFilterBar nowEpoch={nowEpoch} />);
+    render(<EvtxViewBar nowEpoch={nowEpoch} />);
     fireEvent.click(
       screen.getByTitle(
         "Export the events currently shown, using the same filters as the list",
@@ -971,7 +972,7 @@ describe("EventLogWorkspace fixtures", () => {
       return undefined;
     });
 
-    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    render(<EvtxViewBar nowEpoch={Date.now()} />);
     fireEvent.click(
       screen.getByTitle(
         "Export the events currently shown, using the same filters as the list",
@@ -1137,7 +1138,7 @@ describe("EventLogWorkspace fixtures", () => {
     fireEvent.click(
       screen.getByTitle("Export the events currently shown, using the same filters as the list"),
     );
-    fireEvent.click(await screen.findByRole("option", { name: label }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: label }));
   };
 
   // The shared dialog mock is not reset between tests in this file, and these tests judge the guard
@@ -1152,7 +1153,7 @@ describe("EventLogWorkspace fixtures", () => {
     seedEventLog();
     const dialog = Promise.withResolvers<string | null>();
     dialogMock().mockImplementation(() => dialog.promise);
-    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    render(<EvtxViewBar nowEpoch={Date.now()} />);
 
     await selectExportFormat("JSON");
     await selectExportFormat("JSON");
@@ -1167,7 +1168,7 @@ describe("EventLogWorkspace fixtures", () => {
   it("allows another export after the save dialog is dismissed", async () => {
     seedEventLog();
     dialogMock().mockResolvedValue(null);
-    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    render(<EvtxViewBar nowEpoch={Date.now()} />);
 
     await selectExportFormat("JSON");
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
@@ -1182,7 +1183,7 @@ describe("EventLogWorkspace fixtures", () => {
     dialogMock()
       .mockRejectedValueOnce(new Error("dialog unavailable"))
       .mockResolvedValue(null);
-    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    render(<EvtxViewBar nowEpoch={Date.now()} />);
 
     await selectExportFormat("JSON");
     await waitFor(() =>
@@ -1225,7 +1226,7 @@ describe("EventLogWorkspace fixtures", () => {
       if (command === "load_markers") return null;
       return undefined;
     });
-    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    render(<EvtxViewBar nowEpoch={Date.now()} />);
 
     await selectExportFormat("JSON");
     await waitFor(() =>
@@ -1251,7 +1252,7 @@ describe("EventLogWorkspace fixtures", () => {
       if (command === "load_markers") return null;
       return undefined;
     });
-    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    render(<EvtxViewBar nowEpoch={Date.now()} />);
 
     await selectExportFormat("JSON");
     await waitFor(() => expect(sessions).toBe(1));

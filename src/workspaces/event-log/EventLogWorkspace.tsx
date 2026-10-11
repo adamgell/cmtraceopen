@@ -1,4 +1,11 @@
-import { useCallback, useMemo, useRef, useState, useEffect } from "react";
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  useEffect,
+  type ReactNode,
+} from "react";
 import { ProgressBar, Spinner, tokens } from "@fluentui/react-components";
 import {
   closeEventLogAnalysisSession,
@@ -9,6 +16,7 @@ import {
 import { useEvtxStore } from "./evtx-store";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
+import { getLogListMetrics } from "../../lib/log-accessibility";
 import type { LogEntry } from "../../types/log";
 import { SourcePicker } from "./SourcePicker";
 import { ChannelPicker } from "./ChannelPicker";
@@ -18,6 +26,20 @@ import { EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
 import { EvtxDetailPane } from "./EvtxDetailPane";
+import { EvtxViewBar } from "./EvtxViewBar";
+import { EvtxResizeHandle } from "./EvtxResizeHandle";
+import {
+  EVTX_VIEW_LABELS,
+  EVTX_VIEW_PANEL_ID,
+  evtxViewTabId,
+  MAX_RAIL_WIDTH,
+  MIN_DOCK_HEIGHT,
+  MIN_RAIL_WIDTH,
+  maxDockHeightFor,
+  useEvtxLayoutStore,
+  type EvtxRailTabId,
+  type EvtxViewId,
+} from "./evtx-layout-store";
 import { selectVisibleRecords } from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
@@ -35,6 +57,52 @@ const DEFAULT_DETAIL_HEIGHT = 300;
 const MIN_DETAIL_HEIGHT = 100;
 const MAX_DETAIL_RATIO = 0.7;
 const DIAGNOSIS_DEBOUNCE_MS = 75;
+
+const NOT_IMPLEMENTED = "Not implemented in this phase";
+
+/**
+ * One entry per workbench view. A later phase adds its view file and changes one line here.
+ * `keepAlive` entries stay mounted while another view is active (hidden, not unmounted), so
+ * switching away and back keeps scroll position and the unified timeline's page cache.
+ */
+interface EvtxViewEntry {
+  keepAlive: boolean;
+  render: () => ReactNode;
+}
+
+/** Rail contents by tab (Phase 4 replaces these with the Insights, Chains and Details tabs). */
+const RAIL_SLOT_LABELS: Record<EvtxRailTabId, string> = {
+  insights: "Insights",
+  chains: "Chains",
+  details: "Details",
+};
+
+/** Dock contents (Phase 11 replaces this with the correlation dock). */
+const DOCK_SLOT_LABELS: Record<"correlation", string> = {
+  correlation: "Correlation dock",
+};
+
+function ViewPlaceholder({ view }: { view: EvtxViewId }) {
+  return <RegionPlaceholder title={`${EVTX_VIEW_LABELS[view]} view`} />;
+}
+
+function RegionPlaceholder({ title }: { title: string }) {
+  const f = useUiStore((s) => s.logListFontSize);
+  const metrics = useMemo(() => getLogListMetrics(f), [f]);
+  return (
+    <div
+      role="status"
+      style={{
+        padding: "12px",
+        fontSize: `${Math.max(10, metrics.fontSize - 2)}px`,
+        color: tokens.colorNeutralForeground3,
+      }}
+    >
+      <strong style={{ color: tokens.colorNeutralForeground2 }}>{title}</strong>
+      {`: ${NOT_IMPLEMENTED}.`}
+    </div>
+  );
+}
 
 interface EventLogAnalysisSnapshot {
   revision: number;
@@ -184,6 +252,24 @@ export function EventLogWorkspace() {
     publishedSessionId: null,
   });
 
+  const activeView = useEvtxLayoutStore((s) => s.activeView);
+  const panels = useEvtxLayoutStore((s) => s.panels);
+  const railTab = useEvtxLayoutStore((s) => s.railTab);
+  const railWidth = useEvtxLayoutStore((s) => s.railWidth);
+  const dockHeight = useEvtxLayoutStore((s) => s.dockHeight);
+  const setRailWidth = useEvtxLayoutStore((s) => s.setRailWidth);
+  const setDockHeight = useEvtxLayoutStore((s) => s.setDockHeight);
+  const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
+  useEffect(() => {
+    const onResize = () => setViewportHeight(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  // The ceiling is half the viewport and the viewport changes, so it is applied in pixels here
+  // rather than stored.
+  const dockMax = maxDockHeightFor(viewportHeight);
+  const effectiveDockHeight = Math.min(Math.max(dockHeight, MIN_DOCK_HEIGHT), dockMax);
+
   const [detailHeight, setDetailHeight] = useState(DEFAULT_DETAIL_HEIGHT);
   const resizeRef = useRef<{ startY: number; startHeight: number } | null>(
     null,
@@ -217,7 +303,6 @@ export function EventLogWorkspace() {
       if (resizeRef.current) {
         resizeRef.current = null;
         document.body.style.cursor = "";
-
         document.body.style.userSelect = "";
       }
     };
@@ -379,6 +464,78 @@ export function EventLogWorkspace() {
         coverageGaps.length > 0 ||
         diagnosisCoverageGaps.length > 0));
 
+  // Today's stack: the unified timeline, the record grid and the detail pane. Phase 4 moves the
+  // detail pane and the diagnosis card into the rail; Phase 7 restyles the grid.
+  const renderTableView = () => (
+    <>
+      <div
+        style={{
+          height: "320px",
+          minHeight: "240px",
+          maxHeight: "50vh",
+          flexShrink: 0,
+          overflowY: "auto",
+          overflowX: "hidden",
+        }}
+      >
+        <UnifiedTimelineView
+          key={
+            analysisStatus === null
+              ? "pending"
+              : `${analysisStatus.sessionId}:${analysisStatus.revision}`
+          }
+          status={analysisStatus}
+          initialPage={initialTimelinePage}
+          loadPage={loadTimelinePage}
+          pending={timelinePending}
+        />
+      </div>
+      <div style={{ flex: 1, overflow: "hidden" }}>
+        <EvtxTimeline nowEpoch={nowEpoch} />
+      </div>
+
+      {/* Resize handle + detail pane */}
+      {selectedRecordId != null && (
+        <>
+          <div
+            style={{
+              height: "4px",
+              cursor: "row-resize",
+              backgroundColor: tokens.colorNeutralStroke2,
+              flexShrink: 0,
+            }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              resizeRef.current = {
+                startY: e.clientY,
+                startHeight: detailHeight,
+              };
+              document.body.style.cursor = "row-resize";
+              document.body.style.userSelect = "none";
+            }}
+          />
+          <div
+            style={{
+              height: `${detailHeight}px`,
+              flexShrink: 0,
+              overflow: "hidden",
+            }}
+          >
+            <EvtxDetailPane />
+          </div>
+        </>
+      )}
+    </>
+  );
+
+  const views: Record<EvtxViewId, EvtxViewEntry> = {
+    table: { keepAlive: true, render: renderTableView },
+    grouped: { keepAlive: false, render: () => <ViewPlaceholder view="grouped" /> },
+    timeline: { keepAlive: false, render: () => <ViewPlaceholder view="timeline" /> },
+    charts: { keepAlive: false, render: () => <ViewPlaceholder view="charts" /> },
+    correlation: { keepAlive: false, render: () => <ViewPlaceholder view="correlation" /> },
+  };
+
   if (!hasData && !isLoading) {
     return <SourcePicker />;
   }
@@ -430,6 +587,7 @@ export function EventLogWorkspace() {
         </div>
       )}
       {isLoading && <ProgressBar style={{ width: "100%", flexShrink: 0 }} />}
+      <EvtxViewBar nowEpoch={nowEpoch} />
       <EvtxFilterBar nowEpoch={nowEpoch} />
       <EvtxCoverageBanner />
       <EventDiagnosisPanel summary={diagnosis} />
@@ -453,74 +611,113 @@ export function EventLogWorkspace() {
           overflow: "hidden",
         }}
       >
-        {channels.length > 0 && <ChannelPicker />}
+        {/* Hidden, not unmounted: the picker keeps its search text, expanded nodes and width. */}
+        {channels.length > 0 && (
+          <div
+            data-evtx-region="channels"
+            style={{ display: panels.channels ? "flex" : "none", flexShrink: 0 }}
+          >
+            <ChannelPicker />
+          </div>
+        )}
 
         <div
+          data-evtx-region="main"
           style={{
             flex: 1,
+            minWidth: 0,
             display: "flex",
             flexDirection: "column",
             overflow: "hidden",
+            backgroundColor: tokens.colorNeutralBackground1,
           }}
         >
           <div
+            role="tabpanel"
+            id={EVTX_VIEW_PANEL_ID}
+            aria-labelledby={evtxViewTabId(activeView)}
             style={{
-              height: "320px",
-              minHeight: "240px",
-              maxHeight: "50vh",
-              flexShrink: 0,
-              overflowY: "auto",
-              overflowX: "hidden",
+              flex: 1,
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
             }}
           >
-            <UnifiedTimelineView
-              key={
-                analysisStatus === null
-                  ? "pending"
-                  : `${analysisStatus.sessionId}:${analysisStatus.revision}`
-              }
-              status={analysisStatus}
-              initialPage={initialTimelinePage}
-              loadPage={loadTimelinePage}
-              pending={timelinePending}
-            />
-          </div>
-          <div style={{ flex: 1, overflow: "hidden" }}>
-            <EvtxTimeline nowEpoch={nowEpoch} />
+            {(Object.keys(views) as EvtxViewId[]).map((view) => {
+              const entry = views[view];
+              const active = view === activeView;
+              if (!active && !entry.keepAlive) return null;
+              return (
+                <div
+                  key={view}
+                  data-evtx-view={view}
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    display: active ? "flex" : "none",
+                    flexDirection: "column",
+                    overflow: "hidden",
+                  }}
+                >
+                  {entry.render()}
+                </div>
+              );
+            })}
           </div>
 
-          {/* Resize handle + detail pane */}
-          {selectedRecordId != null && (
-            <>
-              <div
-                style={{
-                  height: "4px",
-                  cursor: "row-resize",
-                  backgroundColor: tokens.colorNeutralStroke2,
-                  flexShrink: 0,
-                }}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  resizeRef.current = {
-                    startY: e.clientY,
-                    startHeight: detailHeight,
-                  };
-                  document.body.style.cursor = "row-resize";
-                  document.body.style.userSelect = "none";
-                }}
+          {panels.dock && (
+            <div
+              data-evtx-region="dock"
+              style={{
+                position: "relative",
+                height: `${effectiveDockHeight}px`,
+                flexShrink: 0,
+                borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
+                backgroundColor: tokens.colorNeutralBackground2,
+                overflow: "auto",
+              }}
+            >
+              <EvtxResizeHandle
+                orientation="horizontal"
+                label="Resize correlation dock"
+                value={effectiveDockHeight}
+                min={MIN_DOCK_HEIGHT}
+                max={dockMax}
+                direction={-1}
+                onChange={(next) => setDockHeight(next, window.innerHeight)}
               />
-              <div
-                style={{
-                  height: `${detailHeight}px`,
-                  flexShrink: 0,
-                  overflow: "hidden",
-                }}
-              >
-                <EvtxDetailPane />
-              </div>
-            </>
+              <RegionPlaceholder title={DOCK_SLOT_LABELS.correlation} />
+            </div>
           )}
         </div>
+
+        {/* Hidden, not unmounted, so the rail's future tab state survives a toggle. */}
+        <aside
+          data-evtx-region="rail"
+          aria-label="Insights rail"
+          style={{
+            display: panels.insights ? "block" : "none",
+            position: "relative",
+            width: `${railWidth}px`,
+            flexShrink: 0,
+            boxSizing: "border-box",
+            borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
+            backgroundColor: tokens.colorNeutralBackground2,
+            overflowY: "auto",
+          }}
+        >
+          <EvtxResizeHandle
+            orientation="vertical"
+            label="Resize insights rail"
+            value={railWidth}
+            min={MIN_RAIL_WIDTH}
+            max={MAX_RAIL_WIDTH}
+            direction={-1}
+            onChange={setRailWidth}
+          />
+          <RegionPlaceholder title={RAIL_SLOT_LABELS[railTab]} />
+        </aside>
       </div>
     </div>
   );

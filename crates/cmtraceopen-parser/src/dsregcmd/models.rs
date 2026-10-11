@@ -267,6 +267,15 @@ pub struct DsregcmdDiagnosticInsight {
     pub next_checks: Vec<String>,
     #[serde(default)]
     pub suggested_fixes: Vec<String>,
+    /// Specific error codes this diagnostic's rule cites, as lowercase
+    /// `0x`-prefixed hex. Populated only by rules that key on a known code, and
+    /// only with codes the capture itself contained on token boundaries in the
+    /// fields the rule reads (a rule that fires on a substring hit such as
+    /// `0x801c03f21` records none). Empty for every other rule. Event-log
+    /// entries that mention one of these codes are linked back to this
+    /// diagnostic (issue #870).
+    #[serde(default)]
+    pub related_error_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
