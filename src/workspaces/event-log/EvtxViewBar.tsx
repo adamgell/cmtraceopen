@@ -27,6 +27,7 @@ import {
   PopoverSurface,
   PopoverTrigger,
   ToggleButton,
+  Tooltip,
   makeStyles,
   tokens,
 } from "@fluentui/react-components";
@@ -35,6 +36,7 @@ import {
   ArrowUp16Regular,
   ChartMultiple20Regular,
   Checkmark12Regular,
+  Dismiss12Regular,
   Flowchart20Regular,
   GroupList20Regular,
   TableSimple20Regular,
@@ -80,10 +82,10 @@ const VIEW_ICONS: Record<EvtxViewId, FluentIcon> = {
 const PANEL_TOGGLES: ReadonlyArray<{
   id: EvtxPanelId;
   label: string;
-  /** Shown while the panel has no content; the toggle stays focusable so the reason is reachable. */
+  /** Shown (as the toggle's description) while the panel cannot be shown. */
   unavailableReason: string;
 }> = [
-  { id: "channels", label: "Channels", unavailableReason: "" },
+  { id: "channels", label: "Channels", unavailableReason: "No event log channels loaded" },
   {
     id: "insights",
     label: "Insights",
@@ -173,6 +175,7 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
     : "None";
 
   const records = useEvtxStore((s) => s.records);
+  const channelCount = useEvtxStore((s) => s.channels.length);
   const columnConfig = useEvtxStore((s) => s.columnConfig);
   const toggleColumnVisible = useEvtxStore((s) => s.toggleColumnVisible);
   const moveColumnBy = useEvtxStore((s) => s.moveColumnBy);
@@ -187,7 +190,13 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
   const columnLabel = (id: EvtxColumnId) =>
     choosableColumns.find((column) => column.id === id)?.label ?? id;
 
+  // Visible progress and results. Not a live region: progress changes once per chunk, which
+  // would flood a screen reader.
   const [exportState, setExportState] = useState<string | null>(null);
+  // What a screen reader hears: the start and the final result only.
+  const [exportAnnouncement, setExportAnnouncement] = useState("");
+  // A failure is shown in full under the bar and stays until dismissed or the next export.
+  const [exportError, setExportError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const exportAbortRef = useRef<AbortController | null>(null);
   // The save dialog is awaited before the export session exists, so the abort controller cannot be
@@ -227,6 +236,7 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
     );
     if (exportRecords.length === 0) {
       setExportState("Nothing to export");
+      setExportAnnouncement("Nothing to export");
       return;
     }
     // Claimed before the dialog opens: this is the whole point of the ref, since everything after
@@ -241,6 +251,8 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
       const controller = new AbortController();
       exportAbortRef.current = controller;
       setIsExporting(true);
+      setExportError(null);
+      setExportAnnouncement("Export started");
       setExportState(`Exporting 0 of ${exportRecords.length.toLocaleString()} events...`);
       const result = await streamEventLogExport({
         records: exportRecords,
@@ -254,14 +266,16 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
           );
         },
       });
-      setExportState(
-        `Exported ${result.records.toLocaleString()} events (${result.bytes.toLocaleString()} bytes)`,
-      );
+      const done = `Exported ${result.records.toLocaleString()} events (${result.bytes.toLocaleString()} bytes)`;
+      setExportState(done);
+      setExportAnnouncement(done);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         setExportState("Export cancelled");
+        setExportAnnouncement("Export cancelled");
       } else {
-        setExportState(
+        setExportState(null);
+        setExportError(
           `Export failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
@@ -275,350 +289,385 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
   const small = { minWidth: "auto", padding: "2px 8px", fontSize: controlFontSize } as const;
 
   return (
-    <div
-      data-evtx-region="view-bar"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "8px",
-        padding: "6px 12px",
-        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-        backgroundColor: tokens.colorNeutralBackground1,
-        flexWrap: "wrap",
-        flexShrink: 0,
-        fontSize: controlFontSize,
-      }}
-    >
+    <>
       <div
-        role="tablist"
-        aria-label="Layout"
+        data-evtx-region="view-bar"
         style={{
-          display: "inline-flex",
-          // An inset outline rather than a border, so the group is exactly the 28 px of its
-          // buttons and the bar measures 6 + 28 + 6 plus its bottom border (spec 5.1: ~40).
-          outline: `1px solid ${tokens.colorNeutralStroke1}`,
-          outlineOffset: "-1px",
-          borderRadius: "6px",
-          overflow: "hidden",
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          padding: "6px 12px",
+          borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+          backgroundColor: tokens.colorNeutralBackground1,
+          flexWrap: "wrap",
+          flexShrink: 0,
+          fontSize: controlFontSize,
         }}
       >
-        {EVTX_VIEW_IDS.map((view, index): ReactElement => {
-          const selected = view === activeView;
-          const Icon = VIEW_ICONS[view];
-          return (
-            <button
-              key={view}
-              ref={(element) => {
-                tabRefs.current[view] = element;
+        <div
+          role="tablist"
+          aria-label="Layout"
+          style={{
+            display: "inline-flex",
+            // An inset outline rather than a border, so the group is exactly the 28 px of its
+            // buttons and the bar measures 6 + 28 + 6 plus its bottom border (spec 5.1: ~40).
+            outline: `1px solid ${tokens.colorNeutralStroke1}`,
+            outlineOffset: "-1px",
+            borderRadius: "6px",
+            overflow: "hidden",
+          }}
+        >
+          {EVTX_VIEW_IDS.map((view, index): ReactElement => {
+            const selected = view === activeView;
+            const Icon = VIEW_ICONS[view];
+            return (
+              <button
+                key={view}
+                ref={(element) => {
+                  tabRefs.current[view] = element;
+                }}
+                id={evtxViewTabId(view)}
+                className={styles.layoutTab}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                aria-controls={EVTX_VIEW_PANEL_ID}
+                tabIndex={selected ? 0 : -1}
+                onClick={() => setActiveView(view)}
+                onKeyDown={onTabKeyDown}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  height: "28px",
+                  padding: "0 14px",
+                  border: "none",
+                  borderLeft:
+                    index === 0 ? "none" : `1px solid ${tokens.colorNeutralStroke1}`,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  fontSize: controlFontSize,
+                  fontWeight: selected ? 600 : 400,
+                  backgroundColor: selected
+                    ? tokens.colorNeutralBackground1Selected
+                    : "transparent",
+                  color: selected
+                    ? tokens.colorBrandForeground1
+                    : tokens.colorNeutralForeground2,
+                }}
+              >
+                <Icon fontSize={16} aria-hidden />
+                {EVTX_VIEW_LABELS[view]}
+              </button>
+            );
+          })}
+        </div>
+
+        <div
+          aria-hidden
+          style={{
+            width: "1px",
+            height: "20px",
+            backgroundColor: tokens.colorNeutralStroke1,
+          }}
+        />
+
+        <span style={{ fontSize: labelFontSize, color: tokens.colorNeutralForeground2 }}>
+          Panels
+        </span>
+        {PANEL_TOGGLES.map(({ id, label, unavailableReason }) => {
+          const available =
+            EVTX_PANELS_AVAILABLE[id] && (id !== "channels" || channelCount > 0);
+          // An unavailable panel is never shown as pressed, even from a stale persisted value.
+          const checked = available && panels[id];
+          const toggle = (
+            <ToggleButton
+              shape="rounded"
+              size="small"
+              checked={checked}
+              disabledFocusable={!available}
+              icon={checked ? <Checkmark12Regular /> : undefined}
+              onClick={() => {
+                if (available) setPanel(id, !checked);
               }}
-              id={evtxViewTabId(view)}
-              className={styles.layoutTab}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              aria-controls={EVTX_VIEW_PANEL_ID}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => setActiveView(view)}
-              onKeyDown={onTabKeyDown}
               style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "6px",
-                height: "28px",
-                padding: "0 14px",
-                border: "none",
-                borderLeft:
-                  index === 0 ? "none" : `1px solid ${tokens.colorNeutralStroke1}`,
-                cursor: "pointer",
-                fontFamily: "inherit",
-                fontSize: controlFontSize,
-                fontWeight: selected ? 600 : 400,
-                backgroundColor: selected
-                  ? tokens.colorNeutralBackground1Selected
-                  : "transparent",
-                color: selected
-                  ? tokens.colorBrandForeground1
-                  : tokens.colorNeutralForeground2,
+                ...small,
+                fontWeight: checked ? 600 : 400,
+                ...(checked
+                  ? {
+                      backgroundColor: tokens.colorNeutralBackground1Selected,
+                      color: tokens.colorBrandForeground1,
+                    }
+                  : {}),
               }}
             >
-              <Icon fontSize={16} aria-hidden />
-              {EVTX_VIEW_LABELS[view]}
-            </button>
+              {label}
+            </ToggleButton>
+          );
+          // The tooltip shows on hover and focus and supplies the toggle's accessible description,
+          // so the reason is reachable by keyboard and read once.
+          return available ? (
+            <span key={id} style={{ display: "inline-flex" }}>
+              {toggle}
+            </span>
+          ) : (
+            <Tooltip key={id} content={unavailableReason} relationship="description">
+              {toggle}
+            </Tooltip>
           );
         })}
-      </div>
 
-      <div
-        aria-hidden
-        style={{
-          width: "1px",
-          height: "20px",
-          backgroundColor: tokens.colorNeutralStroke1,
-        }}
-      />
-
-      <span style={{ fontSize: labelFontSize, color: tokens.colorNeutralForeground2 }}>
-        Panels
-      </span>
-      {PANEL_TOGGLES.map(({ id, label, unavailableReason }) => {
-        const checked = panels[id];
-        const available = EVTX_PANELS_AVAILABLE[id];
-        const reasonId = `evtx-panel-reason-${id}`;
-        return (
-          <span key={id} style={{ display: "inline-flex" }}>
-          <ToggleButton
-            shape="rounded"
-            size="small"
-            checked={checked}
-            disabledFocusable={!available}
-            title={available ? undefined : unavailableReason}
-            aria-describedby={available ? undefined : reasonId}
-            icon={checked ? <Checkmark12Regular /> : undefined}
-            onClick={() => {
-              if (available) setPanel(id, !checked);
-            }}
-            style={{
-              ...small,
-              fontWeight: checked ? 600 : 400,
-              ...(checked
-                ? {
-                    backgroundColor: tokens.colorNeutralBackground1Selected,
-                    color: tokens.colorBrandForeground1,
-                  }
-                : {}),
-            }}
-          >
-            {label}
-          </ToggleButton>
-          {!available && (
-            <span id={reasonId} className={styles.visuallyHidden}>
-              {unavailableReason}
-            </span>
-          )}
-          </span>
-        );
-      })}
-
-      {/*
-        The spacer doubles as the export status, so a long message is ellipsized into the free
-        space instead of widening the cluster and wrapping the bar onto a second row (spec 5.1).
-        The full text stays in the title and in the live region.
-      */}
-      <div
-        role="status"
-        aria-live="polite"
-        data-evtx-export-status
-        title={exportState ?? undefined}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          textAlign: "right",
-          fontSize: labelFontSize,
-          color: tokens.colorNeutralForeground3,
-        }}
-      >
-        {exportState}
-      </div>
-      {isExporting && (
-        <Button
-          size="small"
-          appearance="subtle"
-          onClick={() => exportAbortRef.current?.abort()}
+        {/*
+          The spacer doubles as the export status, so a long message is ellipsized into the free
+          space instead of widening the cluster and wrapping the bar onto a second row (spec 5.1).
+          The full text stays in the title. A failure is shown in full, under the bar.
+        */}
+        <div
+          data-evtx-export-status
+          title={exportState ?? undefined}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            textAlign: "right",
+            fontSize: labelFontSize,
+            color: tokens.colorNeutralForeground3,
+          }}
         >
-          Cancel export
-        </Button>
-      )}
-
-      <span style={{ fontSize: labelFontSize, color: tokens.colorNeutralForeground2 }}>
-        Group by
-      </span>
-      <Dropdown
-        button={{ style: { fontSize: controlFontSize } }}
-        size="small"
-        multiselect
-        aria-label="Group by"
-        value={groupSummary}
-        selectedOptions={groupBy.length ? groupBy : [NO_GROUPING]}
-        style={{ minWidth: "128px" }}
-        title="Group the list. Selecting several nests them in the order chosen."
-        onOptionSelect={(_, data) => {
-          const field = data.optionValue;
-          if (!field) return;
-          if (field === NO_GROUPING) {
-            setGroupBy([]);
-            return;
-          }
-          const grouped = field as EvtxGroupField;
-          // Appending rather than sorting keeps the nesting order under the operator's control.
-          setGroupBy(
-            groupBy.includes(grouped)
-              ? groupBy.filter((existing) => existing !== grouped)
-              : [...groupBy, grouped],
-          );
-        }}
-      >
-        <Option value={NO_GROUPING} text="None" style={{ fontSize: controlFontSize }}>
-          None
-        </Option>
-        {GROUP_FIELDS.map((field) => (
-          <Option
-            key={field}
-            value={field}
-            text={EVTX_GROUP_LABELS[field]}
-            style={{ fontSize: controlFontSize }}
+          {exportState}
+        </div>
+        {isExporting && (
+          <Button
+            size="small"
+            appearance="subtle"
+            onClick={() => exportAbortRef.current?.abort()}
           >
-            {EVTX_GROUP_LABELS[field]}
+            Cancel export
+          </Button>
+        )}
+
+        <span style={{ fontSize: labelFontSize, color: tokens.colorNeutralForeground2 }}>
+          Group by
+        </span>
+        <Dropdown
+          button={{ style: { fontSize: controlFontSize } }}
+          size="small"
+          multiselect
+          aria-label="Group by"
+          value={groupSummary}
+          selectedOptions={groupBy.length ? groupBy : [NO_GROUPING]}
+          style={{ minWidth: "128px" }}
+          title="Group the list. Selecting several nests them in the order chosen."
+          onOptionSelect={(_, data) => {
+            const field = data.optionValue;
+            if (!field) return;
+            if (field === NO_GROUPING) {
+              setGroupBy([]);
+              return;
+            }
+            const grouped = field as EvtxGroupField;
+            // Appending rather than sorting keeps the nesting order under the operator's control.
+            setGroupBy(
+              groupBy.includes(grouped)
+                ? groupBy.filter((existing) => existing !== grouped)
+                : [...groupBy, grouped],
+            );
+          }}
+        >
+          <Option value={NO_GROUPING} text="None" style={{ fontSize: controlFontSize }}>
+            None
           </Option>
-        ))}
-      </Dropdown>
+          {GROUP_FIELDS.map((field) => (
+            <Option
+              key={field}
+              value={field}
+              text={EVTX_GROUP_LABELS[field]}
+              style={{ fontSize: controlFontSize }}
+            >
+              {EVTX_GROUP_LABELS[field]}
+            </Option>
+          ))}
+        </Dropdown>
 
-      <Popover positioning="below-end" trapFocus>
-        <PopoverTrigger disableButtonEnhancement>
-          <Button
-            size="small"
-            appearance="outline"
-            title="Choose which columns the list shows."
-            style={small}
-          >
-            {`Columns (${columnConfig.order.length})`}
-          </Button>
-        </PopoverTrigger>
-        <PopoverSurface aria-label="Columns">
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              alignItems: "center",
-              gap: "8px",
-              maxWidth: "420px",
-            }}
-          >
-            {/* inlinePopup keeps the listbox inside the surface, so choosing a column is not an outside click. */}
-            <Dropdown
-              button={{ style: { fontSize: controlFontSize } }}
-              inlinePopup
+        <Popover positioning="below-end" trapFocus>
+          <PopoverTrigger disableButtonEnhancement>
+            <Button
               size="small"
-              multiselect
-              placeholder="Columns"
-              aria-label="Visible columns"
-              value={`${columnConfig.order.length} shown`}
-              selectedOptions={columnConfig.order}
-              style={{ minWidth: "104px" }}
-              onOptionSelect={(_, data) => {
-                const id = data.optionValue as EvtxColumnId | undefined;
-                if (id) toggleColumnVisible(id);
+              appearance="outline"
+              title="Choose which columns the list shows."
+              style={small}
+            >
+              {`Columns (${columnConfig.order.length})`}
+            </Button>
+          </PopoverTrigger>
+          <PopoverSurface aria-label="Columns">
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: "8px",
+                maxWidth: "420px",
               }}
             >
-              {choosableColumns.map((column) => (
-                <Option
-                  key={column.id}
-                  value={column.id}
-                  text={column.label}
-                  style={{ fontSize: controlFontSize }}
-                >
-                  {column.label}
-                </Option>
-              ))}
-            </Dropdown>
-            {/*
-              A button, not an option. In a multiselect listbox every option carries a selection
-              indicator, so "Reset to defaults" rendered as though it were a column that could be
-              checked, and it is an action rather than a member of the set.
-            */}
-            <Button
-              size="small"
-              appearance="outline"
-              onClick={resetColumns}
-              title="Restore the default columns, order and widths"
-              style={small}
-            >
-              Reset columns
-            </Button>
-            {/*
-              Reordering lives outside the listbox. Buttons nested in a Fluent Option are invalid
-              ARIA and never receive focus, because a listbox moves focus between options rather
-              than into them, so a keyboard-only operator could show and hide columns but never
-              order them.
-            */}
-            <Dropdown
-              button={{ style: { fontSize: controlFontSize } }}
-              inlinePopup
-              size="small"
-              placeholder="Reorder"
-              aria-label="Column to reorder"
-              value={reorderTarget ? columnLabel(reorderTarget) : ""}
-              selectedOptions={reorderTarget ? [reorderTarget] : []}
-              style={{ minWidth: "104px" }}
-              title="Pick a column, then use the arrows to move it."
-              onOptionSelect={(_, data) => {
-                if (data.optionValue) setReorderTarget(data.optionValue as EvtxColumnId);
-              }}
-            >
-              {columnConfig.order.map((id) => (
-                <Option
-                  key={id}
-                  value={id}
-                  text={columnLabel(id)}
-                  style={{ fontSize: controlFontSize }}
-                >
-                  {columnLabel(id)}
-                </Option>
-              ))}
-            </Dropdown>
-            <Button
-              size="small"
-              appearance="outline"
-              aria-label="Move the selected column earlier"
-              title="Move the selected column earlier"
-              disabled={!reorderTarget || columnConfig.order.indexOf(reorderTarget) <= 0}
-              onClick={() => reorderTarget && moveColumnBy(reorderTarget, -1)}
-              style={small}
-            >
-              <ArrowUp16Regular />
-            </Button>
-            <Button
-              size="small"
-              appearance="outline"
-              aria-label="Move the selected column later"
-              title="Move the selected column later"
-              disabled={
-                !reorderTarget ||
-                columnConfig.order.indexOf(reorderTarget) === columnConfig.order.length - 1
-              }
-              onClick={() => reorderTarget && moveColumnBy(reorderTarget, 1)}
-              style={small}
-            >
-              <ArrowDown16Regular />
-            </Button>
-          </div>
-        </PopoverSurface>
-      </Popover>
+              {/* inlinePopup keeps the listbox inside the surface, so choosing a column is not an outside click. */}
+              <Dropdown
+                button={{ style: { fontSize: controlFontSize } }}
+                inlinePopup
+                size="small"
+                multiselect
+                placeholder="Columns"
+                aria-label="Visible columns"
+                value={`${columnConfig.order.length} shown`}
+                selectedOptions={columnConfig.order}
+                style={{ minWidth: "104px" }}
+                onOptionSelect={(_, data) => {
+                  const id = data.optionValue as EvtxColumnId | undefined;
+                  if (id) toggleColumnVisible(id);
+                }}
+              >
+                {choosableColumns.map((column) => (
+                  <Option
+                    key={column.id}
+                    value={column.id}
+                    text={column.label}
+                    style={{ fontSize: controlFontSize }}
+                  >
+                    {column.label}
+                  </Option>
+                ))}
+              </Dropdown>
+              {/*
+                A button, not an option. In a multiselect listbox every option carries a selection
+                indicator, so "Reset to defaults" rendered as though it were a column that could be
+                checked, and it is an action rather than a member of the set.
+              */}
+              <Button
+                size="small"
+                appearance="outline"
+                onClick={resetColumns}
+                title="Restore the default columns, order and widths"
+                style={small}
+              >
+                Reset columns
+              </Button>
+              {/*
+                Reordering lives outside the listbox. Buttons nested in a Fluent Option are invalid
+                ARIA and never receive focus, because a listbox moves focus between options rather
+                than into them, so a keyboard-only operator could show and hide columns but never
+                order them.
+              */}
+              <Dropdown
+                button={{ style: { fontSize: controlFontSize } }}
+                inlinePopup
+                size="small"
+                placeholder="Reorder"
+                aria-label="Column to reorder"
+                value={reorderTarget ? columnLabel(reorderTarget) : ""}
+                selectedOptions={reorderTarget ? [reorderTarget] : []}
+                style={{ minWidth: "104px" }}
+                title="Pick a column, then use the arrows to move it."
+                onOptionSelect={(_, data) => {
+                  if (data.optionValue) setReorderTarget(data.optionValue as EvtxColumnId);
+                }}
+              >
+                {columnConfig.order.map((id) => (
+                  <Option
+                    key={id}
+                    value={id}
+                    text={columnLabel(id)}
+                    style={{ fontSize: controlFontSize }}
+                  >
+                    {columnLabel(id)}
+                  </Option>
+                ))}
+              </Dropdown>
+              <Button
+                size="small"
+                appearance="outline"
+                aria-label="Move the selected column earlier"
+                title="Move the selected column earlier"
+                disabled={!reorderTarget || columnConfig.order.indexOf(reorderTarget) <= 0}
+                onClick={() => reorderTarget && moveColumnBy(reorderTarget, -1)}
+                style={small}
+              >
+                <ArrowUp16Regular />
+              </Button>
+              <Button
+                size="small"
+                appearance="outline"
+                aria-label="Move the selected column later"
+                title="Move the selected column later"
+                disabled={
+                  !reorderTarget ||
+                  columnConfig.order.indexOf(reorderTarget) === columnConfig.order.length - 1
+                }
+                onClick={() => reorderTarget && moveColumnBy(reorderTarget, 1)}
+                style={small}
+              >
+                <ArrowDown16Regular />
+              </Button>
+            </div>
+          </PopoverSurface>
+        </Popover>
 
-      <Menu>
-        <MenuTrigger disableButtonEnhancement>
+        <Menu>
+          <MenuTrigger disableButtonEnhancement>
+            <Button
+              size="small"
+              appearance="outline"
+              disabled={isExporting}
+              title={EXPORT_TITLE}
+              style={small}
+            >
+              Export
+            </Button>
+          </MenuTrigger>
+          <MenuPopover>
+            <MenuList>
+              {EVTX_EXPORT_FORMATS.map((format) => (
+                <MenuItem key={format.value} onClick={() => void exportVisible(format)}>
+                  {format.label}
+                </MenuItem>
+              ))}
+            </MenuList>
+          </MenuPopover>
+        </Menu>
+        <span
+          role="status"
+          aria-live="polite"
+          data-evtx-export-announcement
+          className={styles.visuallyHidden}
+        >
+          {exportAnnouncement}
+        </span>
+      </div>
+      {exportError && (
+        <div
+          role="alert"
+          data-evtx-export-error
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "8px",
+            padding: "4px 12px",
+            color: tokens.colorPaletteRedForeground1,
+            fontSize: controlFontSize,
+            overflowWrap: "anywhere",
+          }}
+        >
+          <span style={{ flex: 1, minWidth: 0 }}>{exportError}</span>
           <Button
             size="small"
-            appearance="outline"
-            disabled={isExporting}
-            title={EXPORT_TITLE}
-            style={small}
-          >
-            Export
-          </Button>
-        </MenuTrigger>
-        <MenuPopover>
-          <MenuList>
-            {EVTX_EXPORT_FORMATS.map((format) => (
-              <MenuItem key={format.value} onClick={() => void exportVisible(format)}>
-                {format.label}
-              </MenuItem>
-            ))}
-          </MenuList>
-        </MenuPopover>
-      </Menu>
-    </div>
+            appearance="subtle"
+            icon={<Dismiss12Regular />}
+            aria-label="Dismiss export error"
+            onClick={() => setExportError(null)}
+          />
+        </div>
+      )}
+    </>
   );
 }
