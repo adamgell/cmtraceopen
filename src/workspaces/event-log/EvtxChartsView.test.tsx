@@ -5,14 +5,13 @@ import { contrastRatio, parseHex } from "../../lib/color-contrast";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { getAllThemes } from "../../lib/themes";
 import type { CMTraceTheme } from "../../lib/themes/types";
-import { buildEvtxChartData, type EvtxChartRecord } from "./evtx-chart-data";
+import type { EvtxChartRecord } from "./evtx-chart-data";
 import { DEFAULT_QUICK_FILTER } from "./evtx-filter";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import EvtxChartsViewDefault, {
   EvtxChartsView,
   CHART_DATA_DEBOUNCE_MS,
   HEAT_EMPTY_CELL,
-  hourlyStacks,
   type EvtxChartsViewProps,
 } from "./EvtxChartsView";
 
@@ -68,19 +67,6 @@ function props(overrides: Partial<EvtxChartsViewProps> = {}): EvtxChartsViewProp
     metrics: getLogListMetrics(13),
     visualTokens: lightTokens,
     ...overrides,
-  };
-}
-
-function chartInput() {
-  const p = props();
-  return {
-    records: p.records,
-    chains: p.chains,
-    hideRules: p.hideRules,
-    channelOrder: p.channelOrder,
-    timeZoneMode: p.timeZoneMode,
-    loadedChannelCount: p.loadedChannelCount,
-    textLogCount: p.textLogCount,
   };
 }
 
@@ -247,14 +233,10 @@ describe("EvtxChartsView", () => {
     for (const bar of container.querySelectorAll<HTMLElement>('[data-bar="top-id"]')) {
       expect(bar.style.background).toBe(css(lightTokens.singleSeries));
     }
-    // Figure 4 is drawn by the chart library, which needs layout jsdom lacks; its series
-    // and token colors are checked on the data it is given.
-    const stack = hourlyStacks(buildEvtxChartData(chartInput()).hourly, lightTokens)[2];
-    expect(stack.xAxisPoint).toBe("02:00");
-    expect(stack.chartData.map((p) => [p.legend, p.data, p.color])).toEqual([
-      ["Error", 2, lightTokens.levels.Error.barColor],
-      ["Warning", 1, lightTokens.levels.Warning.barColor],
-    ]);
+    const errorSegment = container.querySelector<HTMLElement>('[data-segment="error"]')!;
+    expect(errorSegment.style.background).toBe(css(lightTokens.levels.Error.barColor));
+    const warningSegment = container.querySelector<HTMLElement>('[data-segment="warning"]')!;
+    expect(warningSegment.style.background).toBe(css(lightTokens.levels.Warning.barColor));
   });
 
   it("fills non-empty heat cells from the heat steps and empty cells from the empty-cell token", () => {
