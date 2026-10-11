@@ -48,6 +48,16 @@ import {
   type EvtxColumnConfig,
   type EvtxColumnId,
 } from "./evtx-columns";
+import {
+  beginLiveComparison,
+  cancelComparison,
+  isComparisonRequestId,
+  observeComparisonBatch,
+  observeComparisonComplete,
+  publishComparisonUnavailable,
+  publishFilesComparison,
+  type ComparisonVisibility,
+} from "./evtx-comparison";
 
 type ServerFilter = EventQueryFilterSubset & {
   eventIds?: EvtxEventIdSelector[];
@@ -2191,6 +2201,31 @@ listen<{ requestId: string; channel: string; fetched: number }>(
     });
   }
 );
+
+/**
+ * What a previous-period comparison is a statement about: the source, the channels read, the window,
+ * the criteria the view applies, and the load whose records the current period was counted from. A
+ * change to any of them makes the comparison describe something no longer on screen, so it is
+ * cancelled and its result cleared. Streaming appends, selection and sorting change none of them.
+ */
+const COMPARISON_INPUTS: ReadonlyArray<keyof EvtxState> = [
+  "sourceMode",
+  "sourcePaths",
+  "remoteMachine",
+  "selectedChannels",
+  "timeWindow",
+  "filterLevels",
+  "filterEventIds",
+  "filterSearch",
+  "quickFilter",
+  "timeZoneMode",
+  "columnConfig",
+  "loadGeneration",
+];
+useEvtxStore.subscribe((state, previous) => {
+  if (COMPARISON_INPUTS.some((key) => state[key] !== previous[key])) cancelComparison();
+});
+
 type StreamReply =
   | { kind: "success" }
   | { kind: "error"; message: string };
@@ -2536,6 +2571,12 @@ listen<{ channel: string; requestId: string; sequence: number; records: EvtxReco
   "evtx-record-batch",
   (event) => {
     const { channel, requestId, sequence, records } = event.payload;
+    // A previous-period comparison shares these events with a load. Its batches are aggregated by
+    // the comparison and never reach the load's streams, `records`, or anything derived from them.
+    if (isComparisonRequestId(requestId)) {
+      observeComparisonBatch({ channel, requestId, sequence, records });
+      return;
+    }
     if (!isCurrentRequest(requestId) || activeRequestIds.get(channel) !== requestId) return;
     const pending = pendingFor(channel, requestId) ?? createPendingStream(channel, requestId);
     if (pending.consumerAcknowledged || pending.sequences.has(sequence)) return;
@@ -2562,6 +2603,10 @@ listen<{ channel: string; requestId: string; sequenceCount: number; totalRecords
   "evtx-record-stream-complete",
   (event) => {
     const { channel, requestId, sequenceCount, totalRecords } = event.payload;
+    if (isComparisonRequestId(requestId)) {
+      observeComparisonComplete({ channel, requestId, sequenceCount, totalRecords });
+      return;
+    }
     if (!isCurrentRequest(requestId) || activeRequestIds.get(channel) !== requestId) return;
     const pending = pendingFor(channel, requestId) ?? createPendingStream(channel, requestId);
     if (pending.consumerAcknowledged) return;
@@ -2700,4 +2745,93 @@ export async function cancelActiveLoad(): Promise<void> {
     // control, so a failed stop is logged rather than turned into a failed load.
     console.warn("[evtx] Failed to cancel active load:", error);
   }
+}
+
+/**
+ * Compares the current time window with the period of the same length immediately before it.
+ *
+ * `anchorEpoch` is the instant the current window is measured from, the workspace's `nowEpoch`, so
+ * the two periods meet exactly. Files are compared from the records already loaded, when they
+ * cover the previous period. A live source is queried again, once per loaded selected channel, with
+ * the view's own pushed-down criteria and an explicit `between` window, under a request ID of its
+ * own: the events stream into the comparison's aggregator and are discarded, never entering
+ * `records`. The outcome, including why a comparison is unavailable, is published to
+ * `useComparisonStore`; it is cleared when the source, channels, window or criteria change.
+ */
+export async function comparePreviousPeriod(anchorEpoch: number): Promise<void> {
+  const state = useEvtxStore.getState();
+  const notReady = state.isLoading
+    ? "Events are still loading."
+    : state.sourceMode === null
+      ? "No source is open."
+      : hasInvalidEventIdFilter(state.filterEventIds)
+        ? "The event ID filter is not valid."
+        : null;
+  if (notReady !== null) {
+    publishComparisonUnavailable("notReady", notReady);
+    return;
+  }
+
+  const visibility: ComparisonVisibility = {
+    selectedChannels: state.selectedChannels,
+    filterLevels: state.filterLevels,
+    filterEventIds: state.filterEventIds,
+    filterSearch: state.filterSearch,
+    quickFilter: state.quickFilter,
+    visibleColumns: state.columnConfig.order,
+    timeZoneMode: state.timeZoneMode,
+  };
+  if (state.sourceMode === "files") {
+    publishFilesComparison({
+      records: state.records,
+      window: state.timeWindow,
+      anchorEpoch,
+      visibility,
+    });
+    return;
+  }
+
+  // Only channels the current view was counted from: a selected channel that was never loaded has
+  // no current events, and counting its previous period would compare unlike sets.
+  const channels = [...state.selectedChannels].filter((channel) =>
+    state.loadedChannels.has(channel)
+  );
+  const session = beginLiveComparison({
+    window: state.timeWindow,
+    anchorEpoch,
+    channels,
+    visibility,
+    cancelQuery: (requestId) => {
+      invoke("evtx_cancel_channel_query", { requestId }).catch((error: unknown) => {
+        console.warn("[evtx] Failed to cancel the previous-period comparison:", error);
+      });
+    },
+  });
+  if (!session) return;
+
+  const remoteMachine = state.remoteMachine;
+  const filter: ServerFilter = {
+    ...buildServerFilter("all", state.filterEventIds, state.filterLevels),
+    time: { kind: "between", from: session.prior.from, to: session.prior.to },
+  };
+  await mapWithConcurrency(channels, MAX_CONCURRENT_CHANNEL_QUERIES, async (channel) => {
+    if (!session.isActive()) return;
+    let result: EvtxParseResult;
+    try {
+      // Unbounded: nothing is retained, so a whole period costs time and not memory, and a cap
+      // would make the previous period a different sample from the one it is compared with.
+      result = await invokeEventQuery<EvtxParseResult>(
+        session.requestId,
+        remoteMachine,
+        [channel],
+        null,
+        filter
+      );
+    } catch (error) {
+      session.failed(channel, error instanceof Error ? error.message : String(error));
+      return;
+    }
+    session.replied(channel, result);
+  });
+  await session.done;
 }

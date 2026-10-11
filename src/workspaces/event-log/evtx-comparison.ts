@@ -230,7 +230,7 @@ export type ComparisonUnavailableReason =
   | "allTime"
   | "unsupportedWindow"
   | "invalidAnchor"
-  | "sourceNotReady"
+  | "notReady"
   | "noChannels"
   | "noTimedRecords"
   | "priorPeriodNotSpanned"
