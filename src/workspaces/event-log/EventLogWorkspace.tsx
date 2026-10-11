@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   useEffect,
+  Suspense,
   type ReactNode,
 } from "react";
 import { ProgressBar, Spinner, tokens } from "@fluentui/react-components";
@@ -61,32 +62,39 @@ const DIAGNOSIS_DEBOUNCE_MS = 75;
 const NOT_IMPLEMENTED = "Not implemented in this phase";
 
 /**
- * One entry per workbench view. A later phase adds its view file and changes one line here.
+ * One entry per workbench view. A later phase adds its view file and changes one line here; a
+ * lazily loaded view (`React.lazy`) works as-is because every render sits in a Suspense boundary.
  * `keepAlive` entries stay mounted while another view is active (hidden, not unmounted), so
- * switching away and back keeps scroll position and the unified timeline's page cache.
+ * switching away and back keeps the component and the unified timeline's page cache.
  */
 interface EvtxViewEntry {
   keepAlive: boolean;
   render: () => ReactNode;
 }
 
-/** Rail contents by tab (Phase 4 replaces these with the Insights, Chains and Details tabs). */
-const RAIL_SLOT_LABELS: Record<EvtxRailTabId, string> = {
-  insights: "Insights",
-  chains: "Chains",
-  details: "Details",
+/**
+ * Rail contents by tab. The rail is off in this phase (its toggle is disabled), so these never
+ * show; Phase 4 replaces each entry with the Insights, Chains and Details tabs.
+ */
+const RAIL_SLOTS: Record<EvtxRailTabId, () => ReactNode> = {
+  insights: () => <RegionPlaceholder title="Insights" />,
+  chains: () => <RegionPlaceholder title="Chains" />,
+  details: () => <RegionPlaceholder title="Details" />,
 };
 
-/** Dock contents (Phase 11 replaces this with the correlation dock). */
-const DOCK_SLOT_LABELS: Record<"correlation", string> = {
-  correlation: "Correlation dock",
+/** Dock contents. Off in this phase; Phase 11 replaces the entry with the correlation dock. */
+const DOCK_SLOTS: Record<"correlation", () => ReactNode> = {
+  correlation: () => <RegionPlaceholder title="Correlation dock" />,
 };
+
+const EVTX_RAIL_ID = "evtx-insights-rail";
+const EVTX_DOCK_ID = "evtx-correlation-dock";
 
 function ViewPlaceholder({ view }: { view: EvtxViewId }) {
   return <RegionPlaceholder title={`${EVTX_VIEW_LABELS[view]} view`} />;
 }
 
-function RegionPlaceholder({ title }: { title: string }) {
+function RegionPlaceholder({ title, loading }: { title: string; loading?: boolean }) {
   const f = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(() => getLogListMetrics(f), [f]);
   return (
@@ -99,7 +107,7 @@ function RegionPlaceholder({ title }: { title: string }) {
       }}
     >
       <strong style={{ color: tokens.colorNeutralForeground2 }}>{title}</strong>
-      {`: ${NOT_IMPLEMENTED}.`}
+      {loading ? "..." : `: ${NOT_IMPLEMENTED}.`}
     </div>
   );
 }
@@ -660,40 +668,46 @@ export function EventLogWorkspace() {
                     overflow: "hidden",
                   }}
                 >
-                  {entry.render()}
+                  <Suspense fallback={<RegionPlaceholder title="Loading view" loading />}>
+                    {entry.render()}
+                  </Suspense>
                 </div>
               );
             })}
           </div>
 
-          {panels.dock && (
-            <div
-              data-evtx-region="dock"
-              style={{
-                position: "relative",
-                height: `${effectiveDockHeight}px`,
-                flexShrink: 0,
-                borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
-                backgroundColor: tokens.colorNeutralBackground2,
-                overflow: "auto",
-              }}
-            >
-              <EvtxResizeHandle
-                orientation="horizontal"
-                label="Resize correlation dock"
-                value={effectiveDockHeight}
-                min={MIN_DOCK_HEIGHT}
-                max={dockMax}
-                direction={-1}
-                onChange={(next) => setDockHeight(next, window.innerHeight)}
-              />
-              <RegionPlaceholder title={DOCK_SLOT_LABELS.correlation} />
-            </div>
-          )}
+          {/* Hidden, not unmounted, so the dock's future state survives a toggle. */}
+          <div
+            id={EVTX_DOCK_ID}
+            data-evtx-region="dock"
+            style={{
+              display: panels.dock ? "block" : "none",
+              position: "relative",
+              height: `${effectiveDockHeight}px`,
+              flexShrink: 0,
+              boxSizing: "border-box",
+              borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
+              backgroundColor: tokens.colorNeutralBackground2,
+            }}
+          >
+            <EvtxResizeHandle
+              orientation="horizontal"
+              edge="start"
+              label="Resize correlation dock"
+              controls={EVTX_DOCK_ID}
+              value={effectiveDockHeight}
+              min={MIN_DOCK_HEIGHT}
+              max={dockMax}
+              direction={-1}
+              onChange={(next) => setDockHeight(next, window.innerHeight)}
+            />
+            <div style={{ height: "100%", overflow: "auto" }}>{DOCK_SLOTS.correlation()}</div>
+          </div>
         </div>
 
         {/* Hidden, not unmounted, so the rail's future tab state survives a toggle. */}
         <aside
+          id={EVTX_RAIL_ID}
           data-evtx-region="rail"
           aria-label="Insights rail"
           style={{
@@ -704,19 +718,20 @@ export function EventLogWorkspace() {
             boxSizing: "border-box",
             borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
             backgroundColor: tokens.colorNeutralBackground2,
-            overflowY: "auto",
           }}
         >
           <EvtxResizeHandle
             orientation="vertical"
+            edge="start"
             label="Resize insights rail"
+            controls={EVTX_RAIL_ID}
             value={railWidth}
             min={MIN_RAIL_WIDTH}
             max={MAX_RAIL_WIDTH}
             direction={-1}
             onChange={setRailWidth}
           />
-          <RegionPlaceholder title={RAIL_SLOT_LABELS[railTab]} />
+          <div style={{ height: "100%", overflowY: "auto" }}>{RAIL_SLOTS[railTab]()}</div>
         </aside>
       </div>
     </div>

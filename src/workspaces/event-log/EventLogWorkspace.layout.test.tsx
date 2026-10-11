@@ -30,7 +30,11 @@ vi.mock("./UnifiedTimelineView", () => ({
 
 import { useLogStore } from "../../stores/log-store";
 import { EventLogWorkspace } from "./EventLogWorkspace";
-import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
+import {
+  EVTX_LAYOUT_STORAGE_KEY,
+  sanitizeLayout,
+  useEvtxLayoutStore,
+} from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
 import type { EvtxRecord } from "./types";
 
@@ -72,55 +76,92 @@ describe("EventLogWorkspace three-column shell", () => {
 
   afterEach(cleanup);
 
-  it("renders the view bar, channel pane, main view and rail", () => {
+  it("renders the view bar, channel pane and main view, with the rail and dock hidden", () => {
     render(<EventLogWorkspace />);
     expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
     expect(screen.getByTestId("channel-picker")).toBeVisible();
     expect(screen.getByRole("tabpanel")).toContainElement(screen.getByTestId("records-table"));
-    expect(region("rail")).toBeVisible();
+    // The regions exist so Phase 4 and 11 only enable the toggle, but nothing shows by default.
+    expect(region("rail")).not.toBeNull();
+    expect(region("rail")).not.toBeVisible();
     expect(region("rail")).toHaveStyle({ width: "340px" });
-    expect(region("dock")).toBeNull();
+    expect(region("dock")).not.toBeNull();
+    expect(region("dock")).not.toBeVisible();
+    for (const note of screen.queryAllByText(/Not implemented in this phase/)) {
+      expect(note).not.toBeVisible();
+    }
   });
 
-  it("hides and shows regions with the panel toggles without discarding their state", () => {
+  it("hides and shows the channel pane without discarding its state", () => {
     render(<EventLogWorkspace />);
     const search = screen.getByTestId("channel-picker");
     fireEvent.change(search, { target: { value: "kept" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Channels" }));
     expect(region("channels")).not.toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Insights" }));
-    expect(region("rail")).not.toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Correlation dock" }));
-    expect(region("dock")).toBeVisible();
-
     fireEvent.click(screen.getByRole("button", { name: "Channels" }));
-    fireEvent.click(screen.getByRole("button", { name: "Insights" }));
     expect(region("channels")).toBeVisible();
-    expect(region("rail")).toBeVisible();
     // The same node, not a remount: the typed text survives.
     expect(screen.getByTestId("channel-picker")).toBe(search);
     expect(search).toHaveValue("kept");
   });
 
-  it("opens the dock at its default height and clamps it to half the viewport", () => {
+  it("keeps the dock mounted and sizes it from the store, clamped to half the viewport", () => {
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
     render(<EventLogWorkspace />);
-    fireEvent.click(screen.getByRole("button", { name: "Correlation dock" }));
-    expect(region("dock")).toHaveStyle({ height: "210px" });
+    const dock = region("dock")!;
+    expect(dock).toHaveStyle({ height: "210px" });
     act(() => useEvtxLayoutStore.getState().setDockHeight(5000));
-    expect(region("dock")).toHaveStyle({ height: "450px" });
+    expect(region("dock")).toBe(dock);
+    expect(dock).toHaveStyle({ height: "450px" });
   });
 
-  it("resizes the rail from its separator, clamped to 280 through 480", () => {
+  it("resizes the hidden rail from its separator, clamped to 280 through 480", () => {
     render(<EventLogWorkspace />);
-    const handle = screen.getByRole("separator", { name: "Resize insights rail" });
+    const handle = screen.getByRole("separator", { name: "Resize insights rail", hidden: true });
     fireEvent.keyDown(handle, { key: "ArrowLeft" });
     expect(useEvtxLayoutStore.getState().railWidth).toBe(356);
     fireEvent.keyDown(handle, { key: "End" });
     expect(useEvtxLayoutStore.getState().railWidth).toBe(480);
     fireEvent.keyDown(handle, { key: "Home" });
     expect(useEvtxLayoutStore.getState().railWidth).toBe(280);
+  });
+
+  it("honors a rehydrated layout on mount", async () => {
+    localStorage.setItem(
+      EVTX_LAYOUT_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: {
+          activeView: "charts",
+          panels: { channels: false, insights: true, dock: true },
+          railTab: "details",
+          railWidth: 400,
+          dockHeight: 250,
+        },
+      }),
+    );
+    await useEvtxLayoutStore.persist.rehydrate();
+    render(<EventLogWorkspace />);
+    expect(screen.getByRole("tab", { name: "Charts" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Charts view")).toBeVisible();
+    expect(region("channels")).not.toBeVisible();
+    expect(region("rail")).toHaveStyle({ width: "400px" });
+    expect(region("dock")).toHaveStyle({ height: "250px" });
+    // Panels with no content yet stay off even if storage says otherwise.
+    expect(region("rail")).not.toBeVisible();
+    expect(region("dock")).not.toBeVisible();
+  });
+
+  it("links the layout tabs and the tabpanel in both directions", () => {
+    render(<EventLogWorkspace />);
+    const panel = screen.getByRole("tabpanel");
+    for (const name of ["Table", "Charts"]) {
+      fireEvent.click(screen.getByRole("tab", { name }));
+      const tab = screen.getByRole("tab", { name });
+      expect(tab).toHaveAttribute("aria-controls", panel.id);
+      expect(panel).toHaveAttribute("aria-labelledby", tab.id);
+    }
   });
 
   it("shows a placeholder for views that are not built yet, behind the same tablist", () => {
