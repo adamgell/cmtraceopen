@@ -2,7 +2,7 @@ import type { EvidenceBundleMetadata } from "./evidence";
 
 export type Severity = "Success" | "Info" | "Warning" | "Error";
 export type LogFormat = "Ccm" | "Simple" | "Plain" | "Timestamped" | "DnsDebug" | "DnsAudit" | "CmtLog";
-export type EntryKind = "Log" | "Section" | "Iteration" | "Header";
+export type EntryKind = "Log" | "Section" | "Iteration" | "Header" | "Fragment";
 export type ParserKind =
   | "ccm"
   | "simple"

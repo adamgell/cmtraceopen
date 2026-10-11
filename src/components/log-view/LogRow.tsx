@@ -480,7 +480,7 @@ export const LogRow = memo(function LogRow({
           return (
             <div
               key="severity"
-              aria-label={entry.severity}
+              aria-label={entry.entryKind === "Fragment" ? "Unparsed" : entry.severity}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -538,6 +538,14 @@ export const LogRow = memo(function LogRow({
                 ...(entry.whatif ? { fontStyle: "italic" } : {}),
               }}
             >
+              {entry.entryKind === "Fragment" && (
+                <span
+                  title="Incomplete IME record. Raw text and source line are retained; metadata has not been inferred."
+                  style={{ fontWeight: 600, marginRight: 8 }}
+                >
+                  [Unparsed record]
+                </span>
+              )}
               {renderMessageWithSpans(
                 entry.message,
                 entry.errorCodeSpans,

@@ -373,3 +373,8 @@ describe("Windows Firewall transport", () => {
     expect(parseTailPayload(value)).toBeNull();
   });
 });
+
+it("accepts explicit unparsed entries in tail payloads", () => {
+  const value = payload({ entries: [entry({ entryKind: "Fragment" })], observedThroughLine: 1 });
+  expect(parseTailPayload(value)).toEqual(value);
+});

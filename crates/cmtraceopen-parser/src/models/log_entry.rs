@@ -15,8 +15,7 @@ pub enum Severity {
     Error,
 }
 
-/// Distinguishes the role of a CmtLog entry: regular log line, section divider, loop
-/// iteration marker, or file header.
+/// Distinguishes structured display roles and unframed IME source text.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum EntryKind {
     #[default]
@@ -24,6 +23,8 @@ pub enum EntryKind {
     Section,
     Iteration,
     Header,
+    /// Source text that cannot be framed as a complete IME record.
+    Fragment,
 }
 
 /// Which log format was detected/used to parse this entry.

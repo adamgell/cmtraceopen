@@ -1,7 +1,7 @@
 use chrono::{FixedOffset, Local, LocalResult, TimeZone, Utc};
 use regex::Regex;
 
-use crate::models::log_entry::{LogEntry, LogFormat, Severity};
+use crate::models::log_entry::{EntryKind, LogEntry, LogFormat, Severity};
 use crate::parser::ccm::{build_timestamp, format_thread_display, severity_from_type_field};
 use crate::parser::severity::detect_severity_from_text;
 use std::sync::OnceLock;
@@ -114,6 +114,7 @@ struct ParsedImeRecord {
     thread_display: Option<String>,
     source_file: Option<String>,
     format: LogFormat,
+    entry_kind: Option<EntryKind>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -205,7 +206,7 @@ pub fn parse_ime_entries(content: &str, file_path: &str) -> (Vec<LogEntry>, u32)
             dns_event_id: None,
             zone_name: None,
             firewall: None,
-            entry_kind: None,
+            entry_kind: entry.entry_kind,
             whatif: None,
             section_name: None,
             section_color: None,
@@ -230,7 +231,7 @@ pub fn parse_ime_entries(content: &str, file_path: &str) -> (Vec<LogEntry>, u32)
 /// - `[PowerShell] Script parameters tamper validation` → source_file = "PowerShell"
 fn enrich_subsystem_source(mut entries: Vec<LogEntry>) -> Vec<LogEntry> {
     for entry in &mut entries {
-        if entry.source_file.is_some() {
+        if entry.entry_kind == Some(EntryKind::Fragment) || entry.source_file.is_some() {
             continue;
         }
         if let Some(subsystem) = extract_subsystem_prefix(&entry.message) {
@@ -382,6 +383,7 @@ fn parse_record(
         thread_display,
         source_file,
         format: LogFormat::Ccm,
+        entry_kind: None,
     })
 }
 
@@ -723,17 +725,18 @@ fn push_unmatched_segment(
                     line_number: line_number_for_offset(line_starts, base_offset + local_offset),
                     timestamp: None,
                     timestamp_utc: None,
-                    message: trimmed.to_string(),
+                    message: line.to_string(),
                     component: None,
                     thread: None,
                     timezone_offset: None,
                 },
                 timestamp_millis: None,
                 timestamp_display: None,
-                severity: detect_severity_from_text(trimmed),
+                severity: Severity::Info,
                 thread_display: None,
                 source_file: None,
                 format: LogFormat::Plain,
+                entry_kind: Some(EntryKind::Fragment),
             });
             *parse_errors += 1;
         }
@@ -776,6 +779,7 @@ fn parse_fallback_lines(content: &str, max_entries: usize) -> ParsedImeChunk {
                 thread_display: None,
                 source_file: None,
                 format: LogFormat::Plain,
+                entry_kind: None,
             });
         } else {
             entries.push(ParsedImeRecord {
@@ -783,23 +787,24 @@ fn parse_fallback_lines(content: &str, max_entries: usize) -> ParsedImeChunk {
                     line_number: (index + 1) as u32,
                     timestamp: None,
                     timestamp_utc: None,
-                    message: trimmed.to_string(),
+                    message: line.to_string(),
                     component: None,
                     thread: None,
                     timezone_offset: None,
                 },
                 timestamp_millis: None,
                 timestamp_display: None,
-                severity: detect_severity_from_text(trimmed),
+                severity: Severity::Info,
                 thread_display: None,
                 source_file: None,
                 format: LogFormat::Plain,
+                entry_kind: Some(EntryKind::Fragment),
             });
         }
     }
 
     ParsedImeChunk {
-        parse_errors: 0,
+        parse_errors: entries.iter().filter(|entry| entry.entry_kind.is_some()).count() as u32,
         entries,
     }
 }
@@ -807,6 +812,64 @@ fn parse_fallback_lines(content: &str, max_entries: usize) -> ParsedImeChunk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Fragment tests retain the opening/closing frame and orphan suffix shapes
+    // observed in a local IME capture. Payload, metadata, identifiers and dates
+    // are replaced with synthetic values; no captured source text is embedded.
+
+
+    #[test]
+    fn timestamped_fallback_and_complete_subsystem_records_keep_their_semantics() {
+        let (entries, errors) = parse_ime_entries("2026-10-11 12:00:00 error happened\nordinary text", "AgentExecutor.log");
+        assert_eq!(errors, 1);
+        assert_eq!(entries[0].entry_kind, None);
+        assert_eq!(entries[0].timestamp_display.as_deref(), Some("2026-10-11 12:00:00"));
+        assert_eq!(entries[0].severity, Severity::Error);
+        assert_eq!(entries[1].entry_kind, Some(EntryKind::Fragment));
+        let (entries, errors) = parse_ime_entries("<![LOG[[PowerShell] completed]LOG]!><component=\"Synthetic\" type=\"1\" file=\"\">", "AgentExecutor.log");
+        assert_eq!(errors, 0);
+        assert_eq!(entries[0].source_file.as_deref(), Some("PowerShell"));
+        assert_eq!(entries[0].entry_kind, None);
+    }
+
+    #[test]
+    fn fragments_do_not_join_duplicate_suffixes_or_split_multiline_records() {
+        let record = "<![LOG[first\r\nsecond]LOG]!><time=\"12:00:00.000+000\" date=\"10-11-2026\" component=\"Synthetic\" type=\"1\" thread=\"2\" file=\"\">";
+        let suffix = "component=\"Synthetic\" type=\"3\" thread=\"2\" file=\"\">";
+        let content = format!("{record}\r\n{suffix}\r\n{suffix}\r\n{record}");
+        let (entries, errors) = parse_ime_entries(&content, "AgentExecutor.log");
+        assert_eq!(errors, 2);
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].message, "first\r\nsecond");
+        assert_eq!(entries[3].message, entries[0].message);
+        for (entry, line) in entries[1..3].iter().zip([3, 4]) {
+            assert_eq!(entry.message, suffix);
+            assert_eq!(entry.line_number, line);
+            assert_eq!(entry.entry_kind, Some(EntryKind::Fragment));
+            assert_eq!(entry.component, None);
+            assert_eq!(entry.thread, None);
+            assert_eq!(entry.severity, Severity::Info);
+        }
+        assert_eq!(entries[0].entry_kind, None);
+        assert_eq!(entries[3].entry_kind, None);
+    }
+
+    #[test]
+    fn unframed_ime_text_is_explicit_and_preserves_evidence() {
+        let raw = "  [PowerShell] failure suffix]LOG]!><time=\"12:00:00\" component=\"AgentExecutor\" type=\"3\">  ";
+        let (entries, errors) = parse_ime_entries(raw, "AgentExecutor.log");
+        assert_eq!(errors, 1);
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.entry_kind, Some(crate::models::log_entry::EntryKind::Fragment));
+        assert_eq!(entry.message, raw);
+        assert_eq!(entry.line_number, 1);
+        assert_eq!(entry.component, None);
+        assert_eq!(entry.timestamp_display, None);
+        assert_eq!(entry.thread, None);
+        assert_eq!(entry.source_file, None);
+        assert_eq!(entry.severity, Severity::Info);
+    }
 
     #[test]
     fn interrupted_attributes_do_not_consume_the_following_record() {
