@@ -906,6 +906,54 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
+    fn log_collection_preserves_partial_records_encoding_and_newlines() {
+        // Checked-in PSADT capture anchors the frame shape. Append a prefix
+        // from its first record to model a copy ending during a source write.
+        let exemplar = include_str!("../../tests/fixtures/ccm/psadt_install.log");
+        let first_record = exemplar
+            .trim_start_matches('\u{feff}')
+            .lines()
+            .next()
+            .unwrap();
+        let partial = &first_record[..first_record.find("]LOG]!><").unwrap()];
+        let text = format!("{exemplar}\r\n{partial}");
+        let mut utf16 = vec![0xff, 0xfe];
+        for unit in text.encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+        for bytes in [text.as_bytes().to_vec(), utf16] {
+            let root = create_temp_dir("collector-raw-records");
+            let evidence_root = root.join("bundle").join("evidence");
+            fs::create_dir_all(&evidence_root).expect("evidence root");
+            let source = root.join("AgentExecutor.log");
+            fs::write(&source, &bytes).expect("synthetic source");
+            let results = Arc::new(Mutex::new(Vec::new()));
+            let context = collector_context(evidence_root.clone(), Arc::clone(&results));
+            collect_logs(
+                &[LogCollectionItem {
+                    id: "synthetic-ime".into(),
+                    family: "intune-ime".into(),
+                    parse_hints: vec!["cmtrace".into()],
+                    source_pattern: source.to_string_lossy().into_owned(),
+                    destination_folder: "logs".into(),
+                    notes: "byte preservation".into(),
+                }],
+                &context,
+            );
+            assert_eq!(fs::read(&source).unwrap(), bytes, "source unchanged");
+            assert_eq!(
+                fs::read(evidence_root.join("logs/AgentExecutor.log")).unwrap(),
+                bytes
+            );
+            let results = results.lock().unwrap();
+            assert!(matches!(results[0].status, ArtifactStatus::Collected));
+            assert_eq!(results[0].files[0].bytes_copied, bytes.len() as u64);
+            drop(results);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
     fn collection_rejects_reparse_destination_before_copy() {
         let root = create_temp_dir("collector-reparse-destination");
         let evidence_root = root.join("bundle").join("evidence");

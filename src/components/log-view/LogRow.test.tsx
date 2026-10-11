@@ -25,11 +25,11 @@ function makeEntry(severity: Severity, id = 1): LogEntry {
 
 const visibleColumns = [getColumnDef("severity")!, getColumnDef("message")!];
 
-function renderRow(severity: Severity) {
+function renderRow(severity: Severity, overrides: Partial<LogEntry> = {}) {
   const palette = themeSeverityPalettes.light;
   const { container } = render(
     <LogRow
-      entry={makeEntry(severity)}
+      entry={{ ...makeEntry(severity), ...overrides }}
       rowDomId="row-1"
       isSelected={false}
       isFindMatch={false}
@@ -65,4 +65,18 @@ describe("LogRow severity rendering", () => {
     // light palette info = { background: "#FFFFFF", text: "#111827" }
     expect(row.style.backgroundColor).toBe("rgb(255, 255, 255)");
   });
+});
+
+ it("identifies incomplete records without changing their raw message", () => {
+   // Sanitized IME orphan suffix shape; values and payload are synthetic.
+   const raw = '  suffix]LOG]!><component="Synthetic">  ';
+   const row = renderRow("Info", { tags: ["cmtrace:unparsed-ime-record"], format: "Plain", message: raw });
+   expect(row.querySelector('[aria-label="Unparsed"]')).not.toBeNull();
+   expect(row.textContent).toContain("[Unparsed record]");
+   expect(row.querySelector(".col-message")?.textContent).toContain(raw);
+ });
+
+it("does not treat arbitrary structured-log tags as IME framing diagnostics", () => {
+  const row = renderRow("Info", { tags: ["cmtrace:unparsed-ime-record"], format: "CmtLog" });
+  expect(row.textContent).not.toContain("[Unparsed record]");
 });
