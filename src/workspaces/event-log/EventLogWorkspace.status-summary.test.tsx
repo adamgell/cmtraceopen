@@ -105,9 +105,47 @@ describe("EventLogWorkspace status summary", () => {
       generation: useEvtxStore.getState().loadGeneration,
       visible: 4,
       loaded: 4,
+      channels: 1,
       errors: 2,
       warnings: 1,
     });
+  });
+
+  it("counts the event channels that loaded, not the parse result's channel list", () => {
+    const system = record("Warning");
+    const rotatedSystem = record("Information");
+    const archivedLog: EvtxRecord = {
+      ...record("Information"),
+      originKind: "log",
+      channel: "C:\\Evidence\\AgentExecutor.log",
+    };
+    useEvtxStore.setState({
+      records: [
+        { ...system, channel: "System" },
+        { ...rotatedSystem, channel: "System" },
+        archivedLog,
+      ],
+      // The files held System twice, Application with no records, and a text log.
+      channels: ["System", "System", "Application", archivedLog.channel].map((name) => ({
+        name,
+        eventCount: 1,
+        sourceType: { file: { path: `C:\\Evidence\\${name}.evtx` } },
+      })),
+      selectedChannels: new Set(["System", "Application", archivedLog.channel]),
+    });
+    render(<EventLogWorkspace />);
+
+    expect(visibleSummary()).toMatchObject({ visible: 3, loaded: 3, channels: 1 });
+  });
+
+  it("counts the channels whose load completed in live mode", () => {
+    useEvtxStore.setState({
+      sourceMode: "live",
+      loadedChannels: new Set(["Application", "System", "Setup"]),
+    });
+    render(<EventLogWorkspace />);
+
+    expect(visibleSummary()).toMatchObject({ channels: 3 });
   });
 
   it("publishes the rows the grid selects, not the loaded events, when a filter narrows them", () => {

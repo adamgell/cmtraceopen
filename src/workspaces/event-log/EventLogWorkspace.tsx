@@ -45,6 +45,7 @@ import { selectVisibleRecords } from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
 import {
+  loadedChannelCountFor,
   summarizeVisibleRecords,
   useEvtxCorrelationStatusStore,
   useEvtxVisibleSummaryStore,
@@ -288,15 +289,24 @@ export function EventLogWorkspace() {
   // bumps, so the bar never shows it against another source. It is cleared while a query runs
   // (`visibleRecords` is empty then, and "0 events" must not read as a result) and on unmount.
   const loadGeneration = useEvtxStore((s) => s.loadGeneration);
+  const loadedChannels = useEvtxStore((s) => s.loadedChannels);
+  const loadedChannelCount = useMemo(
+    () => loadedChannelCountFor({ sourceMode, loadedChannels, records }),
+    [sourceMode, loadedChannels, records],
+  );
   useEffect(() => {
     useEvtxVisibleSummaryStore
       .getState()
       .publish(
         isLoading
           ? null
-          : summarizeVisibleRecords(visibleRecords, records.length, loadGeneration),
+          : summarizeVisibleRecords(
+              visibleRecords,
+              { events: records.length, channels: loadedChannelCount },
+              loadGeneration,
+            ),
       );
-  }, [isLoading, visibleRecords, records.length, loadGeneration]);
+  }, [isLoading, visibleRecords, records.length, loadedChannelCount, loadGeneration]);
   useEffect(
     () => () => {
       useEvtxVisibleSummaryStore.getState().publish(null);

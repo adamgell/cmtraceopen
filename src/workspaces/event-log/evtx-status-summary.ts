@@ -9,7 +9,8 @@
  * Two values are published, both derived from rows the workspace has already computed, so the
  * status bar never runs a second pass over the records:
  * - the visible summary: how many rows the grid shows, how many of them are errors and warnings,
- *   and how many events are loaded behind them (the chip row's "Showing {visible} of {loaded}");
+ *   how many events are loaded behind them (the chip row's "Showing {visible} of {loaded}") and
+ *   how many channels those events came from;
  * - the correlation counts for the Correlation view variant.
  *
  * Every value carries the evtx store's `loadGeneration` as its key. A generation is bumped by each
@@ -52,23 +53,52 @@ export function countProblemLevels(
   return { errors, warnings };
 }
 
+/**
+ * Loaded channels as the status bar counts them (spec 8.14).
+ *
+ * Live mode counts the channels whose load completed (`loadedChannels`), not every channel that
+ * was enumerated. Files mode counts the DISTINCT channel names of the event records that loaded.
+ * It must not count the parse result's `channels` list: the archive reader sets the `channel` of
+ * an archived text log to that log's source label, so a text log would count as a channel; a
+ * rotated archive repeats one channel once per file; and a file with no records would count as
+ * a channel that contributed nothing. Text-log records (`originKind` "log") are not channels.
+ */
+export function loadedChannelCountFor(input: {
+  sourceMode: "files" | "live" | null;
+  loadedChannels: ReadonlySet<string>;
+  records: readonly Pick<EvtxRecord, "channel" | "originKind">[];
+}): number {
+  if (input.sourceMode === "live") return input.loadedChannels.size;
+  const names = new Set<string>();
+  for (const record of input.records) {
+    if (record.originKind !== "log") names.add(record.channel);
+  }
+  return names.size;
+}
+
 export interface EvtxVisibleSummary extends GenerationKeyed, EvtxProblemCounts {
   /** Rows the grid shows: `{n} events`, equal to the chip row's "Showing {visible}". */
   visible: number;
   /** Events loaded behind them: the chip row's "of {loaded}". */
   loaded: number;
+  /** `loadedChannelCountFor` for the source on screen: `{c} channels`. */
+  channels: number;
 }
 
-/** Summarizes the rows the workspace computed. `visible` is its `visibleRecords`, not a new pass. */
+/**
+ * Summarizes the rows the workspace computed. `visible` is its `visibleRecords`, not a new pass;
+ * `loaded` and `channels` describe the records behind it.
+ */
 export function summarizeVisibleRecords(
   visible: readonly Pick<EvtxRecord, "level">[],
-  loadedCount: number,
+  loaded: { events: number; channels: number },
   generation: number,
 ): EvtxVisibleSummary {
   return {
     generation,
     visible: visible.length,
-    loaded: loadedCount,
+    loaded: loaded.events,
+    channels: loaded.channels,
     ...countProblemLevels(visible),
   };
 }

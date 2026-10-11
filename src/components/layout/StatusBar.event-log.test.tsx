@@ -23,6 +23,7 @@ import {
 } from "../../workspaces/event-log/evtx-layout-store";
 import { useEvtxStore } from "../../workspaces/event-log/evtx-store";
 import {
+  loadedChannelCountFor,
   summarizeEvtxCorrelationStatus,
   summarizeVisibleRecords,
   useEvtxCorrelationStatusStore,
@@ -107,16 +108,23 @@ function resetStores() {
 }
 
 /**
- * What EventLogWorkspace publishes for the source on screen: `visible` is the grid's rows, and
- * `loaded` defaults to the same (nothing filtered out).
+ * What EventLogWorkspace publishes for the source on screen: `visible` is the grid's rows,
+ * `loaded` defaults to the same (nothing filtered out), and the channel count is derived from the
+ * evtx store's current state the way the workspace derives it.
  */
 function publishRows(visible: EvtxRecord[], loaded = visible.length) {
+  const { loadGeneration, sourceMode, loadedChannels, records } = useEvtxStore.getState();
   act(() =>
-    useEvtxVisibleSummaryStore
-      .getState()
-      .publish(
-        summarizeVisibleRecords(visible, loaded, useEvtxStore.getState().loadGeneration),
+    useEvtxVisibleSummaryStore.getState().publish(
+      summarizeVisibleRecords(
+        visible,
+        {
+          events: loaded,
+          channels: loadedChannelCountFor({ sourceMode, loadedChannels, records }),
+        },
+        loadGeneration,
       ),
+    ),
   );
 }
 
@@ -201,19 +209,29 @@ describe("StatusBar Event Logs content", () => {
       );
     });
 
-    it("counts the channels a file source contains, not the live loaded set", () => {
+    it("counts the distinct event channels that loaded from files", () => {
       useEvtxStore.setState({
         sourceMode: "files",
+        // The parse result lists every file's channel, including Application, whose file held no
+        // records. Counting that list would report a channel that contributed nothing.
         channels: [channelInfo("Application"), channelInfo("System"), channelInfo("Setup")],
         // A file parse never fills loadedChannels, so a "0 channels" here would be wrong.
         loadedChannels: new Set(),
-        records: [record("Warning", "System"), record("Information", "Setup")],
+        records: [
+          record("Warning", "System"),
+          // A second file of the same channel (a rotated archive) is not another channel.
+          record("Information", "System"),
+          record("Information", "Setup"),
+          // An archived text log is a row in the grid but not a channel: the archive reader sets
+          // its channel to the log's source label.
+          { ...record("Information", "C:\\Evidence\\AgentExecutor.log"), originKind: "log" },
+        ],
       });
       publishRows(useEvtxStore.getState().records);
       render(<StatusBar />);
 
       expect(left()).toHaveTextContent(
-        "Files · 3 channels · 0 text logs · 2 events · 0 errors · 1 warning",
+        "Files · 2 channels · 0 text logs · 4 events · 0 errors · 1 warning",
       );
     });
 
@@ -369,8 +387,8 @@ describe("StatusBar Event Logs content", () => {
       });
       render(<StatusBar />);
 
-      expect(left()).toHaveTextContent(/^Live · 1 channel · 0 text logs$/);
-      expect(left()).not.toHaveTextContent(/event|error|warning/);
+      expect(left()).toHaveTextContent(/^Live · 0 text logs$/);
+      expect(left()).not.toHaveTextContent(/channel|event|error|warning/);
     });
 
     it("never shows a summary published for another source", () => {
@@ -389,7 +407,7 @@ describe("StatusBar Event Logs content", () => {
       act(() =>
         useEvtxStore.setState((state) => ({ loadGeneration: state.loadGeneration + 1 })),
       );
-      expect(left()).toHaveTextContent(/^Live · 1 channel · 0 text logs$/);
+      expect(left()).toHaveTextContent(/^Live · 0 text logs$/);
 
       publishRows(records);
       expect(left()).toHaveTextContent(/1 event · 1 error/);
@@ -586,11 +604,13 @@ describe("StatusBar Event Logs content", () => {
     }
 
     function loadLive() {
+      const records = [record("Error")];
       useEvtxStore.setState({
         sourceMode: "live",
         loadedChannels: new Set(["System"]),
-        records: [record("Error")],
+        records,
       });
+      publishRows(records);
     }
 
     it("reads chains, exact, candidate, ambiguous and not placed, with no nearby count", () => {
@@ -699,7 +719,9 @@ describe("StatusBar Event Logs content", () => {
       act(() =>
         useEvtxStore.setState((state) => ({ loadGeneration: state.loadGeneration + 1 })),
       );
-      expect(left()).toHaveTextContent(/^Live · 1 channel · /);
+      // The rows are from the old source too, so the bar has nothing to count until the
+      // workspace publishes for the new one.
+      expect(left()).toHaveTextContent(/^Live · 0 text logs$/);
       expect(left()).not.toHaveTextContent(/chain/);
     });
   });
@@ -722,9 +744,8 @@ describe("Event Logs status helpers", () => {
       evtxStatusText(
         buildEvtxCountsSegments({
           sourceMode: "files",
-          channels: 12,
           textLogs: 3,
-          rows: { visible: 12345, errors: 10, warnings: 2 },
+          rows: { channels: 12, visible: 12345, errors: 10, warnings: 2 },
         }),
       ),
     ).toBe(
@@ -732,16 +753,15 @@ describe("Event Logs status helpers", () => {
     );
   });
 
-  it("leaves the event counts out when no rows are published", () => {
+  it("leaves the channel and event counts out when no rows are published", () => {
     expect(
       evtxStatusText(
         buildEvtxCountsSegments({
           sourceMode: "live",
-          channels: 2,
           textLogs: 0,
           rows: null,
         }),
       ),
-    ).toBe("Live · 2 channels · 0 text logs");
+    ).toBe("Live · 0 text logs");
   });
 });

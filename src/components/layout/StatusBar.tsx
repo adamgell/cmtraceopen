@@ -164,14 +164,13 @@ export function countTextLogFiles(
 
 export interface EvtxStatusCounts {
   sourceMode: Exclude<EvtxSourceMode, null>;
-  channels: number;
   textLogs: number;
   /**
-   * The workspace's visible-row summary, or null while it is not published for this source (the
-   * workspace is still mounting, or a query has just finished). The three event counts are then
-   * left out rather than shown as zero or recounted here.
+   * The workspace's summary of the source on screen, or null while it is not published for it
+   * (the workspace is still mounting, or a query has just finished). The channel and event counts
+   * are then left out rather than shown as zero or recounted here.
    */
-  rows: Pick<EvtxVisibleSummary, "visible" | "errors" | "warnings"> | null;
+  rows: Pick<EvtxVisibleSummary, "channels" | "visible" | "errors" | "warnings"> | null;
 }
 
 /** "{Live|Files} · {c} channels · {l} text logs · {n} events · {e} errors · {w} warnings". */
@@ -180,7 +179,7 @@ export function buildEvtxCountsSegments(
 ): EvtxStatusSegment[] {
   return [
     [{ text: counts.sourceMode === "live" ? "Live" : "Files" }],
-    countRuns(counts.channels, "channel"),
+    ...(counts.rows === null ? [] : [countRuns(counts.rows.channels, "channel")]),
     countRuns(counts.textLogs, "text log"),
     ...(counts.rows === null
       ? []
@@ -332,10 +331,8 @@ export function StatusBar() {
   // The raw store references are only dereferenced inside the event-log branch below, so a test
   // that stubs `useEvtxStore` with a partial state keeps working for the other workspaces.
   const evtxRecords = useEvtxStore((s) => s.records);
-  const evtxChannels = useEvtxStore((s) => s.channels);
   const evtxSourceMode = useEvtxStore((s) => s.sourceMode);
   const evtxIsLoading = useEvtxStore((s) => s.isLoading);
-  const evtxLoadedChannelCount = useEvtxStore((s) => s.loadedChannels.size);
   const evtxTimeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const evtxLoadGeneration = useEvtxStore((s) => s.loadGeneration);
   const evtxLayoutView = useEvtxLayoutStore((s) => s.activeView);
@@ -727,12 +724,6 @@ export function StatusBar() {
           ? buildEvtxCorrelationSegments(correlation)
           : buildEvtxCountsSegments({
               sourceMode: evtxSourceMode,
-              // Live reads report the channels actually loaded. A file parse never fills
-              // `loadedChannels`, so a file source counts the channels it contains.
-              channels:
-                evtxSourceMode === "live"
-                  ? evtxLoadedChannelCount
-                  : evtxChannels.length,
               textLogs: evtxTextLogCount,
               rows,
             });
