@@ -29,10 +29,10 @@ async function rehydrateFrom(stored: unknown) {
 describe("evtx-layout-store", () => {
   beforeEach(reset);
 
-  it("starts on the table with channels and insights shown and the dock hidden", () => {
+  it("starts on the table with only the channel pane shown", () => {
     const state = useEvtxLayoutStore.getState();
     expect(state.activeView).toBe("table");
-    expect(state.panels).toEqual({ channels: true, insights: true, dock: false });
+    expect(state.panels).toEqual({ channels: true, insights: false, dock: false });
     expect(state.railTab).toBe("insights");
     expect(state.railWidth).toBe(DEFAULT_RAIL_WIDTH);
     expect(state.dockHeight).toBe(DEFAULT_DOCK_HEIGHT);
@@ -42,12 +42,23 @@ describe("evtx-layout-store", () => {
     const store = useEvtxLayoutStore.getState();
     store.setActiveView("correlation");
     store.setRailTab("details");
-    store.setPanel("dock", true);
     store.togglePanel("channels");
     const state = useEvtxLayoutStore.getState();
     expect(state.activeView).toBe("correlation");
     expect(state.railTab).toBe("details");
-    expect(state.panels).toEqual({ channels: false, insights: true, dock: true });
+    expect(state.panels).toEqual({ channels: false, insights: false, dock: false });
+  });
+
+  it("refuses to show a panel that has no content yet", () => {
+    const store = useEvtxLayoutStore.getState();
+    store.setPanel("insights", true);
+    store.setPanel("dock", true);
+    store.togglePanel("dock");
+    expect(useEvtxLayoutStore.getState().panels).toEqual({
+      channels: true,
+      insights: false,
+      dock: false,
+    });
   });
 
   it("ignores an unknown view or tab", () => {
@@ -84,13 +95,13 @@ describe("evtx-layout-store", () => {
   });
 
   it("persists exactly the five layout keys and nothing else", () => {
-    useEvtxLayoutStore.getState().setPanel("dock", true);
+    useEvtxLayoutStore.getState().setPanel("channels", false);
     const stored = JSON.parse(localStorage.getItem(EVTX_LAYOUT_STORAGE_KEY) ?? "{}");
     expect(stored.version).toBe(1);
     expect(Object.keys(stored.state).sort()).toEqual(
       ["activeView", "dockHeight", "panels", "railTab", "railWidth"],
     );
-    expect(stored.state.panels.dock).toBe(true);
+    expect(stored.state.panels.channels).toBe(false);
   });
 
   it("restores a valid persisted layout", async () => {
@@ -103,7 +114,8 @@ describe("evtx-layout-store", () => {
     });
     const state = useEvtxLayoutStore.getState();
     expect(state.activeView).toBe("charts");
-    expect(state.panels).toEqual({ channels: false, insights: true, dock: true });
+    // Insights and the dock have no content yet, so a persisted true is forced back to false.
+    expect(state.panels).toEqual({ channels: false, insights: false, dock: false });
     expect(state.railTab).toBe("chains");
     expect(state.railWidth).toBe(400);
     expect(state.dockHeight).toBe(250);

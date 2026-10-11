@@ -51,7 +51,20 @@ export const MIN_DOCK_HEIGHT = 160;
 /** The dock may take at most half the viewport height; applied in pixels at use time. */
 export const MAX_DOCK_HEIGHT_RATIO = 0.5;
 
-const DEFAULT_PANELS: EvtxPanels = { channels: true, insights: true, dock: false };
+/**
+ * Which panels have content to show. The Insights rail (Phase 4) and the correlation dock
+ * (Phase 11) are not built yet, so their toggles are disabled and a persisted `true` is forced
+ * back to `false` on rehydration. The phase that enables a panel must flip it here AND in
+ * `DEFAULT_PANELS`, and must bump the persist `version` and migrate a persisted `false` to the
+ * new default; otherwise users who already hold `false` never see the new panel.
+ */
+export const EVTX_PANELS_AVAILABLE: EvtxPanels = {
+  channels: true,
+  insights: false,
+  dock: false,
+};
+
+const DEFAULT_PANELS: EvtxPanels = { channels: true, insights: false, dock: false };
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
   const number = typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -98,7 +111,8 @@ export function sanitizeLayout(raw: unknown): EvtxPersistedLayout {
     source.panels && typeof source.panels === "object" ? source.panels : {}
   ) as Record<string, unknown>;
   const panel = (id: EvtxPanelId): boolean =>
-    typeof rawPanels[id] === "boolean" ? (rawPanels[id] as boolean) : DEFAULT_PANELS[id];
+    EVTX_PANELS_AVAILABLE[id] &&
+    (typeof rawPanels[id] === "boolean" ? (rawPanels[id] as boolean) : DEFAULT_PANELS[id]);
   return {
     activeView: isOneOf(EVTX_VIEW_IDS, source.activeView) ? source.activeView : "table",
     panels: { channels: panel("channels"), insights: panel("insights"), dock: panel("dock") },
@@ -125,10 +139,14 @@ export const useEvtxLayoutStore = create<EvtxLayoutState>()(
       setActiveView: (view) => {
         if (isOneOf(EVTX_VIEW_IDS, view)) set({ activeView: view });
       },
-      setPanel: (panel, visible) =>
-        set((state) => ({ panels: { ...state.panels, [panel]: visible } })),
-      togglePanel: (panel) =>
-        set((state) => ({ panels: { ...state.panels, [panel]: !state.panels[panel] } })),
+      setPanel: (panel, visible) => {
+        if (!EVTX_PANELS_AVAILABLE[panel]) return;
+        set((state) => ({ panels: { ...state.panels, [panel]: visible } }));
+      },
+      togglePanel: (panel) => {
+        if (!EVTX_PANELS_AVAILABLE[panel]) return;
+        set((state) => ({ panels: { ...state.panels, [panel]: !state.panels[panel] } }));
+      },
       setRailTab: (tab) => {
         if (isOneOf(EVTX_RAIL_TAB_IDS, tab)) set({ railTab: tab });
       },
