@@ -539,4 +539,3 @@ describe("EvtxDetailPane rail extras", () => {
     expect(valueOf("Record ID").style.fontFamily).toContain("fontFamilyNumeric");
   });
 });
-
