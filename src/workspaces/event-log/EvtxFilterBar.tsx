@@ -330,12 +330,13 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
       {showTimeWindow && (
         <Dropdown
           aria-label="Time window"
-          button={{ style: { fontSize: controlFontSize } }}
+          // 28 px (spec 8.3): the small dropdown is 24 px and the button, not the root, sets it.
+          button={{ style: { fontSize: controlFontSize, minHeight: "28px" } }}
           size="small"
           value={timeWindowSnapshotLabel}
           selectedOptions={[timeWindow]}
           disabled={isLoading}
-          style={{ minWidth: timeWindow === "all" ? "132px" : "260px", minHeight: "28px" }}
+          style={{ minWidth: timeWindow === "all" ? "132px" : "260px" }}
           title={
             timeWindow === "all"
               ? "Query the complete available event history."

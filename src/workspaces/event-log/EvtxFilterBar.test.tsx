@@ -297,6 +297,12 @@ describe("time window", () => {
     expect(useEvtxStore.getState().timeWindow).toBe("7d");
   });
 
+  it("is 28 px tall like the search box and More filters (spec 8.3)", () => {
+    seed({ sourceMode: "live", timeWindow: "24h" });
+    render(<EvtxFilterBar nowEpoch={0} />);
+    expect(screen.getByRole("combobox", { name: "Time window" }).style.minHeight).toBe("28px");
+  });
+
   it("is disabled while events load", () => {
     seed({ sourceMode: "live", timeWindow: "24h", isLoading: true });
     render(<EvtxFilterBar nowEpoch={0} />);
