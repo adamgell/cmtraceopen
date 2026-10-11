@@ -159,7 +159,8 @@ Windows Firewall support (#814), DsRegCmd event-log linking (#870) and the DsReg
   - `None` otherwise: the export is missing, unreadable or lacks its root key; an enrollment exists that no task confirms; or an empty registry sits beside a listed task.
 
   Callers that read `mdm_enrolled` as "an MDM URL is present" must read `mdm_urls_present`. `analyze_text` without bundle evidence now returns `mdm_enrolled: None`. The `enrollment-missing-on-joined` rule fires exactly when `mdm_enrolled` is `Some(false)` on an Entra-joined device, so it can fire when MDM URLs are present and never fires on missing, unreadable or conflicting evidence.
-- New public helpers `dsregcmd::extended::unbraced_guid` and `dsregcmd::extended::same_enrollment_guid` give the enrollment GUID identity the analyzer uses: the unbraced `8-4-4-4-12` form, compared ignoring braces and case. They are additions and need no source change.
+- New public helpers `dsregcmd::extended::unbraced_guid` and `dsregcmd::extended::same_enrollment_guid` give the enrollment GUID identity the analyzer uses: the unbraced `8-4-4-4-12` form, compared ignoring braces and case. `dsregcmd::extended::active_enrollment_count` counts active enrollments (distinct GUIDs whose reconciled `EnrollmentState` is 1). They are additions and need no source change.
+- `DsregcmdEnrollmentEvidence::enrollment_count` counts enrollment registry keys, whatever their values or state. The `multiple-enrollments` rule now fires on more than one active enrollment instead of on that count, and its evidence cites both.
 
 These source API changes require the parser version to advance to `0.4.0`. Crate publication remains a separate step.
 

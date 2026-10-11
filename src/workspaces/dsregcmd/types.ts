@@ -253,6 +253,11 @@ export interface DsregcmdEnrollmentEntry {
 }
 
 export interface DsregcmdEnrollmentEvidence {
+  /**
+   * Enrollment registry keys, whatever their values or state. It errs high on
+   * purpose and feeds only the negative; positive claims use
+   * `activeEnrollmentCount`.
+   */
   enrollmentCount: number;
   enrollments: DsregcmdEnrollmentEntry[];
 }

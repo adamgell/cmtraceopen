@@ -327,6 +327,10 @@ pub struct DsregcmdEnrollmentEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DsregcmdEnrollmentEvidence {
+    /// Enrollment registry keys: distinct GUID keys under the Enrollments root,
+    /// whatever their values or state. It errs high on purpose and feeds only
+    /// the negative `mdm_enrolled`; positive claims use
+    /// `extended::active_enrollment_count`.
     pub enrollment_count: u32,
     #[serde(default)]
     pub enrollments: Vec<DsregcmdEnrollmentEntry>,
