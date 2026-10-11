@@ -447,6 +447,7 @@ export interface ChannelRowModel {
 export interface ChannelPaneModel {
   /** The channels plus a row for each source that could not be opened. */
   channels: EvtxChannelInfo[];
+  tree: ChannelTree;
   order: ReadonlyMap<string, number>;
   rows: ReadonlyMap<string, ChannelRowModel>;
   span: ChannelActivitySpan | null;
@@ -507,7 +508,8 @@ export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel
   const unopenedNames = new Set(unopened.map((channel) => channel.name));
   const allChannels = [...channels, ...unopened];
 
-  const order = channelDisplayOrder(buildChannelTree(allChannels));
+  const tree = buildChannelTree(allChannels);
+  const order = channelDisplayOrder(tree);
   const rows = new Map<string, ChannelRowModel>();
   let readCount = 0;
   for (const channel of allChannels) {
@@ -531,5 +533,39 @@ export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel
     });
   }
 
-  return { channels: allChannels, order, rows, span, readCount, totalCount: allChannels.length };
+  return { channels: allChannels, tree, order, rows, span, readCount, totalCount: allChannels.length };
+}
+
+// ── Text logs correlated alongside the channels ─────────────────────────────
+
+export interface LogSourceSummary {
+  path: string;
+  label: string;
+  entries: number;
+}
+
+function basename(path: string): string {
+  return path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
+}
+
+/**
+ * The text logs handed to the analysis session, one row per file with its parsed entry count.
+ *
+ * The grouping key is the entry's `filePath`, the log file itself. It is not the entry's
+ * `sourceFile`, which the session records as the origin `source` and which, for a CCM log, is the
+ * code file the line names (`file=` in the line), so it would split one log into many labels.
+ * The count is parsed entries: one entry can span several physical lines.
+ */
+export function summarizeLogSources(
+  entries: readonly { filePath: string }[]
+): LogSourceSummary[] {
+  const counts = new Map<string, number>();
+  for (const entry of entries) counts.set(entry.filePath, (counts.get(entry.filePath) ?? 0) + 1);
+  return [...counts]
+    .map(([path, count]) => ({
+      path,
+      label: basename(path) || path || "Unnamed source",
+      entries: count,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label) || a.path.localeCompare(b.path));
 }

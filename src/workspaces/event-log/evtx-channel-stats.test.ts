@@ -7,6 +7,7 @@ import {
   computeChannelStats,
   recordTimestampMs,
   scaleActivityBars,
+  summarizeLogSources,
   type ChannelPaneInput,
 } from "./evtx-channel-stats";
 import type {
@@ -499,5 +500,31 @@ describe("buildChannelPaneModel", () => {
       }),
     );
     expect(model.totalCount).toBe(1);
+  });
+});
+
+describe("summarizeLogSources", () => {
+  it("counts parsed entries per log file and labels each by its file name", () => {
+    const summary = summarizeLogSources([
+      { filePath: "C:\\logs\\ccmexec.log" },
+      { filePath: "C:\\logs\\AppEnforce.log" },
+      { filePath: "C:\\logs\\ccmexec.log" },
+      { filePath: "/var/log/IntuneManagementExtension.log" },
+    ]);
+    expect(summary).toEqual([
+      { path: "C:\\logs\\AppEnforce.log", label: "AppEnforce.log", entries: 1 },
+      { path: "C:\\logs\\ccmexec.log", label: "ccmexec.log", entries: 2 },
+      { path: "/var/log/IntuneManagementExtension.log", label: "IntuneManagementExtension.log", entries: 1 },
+    ]);
+  });
+
+  it("keeps two files with the same name apart", () => {
+    const summary = summarizeLogSources([{ filePath: "a/x.log" }, { filePath: "b/x.log" }]);
+    expect(summary.map((item) => item.path)).toEqual(["a/x.log", "b/x.log"]);
+  });
+
+  it("returns nothing for no entries and a placeholder for a path with no name", () => {
+    expect(summarizeLogSources([])).toEqual([]);
+    expect(summarizeLogSources([{ filePath: "" }])[0].label).toBe("Unnamed source");
   });
 });
