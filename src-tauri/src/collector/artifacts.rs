@@ -69,6 +69,7 @@ fn collect_logs_with_copy(
         let mut failed = 0usize;
         let mut changed_sources = Vec::new();
         let mut changed_count = 0usize;
+        let mut growth_count = 0usize;
         let mut any_match = false;
         for entry in entries.flatten() {
             if entry.is_file() {
@@ -80,6 +81,7 @@ fn collect_logs_with_copy(
                         failed += usize::from(capture.inconsistent);
                         if capture.inconsistent {
                             changed_count += 1;
+                            growth_count += usize::from(capture.growth_observed);
                             if changed_sources.len() < 8 {
                                 changed_sources.push(file_name.to_string_lossy().chars().take(128).collect::<String>());
                             }
@@ -113,9 +115,12 @@ fn collect_logs_with_copy(
             );
         } else {
             let copied = files.len();
-            let mut reason = format!("{copied} captured, {failed} copy or source-consistency failures; captured files retained without repair");
+            let mut reason = format!("{copied} captured, {failed} copy or source-consistency failures; copy limited to initial opened length, captured files retained without repair");
             if changed_count > 0 {
                 reason.push_str(&format!("; {changed_count} changed or unverified sources (first 8 filenames): {}", changed_sources.join(", ")));
+            }
+            if growth_count > 0 {
+                reason.push_str(&format!("; growth beyond initial opened length observed in {growth_count} sources; copy limited to initial extent, raw prefixes retained"));
             }
             push_result(ctx, artifact, ArtifactStatus::Failed, files, Some(reason));
         }
@@ -319,7 +324,7 @@ pub fn copy_event_logs(items: &[EventLogCollectionItem], ctx: &CollectorContext)
                 ArtifactStatus::Failed,
                 files,
                 Some(format!(
-                    "{copied} captured, {failed} copy or source-consistency failures; captured files retained without repair"
+                    "{copied} captured, {failed} copy or source-consistency failures; copy limited to initial opened length, captured files retained without repair"
                 )),
             );
         }
@@ -404,7 +409,7 @@ pub fn copy_exports(items: &[FileExportItem], ctx: &CollectorContext) {
                     artifact,
                     ArtifactStatus::Failed,
                     files,
-                    Some(format!("{copied} captured, {failed} copy or source-consistency failures; captured files retained without repair")),
+                    Some(format!("{copied} captured, {failed} copy or source-consistency failures; copy limited to initial opened length, captured files retained without repair")),
                 );
             }
         } else {
@@ -425,7 +430,13 @@ pub fn copy_exports(items: &[FileExportItem], ctx: &CollectorContext) {
                                 artifact,
                                 if capture.inconsistent { ArtifactStatus::Failed } else { ArtifactStatus::Collected },
                                 vec![file],
-                                capture.inconsistent.then(|| "source changed or consistency could not be verified while copying; captured bytes retained without repair".to_string()),
+                                capture.inconsistent.then(|| {
+                                    if capture.growth_observed {
+                                        "growth beyond initial opened length observed; copy limited to initial extent, raw prefix retained without repair".to_string()
+                                    } else {
+                                        "source changed or consistency could not be verified; copy limited to initial opened length, captured bytes retained without repair".to_string()
+                                    }
+                                }),
                             ),
                             Err(error) => push_result(
                                 ctx,
@@ -698,8 +709,12 @@ const COPY_BUFFER_BYTES: usize = 64 * 1024;
 struct FileCapture {
     bytes_copied: u64,
     inconsistent: bool,
+    growth_observed: bool,
 }
 
+// Copy at most the opening length, retaining that raw extent without record
+// repair. A separate one-byte probe observes growth beyond it; probe bytes are
+// not captured. Observable growth makes the retained prefix a failed capture.
 // This is a live capture, not an atomic snapshot. The observer is a no-op in
 // production and lets tests mutate a synthetic source at exact read boundaries.
 // Checks detect observable changes; a same-size rewrite with restored mtime,
@@ -715,8 +730,9 @@ fn copy_source_with_observer<W: Write>(
     let identity = crate::fs_identity::file_identity(source, &before);
     let mut buffer = vec![0_u8; COPY_BUFFER_BYTES];
     let mut bytes_copied = 0_u64;
-    loop {
-        let read = match source.read(&mut buffer) {
+    while bytes_copied < before.len() {
+        let limit = (before.len() - bytes_copied).min(buffer.len() as u64) as usize;
+        let read = match source.read(&mut buffer[..limit]) {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             result => result?,
         };
@@ -727,8 +743,30 @@ fn copy_source_with_observer<W: Write>(
         output.write_all(&buffer[..read])?;
         bytes_copied += read as u64;
     }
+    // Probe only after the initial extent was copied. If it ended short, the
+    // count/metadata checks already report an inconsistent retained capture.
+    let growth_observed = if bytes_copied == before.len() {
+        let mut probe = [0_u8; 1];
+        let read = loop {
+            match source.read(&mut probe) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => break result?,
+            }
+        };
+        after_read(read);
+        read != 0
+    } else {
+        false
+    };
+    // Growth can also become visible after a zero-byte probe. Retain that
+    // explicit observation in diagnostics rather than only a generic change.
+    let after = source.metadata();
+    let growth_observed = growth_observed
+        || after
+            .as_ref()
+            .is_ok_and(|metadata| metadata.len() > before.len());
     // A failed post-copy inspection is uncertainty, not a complete capture.
-    let changed = source.metadata().map_or(true, |after| {
+    let changed = after.map_or(true, |after| {
         before.len() != after.len()
             || match (before.modified(), after.modified()) {
                 (Ok(before_time), Ok(after_time)) => before_time != after_time,
@@ -746,7 +784,8 @@ fn copy_source_with_observer<W: Write>(
     });
     Ok(FileCapture {
         bytes_copied,
-        inconsistent: changed || replaced,
+        inconsistent: growth_observed || changed || replaced,
+        growth_observed,
     })
 }
 
@@ -1032,9 +1071,11 @@ mod tests {
             }],
             &context,
             |ctx, path, destination| {
+                let mut changed = false;
                 super::secure_copy_file_with_observer(ctx, path, destination, |read| {
-                    if read == 0 {
+                    if read > 0 && !changed {
                         fs::write(path, b"<![LOG[partial]LOG]!><time=\"01:00:00\">").unwrap();
+                        changed = true;
                     }
                 })
             },
@@ -1076,7 +1117,57 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("source.log"));
+        let reason = manifest["collection"]["results"]["gaps"][0]["reason"]
+            .as_str()
+            .unwrap();
+        assert!(reason.contains("growth beyond initial opened length"));
+        assert!(reason.contains("copy limited to initial extent"));
+        // Failed consistency must remain inspectable as raw evidence in Log Explorer.
+        let details = crate::commands::bundle_ops::inspect_evidence_bundle(
+            bundle.to_string_lossy().into_owned(),
+        )
+        .unwrap();
+        assert_eq!(details.artifacts.len(), 1);
+        assert_eq!(details.artifacts[0].status, "failed");
+        assert!(details.artifacts[0].exists_on_disk);
+        assert_eq!(
+            details.artifacts[0].intake.kind,
+            crate::commands::bundle_ops::EvidenceArtifactIntakeKind::Log
+        );
+        let listing =
+            crate::commands::file_ops::list_log_folder(bundle.to_string_lossy().into_owned())
+                .unwrap();
+        assert!(listing
+            .entries
+            .iter()
+            .any(|entry| entry.name == "source.log"));
         drop(results);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_bounds_growing_source_to_initial_extent_without_repair() {
+        let root = create_temp_dir("collector-growing-source");
+        let path = root.join("source.log");
+        let initial = b"<![LOG[partial";
+        fs::write(&path, initial).unwrap();
+        let mut source = fs::File::open(&path).unwrap();
+        let mut captured = Vec::new();
+        let mut appends = 0;
+        let result = super::copy_source_with_observer(&mut source, &path, &mut captured, |read| {
+            if read > 0 && appends < 4 {
+                let mut writer = fs::OpenOptions::new().append(true).open(&path).unwrap();
+                std::io::Write::write_all(&mut writer, b"synthetic growth").unwrap();
+                appends += 1;
+            }
+        })
+        .unwrap();
+        assert_eq!(captured, initial);
+        assert_eq!(result.bytes_copied, initial.len() as u64);
+        assert!(result.inconsistent);
+        assert!(result.growth_observed);
+        assert!(fs::read(&path).unwrap().starts_with(initial));
+        drop(source);
         fs::remove_dir_all(root).unwrap();
     }
 
