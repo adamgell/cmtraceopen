@@ -10,7 +10,7 @@ import { DEFAULT_QUICK_FILTER } from "./evtx-filter";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import EvtxChartsViewDefault, {
   EvtxChartsView,
-  CHART_DATA_DEBOUNCE_MS,
+  CHART_DATA_THROTTLE_MS,
   HEAT_EMPTY_CELL,
   type EvtxChartsViewProps,
 } from "./EvtxChartsView";
@@ -125,7 +125,7 @@ describe("EvtxChartsView", () => {
       // Debounced: the previous derivation stays until the settle time passes.
       expect(screen.getByText("excluding 7036 / 16384")).toBeInTheDocument();
       act(() => {
-        vi.advanceTimersByTime(CHART_DATA_DEBOUNCE_MS);
+        vi.advanceTimersByTime(CHART_DATA_THROTTLE_MS);
       });
       expect(screen.queryByText(/excluding/)).toBeNull();
     } finally {
@@ -204,7 +204,7 @@ describe("EvtxChartsView", () => {
     try {
       rerender(<EvtxChartsView {...props({ records: [rec({ hour: 3, level: "Error" }), unplaced("Warning")] })} />);
       act(() => {
-        vi.advanceTimersByTime(CHART_DATA_DEBOUNCE_MS);
+        vi.advanceTimersByTime(CHART_DATA_THROTTLE_MS);
       });
       expect(hourly()).toHaveTextContent("1 error or warning has no timestamp and is not placed");
     } finally {
@@ -273,6 +273,74 @@ describe("EvtxChartsView", () => {
     render(<EvtxChartsView {...props({ records: [] })} />);
     expect(screen.getByRole("status")).toHaveTextContent("No events to chart");
     expect(screen.queryAllByRole("figure")).toHaveLength(0);
+  });
+
+  describe("update throttle under a live stream", () => {
+    const eventsValue = () => Number(screen.getByTestId("kpi-value-events").textContent);
+    const batch = (n: number) =>
+      Array.from({ length: n }, (_, i) => rec({ eventId: 1000 + i, hour: 1 }));
+
+    it("updates within 75 ms of the first change and at least every 75 ms during a 20 ms stream", () => {
+      vi.useFakeTimers();
+      try {
+        const { rerender } = render(<EvtxChartsView {...props({ records: batch(1) })} />);
+        expect(eventsValue()).toBe(1);
+        const updates: number[] = [];
+        let shown = 1;
+        let now = 0;
+        let count = 1;
+        // A change every 20 ms for 1 s, sampled every 5 ms.
+        for (now = 5; now <= 1000; now += 5) {
+          if (now % 20 === 0) {
+            count += 1;
+            rerender(<EvtxChartsView {...props({ records: batch(count) })} />);
+          }
+          act(() => {
+            vi.advanceTimersByTime(5);
+          });
+          const value = eventsValue();
+          if (value !== shown) {
+            shown = value;
+            updates.push(now);
+          }
+        }
+        // The first change happens at t = 20 ms; the first update is no later than 75 ms after it.
+        expect(updates[0]).toBeLessThanOrEqual(20 + CHART_DATA_THROTTLE_MS);
+        // The charts were never starved: no gap between updates (nor from the last one to the
+        // end of the stream) exceeds the interval, plus the 5 ms sampling step.
+        const marks = [20, ...updates];
+        for (let i = 1; i < marks.length; i += 1) {
+          expect(marks[i] - marks[i - 1]).toBeLessThanOrEqual(CHART_DATA_THROTTLE_MS + 5);
+        }
+        expect(1000 - marks[marks.length - 1]).toBeLessThanOrEqual(CHART_DATA_THROTTLE_MS + 5);
+        expect(updates.length).toBeGreaterThan(10);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("updates once after a single change", () => {
+      vi.useFakeTimers();
+      try {
+        const { rerender } = render(<EvtxChartsView {...props({ records: batch(1) })} />);
+        rerender(<EvtxChartsView {...props({ records: batch(3) })} />);
+        expect(eventsValue()).toBe(1);
+        act(() => {
+          vi.advanceTimersByTime(CHART_DATA_THROTTLE_MS - 1);
+        });
+        expect(eventsValue()).toBe(1);
+        act(() => {
+          vi.advanceTimersByTime(1);
+        });
+        expect(eventsValue()).toBe(3);
+        act(() => {
+          vi.advanceTimersByTime(1000);
+        });
+        expect(eventsValue()).toBe(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("says it is loading, not that there are no events, while a load runs", () => {

@@ -28,7 +28,7 @@
  *   "00" to "09"), worked around with "HH:00" labels.
  * - Figures 1 and 2 are token-styled rows, as the spec recommends.
  */
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { tokens } from "@fluentui/react-components";
 import {
   LOG_UI_FONT_FAMILY,
@@ -574,17 +574,39 @@ function HourlyFigure({
   );
 }
 
-/** Spec 11: chart data is debounced at 75 ms during live tail (DIAGNOSIS_DEBOUNCE_MS precedent). */
-export const CHART_DATA_DEBOUNCE_MS = 75;
+/**
+ * Chart data updates at most this often during live tail. Spec 11 words this as a debounce
+ * (DIAGNOSIS_DEBOUNCE_MS precedent); this is a deliberate deviation, recorded here: a restarting
+ * debounce never fires while batches arrive faster than the interval, so the charts would show
+ * stale counts under a busy stream. The wait starts at the first change and fires no later than
+ * this interval after it (a throttle with a trailing call), with the same 75 ms value.
+ */
+export const CHART_DATA_THROTTLE_MS = 75;
 
-/** The first value is used at once; later changes settle for `ms` before they apply. */
-function useSettledValue<T>(value: T, ms: number): T {
+/**
+ * The first value is used at once. After a change the latest value applies once `ms` has passed
+ * since the first change not yet applied; changes during the wait do not restart it, so a steady
+ * stream still updates every `ms`.
+ */
+function useThrottledValue<T>(value: T, ms: number): T {
   const [settled, setSettled] = useState(value);
+  const latest = useRef(value);
+  latest.current = value;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (Object.is(settled, value)) return undefined;
-    const timer = setTimeout(() => setSettled(value), ms);
-    return () => clearTimeout(timer);
+    if (Object.is(settled, value) || timer.current !== null) return;
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      setSettled(latest.current);
+    }, ms);
   }, [value, settled, ms]);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) clearTimeout(timer.current);
+      timer.current = null;
+    },
+    [],
+  );
   return settled;
 }
 
@@ -605,7 +627,7 @@ export function EvtxChartsView({
     () => ({ records, chains, hideRules, channelOrder, timeZoneMode, loadedChannelCount, textLogCount }),
     [records, chains, hideRules, channelOrder, timeZoneMode, loadedChannelCount, textLogCount],
   );
-  const settled = useSettledValue(input, CHART_DATA_DEBOUNCE_MS);
+  const settled = useThrottledValue(input, CHART_DATA_THROTTLE_MS);
   const data = useMemo(() => buildEvtxChartData(settled), [settled]);
 
   if (data.totalEvents === 0) {
