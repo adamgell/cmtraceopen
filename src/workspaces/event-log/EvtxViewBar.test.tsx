@@ -458,14 +458,17 @@ describe("EVTX subset menu entry", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
-  it("keeps the disabled item reachable by keyboard so its reason can be read", async () => {
+  it("keeps the disabled item in the focus order, like the enabled items, so its reason can be read", async () => {
     useEvtxStore.setState({ remoteMachine: "SRV01" });
     render(<EvtxViewBar nowEpoch={0} />);
-    await openExportMenu();
+    const items = await openExportMenu();
     const item = screen.getByRole("menuitem", { name: /EVTX subset/ });
-    // Fluent maps a disabled MenuItem to a focusable, aria-disabled one, so focus (and with it the
-    // tooltip) reaches it; it is not removed from the tab/arrow order.
+    // Fluent maps a disabled MenuItem to a focusable, aria-disabled one (disabledFocusable): it
+    // is not `disabled`, and it takes part in the focus order exactly as the enabled items do.
+    // jsdom has no layout, so arrow-key movement and the tooltip appearing on focus cannot be
+    // exercised here; that is a check for a real browser.
     expect(item).not.toHaveAttribute("disabled");
+    expect(item.tabIndex).toBe(items[0].tabIndex);
     act(() => item.focus());
     expect(item).toHaveFocus();
   });
@@ -595,6 +598,22 @@ describe("EVTX subset menu entry", () => {
     expect(alert).toHaveTextContent("never overwritten");
     expect(document.querySelector("[data-evtx-export-error]")).toBeNull();
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+  });
+
+  it("puts focus on Cancel when the dialog is opened from the menu, and keeps it there", async () => {
+    render(<EvtxViewBar nowEpoch={0} />);
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+    await screen.findByRole("alertdialog");
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    await waitFor(() => expect(cancel).toHaveFocus());
+    // Closing the menu makes Fluent restore focus to the Export button. If that landed after the
+    // dialog's own focus it would take it back, so look again after the menu has finished closing.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    expect(cancel).toHaveFocus();
+    expect(screen.getByTitle(EXPORT_BUTTON_TITLE)).not.toHaveFocus();
   });
 
   it("returns focus to the Export button when the dialog is cancelled", async () => {
