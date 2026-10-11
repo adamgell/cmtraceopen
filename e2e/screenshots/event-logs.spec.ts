@@ -270,9 +270,113 @@ test.describe("event-logs screenshots", () => {
     await expect(
       page.getByRole("region", { name: "Event log details" }),
     ).toContainText("Installation failed.");
+
+    // At 1440x900 the 320 px unified-timeline pane and the 300 px Details pane leave the grid
+    // about 0 px once a record is selected, so the capture showed no table. Drag the Details
+    // pane's handle down to its 100 px minimum. That handle is a plain mouse handle (it has no
+    // keyboard separator role), so the drag is the way to resize it.
+    // The dock's handle (a hidden `separator`) also carries a row-resize cursor, so take the visible
+    // one that is not a separator.
+    const handle = page.locator('div[style*="row-resize"]:not([role="separator"]):visible');
+    await expect(handle).toHaveCount(1);
+    const box = (await handle.boundingBox())!;
+    const x = box.x + box.width / 2;
+    await page.mouse.move(x, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(x, box.y + 300, { steps: 8 });
+    await page.mouse.up();
+
+    // Put the selected row, with a tinted neighbour above it, in the grid, and require that the
+    // capture really shows the table: its header, and the selected row inside the viewport.
+    await grid.evaluate((el, top) => {
+      el.scrollTop = top;
+    }, Math.max(0, targetIndex - 1) * rowHeight);
+    const selectedRow = grid.locator('[role="row"][aria-selected="true"]');
+    await expect(selectedRow).toHaveCount(1);
+    await expect(selectedRow).toContainText("Installation failed.");
+    await expect(selectedRow).toBeInViewport({ ratio: 1 });
+    await expect(page.locator("[data-evtx-table-header]")).toBeInViewport({ ratio: 1 });
     await assertNoHostPaths(page);
     await page.screenshot({
       path: outPath("event-logs-selected.png"),
+      animations: "disabled",
+    });
+  });
+
+  // The table's states in one frame: the Error and Warning tints, plain rows, the selected row
+  // (Q-1) and the quick-filter highlight, so spec 8.7 can be reviewed from one image. The
+  // quick filter "ion" keeps rows of every level (resolution, Installation, Operational,
+  // Application, Protection) and highlights it in the channel and message cells. The Error row is
+  // the first "Installation failed." and the row after it is selected, so the Error tint stays
+  // visible beside the selection. No Critical row falls near it, so the frame shows Error.
+  test("event-logs table states", async ({ page }) => {
+    // Tall enough for the unified-timeline pane, the Details pane and about twenty grid rows.
+    await page.setViewportSize({ width: 1440, height: 1500 });
+    await page.getByPlaceholder("Quick filter...").fill("ion");
+    const grid = page.getByRole("grid", { name: /^Event log timeline - \d+ records$/ });
+    await expect(grid).not.toHaveAttribute("aria-label", timelineGridName);
+
+    const settle = () =>
+      page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      );
+    const rowHeight = await grid
+      .getByRole("row")
+      .first()
+      .evaluate((el) => el.getBoundingClientRect().height);
+    const scrollTo = async (top: number) => {
+      await grid.evaluate((el, y) => {
+        el.scrollTop = y;
+      }, top);
+      await settle();
+    };
+
+    // Page down until the Error row is rendered; its data-index is then its position in the
+    // filtered list, whatever the filter kept.
+    const errorRow = grid.getByRole("row").filter({ hasText: "Installation failed." }).first();
+    const scrollHeight = await grid.evaluate((el) => el.scrollHeight);
+    let found = false;
+    for (let top = 0; top <= scrollHeight && !found; top += 10 * rowHeight) {
+      await scrollTo(top);
+      found = (await errorRow.count()) > 0;
+    }
+    expect(found, "the filtered list holds the Installation failed. row").toBe(true);
+    const errorIndex = Number(await errorRow.getAttribute("data-index"));
+
+    await grid.locator(`[role="row"][data-index="${errorIndex + 1}"]`).click();
+    await expect(page.getByRole("region", { name: "Event log details" })).toBeVisible();
+    await scrollTo(Math.max(0, errorIndex - 5) * rowHeight);
+
+    // The frame must hold every state it is meant to show, fully inside the grid.
+    const rows = await grid.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      return Array.from(el.querySelectorAll<HTMLElement>('[role="row"]'))
+        .filter((row) => {
+          const r = row.getBoundingClientRect();
+          return r.top >= box.top && r.bottom <= box.bottom;
+        })
+        .map((row) => ({
+          level: row.querySelector("[data-evtx-level-cell]")?.getAttribute("aria-label") ?? "",
+          selected: row.getAttribute("aria-selected") === "true",
+          marks: row.querySelectorAll("mark").length,
+        }));
+    });
+    const unselected = (level: string) =>
+      rows.some((row) => !row.selected && row.level === level);
+    expect(unselected("Level: Error"), JSON.stringify(rows)).toBe(true);
+    expect(unselected("Level: Warning"), JSON.stringify(rows)).toBe(true);
+    expect(unselected("Level: Information"), JSON.stringify(rows)).toBe(true);
+    expect(rows.filter((row) => row.selected), JSON.stringify(rows)).toHaveLength(1);
+    expect(rows.some((row) => row.marks > 0), JSON.stringify(rows)).toBe(true);
+
+    await assertNoHostPaths(page);
+    // The header and the grid are siblings inside the table's wrapper.
+    const table = page.locator("[data-evtx-table-header]").locator("xpath=..");
+    await table.screenshot({
+      path: outPath("event-logs-table-states.png"),
       animations: "disabled",
     });
   });
