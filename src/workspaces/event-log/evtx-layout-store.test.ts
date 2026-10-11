@@ -188,4 +188,20 @@ describe("evtx-layout-store", () => {
       expect(migrateLayout(null, 1)).toBeNull();
     });
   });
+
+  // Guard for the enable-and-migrate rule (see EVTX_PANELS_AVAILABLE). A user who last ran a build
+  // where a panel was off holds a persisted `false`. If a phase flips that panel's default without
+  // bumping the persist version and migrating, this fails: the user would stay on `false` and
+  // never see the new panel.
+  it("keeps a persisted false equal to the default for every panel (flip a default only with a migrate)", async () => {
+    await rehydrateFrom(
+      { panels: { channels: true, insights: false, dock: false } },
+      1,
+    );
+    const defaults = sanitizeLayout(undefined).panels;
+    const panels = useEvtxLayoutStore.getState().panels;
+    expect(panels.insights).toBe(defaults.insights);
+    expect(panels.dock).toBe(defaults.dock);
+    expect(panels).toEqual(defaults);
+  });
 });

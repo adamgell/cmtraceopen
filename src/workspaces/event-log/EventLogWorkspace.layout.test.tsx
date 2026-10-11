@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { lazy } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -25,7 +26,8 @@ vi.mock("./EvtxTimeline", () => ({
 vi.mock("./EvtxDetailPane", () => ({
   EvtxDetailPane: () => <div role="region" aria-label="Event log details" />,
 }));
-vi.mock("./EventDiagnosisPanel", () => ({
+vi.mock("./EventDiagnosisPanel", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./EventDiagnosisPanel")>()),
   EventDiagnosisPanel: () => <section aria-label="Operational diagnosis" />,
 }));
 vi.mock("./UnifiedTimelineView", () => ({
@@ -33,7 +35,8 @@ vi.mock("./UnifiedTimelineView", () => ({
 }));
 
 import { useLogStore } from "../../stores/log-store";
-import { EventLogWorkspace } from "./EventLogWorkspace";
+import { EventLogWorkspace, EvtxViewHost, type EvtxViewEntry } from "./EventLogWorkspace";
+import { EvtxViewBar } from "./EvtxViewBar";
 import {
   EVTX_LAYOUT_STORAGE_KEY,
   EVTX_VIEW_PANEL_ID,
@@ -222,5 +225,40 @@ describe("EventLogWorkspace three-column shell", () => {
     expect(region("rail")).toBeVisible();
     expect(useEvtxLayoutStore.getState().railTab).toBe("details");
     expect(screen.getByRole("tab", { name: "Event 42" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("shows the Loading view fallback inside the tabpanel while a lazy view loads, with the tablist mounted", async () => {
+    let resolveView!: (module: { default: () => React.ReactElement }) => void;
+    const Lazy = lazy(
+      () =>
+        new Promise<{ default: () => React.ReactElement }>((resolve) => {
+          resolveView = resolve;
+        }),
+    );
+    const placeholder: EvtxViewEntry = { keepAlive: false, render: () => <div>stub</div> };
+    const views: Record<string, EvtxViewEntry> = {
+      table: placeholder,
+      grouped: placeholder,
+      timeline: placeholder,
+      charts: { keepAlive: false, render: () => <Lazy /> },
+      correlation: placeholder,
+    };
+    useEvtxLayoutStore.setState({ activeView: "charts" });
+    render(
+      <>
+        <EvtxViewBar nowEpoch={0} />
+        <EvtxViewHost views={views as never} activeView="charts" />
+      </>,
+    );
+    const panel = screen.getByRole("tabpanel");
+    expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
+    expect(panel).toHaveTextContent("Loading view");
+
+    await act(async () => {
+      resolveView({ default: () => <div>Charts loaded</div> });
+    });
+    expect(panel).toHaveTextContent("Charts loaded");
+    expect(panel).not.toHaveTextContent("Loading view");
+    expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
   });
 });

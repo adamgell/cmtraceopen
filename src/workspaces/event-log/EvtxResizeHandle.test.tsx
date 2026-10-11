@@ -44,25 +44,25 @@ describe("EvtxResizeHandle", () => {
 
   it("drags toward the region to grow it when direction is -1, and releases the cursor", () => {
     const { onChange, handle } = renderHandle({ direction: -1 });
-    fireEvent.mouseDown(handle, { clientX: 500 });
+    fireEvent.pointerDown(handle, { clientX: 500, button: 0, isPrimary: true, pointerId: 1 });
     expect(document.body.style.cursor).toBe("col-resize");
-    fireEvent.mouseMove(window, { clientX: 460 });
+    fireEvent.pointerMove(handle, { clientX: 460, buttons: 1, pointerId: 1 });
     expect(onChange).toHaveBeenLastCalledWith(380);
-    fireEvent.mouseMove(window, { clientX: 520 });
+    fireEvent.pointerMove(handle, { clientX: 520, buttons: 1, pointerId: 1 });
     expect(onChange).toHaveBeenLastCalledWith(320);
-    fireEvent.mouseUp(window);
+    fireEvent.pointerUp(handle, { pointerId: 1 });
     expect(document.body.style.cursor).toBe("");
     onChange.mockClear();
-    fireEvent.mouseMove(window, { clientX: 100 });
+    fireEvent.pointerMove(handle, { clientX: 100, buttons: 1, pointerId: 1 });
     expect(onChange).not.toHaveBeenCalled();
   });
 
   it("drags away from the region to grow it when direction is +1", () => {
     const { onChange, handle } = renderHandle({ direction: 1, value: 250, min: 200, max: 500 });
-    fireEvent.mouseDown(handle, { clientX: 250 });
-    fireEvent.mouseMove(window, { clientX: 300 });
+    fireEvent.pointerDown(handle, { clientX: 250, button: 0, isPrimary: true, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientX: 300, buttons: 1, pointerId: 1 });
     expect(onChange).toHaveBeenLastCalledWith(300);
-    fireEvent.mouseUp(window);
+    fireEvent.pointerUp(handle, { pointerId: 1 });
   });
 
   it("drags on the Y axis for a horizontal separator", () => {
@@ -73,11 +73,62 @@ describe("EvtxResizeHandle", () => {
       min: 160,
       max: 450,
     });
-    fireEvent.mouseDown(handle, { clientY: 600 });
+    fireEvent.pointerDown(handle, { clientY: 600, button: 0, isPrimary: true, pointerId: 1 });
     expect(document.body.style.cursor).toBe("row-resize");
-    fireEvent.mouseMove(window, { clientY: 560 });
+    fireEvent.pointerMove(handle, { clientY: 560, buttons: 1, pointerId: 1 });
     expect(onChange).toHaveBeenLastCalledWith(250);
-    fireEvent.mouseUp(window);
+    fireEvent.pointerUp(handle, { pointerId: 1 });
+  });
+
+  it("does not arm a drag from a right-click or a non-primary pointer", () => {
+    const { onChange, handle } = renderHandle();
+    fireEvent.pointerDown(handle, { clientX: 500, button: 2, isPrimary: true, pointerId: 1 });
+    expect(document.body.style.cursor).toBe("");
+    fireEvent.pointerMove(handle, { clientX: 400, buttons: 2, pointerId: 1 });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.pointerDown(handle, { clientX: 500, button: 0, isPrimary: false, pointerId: 2 });
+    fireEvent.pointerMove(handle, { clientX: 400, buttons: 1, pointerId: 2 });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("ends a drag on window blur, on lost capture, and when no button is down", () => {
+    const { onChange, handle } = renderHandle();
+    const start = () =>
+      fireEvent.pointerDown(handle, { clientX: 500, button: 0, isPrimary: true, pointerId: 1 });
+
+    start();
+    fireEvent.blur(window);
+    expect(document.body.style.cursor).toBe("");
+    fireEvent.pointerMove(handle, { clientX: 400, buttons: 1, pointerId: 1 });
+    expect(onChange).not.toHaveBeenCalled();
+
+    start();
+    fireEvent.lostPointerCapture(handle, { pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientX: 400, buttons: 1, pointerId: 1 });
+    expect(onChange).not.toHaveBeenCalled();
+
+    start();
+    fireEvent.pointerMove(handle, { clientX: 400, buttons: 0, pointerId: 1 });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(document.body.style.cursor).toBe("");
+  });
+
+  it("keeps a real outline on focus so it survives forced-colors mode", () => {
+    const { handle } = renderHandle();
+    const classes = handle.className.split(/\s+/).filter(Boolean);
+    const css = Array.from(document.styleSheets)
+      .flatMap((sheet) => Array.from(sheet.cssRules))
+      .filter(
+        (rule): rule is CSSStyleRule =>
+          rule instanceof CSSStyleRule &&
+          rule.selectorText.includes(":focus-visible") &&
+          classes.some((name) => rule.selectorText.includes(`.${name}`)),
+      )
+      .map((rule) => rule.cssText)
+      .join(" ");
+    expect(css).toMatch(/outline-style:\s*solid/);
+    expect(css).toMatch(/outline-width:\s*2px/);
+    expect(css).toMatch(/outline-offset:\s*-2px/);
   });
 
   it("makes arrow keys follow direction -1 like the drag does", () => {
