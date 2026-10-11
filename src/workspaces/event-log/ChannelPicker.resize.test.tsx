@@ -56,11 +56,11 @@ describe("channel pane resize handle", () => {
     expect(pane).toHaveStyle({ width: "266px" });
   });
 
-  it("caps the pane at 40% of the row so a narrow window cannot squeeze the main view to nothing", () => {
+  it("does not cap itself by percentage: that would resolve against its own shrink-to-fit wrapper", () => {
     render(<ChannelPicker />);
-    const handle = screen.getByRole("separator", { name: "Resize channel pane" });
-    const pane = handle.parentElement as HTMLElement;
-    expect(pane).toHaveStyle({ maxWidth: "40%", minWidth: "0px" });
-    expect(pane).toHaveStyle({ flexShrink: "0" });
+    const pane = screen.getByRole("separator", { name: "Resize channel pane" })
+      .parentElement as HTMLElement;
+    expect(pane.style.maxWidth).toBe("");
+    expect(pane).toHaveStyle({ width: "250px", minWidth: "0px", flexShrink: "1" });
   });
 });

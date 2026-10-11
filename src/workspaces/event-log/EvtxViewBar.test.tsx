@@ -13,6 +13,7 @@ import { EVTX_EXPORT_FORMATS } from "./evtx-export";
 import { defaultColumnConfig } from "./evtx-columns";
 import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
+import { useUiStore } from "../../stores/ui-store";
 import type { EvtxRecord } from "./types";
 
 const TAB_ORDER = ["Table", "Grouped", "Timeline", "Charts", "Correlation"];
@@ -152,6 +153,26 @@ describe("EvtxViewBar", () => {
     seedChannels();
     render(<EvtxViewBar nowEpoch={0} />);
     expect(screen.getByRole("button", { name: "Channels" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("sets the active text color from the theme, in classes rather than inline styles", () => {
+    seedChannels();
+    const original = useUiStore.getState().themeId;
+    useUiStore.setState({ themeId: "high-contrast" });
+    try {
+      render(<EvtxViewBar nowEpoch={0} />);
+      const bar = document.querySelector<HTMLElement>("[data-evtx-region=view-bar]")!;
+      // High-contrast fails 4.5:1 with the brand foreground, so the fallback is black.
+      expect(bar.style.getPropertyValue("--evtx-active-text")).toBe("#000000");
+      const tab = screen.getByRole("tab", { name: "Table" });
+      const toggle = screen.getByRole("button", { name: "Channels" });
+      for (const el of [tab, toggle]) {
+        expect(el.style.color).toBe("");
+        expect(el.style.backgroundColor).toBe("");
+      }
+    } finally {
+      useUiStore.setState({ themeId: original });
+    }
   });
 
   it("draws the Layout tab focus ring inside the tab so the clipped group cannot cut it off", () => {
