@@ -12,6 +12,7 @@ import {
   type DisplayPhaseAssessment,
   type FactGroup,
   type FactRow,
+  enrollmentGuidKey,
   formatBool,
   formatCertificateValidityRange,
   formatConfidenceLabel,
@@ -351,7 +352,7 @@ export function buildManagementGroup(
       {
         label: "MDM Visibility",
         value: getMdmVisibilityLabel(derived),
-        tone: toneForMdmVisibility(derived),
+        tone: toneForMdmVisibility(result),
       },
       {
         label: "MDM URL",
@@ -765,15 +766,15 @@ export function buildEnrollmentStatusGroup(
                 : ("good" as const),
         },
         ...(() => {
+          // GUID identity ignores braces and case, as the parser compares it.
           const taskGuidSet = new Set(
             (result.scheduledTaskEvidence?.enterpriseMgmtGuids ?? []).map(
-              (g) => g.toLowerCase(),
+              enrollmentGuidKey,
             ),
           );
           return result.enrollmentEvidence!.enrollments.map((e, i) => {
-            const guidLower = e.guid?.toLowerCase();
-            const hasTaskMatch =
-              guidLower != null && taskGuidSet.has(guidLower);
+            const guidKey = enrollmentGuidKey(e.guid);
+            const hasTaskMatch = guidKey !== null && taskGuidSet.has(guidKey);
             return {
               label: `Enrollment ${i + 1}`,
               value: [
@@ -815,8 +816,8 @@ export function buildEnterpriseMgmtTasksGroup(
     (typeof enrollments)[number]
   >();
   for (const enrollment of enrollments) {
-    const key = enrollment.guid?.toLowerCase();
-    if (key && !enrollmentByGuid.has(key)) {
+    const key = enrollmentGuidKey(enrollment.guid);
+    if (key !== null && !enrollmentByGuid.has(key)) {
       enrollmentByGuid.set(key, enrollment);
     }
   }
@@ -835,9 +836,9 @@ export function buildEnterpriseMgmtTasksGroup(
         },
         ...result.scheduledTaskEvidence.enterpriseMgmtGuids.map(
           (guid) => {
-            const matchingEnrollment = enrollmentByGuid.get(
-              guid.toLowerCase(),
-            );
+            const guidKey = enrollmentGuidKey(guid);
+            const matchingEnrollment =
+              guidKey === null ? undefined : enrollmentByGuid.get(guidKey);
             const enrolled =
               matchingEnrollment?.enrollmentState === 1;
             return {

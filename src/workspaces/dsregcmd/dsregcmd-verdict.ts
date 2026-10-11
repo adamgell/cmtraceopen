@@ -1,4 +1,7 @@
-import { selectTopFindings } from "./dsregcmd-formatters";
+import {
+  hasEnrollmentMissingOnJoined,
+  selectTopFindings,
+} from "./dsregcmd-formatters";
 import type {
   DsregcmdAnalysisResult,
   DsregcmdDiagnosticInsight,
@@ -73,7 +76,8 @@ export function getMdmState(result: DsregcmdAnalysisResult): MdmState {
       tone: "pass",
     };
   }
-  if (hasDiagnostic("enrollment-missing-on-joined")) {
+  // The same predicate as the MDM visibility tone (`toneForMdmVisibility`).
+  if (hasEnrollmentMissingOnJoined(result)) {
     return {
       kind: "no-enrollment-registry",
       label: "No enrollment (registry)",

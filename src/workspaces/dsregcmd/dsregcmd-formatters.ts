@@ -480,17 +480,52 @@ export function getDisplayConfidenceAssessment(
 }
 
 /**
+ * The parser's `enrollment-missing-on-joined` warning: the registry negative
+ * (`mdmEnrolled === false`) on an Entra-joined device. The MDM chip
+ * (`getMdmState`) and the MDM visibility tone both key on it, so the two
+ * surfaces and the diagnostic can never disagree about a warning.
+ */
+export function hasEnrollmentMissingOnJoined(
+  result: DsregcmdAnalysisResult,
+): boolean {
+  return result.diagnostics.some(
+    (item) => item.id === "enrollment-missing-on-joined",
+  );
+}
+
+const GUID_BODY =
+  "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+/** A GUID with both braces or neither (one pair at most). */
+const ENROLLMENT_GUID = new RegExp(
+  `^(?:\\{(${GUID_BODY})\\}|(${GUID_BODY}))$`,
+  "i",
+);
+
+/**
+ * An enrollment GUID's identity, as the parser compares it: the unbraced
+ * 8-4-4-4-12 form in lower case, so a registry GUID and a task GUID match
+ * whether either was written with braces or in either case. `null` for a
+ * value that is not GUID-shaped, which matches nothing.
+ */
+export function enrollmentGuidKey(guid: string | null | undefined): string | null {
+  const match = guid == null ? null : ENROLLMENT_GUID.exec(guid);
+  return match ? (match[1] ?? match[2]).toLowerCase() : null;
+}
+
+/**
  * "MDM visibility" is what dsregcmd shows about management. URL presence comes
  * from `mdmUrlsPresent`; `mdmEnrolled` is the registry-confirmed answer and
  * takes precedence only when it is an affirmative finding of no enrollment.
  */
 export function toneForMdmVisibility(
-  derived: DsregcmdAnalysisResult["derived"],
+  result: DsregcmdAnalysisResult,
 ): FactRow["tone"] {
-  // `false` is an affirmative registry finding of no enrollment; `null` is
-  // "could not be determined" and must stay neutral rather than claim a problem.
+  const { derived } = result;
+  // "Not enrolled" warns exactly when the chip does: the registry negative on
+  // a joined device. The same negative on a device that is not joined stays
+  // neutral, and `null` ("could not be determined") never claims a problem.
   if (derived.mdmEnrolled === false) {
-    return "warn";
+    return hasEnrollmentMissingOnJoined(result) ? "warn" : "neutral";
   }
   if (derived.mdmUrlsPresent === true) {
     return derived.missingMdm || derived.missingComplianceUrl

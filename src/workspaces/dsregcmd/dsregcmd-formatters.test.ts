@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  enrollmentGuidKey,
   getMdmVisibilityLabel,
   selectTopFindings,
   toneForMdmVisibility,
@@ -7,7 +8,11 @@ import {
 } from "./dsregcmd-formatters";
 import type { DsregcmdAnalysisResult, DsregcmdSeverity } from "./types";
 
-import { buildDerived } from "./dsregcmd-test-builders";
+import {
+  buildAnalysisResult,
+  buildDerived,
+  buildDiagnostic,
+} from "./dsregcmd-test-builders";
 
 type MdmDerived = Pick<
   DsregcmdAnalysisResult["derived"],
@@ -23,54 +28,108 @@ const mdmDerived = (overrides: Partial<MdmDerived>) =>
     ...overrides,
   });
 
+/** The parser's warning for the registry negative on an Entra-joined device. */
+const enrollmentMissingOnJoined = buildDiagnostic({
+  id: "enrollment-missing-on-joined",
+  severity: "Warning",
+});
+
+const mdmResult = (
+  overrides: Partial<MdmDerived>,
+  { joinedNegative = false } = {},
+) =>
+  buildAnalysisResult({
+    derived: mdmDerived(overrides),
+    diagnostics: joinedNegative ? [enrollmentMissingOnJoined] : [],
+  });
+
 /// The sidebar and the facts panel must tell the same story. URL presence reads
 /// `mdmUrlsPresent`; `mdmEnrolled` is registry-confirmed. `false` is not
-/// "Unknown": the enrollments registry was read and is empty, which deserves a
-/// warning tone, and it outranks URL presence.
+/// "Unknown": the enrollments registry was read and is empty, and it outranks
+/// URL presence. It warns only where the chip does, on a joined device.
 describe("MDM visibility", () => {
   it("reports Present and good when URLs are shown and enrollment is confirmed", () => {
-    const derived = mdmDerived({ mdmEnrolled: true, mdmUrlsPresent: true });
-    expect(getMdmVisibilityLabel(derived)).toBe("Present");
-    expect(toneForMdmVisibility(derived)).toBe("good");
+    const result = mdmResult({ mdmEnrolled: true, mdmUrlsPresent: true });
+    expect(getMdmVisibilityLabel(result.derived)).toBe("Present");
+    expect(toneForMdmVisibility(result)).toBe("good");
   });
 
   it("reports Present and good when URLs are shown and the registry is unknown", () => {
-    const derived = mdmDerived({ mdmUrlsPresent: true });
-    expect(getMdmVisibilityLabel(derived)).toBe("Present");
-    expect(toneForMdmVisibility(derived)).toBe("good");
+    const result = mdmResult({ mdmUrlsPresent: true });
+    expect(getMdmVisibilityLabel(result.derived)).toBe("Present");
+    expect(toneForMdmVisibility(result)).toBe("good");
   });
 
   it("reports Partial and neutral when URLs are shown but one is missing", () => {
-    const missingMdm = mdmDerived({ mdmUrlsPresent: true, missingMdm: true });
-    const missingCompliance = mdmDerived({
+    const missingMdm = mdmResult({ mdmUrlsPresent: true, missingMdm: true });
+    const missingCompliance = mdmResult({
       mdmUrlsPresent: true,
       missingComplianceUrl: true,
     });
-    expect(getMdmVisibilityLabel(missingMdm)).toBe("Partial");
+    expect(getMdmVisibilityLabel(missingMdm.derived)).toBe("Partial");
     expect(toneForMdmVisibility(missingMdm)).toBe("neutral");
-    expect(getMdmVisibilityLabel(missingCompliance)).toBe("Partial");
+    expect(getMdmVisibilityLabel(missingCompliance.derived)).toBe("Partial");
     expect(toneForMdmVisibility(missingCompliance)).toBe("neutral");
   });
 
-  it("reports Not enrolled and warn when the registry was read and is empty, even with URLs", () => {
-    const withUrls = mdmDerived({ mdmEnrolled: false, mdmUrlsPresent: true });
-    const withoutUrls = mdmDerived({ mdmEnrolled: false });
-    for (const derived of [withUrls, withoutUrls]) {
-      expect(getMdmVisibilityLabel(derived)).toBe("Not enrolled");
-      expect(toneForMdmVisibility(derived)).toBe("warn");
+  it("reports Not enrolled and warn for the registry negative on a joined device, even with URLs", () => {
+    for (const urls of [{ mdmUrlsPresent: true }, {}]) {
+      const result = mdmResult(
+        { mdmEnrolled: false, ...urls },
+        { joinedNegative: true },
+      );
+      expect(getMdmVisibilityLabel(result.derived)).toBe("Not enrolled");
+      expect(toneForMdmVisibility(result)).toBe("warn");
+    }
+  });
+
+  it("reports Not enrolled but neutral for the registry negative on a device that is not joined", () => {
+    for (const urls of [{ mdmUrlsPresent: true }, {}]) {
+      const result = mdmResult({ mdmEnrolled: false, ...urls });
+      expect(getMdmVisibilityLabel(result.derived)).toBe("Not enrolled");
+      expect(toneForMdmVisibility(result)).toBe("neutral");
     }
   });
 
   it("reports Registry only and good when enrollment is confirmed without URLs", () => {
-    const derived = mdmDerived({ mdmEnrolled: true });
-    expect(getMdmVisibilityLabel(derived)).toBe("Registry only");
-    expect(toneForMdmVisibility(derived)).toBe("good");
+    const result = mdmResult({ mdmEnrolled: true });
+    expect(getMdmVisibilityLabel(result.derived)).toBe("Registry only");
+    expect(toneForMdmVisibility(result)).toBe("good");
   });
 
   it("keeps Unknown and neutral when neither URLs nor enrollment are known", () => {
-    const derived = mdmDerived({});
-    expect(getMdmVisibilityLabel(derived)).toBe("Unknown");
-    expect(toneForMdmVisibility(derived)).toBe("neutral");
+    const result = mdmResult({});
+    expect(getMdmVisibilityLabel(result.derived)).toBe("Unknown");
+    expect(toneForMdmVisibility(result)).toBe("neutral");
+  });
+});
+
+/// Enrollment GUID identity matches the parser's: braces and case never change
+/// it, and a value that is not GUID-shaped matches nothing.
+describe("enrollmentGuidKey", () => {
+  it("ignores braces and letter case", () => {
+    const key = "aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb";
+    for (const guid of [
+      "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB",
+      "{AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB}",
+      "{aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb}",
+      key,
+    ]) {
+      expect(enrollmentGuidKey(guid)).toBe(key);
+    }
+  });
+
+  it.each([
+    null,
+    undefined,
+    "",
+    "Context",
+    "{AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB",
+    "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB}",
+    "{{AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB}}",
+    "AAAAAAAA-1111-2222-3333-BBBBBBBBBBB",
+  ])("is null for %s", (value) => {
+    expect(enrollmentGuidKey(value)).toBeNull();
   });
 });
 
