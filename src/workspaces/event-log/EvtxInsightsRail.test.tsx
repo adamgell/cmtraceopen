@@ -246,12 +246,12 @@ describe("EvtxInsightsRail", () => {
               {
                 kind: "event",
                 value: {
-                  source: "[path:1]",
+                  source: RECORD.sourceLabel,
                   provider: RECORD.provider,
                   eventId: RECORD.eventId,
                   recordId: RECORD.eventRecordId,
                   channel: RECORD.channel,
-                  machine: "[host:1]",
+                  machine: "[host:0123456789abcdef]",
                 },
               },
             ],

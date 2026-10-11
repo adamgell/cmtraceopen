@@ -360,6 +360,7 @@ describe("EvtxDetailPane rail extras", () => {
   const rec = (id: number, overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
     ...RECORD,
     id,
+    sourceLabel: "C:\\Users\\adam.gell\\Downloads\\Application.evtx",
     eventRecordId: 500 + id,
     timestampEpoch: Date.parse("2026-08-22T12:00:00Z") + id * 60_000,
     ...overrides,
@@ -540,12 +541,12 @@ describe("EvtxDetailPane rail extras", () => {
       {
         kind: "event",
         value: {
-          source: "[path:9f3e]",
+          source: "C:\\Users\\[user:00112233445566ff]\\Downloads\\Application.evtx",
           provider: "Example Provider",
           eventId: 100,
           recordId: 501,
           channel: "Application",
-          machine: "[host:ab12cd]",
+          machine: "[host:0123456789abcdef]",
         },
       },
     ],
@@ -563,7 +564,7 @@ describe("EvtxDetailPane rail extras", () => {
   });
 
   it("shows no callout when two loaded records from different machines match the evidence", () => {
-    const twin = rec(1, { id: 9, computer: "OTHER-PC", sourceLabel: "Other.evtx", eventRecordId: 501 });
+    const twin = rec(1, { id: 9, computer: "OTHER-PC", sourceLabel: "C:\\Users\\other.user\\Downloads\\Application.evtx", eventRecordId: 501 });
     const both = [...records, twin];
     useEvtxStore.setState({ records: both, selectedRecordId: 1 });
     render(<EvtxDetailPane visibleRecords={both} findings={[finding]} />);

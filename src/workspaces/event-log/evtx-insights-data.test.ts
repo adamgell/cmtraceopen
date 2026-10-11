@@ -6,7 +6,7 @@ import {
   findRecordById,
   findingForRecord,
   formatCount,
-  isRedactionToken,
+  redactedValueMatches,
   neighborRecordId,
   summarizeRecords,
 } from "./evtx-insights-data";
@@ -129,6 +129,46 @@ function findingWith(...refs: ReturnType<typeof evidence>[]): DiagnosisFinding {
   };
 }
 
+const HOST = "[host:0123456789abcdef]";
+const OTHER_HOST = "[host:fedcba9876543210]";
+const USER = "[user:00112233445566ff]";
+
+describe("redactedValueMatches", () => {
+  it("compares a value with no token exactly", () => {
+    expect(redactedValueMatches("Application", "Application")).toBe(true);
+    expect(redactedValueMatches("Application", "System")).toBe(false);
+  });
+
+  it("matches a profile path with an embedded user token", () => {
+    const evidence = `C:\\Users\\${USER}\\Downloads\\System.evtx`;
+    expect(redactedValueMatches(evidence, "C:\\Users\\adam.gell\\Downloads\\System.evtx")).toBe(true);
+    expect(redactedValueMatches(evidence, "C:\\Users\\adam.gell\\Downloads\\Other.evtx")).toBe(false);
+    // A token stands for a non-empty segment.
+    expect(redactedValueMatches(evidence, "C:\\Users\\\\Downloads\\System.evtx")).toBe(false);
+  });
+
+  it("matches a host-named bundle folder and a remote source", () => {
+    expect(
+      redactedValueMatches(`bundle\\${HOST}\\System.evtx`, "bundle\\LAB-PC-07\\System.evtx"),
+    ).toBe(true);
+    expect(redactedValueMatches(`Remote: ${HOST}`, "Remote: LAB-PC-07")).toBe(true);
+    expect(redactedValueMatches(`Remote: ${HOST}`, "Local: LAB-PC-07")).toBe(false);
+    expect(redactedValueMatches(HOST, "LAB-PC-07")).toBe(true);
+  });
+
+  it("treats regular-expression characters in the literal parts literally", () => {
+    expect(redactedValueMatches(`a.b(${HOST})`, "a.b(PC)")).toBe(true);
+    expect(redactedValueMatches(`a.b(${HOST})`, "aXb(PC)")).toBe(false);
+  });
+
+  it("does not compare a field the transport digest-bounded (record value over 256 bytes)", () => {
+    const long = `Microsoft-Windows-${"Very".repeat(80)}-Provider`;
+    // The engine saw a truncated form plus a digest, so no literal match is possible.
+    expect(redactedValueMatches("Microsoft-Windows-VeryVery...[digest]", long)).toBe(true);
+    expect(redactedValueMatches("short", "different")).toBe(false);
+  });
+});
+
 describe("findingForRecord", () => {
   const selected = record(1);
   const loaded = [selected, record(2)];
@@ -141,29 +181,58 @@ describe("findingForRecord", () => {
       expect(findingForRecord([findingWith(evidence(overrides))], selected, loaded)).toBeNull();
     }
   });
-  it("matches IPC-shaped evidence: a redacted machine and a redacted source are not compared", () => {
-    const ipc = findingWith(evidence({ machine: "[host:ab12cd]", source: "[path:9f3e]" }));
-    expect(findingForRecord([ipc], selected, loaded)).toBe(ipc);
+  it("matches the real redacted projection: host, user and path tokens inside longer strings", () => {
+    const home = record(1, {
+      computer: "LAB-PC-07",
+      sourceLabel: "C:\\Users\\adam.gell\\Downloads\\System.evtx",
+    });
+    const ipc = findingWith(
+      evidence({
+        machine: HOST,
+        source: `C:\\Users\\${USER}\\Downloads\\System.evtx`,
+      }),
+    );
+    expect(findingForRecord([ipc], home, [home])).toBe(ipc);
+
+    const bundle = record(1, { computer: "LAB-PC-07", sourceLabel: "bundle\\LAB-PC-07\\System.evtx" });
+    const folder = findingWith(evidence({ machine: HOST, source: `bundle\\${HOST}\\System.evtx` }));
+    expect(findingForRecord([folder], bundle, [bundle])).toBe(folder);
+
+    const remote = record(1, { computer: "LAB-PC-07", sourceLabel: "Remote: LAB-PC-07" });
+    const live = findingWith(evidence({ machine: HOST, source: `Remote: ${HOST}` }));
+    expect(findingForRecord([live], remote, [remote])).toBe(live);
   });
-  it("compares a machine or source only when it is a raw value", () => {
-    expect(
-      findingForRecord([findingWith(evidence({ machine: "PC-2" }))], selected, loaded),
-    ).toBeNull();
-    expect(
-      findingForRecord([findingWith(evidence({ source: "b.evtx" }))], selected, loaded),
-    ).toBeNull();
+  it("matches when the provider and channel were digest-bounded in transit", () => {
+    const longProvider = `Microsoft-Windows-${"Very".repeat(80)}-Provider`;
+    const longChannel = `${longProvider}/Admin`;
+    const rec = record(1, { provider: longProvider, channel: longChannel });
+    const finding = findingWith(
+      evidence({ provider: "Microsoft-Windows-VeryVery[bounded]", channel: "Microsoft-Windows-VeryVery[bounded]/Admin" }),
+    );
+    expect(findingForRecord([finding], rec, [rec])).toBe(finding);
+  });
+  it("rejects a different raw machine or source around a token", () => {
+    const wrong = findingWith(evidence({ machine: "PC-2" }));
+    expect(findingForRecord([wrong], selected, loaded)).toBeNull();
+    const other = findingWith(evidence({ source: `b.evtx` }));
+    expect(findingForRecord([other], selected, loaded)).toBeNull();
     const raw = findingWith(evidence({ machine: "PC-1", source: "a.evtx" }));
     expect(findingForRecord([raw], selected, loaded)).toBe(raw);
   });
   it("shows no match when two loaded records from different machines share every matched field", () => {
-    const twin = record(2, { computer: "PC-2", sourceLabel: "b.evtx", eventRecordId: 1001 });
-    const ipc = findingWith(evidence({ machine: "[host:ab12cd]", source: "[path:9f3e]" }));
-    expect(findingForRecord([ipc], selected, [selected, twin])).toBeNull();
-    expect(findingForRecord([ipc], twin, [selected, twin])).toBeNull();
-    // A raw machine tells them apart again.
-    const raw = findingWith(evidence({ machine: "PC-1", source: "[path:9f3e]" }));
-    expect(findingForRecord([raw], selected, [selected, twin])).toBe(raw);
-    expect(findingForRecord([raw], twin, [selected, twin])).toBeNull();
+    const first = record(1, { computer: "LAB-PC-07", sourceLabel: "bundle\\LAB-PC-07\\System.evtx" });
+    const twin = record(2, { computer: "LAB-PC-08", sourceLabel: "bundle\\LAB-PC-08\\System.evtx", eventRecordId: 1001 });
+    // Both hosts are tokens, and the provider, channel, ID and record ID agree.
+    const ipc = findingWith(evidence({ machine: HOST, source: `bundle\\${HOST}\\System.evtx` }));
+    expect(findingForRecord([ipc], first, [first, twin])).toBeNull();
+    expect(findingForRecord([ipc], twin, [first, twin])).toBeNull();
+    // A different token for the other host changes nothing: the UI cannot tell which is which.
+    const other = findingWith(evidence({ machine: OTHER_HOST, source: `bundle\\${OTHER_HOST}\\System.evtx` }));
+    expect(findingForRecord([other], first, [first, twin])).toBeNull();
+    // A raw machine tells them apart.
+    const raw = findingWith(evidence({ machine: "LAB-PC-07", source: `bundle\\${HOST}\\System.evtx` }));
+    expect(findingForRecord([raw], first, [first, twin])).toBe(raw);
+    expect(findingForRecord([raw], twin, [first, twin])).toBeNull();
   });
   it("prefers the record id text, and never matches an unnumbered record or a fallback identity", () => {
     const withText = record(1, { eventRecordIdText: "88456" });
@@ -185,14 +254,6 @@ describe("findingForRecord", () => {
         loaded,
       ),
     ).toBeNull();
-  });
-});
-
-describe("isRedactionToken", () => {
-  it("recognizes a bracketed token and nothing else", () => {
-    expect(isRedactionToken("[host:ab12]")).toBe(true);
-    expect(isRedactionToken("PC-1")).toBe(false);
-    expect(isRedactionToken("C:\\x\\[a].evtx")).toBe(false);
   });
 });
 

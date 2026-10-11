@@ -179,13 +179,33 @@ export function eventEvidenceLabel(
   return parts.join(" · ");
 }
 
+/** The redaction token the engine writes: `[kind:16 hex digits]`, as in `[host:0123456789abcdef]`. */
+const REDACTION_TOKEN = /\[[a-z]+:[0-9a-f]{16}\]/g;
+
+/** The analysis transport digest-bounds identity fields over this many UTF-8 bytes. */
+const IDENTITY_BYTE_LIMIT = 256;
+
+const utf8 = new TextEncoder();
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
- * True for a redaction token such as `[host:ab12]`. The diagnosis the UI receives over IPC is the
- * redacted display projection, so a machine name and often a source arrive as tokens that cannot
- * be compared with the record's own values.
+ * Whether an evidence value from the redacted display projection names the record's raw value.
+ * The engine redacts identifiers partially: a profile segment or a machine name inside a longer
+ * string becomes a `[kind:hex16]` token (`C:\Users\[user:...]\Downloads\System.evtx`,
+ * `Remote: [host:...]`). A value with tokens is compared with each token as a non-empty wildcard
+ * and the rest literal; a value without tokens must be equal. A record value over the transport's
+ * identity byte limit reaches the engine digest-bounded and can never match literally, so that
+ * field is not compared; the unique-match rule still guards against a wrong match.
  */
-export function isRedactionToken(value: string): boolean {
-  return /^\[[^\]]*\]$/.test(value.trim());
+export function redactedValueMatches(evidenceValue: string, recordValue: string): boolean {
+  if (utf8.encode(recordValue).length > IDENTITY_BYTE_LIMIT) return true;
+  const tokens = evidenceValue.match(REDACTION_TOKEN);
+  if (!tokens) return evidenceValue === recordValue;
+  const segments = evidenceValue.split(REDACTION_TOKEN).map(escapeRegExp);
+  return new RegExp(`^${segments.join(".+")}$`, "s").test(recordValue);
 }
 
 /** The record's identity text in the engine's order, or null when the provider never numbered it. */
@@ -198,23 +218,18 @@ function recordIdentityText(record: EvtxRecord): string | null {
  * Whether event evidence names `record`. Matched on the fields that survive redaction: event ID,
  * provider, channel, and the record identity in the engine's `stable_id` order (non-zero
  * `recordIdText`, then `fallbackIdentity`, then non-zero `recordId`). A `fallbackIdentity` is a hash
- * the record cannot reproduce, so evidence identified only that way never matches. Machine and
- * source are compared only when they are not redaction tokens.
+ * the record cannot reproduce, so evidence identified only that way never matches. Machine, source,
+ * provider and channel are compared with `redactedValueMatches`, so partial redaction still matches.
  */
 export function evidenceMatchesRecord(
   value: DiagnosisEventEvidence,
   record: EvtxRecord,
 ): boolean {
-  if (value.eventId !== record.eventId || value.provider !== record.provider) return false;
-  if (value.channel && !isRedactionToken(value.channel) && value.channel !== record.channel) {
-    return false;
-  }
-  if (value.machine && !isRedactionToken(value.machine) && value.machine !== record.computer) {
-    return false;
-  }
-  if (value.source && !isRedactionToken(value.source) && value.source !== record.sourceLabel) {
-    return false;
-  }
+  if (value.eventId !== record.eventId) return false;
+  if (!redactedValueMatches(value.provider, record.provider)) return false;
+  if (value.channel && !redactedValueMatches(value.channel, record.channel)) return false;
+  if (value.machine && !redactedValueMatches(value.machine, record.computer)) return false;
+  if (value.source && !redactedValueMatches(value.source, record.sourceLabel)) return false;
   const own = recordIdentityText(record);
   if (own === null) return false;
   if (hasRecordIdText(value.recordIdText)) return value.recordIdText === own;
