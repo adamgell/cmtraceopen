@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, tokens } from "@fluentui/react-components";
+import { Button, Tab, TabList, tokens } from "@fluentui/react-components";
+import { Dismiss12Regular } from "@fluentui/react-icons";
 import { invoke } from "@tauri-apps/api/core";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
   clampLogDetailsFontSize,
   getLogDetailsLineHeight,
+  getLogListMetrics,
 } from "../../lib/log-accessibility";
 import { useMarkerStore } from "../../stores/marker-store";
 import { useUiStore } from "../../stores/ui-store";
@@ -20,6 +22,14 @@ import {
 } from "./evtx-marker-adapter";
 import { useEvtxStore } from "./evtx-store";
 import { EvtxMarkerControls } from "./EvtxTimelineRow";
+import { useEvtxLayoutStore } from "./evtx-layout-store";
+import { formatEventTime } from "./evtx-time";
+import { useEvtxVisualTokens } from "./evtx-visual-tokens";
+
+/** How many EventData fields the Details tab shows before "Show all". */
+const EVENT_DATA_PREVIEW_COUNT = 6;
+
+type DetailSubTab = "details" | "xml";
 
 /** One error code found in an event's text, as the parser crate reports it. */
 interface ErrorCodeMention {
@@ -39,7 +49,15 @@ export function EvtxDetailPane() {
   const markersByFile = useMarkerStore((s) => s.markersByFile);
   const records = useEvtxStore((s) => s.records);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
-  const [showRawXml, setShowRawXml] = useState(false);
+  const [subTab, setSubTab] = useState<DetailSubTab>("details");
+  const [showAllEventData, setShowAllEventData] = useState(false);
+  const setSelectedRecordId = useEvtxStore((s) => s.setSelectedRecordId);
+  const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  const setRailTab = useEvtxLayoutStore((s) => s.setRailTab);
+  const visuals = useEvtxVisualTokens();
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  // The summary header follows the log list size; the sections below keep the details size.
+  const listFontSize = getLogListMetrics(logListFontSize).fontSize;
   const [resolvedCodes, setResolvedCodes] = useState<{
     text: string;
     mentions: ErrorCodeMention[];
@@ -110,6 +128,13 @@ export function EvtxDetailPane() {
     if (record) loadEvtxMarkers([record.sourceLabel]);
   }, [record?.sourceLabel]);
 
+  // A different record starts on Details with its EventData collapsed.
+  const recordId = record?.id;
+  useEffect(() => {
+    setSubTab("details");
+    setShowAllEventData(false);
+  }, [recordId]);
+
   if (!record) {
     return (
       <div
@@ -129,6 +154,46 @@ export function EvtxDetailPane() {
   }
 
   const markerAddressable = isEvtxMarkerAddressable(record);
+  const level = visuals.levels[record.level];
+  const LevelIcon = level.RailIcon;
+  const eventDataShown = showAllEventData
+    ? record.eventData
+    : record.eventData.slice(0, EVENT_DATA_PREVIEW_COUNT);
+  const processText = [
+    record.processId != null ? `PID ${record.processId}` : null,
+    record.threadId != null ? `TID ${record.threadId}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const definitions: Array<{
+    term: string;
+    value: string;
+    mono?: boolean;
+    title?: string;
+  }> = [
+    { term: "Channel", value: record.channel },
+    { term: "Provider", value: record.provider },
+    { term: "Record ID", value: String(record.eventRecordIdText ?? record.eventRecordId) },
+    ...(processText ? [{ term: "Process", value: processText }] : []),
+    ...(record.userSid
+      ? [
+          {
+            term: "User SID",
+            value: record.userSid,
+            mono: true,
+            title: "Raw security identifier; not resolved to an account name",
+          },
+        ]
+      : []),
+  ];
+
+  const sectionHeading = {
+    fontSize: `${labelFontSize}px`,
+    fontWeight: 600,
+    color: tokens.colorNeutralForeground3,
+    textTransform: "uppercase" as const,
+    marginBottom: "4px",
+  };
 
   return (
     <div
@@ -138,26 +203,26 @@ export function EvtxDetailPane() {
         display: "flex",
         flexDirection: "column",
         height: "100%",
-        overflow: "auto",
-        padding: "12px",
         fontFamily: LOG_UI_FONT_FAMILY,
         fontSize: `${fontSize}px`,
         lineHeight: `${detailLineHeight}px`,
-        gap: "12px",
       }}
     >
-      {/* Header */}
+      {/* Summary header: level, id, level word, marker actions, close */}
       <div
         data-evtx-marker-key={evtxMarkerKey(record)}
         style={{
           display: "flex",
           alignItems: "center",
-          gap: "12px",
-          flexWrap: "wrap",
+          gap: "8px",
+          padding: "10px 12px 4px",
+          flexShrink: 0,
         }}
       >
+        <LevelIcon aria-hidden="true" style={{ color: level.railIconColor, flexShrink: 0 }} />
         <span
           style={{
+            fontSize: `${listFontSize + 1}px`,
             fontWeight: 600,
             color: tokens.colorNeutralForeground1,
           }}
@@ -166,17 +231,9 @@ export function EvtxDetailPane() {
         </span>
         <span
           style={{
-            fontSize: `${monoFontSize}px`,
-            color: tokens.colorNeutralForeground3,
-            fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-          }}
-        >
-          {record.timestamp}
-        </span>
-        <span
-          style={{
-            fontSize: `${monoFontSize}px`,
-            color: tokens.colorNeutralForeground4,
+            fontSize: `${Math.max(10, listFontSize - 2)}px`,
+            fontWeight: 600,
+            color: level.textColor,
           }}
         >
           {record.level}
@@ -190,318 +247,50 @@ export function EvtxDetailPane() {
           onTag={toggleEvtxTag}
           onBookmark={toggleEvtxBookmark}
         />
-      </div>
-
-      {/* Message */}
-      {record.message && (
-        <div
-          style={{
-            fontSize: `${monoFontSize}px`,
-            fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            backgroundColor: tokens.colorNeutralBackground1,
-            border: `1px solid ${tokens.colorNeutralStroke1}`,
-            padding: "8px",
-            borderRadius: "4px",
-            color: tokens.colorNeutralForeground1,
-            minHeight: "60px",
-            maxHeight: "200px",
-            overflow: "auto",
-            flexShrink: 0,
-          }}
-        >
-          {record.message}
-        </div>
-      )}
-
-      {errorCodes.length > 0 && (
-        <div
-          style={{
-            border: `1px solid ${tokens.colorNeutralStroke1}`,
-            borderRadius: "4px",
-            padding: "8px",
-            flexShrink: 0,
-          }}
-        >
-          <div
-            style={{
-              fontSize: `${labelFontSize}px`,
-              color: tokens.colorNeutralForeground3,
-              marginBottom: "4px",
-            }}
-          >
-            Error codes in this event
-          </div>
-          <ul
-            style={{
-              margin: 0,
-              paddingLeft: "18px",
-              fontSize: `${monoFontSize}px`,
-              lineHeight: `${detailLineHeight}px`,
-            }}
-          >
-            {errorCodes.map((mention) => (
-              <li key={mention.codeHex}>
-                <span style={{ fontFamily: LOG_MONOSPACE_FONT_FAMILY }}>
-                  {mention.codeHex}
-                </span>
-                {": "}
-                {mention.known ? (
-                  <span>
-                    {mention.description}
-                    {mention.category ? ` (${mention.category})` : ""}
-                  </span>
-                ) : (
-                  // Not silence: the code is real, the database just cannot
-                  // explain it, and the operator needs to see that difference.
-                  <span style={{ color: tokens.colorNeutralForeground3 }}>
-                    Not in the error database
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {(record.activityId ||
-        record.relatedActivityId ||
-        record.sessionId ||
-        record.deviceId ||
-        record.userId ||
-        record.processStartTime) && (
-        <div
-          style={{
-            border: `1px solid ${tokens.colorNeutralStroke2}`,
-            padding: "8px",
-            borderRadius: "4px",
-            backgroundColor: tokens.colorNeutralBackground2,
-          }}
-        >
-          <div
-            style={{
-              fontSize: `${labelFontSize}px`,
-              fontWeight: 600,
-              color: tokens.colorNeutralForeground3,
-              textTransform: "uppercase",
-              marginBottom: "4px",
-            }}
-          >
-            Correlation identity
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "max-content 1fr",
-              gap: "2px 12px",
-              fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              fontSize: `${monoFontSize}px`,
-            }}
-          >
-            {[
-              ["Activity ID", record.activityId],
-              ["Related activity ID", record.relatedActivityId],
-              ["Session ID", record.sessionId],
-              ["Device ID", record.deviceId],
-              ["User ID", record.userId],
-              ["Process start", record.processStartTime],
-            ]
-              .filter(([, value]) => value)
-              .map(([label, value]) => (
-                <div key={label} style={{ display: "contents" }}>
-                  <span style={{ color: tokens.colorNeutralForeground3 }}>{label}</span>
-                  <span style={{ color: tokens.colorNeutralForeground1, wordBreak: "break-all" }}>
-                    {value}
-                  </span>
-                </div>
-              ))}
-          </div>
-        </div>
-      )}
-
-      {/* Event Data key-value table */}
-      {record.eventData.length > 0 && (
-        <div>
-          <div
-            style={{
-              fontSize: `${labelFontSize}px`,
-              fontWeight: 600,
-              color: tokens.colorNeutralForeground3,
-              textTransform: "uppercase",
-              marginBottom: "4px",
-            }}
-          >
-            Event Data
-          </div>
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              fontSize: `${monoFontSize}px`,
-              fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            }}
-          >
-            <tbody>
-              {record.eventData.map((field, i) => (
-                <tr
-                  key={`${field.name}-${i}`}
-                  style={{
-                    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-                  }}
-                >
-                  <td
-                    style={{
-                      padding: "4px 8px 4px 0",
-                      fontWeight: 600,
-                      color: tokens.colorNeutralForeground3,
-                      verticalAlign: "top",
-                      whiteSpace: "nowrap",
-                      width: "1%",
-                    }}
-                  >
-                    {field.name}
-                  </td>
-                  <td
-                    style={{
-                      padding: "4px 0",
-                      color: tokens.colorNeutralForeground1,
-                      wordBreak: "break-all",
-                    }}
-                  >
-                    {field.value}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* Metadata */}
-      <div
-        style={{
-          display: "flex",
-          gap: "16px",
-          flexWrap: "wrap",
-          fontSize: `${monoFontSize}px`,
-          color: tokens.colorNeutralForeground3,
-        }}
-      >
-        <span>
-          <strong>Provider:</strong> {record.provider}
-        </span>
-        <span>
-          <strong>Channel:</strong> {record.channel}
-        </span>
-        <span>
-          <strong>Computer:</strong> {record.computer}
-        </span>
-        <span>
-          <strong>Record ID:</strong> {record.eventRecordIdText ?? record.eventRecordId}
-        </span>
-        <span>
-          <strong>Source:</strong> {record.sourceLabel}
-        </span>
-        {/* System-block fields. Rendered only when the provider actually wrote them, so an absent
-            value reads as absent rather than as a zero the provider never claimed. */}
-        {record.task != null && (
-          <span>
-            <strong>Task:</strong> {record.task}
-          </span>
-        )}
-        {record.opcode != null && (
-          <span>
-            <strong>Opcode:</strong> {record.opcode}
-          </span>
-        )}
-        {record.processId != null && (
-          <span>
-            <strong>PID:</strong> {record.processId}
-          </span>
-        )}
-        {record.threadId != null && (
-          <span>
-            <strong>TID:</strong> {record.threadId}
-          </span>
-        )}
-        {record.keywords && (
-          <span>
-            <strong>Keywords:</strong> {record.keywords}
-          </span>
-        )}
-        {record.userSid && (
-          <span title="Raw security identifier; not resolved to an account name">
-            <strong>User SID:</strong> {record.userSid}
-          </span>
-        )}
-      </div>
-
-      {/* Map-derived columns. Only present where a map covers this event type, so the section is
-          hidden entirely rather than showing an empty heading. */}
-      {record.mapped && record.mapped.length > 0 && (
-        <div style={{ marginTop: "10px" }}>
-          <div
-            style={{
-              fontSize: `${monoFontSize}px`,
-              fontWeight: 600,
-              marginBottom: "4px",
-              color: tokens.colorNeutralForeground2,
-            }}
-          >
-            Mapped fields
-          </div>
-          {record.mapped.map((column) => (
-            <div
-              key={column.property}
-              style={{
-                display: "flex",
-                gap: "8px",
-                fontSize: `${monoFontSize}px`,
-                fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-              }}
-            >
-              <span
-                style={{
-                  minWidth: "110px",
-                  color: tokens.colorNeutralForeground3,
-                }}
-              >
-                {column.property}
-              </span>
-              <span
-                title={
-                  column.complete
-                    ? undefined
-                    : "The map references a field this event did not carry; the unresolved placeholder is shown as-is"
-                }
-                style={{
-                  color: column.complete
-                    ? tokens.colorNeutralForeground1
-                    : tokens.colorPaletteMarigoldForeground1,
-                }}
-              >
-                {column.text}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Raw XML */}
-      <div>
+        <span style={{ flex: 1 }} />
         <Button
           size="small"
           appearance="subtle"
-          onClick={() => setShowRawXml(!showRawXml)}
-          style={{ fontSize: `${fontSize}px` }}
-        >
-          {showRawXml ? "Hide Raw XML" : "Show Raw XML"}
-        </Button>
-        {showRawXml && (
+          icon={<Dismiss12Regular />}
+          aria-label="Close details"
+          onClick={() => {
+            setSelectedRecordId(null);
+            setRailTab("insights");
+          }}
+        />
+      </div>
+
+      <TabList
+        size="small"
+        aria-label="Event detail view"
+        selectedValue={subTab}
+        onTabSelect={(_, data) => setSubTab(data.value as DetailSubTab)}
+        style={{
+          paddingLeft: "6px",
+          borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+          flexShrink: 0,
+        }}
+      >
+        <Tab value="details">Details</Tab>
+        <Tab value="xml">XML</Tab>
+      </TabList>
+
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: "auto",
+          padding: "12px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+        }}
+      >
+        {subTab === "xml" ? (
           <pre
+            aria-label="Raw event XML"
             style={{
-              marginTop: "6px",
+              margin: 0,
               fontSize: `${Math.max(10, monoFontSize - 1)}px`,
               fontFamily: LOG_MONOSPACE_FONT_FAMILY,
               whiteSpace: "pre-wrap",
@@ -510,13 +299,296 @@ export function EvtxDetailPane() {
               border: `1px solid ${tokens.colorNeutralStroke2}`,
               padding: "8px",
               borderRadius: "4px",
-              maxHeight: "300px",
-              overflow: "auto",
               color: tokens.colorNeutralForeground1,
             }}
           >
             {record.rawXml}
           </pre>
+        ) : (
+          <>
+            {record.message && (
+              <div
+                style={{
+                  fontSize: `${listFontSize}px`,
+                  fontWeight: 600,
+                  lineHeight: 1.4,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  color: tokens.colorNeutralForeground1,
+                  flexShrink: 0,
+                }}
+              >
+                {record.message}
+              </div>
+            )}
+
+            <div
+              style={{
+                fontSize: `${Math.max(10, listFontSize - 2)}px`,
+                color: tokens.colorNeutralForeground3,
+              }}
+            >
+              <span style={{ fontFamily: tokens.fontFamilyNumeric }}>
+                {formatEventTime(record.timestampEpoch, timeZoneMode, record.timestamp)}
+              </span>
+              {` · ${record.computer}`}
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "84px 1fr",
+                gap: "4px 10px",
+                fontSize: `${Math.max(10, listFontSize - 2)}px`,
+                lineHeight: 1.4,
+                flexShrink: 0,
+              }}
+            >
+              {definitions.map((definition) => (
+                <div key={definition.term} style={{ display: "contents" }}>
+                  <span style={{ color: tokens.colorNeutralForeground2 }}>{definition.term}</span>
+                  <span
+                    title={definition.title}
+                    style={{
+                      color: tokens.colorNeutralForeground1,
+                      wordBreak: "break-all",
+                      fontFamily: definition.mono
+                        ? LOG_MONOSPACE_FONT_FAMILY
+                        : tokens.fontFamilyNumeric,
+                    }}
+                  >
+                    {definition.value}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {errorCodes.length > 0 && (
+              <div
+                style={{
+                  border: `1px solid ${tokens.colorNeutralStroke1}`,
+                  borderRadius: "4px",
+                  padding: "8px",
+                  flexShrink: 0,
+                }}
+              >
+                <div style={sectionHeading}>Error codes in this event</div>
+                <ul
+                  style={{
+                    margin: 0,
+                    paddingLeft: "18px",
+                    fontSize: `${monoFontSize}px`,
+                    lineHeight: `${detailLineHeight}px`,
+                  }}
+                >
+                  {errorCodes.map((mention) => (
+                    <li key={mention.codeHex}>
+                      <span style={{ fontFamily: LOG_MONOSPACE_FONT_FAMILY }}>
+                        {mention.codeHex}
+                      </span>
+                      {": "}
+                      {mention.known ? (
+                        <span>
+                          {mention.description}
+                          {mention.category ? ` (${mention.category})` : ""}
+                        </span>
+                      ) : (
+                        // Not silence: the code is real, the database just cannot
+                        // explain it, and the operator needs to see that difference.
+                        <span style={{ color: tokens.colorNeutralForeground3 }}>
+                          Not in the error database
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {(record.activityId ||
+              record.relatedActivityId ||
+              record.sessionId ||
+              record.deviceId ||
+              record.userId ||
+              record.processStartTime) && (
+              <div
+                style={{
+                  border: `1px solid ${tokens.colorNeutralStroke2}`,
+                  padding: "8px",
+                  borderRadius: "4px",
+                  backgroundColor: tokens.colorNeutralBackground1,
+                  flexShrink: 0,
+                }}
+              >
+                <div style={sectionHeading}>Correlation identity</div>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "max-content 1fr",
+                    gap: "2px 12px",
+                    fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                    fontSize: `${monoFontSize}px`,
+                  }}
+                >
+                  {[
+                    ["Activity ID", record.activityId],
+                    ["Related activity ID", record.relatedActivityId],
+                    ["Session ID", record.sessionId],
+                    ["Device ID", record.deviceId],
+                    ["User ID", record.userId],
+                    ["Process start", record.processStartTime],
+                  ]
+                    .filter(([, value]) => value)
+                    .map(([label, value]) => (
+                      <div key={label} style={{ display: "contents" }}>
+                        <span style={{ color: tokens.colorNeutralForeground3 }}>{label}</span>
+                        <span
+                          style={{ color: tokens.colorNeutralForeground1, wordBreak: "break-all" }}
+                        >
+                          {value}
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* EventData: a preview of the first fields, "Show all" reveals the rest. */}
+            {record.eventData.length > 0 && (
+              <div style={{ flexShrink: 0 }}>
+                <div style={sectionHeading}>Event Data</div>
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: `${monoFontSize}px`,
+                    fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                  }}
+                >
+                  <tbody>
+                    {eventDataShown.map((field, i) => (
+                      <tr
+                        key={`${field.name}-${i}`}
+                        style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}
+                      >
+                        <td
+                          style={{
+                            padding: "4px 8px 4px 0",
+                            fontWeight: 600,
+                            color: tokens.colorNeutralForeground3,
+                            verticalAlign: "top",
+                            whiteSpace: "nowrap",
+                            width: "1%",
+                          }}
+                        >
+                          {field.name}
+                        </td>
+                        <td
+                          style={{
+                            padding: "4px 0",
+                            color: tokens.colorNeutralForeground1,
+                            wordBreak: "break-all",
+                          }}
+                        >
+                          {field.value}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {record.eventData.length > EVENT_DATA_PREVIEW_COUNT && (
+                  <Button
+                    size="small"
+                    appearance="subtle"
+                    aria-expanded={showAllEventData}
+                    onClick={() => setShowAllEventData((value) => !value)}
+                    style={{ fontSize: `${labelFontSize}px` }}
+                  >
+                    {showAllEventData ? "Show fewer" : `Show all ${record.eventData.length}`}
+                  </Button>
+                )}
+              </div>
+            )}
+
+            {/* Metadata the definition grid does not carry. System-block fields render only when
+                the provider wrote them, so an absent value reads as absent rather than as a zero
+                the provider never claimed. */}
+            <div
+              style={{
+                display: "flex",
+                gap: "16px",
+                flexWrap: "wrap",
+                fontSize: `${monoFontSize}px`,
+                color: tokens.colorNeutralForeground3,
+                flexShrink: 0,
+              }}
+            >
+              <span>
+                <strong>Source:</strong> {record.sourceLabel}
+              </span>
+              {record.task != null && (
+                <span>
+                  <strong>Task:</strong> {record.task}
+                </span>
+              )}
+              {record.opcode != null && (
+                <span>
+                  <strong>Opcode:</strong> {record.opcode}
+                </span>
+              )}
+              {record.keywords && (
+                <span>
+                  <strong>Keywords:</strong> {record.keywords}
+                </span>
+              )}
+            </div>
+
+            {/* Map-derived columns. Only present where a map covers this event type, so the
+                section is hidden entirely rather than showing an empty heading. */}
+            {record.mapped && record.mapped.length > 0 && (
+              <div style={{ flexShrink: 0 }}>
+                <div
+                  style={{
+                    fontSize: `${monoFontSize}px`,
+                    fontWeight: 600,
+                    marginBottom: "4px",
+                    color: tokens.colorNeutralForeground2,
+                  }}
+                >
+                  Mapped fields
+                </div>
+                {record.mapped.map((column) => (
+                  <div
+                    key={column.property}
+                    style={{
+                      display: "flex",
+                      gap: "8px",
+                      fontSize: `${monoFontSize}px`,
+                      fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                    }}
+                  >
+                    <span style={{ minWidth: "110px", color: tokens.colorNeutralForeground3 }}>
+                      {column.property}
+                    </span>
+                    <span
+                      title={
+                        column.complete
+                          ? undefined
+                          : "The map references a field this event did not carry; the unresolved placeholder is shown as-is"
+                      }
+                      style={{
+                        color: column.complete
+                          ? tokens.colorNeutralForeground1
+                          : tokens.colorPaletteMarigoldForeground1,
+                      }}
+                    >
+                      {column.text}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
