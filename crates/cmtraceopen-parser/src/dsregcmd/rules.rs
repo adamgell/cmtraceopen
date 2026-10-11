@@ -2496,6 +2496,216 @@ mod tests {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // `multiple-enrollments` and the active enrollment count (reducer-contract
+    // ruling 2 on #924). Run the group with `--lib multiple_enrollments_`.
+    // ---------------------------------------------------------------------
+
+    const MULTIPLE_ENROLLMENTS: &str = "multiple-enrollments";
+    const GUID_B: &str = "BBBBBBBB-2222-3333-4444-CCCCCCCCCCCC";
+    const GUID_C: &str = "CCCCCCCC-3333-4444-5555-DDDDDDDDDDDD";
+    const GUID_D: &str = "DDDDDDDD-4444-5555-6666-EEEEEEEEEEEE";
+
+    fn keyed(
+        guid: Option<&str>,
+        state: Option<u32>,
+        provider: Option<&str>,
+    ) -> DsregcmdEnrollmentEntry {
+        DsregcmdEnrollmentEntry {
+            guid: guid.map(str::to_string),
+            upn: None,
+            provider_id: provider.map(str::to_string),
+            enrollment_state: state,
+        }
+    }
+
+    /// The fixture matrix shared with `activeEnrollmentCount` in
+    /// `fact-group-builders.test.ts`: each case's entries and its active count.
+    fn active_count_matrix() -> Vec<(&'static str, Vec<DsregcmdEnrollmentEntry>, usize)> {
+        let ms = Some("MS DM Server");
+        vec![
+            ("no keys", vec![], 0),
+            ("one active", vec![keyed(Some(MDM_GUID), Some(1), ms)], 1),
+            (
+                "active, no values, state 6",
+                vec![
+                    keyed(Some(MDM_GUID), Some(1), ms),
+                    keyed(Some(GUID_B), None, None),
+                    keyed(Some(GUID_C), Some(6), ms),
+                ],
+                1,
+            ),
+            (
+                "two active, different providers",
+                vec![
+                    keyed(Some(MDM_GUID), Some(1), ms),
+                    keyed(Some(GUID_B), Some(1), Some("Contoso MDM")),
+                ],
+                2,
+            ),
+            (
+                "two active, no providers",
+                vec![
+                    keyed(Some(MDM_GUID), Some(1), None),
+                    keyed(Some(GUID_B), Some(1), None),
+                ],
+                2,
+            ),
+            (
+                "none active",
+                vec![
+                    keyed(Some(MDM_GUID), Some(0), ms),
+                    keyed(Some(GUID_B), Some(2), ms),
+                    keyed(Some(GUID_C), Some(6), ms),
+                    keyed(Some(GUID_D), None, ms),
+                ],
+                0,
+            ),
+            (
+                "one GUID braced and unbraced, both active",
+                vec![
+                    keyed(Some(MDM_GUID), Some(1), ms),
+                    keyed(Some(MDM_GUID_VARIANT), Some(1), ms),
+                ],
+                1,
+            ),
+            (
+                "one GUID braced and unbraced, disagreeing",
+                vec![
+                    keyed(Some(MDM_GUID), Some(1), ms),
+                    keyed(Some(MDM_GUID_VARIANT), Some(6), ms),
+                ],
+                0,
+            ),
+            ("no GUID", vec![keyed(None, Some(1), ms)], 0),
+            (
+                "not GUID-shaped",
+                vec![keyed(Some("Context"), Some(1), ms)],
+                0,
+            ),
+            (
+                "three active",
+                vec![
+                    keyed(Some(MDM_GUID), Some(1), ms),
+                    keyed(Some(GUID_B), Some(1), ms),
+                    keyed(Some(GUID_C), Some(1), None),
+                ],
+                3,
+            ),
+        ]
+    }
+
+    fn multiple_enrollments_evidence(
+        analysis: &(DsregcmdAnalysisResult, Vec<String>),
+    ) -> Vec<String> {
+        use super::build_extended_diagnostics;
+        build_extended_diagnostics(&analysis.0)
+            .into_iter()
+            .find(|d| d.id == MULTIPLE_ENROLLMENTS)
+            .map(|d| d.evidence)
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn multiple_enrollments_active_count_matrix() {
+        use crate::dsregcmd::extended::active_enrollment_count;
+
+        for (name, entries, expected) in active_count_matrix() {
+            let evidence = registry(entries).expect("registry evidence");
+            assert_eq!(active_enrollment_count(&evidence), expected, "{name}");
+            let (_, ids) = analyze_mdm(&mdm_status(Join::Joined, true), Some(evidence), None);
+            assert_eq!(has(&ids, MULTIPLE_ENROLLMENTS), expected > 1, "{name}");
+        }
+    }
+
+    /// Three registry keys (state 1, no values, state 6) are three keys for
+    /// the negative but one active enrollment: no multiple-enrollments, and no
+    /// negative either.
+    #[test]
+    fn multiple_enrollments_ignore_keys_that_are_not_active() {
+        let (result, ids) = analyze_mdm(
+            &mdm_status(Join::Joined, true),
+            registry(vec![
+                entry(Some(MDM_GUID), Some(1)),
+                keyed(Some(GUID_B), None, None),
+                entry(Some(GUID_C), Some(6)),
+            ]),
+            None,
+        );
+        assert_eq!(
+            result
+                .enrollment_evidence
+                .as_ref()
+                .map(|e| e.enrollment_count),
+            Some(3)
+        );
+        assert!(!has(&ids, MULTIPLE_ENROLLMENTS));
+        assert_eq!(result.derived.mdm_enrolled, None);
+        assert!(!has(&ids, MISSING_WARNING));
+    }
+
+    #[test]
+    fn multiple_enrollments_fire_for_two_active_entries_with_different_providers() {
+        let analysis = analyze_mdm(
+            &mdm_status(Join::Joined, true),
+            registry(vec![
+                keyed(Some(MDM_GUID), Some(1), Some("MS DM Server")),
+                keyed(Some(GUID_B), Some(1), Some("Contoso MDM")),
+                keyed(Some(GUID_C), Some(6), Some("MS DM Server")),
+            ]),
+            tasks(&[MDM_GUID]),
+        );
+        assert!(has(&analysis.1, MULTIPLE_ENROLLMENTS));
+        let evidence = multiple_enrollments_evidence(&analysis);
+        assert!(
+            evidence
+                .iter()
+                .any(|line| line == "Active enrollments (EnrollmentState 1): 2"),
+            "{evidence:?}"
+        );
+        assert!(
+            evidence
+                .iter()
+                .any(|line| line == "Enrollment registry keys: 3"),
+            "{evidence:?}"
+        );
+    }
+
+    #[test]
+    fn multiple_enrollments_fire_without_provider_ids() {
+        let (_, ids) = analyze_mdm(
+            &mdm_status(Join::NotJoined, false),
+            registry(vec![
+                keyed(Some(MDM_GUID), Some(1), None),
+                keyed(Some(GUID_B), Some(1), None),
+            ]),
+            None,
+        );
+        assert!(has(&ids, MULTIPLE_ENROLLMENTS));
+    }
+
+    #[test]
+    fn multiple_enrollments_order_does_not_change_result() {
+        let entries = [
+            keyed(Some(MDM_GUID), Some(1), Some("MS DM Server")),
+            keyed(Some(GUID_B), Some(6), Some("MS DM Server")),
+            keyed(Some(GUID_C), Some(1), None),
+            keyed(Some(MDM_GUID_VARIANT), Some(1), None),
+        ];
+        let orders: [[usize; 4]; 4] = [[0, 1, 2, 3], [3, 2, 1, 0], [1, 3, 0, 2], [2, 0, 3, 1]];
+        for order in orders {
+            let permuted = order.iter().map(|&i| entries[i].clone()).collect();
+            let analysis = analyze_mdm(&mdm_status(Join::Joined, true), registry(permuted), None);
+            assert!(has(&analysis.1, MULTIPLE_ENROLLMENTS), "{order:?}");
+            assert!(
+                multiple_enrollments_evidence(&analysis)
+                    .iter()
+                    .any(|line| line == "Active enrollments (EnrollmentState 1): 2"),
+                "{order:?}"
+            );
+        }
+    }
+
     #[test]
     fn scp_not_found_suppressed_when_scp_query_errored() {
         use super::build_active_diagnostics_rules;

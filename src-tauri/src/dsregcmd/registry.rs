@@ -1023,6 +1023,44 @@ mod tests {
         }
     }
 
+    /// A deeper key's values are not its enrollment's values: only the
+    /// first-level GUID key supplies UPN, ProviderID and EnrollmentState.
+    #[test]
+    fn enrollments_export_deeper_key_values_are_not_the_enrollments() {
+        let evidence = collected(&export_with_root(
+            r#"[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB]
+"EnrollmentState"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\DMClient\MS DM Server]
+"EnrollmentState"=dword:00000006
+"UPN"="deeper@contoso.test"
+"ProviderID"="Deeper Provider"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD\FirstSync]
+"EnrollmentState"=dword:00000001
+"UPN"="first-sync@contoso.test"
+"#,
+        ));
+
+        assert_eq!(
+            evidence.enrollments,
+            [
+                DsregcmdEnrollmentEntry {
+                    guid: Some("AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB".to_string()),
+                    upn: None,
+                    provider_id: None,
+                    enrollment_state: Some(1),
+                },
+                DsregcmdEnrollmentEntry {
+                    guid: Some("CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD".to_string()),
+                    upn: None,
+                    provider_id: None,
+                    enrollment_state: None,
+                },
+            ]
+        );
+    }
+
     #[test]
     fn enrollments_export_malformed_or_outside_keys_are_not_enrollments() {
         let evidence = collected(&export_with_root(

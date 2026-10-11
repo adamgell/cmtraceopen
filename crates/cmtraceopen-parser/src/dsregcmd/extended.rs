@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use crate::dsregcmd::models::{
-    DsregcmdAnalysisResult, DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry, DsregcmdJoinType,
+    DsregcmdAnalysisResult, DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry,
+    DsregcmdEnrollmentEvidence, DsregcmdJoinType,
 };
 use crate::intune::apps::windows::ime::models::IntuneDiagnosticSeverity;
 
@@ -33,6 +36,37 @@ pub fn same_enrollment_guid(left: &str, right: &str) -> bool {
         (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
         _ => false,
     }
+}
+
+/// The number of active enrollments: distinct enrollment GUIDs (compared
+/// ignoring braces and case) whose `EnrollmentState` is exactly 1 once all the
+/// entries of that GUID are reconciled. A missing state, any other state,
+/// entries of one GUID that disagree on the state, and an entry without a
+/// GUID-shaped value do not count. `ProviderID` plays no part.
+///
+/// Every positive claim about enrollments uses this count
+/// (`multiple-enrollments` and the Facts tones). `enrollment_count` counts
+/// registry keys for the negative and errs high on purpose, so it never feeds a
+/// positive claim (reducer-contract ruling 2 on #924). `activeEnrollmentCount`
+/// in `src/workspaces/dsregcmd/dsregcmd-formatters.ts` is the same definition,
+/// tested on the same fixture matrix.
+pub fn active_enrollment_count(evidence: &DsregcmdEnrollmentEvidence) -> usize {
+    let mut states: HashMap<String, Vec<u32>> = HashMap::new();
+    for entry in &evidence.enrollments {
+        let Some(guid) = entry.guid.as_deref().and_then(unbraced_guid) else {
+            continue;
+        };
+        let guid_states = states.entry(guid.to_ascii_lowercase()).or_default();
+        if let Some(state) = entry.enrollment_state {
+            guid_states.push(state);
+        }
+    }
+    states
+        .values()
+        .filter(|guid_states| {
+            !guid_states.is_empty() && guid_states.iter().all(|&state| state == 1)
+        })
+        .count()
 }
 
 /// Set the registry-confirmed `mdm_enrolled` from the enrollment evidence.
@@ -211,14 +245,20 @@ pub fn build_extended_diagnostics(
             ));
         }
 
-        if enrollment.enrollment_count > 1 {
+        // A positive claim, so it counts active enrollments only, never the
+        // registry keys that `enrollment_count` counts for the negative.
+        let active = active_enrollment_count(enrollment);
+        if active > 1 {
             diagnostics.push(issue(
                 "multiple-enrollments",
                 IntuneDiagnosticSeverity::Info,
                 "configuration",
                 "Multiple MDM enrollment entries detected",
-                "The device has more than one enrollment entry in the registry, which can indicate dual management or stale enrollment records.",
-                vec![format!("EnrollmentCount: {}", enrollment.enrollment_count)],
+                "The device has more than one active enrollment (EnrollmentState 1) in the registry, which can indicate dual management or stale enrollment records.",
+                vec![
+                    format!("Active enrollments (EnrollmentState 1): {active}"),
+                    format!("Enrollment registry keys: {}", enrollment.enrollment_count),
+                ],
                 vec!["Review enrollment entries and confirm only the expected MDM enrollment is active.".to_string()],
                 Vec::new(),
             ));
