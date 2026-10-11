@@ -89,18 +89,25 @@ export function liveTailStateFor(input: {
   };
 }
 
-/** What the tail adds to the pill, or null when no tail has been started. */
+/**
+ * What the tail adds to the pill when every loaded channel is followed.
+ *
+ * "subscription" and "polling" are uniform aggregates, so they stay true as channels come and go.
+ * "mixed" does not: the store computes it once, at tail start, and clearing a channel keeps it
+ * (`clearChannel` leaves `tailMode` alone while any tail channel remains). After the unfollowed
+ * channel is cleared, or the polled one, a "mixed" can describe a tail in which nothing polls.
+ * So the "mixed" copy claims no specific mode: it says the tail is running and nothing else.
+ */
 const ALL_FOLLOWED_QUALIFIER: Record<Exclude<EvtxLiveMode, "unsupported">, string> = {
   subscription: "tailing",
   polling: "polling",
-  // Every followed channel is active, so "mixed" here really is subscriptions beside polling.
-  mixed: "tailing (mixed)",
+  mixed: "tailing",
 };
 
 const ALL_FOLLOWED_DESCRIPTION: Record<Exclude<EvtxLiveMode, "unsupported">, string> = {
   subscription: "Live tail is running on event subscriptions.",
   polling: "Live tail is running by polling.",
-  mixed: "Live tail is running on subscriptions for some channels and by polling for others.",
+  mixed: "Live tail is running.",
 };
 
 const NOT_FOLLOWED_NAME_LIMIT = 10;
@@ -118,9 +125,9 @@ function partlyFollowed(tail: LiveTailState): boolean {
 }
 
 /**
- * "Live · {machine}", with the tail state after it: "tailing", "polling", "tailing (mixed)" when
- * every loaded channel is followed, "tailing {k} of {n} channels" when some are not, and
- * "not tailing" when none is. The machine name is always shown.
+ * "Live · {machine}", with the tail state after it: "tailing" or "polling" when every loaded
+ * channel is followed, "tailing {k} of {n} channels" when some are not, and "not tailing" when
+ * none is. The machine name is always shown.
  */
 export function liveLabel(machine: string, tail: LiveTailState): string {
   if (tail.mode === null) return `Live · ${machine}`;

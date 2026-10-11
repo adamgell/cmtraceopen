@@ -150,7 +150,7 @@ describe("EvtxToolbarAction copy", () => {
       [null, "Live · CONTOSO-PC01"],
       ["subscription", "Live · CONTOSO-PC01 · tailing"],
       ["polling", "Live · CONTOSO-PC01 · polling"],
-      ["mixed", "Live · CONTOSO-PC01 · tailing (mixed)"],
+      ["mixed", "Live · CONTOSO-PC01 · tailing"],
       ["unsupported", "Live · CONTOSO-PC01 · not tailing"],
     ])("reads the %s tail state, with every loaded channel followed, as %s", (tailMode, expected) => {
       loadLive({ tailMode });
@@ -234,15 +234,58 @@ describe("EvtxToolbarAction copy", () => {
         expect(pill().getAttribute("title")).toMatch(/not following any loaded channel/);
       });
 
-      it("keeps the mixed copy only when every loaded channel is followed", () => {
-        // Everything followed is active, so a "mixed" here really is subscriptions beside polling.
+      it("claims no specific mode for a mixed tail even when every loaded channel is followed", () => {
+        // The aggregate is computed once at tail start and kept when a channel is cleared, so a
+        // "mixed" can outlive the mix: nothing here may say subscriptions or polling.
         loadLive({ tailMode: "mixed", loadedChannels: four, tailChannels: four });
         render(<EvtxToolbarAction />);
 
-        expect(label().textContent).toBe("Live · CONTOSO-PC01 · tailing (mixed)");
-        expect(pill().getAttribute("title")).toMatch(
-          /subscriptions for some channels and by polling for others/,
+        expect(label().textContent).toBe("Live · CONTOSO-PC01 · tailing");
+        expect(pill().getAttribute("title")).toBe(
+          "Live event logs from CONTOSO-PC01. Live tail is running.",
         );
+        expect(pill().getAttribute("title")).not.toMatch(/poll|subscription|mixed/i);
+        expect(label().textContent).not.toMatch(/poll|subscription|mixed/i);
+      });
+
+      describe("after a channel is cleared during a mixed tail", () => {
+        // clearChannel drops the channel from loadedChannels and tailChannels but keeps the old
+        // aggregate "mixed" while any tail channel remains.
+        it("makes no polling claim when the unfollowed channel is cleared (subscription plus unsupported)", () => {
+          loadLive({
+            tailMode: "mixed",
+            loadedChannels: four,
+            tailChannels: ["Application", "Setup", "System"],
+          });
+          render(<EvtxToolbarAction />);
+          expect(label().textContent).toBe("Live · CONTOSO-PC01 · tailing 3 of 4 channels");
+
+          // Security, whose tail failed to start, is cleared: 3 of 3 are followed, none polls.
+          act(() =>
+            useEvtxStore.setState({ loadedChannels: new Set(["Application", "Setup", "System"]) }),
+          );
+
+          expect(label().textContent).toBe("Live · CONTOSO-PC01 · tailing");
+          expect(pill().getAttribute("title")).not.toMatch(/poll|subscription|mixed/i);
+        });
+
+        it("makes no mixed claim when the polled channel is cleared (a real mix that became uniform)", () => {
+          loadLive({ tailMode: "mixed", loadedChannels: four, tailChannels: four });
+          render(<EvtxToolbarAction />);
+
+          // The one polled channel is cleared; the remaining three subscribe.
+          act(() =>
+            useEvtxStore.setState({
+              loadedChannels: new Set(["Application", "Security", "Setup"]),
+              tailChannels: new Set(["Application", "Security", "Setup"]),
+            }),
+          );
+
+          expect(label().textContent).toBe("Live · CONTOSO-PC01 · tailing");
+          expect(pill().getAttribute("title")).toBe(
+            "Live event logs from CONTOSO-PC01. Live tail is running.",
+          );
+        });
       });
 
       it("counts a channel loaded after the tail started as not followed", () => {
@@ -279,7 +322,7 @@ describe("EvtxToolbarAction copy", () => {
       [null, /Live tail is not running\./],
       ["subscription", /running on event subscriptions/],
       ["polling", /running by polling/],
-      ["mixed", /subscriptions for some channels and by polling for others/],
+      ["mixed", /^Live event logs from CONTOSO-PC01\. Live tail is running\.$/],
       ["unsupported", /not supported/],
     ])("describes the %s tail state in the title", (tailMode, expected) => {
       loadLive({ tailMode });
