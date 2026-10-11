@@ -14,7 +14,8 @@
  * - "{n} nearby, not linked": Phase 10c (Chains tab data).
  *
  * The coverage note (item 2) comes from the loaded sources rather than the diagnosis, so it shows
- * while a build is pending or has failed; `EvtxCoverageBanner` owns it.
+ * while a first build is pending; `EvtxCoverageBanner` owns it. When a build failed there is no
+ * coverage disclosure here, so the gaps move to the grid banner and the note steps aside.
  */
 import { memo, useId, useMemo, useState, type ReactNode } from "react";
 import { tokens } from "@fluentui/react-components";
@@ -857,7 +858,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
         >
           {message}
         </div>
-        <EvtxCoverageBanner variant="rail" />
+        <EvtxCoverageBanner variant="rail" diagnosisFailed={Boolean(error)} />
         {recordCards}
       </section>
     );
@@ -925,7 +926,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
         </>
       )}
 
-      <EvtxCoverageBanner variant="rail" />
+      <EvtxCoverageBanner variant="rail" diagnosisFailed={Boolean(error)} />
 
       {summary.overview.coverageGapCount > 0 && (
         <Disclosure

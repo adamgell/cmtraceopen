@@ -12,11 +12,14 @@ vi.mock("@tauri-apps/api/event", () => ({
 import {
   EvtxCoverageBanner,
   MAX_COVERAGE_NOTES,
-  accessDeniedChannels,
+  accessDeniedSources,
+  coverageBannerVisible,
+  coverageNoteSubject,
   pickCoverageNoteColors,
+  type CoverageBannerGateInput,
 } from "./EvtxCoverageBanner";
 import { useEvtxStore } from "./evtx-store";
-import { useEvtxLayoutStore } from "./evtx-layout-store";
+import { useEvtxLayoutStore, type EvtxRailTabId } from "./evtx-layout-store";
 import { resolveToken } from "./evtx-visual-tokens";
 import { RestartAsAdministratorDialog } from "../../components/dialogs/RestartAsAdministratorDialog";
 import { contrastRatio } from "../../lib/color-contrast";
@@ -28,22 +31,24 @@ import type { EventLogSourceManifest, EvtxCoverageGap } from "./types";
 
 /**
  * Gaps in the backend's real shapes. A live channel the Event Log service refuses arrives as
- * `absorb_scan` builds it (src-tauri/src/event_log/commands.rs): source = the channel, the reason
- * with the "{channel}: " prefix stripped. Its kind is `accessDenied` once #931 lands; the reason
- * text is `describe_query_status` in live.rs.
+ * `absorb_scan` builds it (src-tauri/src/event_log/commands.rs): source = the channel, or
+ * `machine/channel` for a remote read, with the reason's "{source}: " prefix stripped. Its kind is
+ * `accessDenied` once #931 lands; the reason text is `describe_query_status` in live.rs.
  */
 const LIVE_REFUSAL_5 =
   "the Event Log service refused the channel query (Windows error 5: Access is denied)";
 const LIVE_REFUSAL_1314 =
   "the Event Log service refused the channel query (Windows error 1314: A required privilege is not held by the client)";
+const REMOTE_MACHINE = "CONTOSO-PC01";
 
-function liveDenied(channel: string, reason = LIVE_REFUSAL_5): EvtxCoverageGap {
-  return { source: channel, kind: "accessDenied", reason };
+function liveDenied(source: string, reason = LIVE_REFUSAL_5): EvtxCoverageGap {
+  return { source, kind: "accessDenied", reason };
 }
 
 /** Files mode: `SourceCoverage::AccessDenied` from manifest expansion (parser.rs), mirrored twice. */
 const FILE_PATH = "C:\\Fixture\\EventLogs\\Security.evtx";
 const FILE_REASON = "source metadata access was denied";
+const FILE_GAP: EvtxCoverageGap = { source: FILE_PATH, kind: "accessDenied", reason: FILE_REASON };
 const FILE_MANIFEST: EventLogSourceManifest = {
   entries: [],
   coverage: [{ kind: "accessDenied", path: FILE_PATH, reason: FILE_REASON }],
@@ -70,16 +75,28 @@ function elevationProbes(): number {
   return invoke.mock.calls.filter(([command]) => command === "get_app_elevation_state").length;
 }
 
-/** Renders and lets the elevation probe answer. */
-async function renderRail(): Promise<void> {
-  render(<EvtxCoverageBanner variant="rail" />);
+async function settle(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
   });
 }
 
+/** Renders the rail variant and lets the elevation probe answer. */
+async function renderRail(diagnosisFailed = false): Promise<void> {
+  render(<EvtxCoverageBanner variant="rail" diagnosisFailed={diagnosisFailed} />);
+  await settle();
+}
+
 function notes(): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>("[data-coverage-note]"));
+}
+
+function gridBanner(): HTMLElement | null {
+  return document.querySelector<HTMLElement>("[data-coverage-banner]");
+}
+
+function setLayout(insights: boolean, railTab: EvtxRailTabId = "insights", channels = true): void {
+  useEvtxLayoutStore.setState({ panels: { channels, insights, dock: false }, railTab });
 }
 
 beforeEach(() => {
@@ -91,7 +108,10 @@ beforeEach(() => {
     tailCoverageGaps: [],
     archiveMembers: [],
     sourceManifest: null,
+    sourceMode: "live",
+    remoteMachine: null,
   });
+  setLayout(true);
   useUiStore.getState().setElevationPrompt(null);
   useUiStore.setState({ themeId: "light", logListFontSize: 13 });
 });
@@ -99,9 +119,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("EvtxCoverageBanner grid variant", () => {
-  beforeEach(() => {
-    useEvtxLayoutStore.setState({ panels: { channels: true, insights: false, dock: false } });
-  });
+  beforeEach(() => setLayout(false));
 
   it("renders every archive member decision, including duplicate paths", () => {
     const member = {
@@ -162,48 +180,173 @@ describe("EvtxCoverageBanner grid variant", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("source-257: coverage gap 257")).not.toBeInTheDocument();
   });
+
+  it("is not a live region (the announcer speaks for every surface)", () => {
+    useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] });
+    render(<EvtxCoverageBanner />);
+    const banner = gridBanner();
+    expect(banner).not.toBeNull();
+    expect(banner).not.toHaveAttribute("aria-live");
+    expect(banner).not.toHaveAttribute("role");
+    expect(banner?.querySelector("[aria-live]")).toBeNull();
+  });
 });
 
-describe("EvtxCoverageBanner grid variant follows the Insights rail", () => {
-  // Nothing else in this stack discloses a gap with the rail off (the channel pane and the status
-  // bar carry no coverage state yet), so the grid banner is what keeps a partial load from reading
-  // as whole there.
+describe("coverageBannerVisible", () => {
+  // Every combination, written out: [channelsPanel, insightsPanel, railTab, diagnosisFailed, shown].
+  const TABLE: [boolean, boolean, EvtxRailTabId, boolean, boolean][] = [
+    // The channel pane is shown and discloses coverage: never the banner.
+    [true, true, "insights", false, false],
+    [true, true, "insights", true, false],
+    [true, true, "chains", false, false],
+    [true, true, "chains", true, false],
+    [true, true, "details", false, false],
+    [true, true, "details", true, false],
+    [true, false, "insights", false, false],
+    [true, false, "insights", true, false],
+    [true, false, "chains", false, false],
+    [true, false, "chains", true, false],
+    [true, false, "details", false, false],
+    [true, false, "details", true, false],
+    // No channel pane: the banner unless the rail shows its Insights tab with a diagnosis.
+    [false, true, "insights", false, false],
+    [false, true, "insights", true, true],
+    [false, true, "chains", false, true],
+    [false, true, "chains", true, true],
+    [false, true, "details", false, true],
+    [false, true, "details", true, true],
+    [false, false, "insights", false, true],
+    [false, false, "insights", true, true],
+    [false, false, "chains", false, true],
+    [false, false, "chains", true, true],
+    [false, false, "details", false, true],
+    [false, false, "details", true, true],
+  ];
+
+  it("covers all 24 combinations", () => {
+    expect(new Set(TABLE.map((row) => row.slice(0, 4).join())).size).toBe(24);
+  });
+
+  it.each(TABLE)(
+    "channels %s, insights %s, tab %s, diagnosis failed %s: banner %s",
+    (channelsPanel, insightsPanel, railTab, diagnosisFailed, shown) => {
+      const input: CoverageBannerGateInput = {
+        channelsPanel,
+        insightsPanel,
+        railTab,
+        diagnosisFailed,
+      };
+      expect(coverageBannerVisible(input)).toBe(shown);
+    },
+  );
+});
+
+describe("the grid banner as wired in this stack", () => {
+  // Until #837 the channel pane carries no coverage, so it never counts as a disclosing surface.
   beforeEach(() => {
     useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] });
   });
 
   it("lists every gap above the grid while the rail is hidden", () => {
-    useEvtxLayoutStore.setState({ panels: { channels: true, insights: false, dock: false } });
+    setLayout(false);
     render(<EvtxCoverageBanner />);
     expect(screen.getByText("1 gap in this view")).toBeInTheDocument();
     expect(screen.getByText(`Security: ${LIVE_REFUSAL_5}`)).toBeInTheDocument();
   });
 
-  it("leaves the gaps to the rail while it is shown", () => {
-    useEvtxLayoutStore.setState({ panels: { channels: true, insights: true, dock: false } });
+  it("leaves the gaps to the rail while it shows its Insights tab", () => {
+    setLayout(true, "insights");
     const { container } = render(<EvtxCoverageBanner />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("comes back when the rail is hidden again", () => {
-    useEvtxLayoutStore.setState({ panels: { channels: true, insights: true, dock: false } });
+  it("comes back while the rail shows Details, since that hides the disclosure", () => {
+    setLayout(true, "insights");
     render(<EvtxCoverageBanner />);
-    expect(screen.queryByText("1 gap in this view")).toBeNull();
+    expect(gridBanner()).toBeNull();
+    act(() => useEvtxLayoutStore.getState().setRailTab("details"));
+    expect(screen.getByText("1 gap in this view")).toBeInTheDocument();
+    act(() => useEvtxLayoutStore.getState().setRailTab("insights"));
+    expect(gridBanner()).toBeNull();
+  });
+
+  it("comes back when the rail is hidden again", () => {
+    setLayout(true);
+    render(<EvtxCoverageBanner />);
+    expect(gridBanner()).toBeNull();
     act(() => useEvtxLayoutStore.getState().togglePanel("insights"));
     expect(screen.getByText("1 gap in this view")).toBeInTheDocument();
   });
 
-  it("stays while the rail is shown when the diagnosis that feeds its disclosure failed", () => {
-    useEvtxLayoutStore.setState({ panels: { channels: true, insights: true, dock: false } });
+  it("stays while the rail is on Insights when the diagnosis that feeds its disclosure failed", () => {
+    setLayout(true);
     render(<EvtxCoverageBanner diagnosisFailed />);
     expect(screen.getByText("1 gap in this view")).toBeInTheDocument();
   });
+
+  it("does not yet count the channel pane as a disclosing surface (#837)", () => {
+    setLayout(false, "insights", true);
+    render(<EvtxCoverageBanner />);
+    expect(gridBanner()).not.toBeNull();
+  });
 });
 
-describe("accessDeniedChannels", () => {
+describe("a gap and the archive provenance appear in exactly one place", () => {
+  function renderBoth(diagnosisFailed: boolean) {
+    render(
+      <>
+        <EvtxCoverageBanner diagnosisFailed={diagnosisFailed} />
+        <EvtxCoverageBanner variant="rail" diagnosisFailed={diagnosisFailed} />
+      </>,
+    );
+  }
+
+  beforeEach(() => {
+    answerElevation(OFFERABLE);
+    useEvtxStore.setState({
+      coverageDetails: [liveDenied("Security")],
+      archiveMembers: [
+        { path: "bundle.zip::logs/Application.evtx", kind: "evtx", outcome: "parsed" },
+      ],
+    });
+  });
+
+  it("diagnosis failed with the rail on Insights: the banner only", async () => {
+    setLayout(true, "insights");
+    renderBoth(true);
+    await settle();
+
+    expect(gridBanner()).not.toBeNull();
+    expect(notes()).toHaveLength(0);
+    expect(screen.queryByText(/channel not read/)).toBeNull();
+    expect(screen.getAllByText("Archive member provenance (1)")).toHaveLength(1);
+  });
+
+  it("rail on Insights with a diagnosis: the note only", async () => {
+    setLayout(true, "insights");
+    renderBoth(false);
+    await settle();
+
+    expect(gridBanner()).toBeNull();
+    expect(notes()).toHaveLength(1);
+    expect(screen.getAllByText("Archive member provenance (1)")).toHaveLength(1);
+  });
+
+  it("rail on Details: the banner only", async () => {
+    setLayout(true, "details");
+    renderBoth(false);
+    await settle();
+
+    expect(gridBanner()).not.toBeNull();
+    expect(notes()).toHaveLength(0);
+    expect(screen.getAllByText("Archive member provenance (1)")).toHaveLength(1);
+  });
+});
+
+describe("accessDeniedSources", () => {
   it("keys on the accessDenied kind only, in first-reported order, each source once", () => {
     expect(
-      accessDeniedChannels(
+      accessDeniedSources(
         [
           liveDenied("Security"),
           { source: "Application", kind: "missing", reason: "channel not found" },
@@ -212,23 +355,26 @@ describe("accessDeniedChannels", () => {
         ],
         [],
       ),
-    ).toEqual(["Security", "System"]);
+    ).toEqual([
+      { source: "Security", manifest: false },
+      { source: "System", manifest: false },
+    ]);
   });
 
   it("merges the parser's gap and the manifest's coverage row for the same file into one", () => {
-    expect(
-      accessDeniedChannels(
-        [{ source: FILE_PATH, kind: "accessDenied", reason: FILE_REASON }],
-        FILE_MANIFEST.coverage,
-      ),
-    ).toEqual([FILE_PATH]);
+    expect(accessDeniedSources([FILE_GAP], FILE_MANIFEST.coverage)).toEqual([
+      { source: FILE_PATH, manifest: false },
+    ]);
+    expect(accessDeniedSources([], FILE_MANIFEST.coverage)).toEqual([
+      { source: FILE_PATH, manifest: true },
+    ]);
   });
 
   it("does not read the refusal wording: a record gap carrying it is not a note (#931)", () => {
     // Today's live shape for an unelevated Security read. The note waits for #931 to file it as
     // accessDenied; no phrase matching stands in.
     expect(
-      accessDeniedChannels(
+      accessDeniedSources(
         [
           { source: "Security", kind: "record", reason: LIVE_REFUSAL_5 },
           { source: "System", kind: "record", reason: LIVE_REFUSAL_1314 },
@@ -236,6 +382,67 @@ describe("accessDeniedChannels", () => {
         [],
       ),
     ).toEqual([]);
+  });
+});
+
+describe("coverageNoteSubject", () => {
+  const local = { sourceMode: "live" as const, remoteMachine: null };
+  const remote = { sourceMode: "live" as const, remoteMachine: REMOTE_MACHINE };
+  const files = { sourceMode: "files" as const, remoteMachine: null };
+  const entry = (source: string, manifest = false) => ({ source, manifest });
+
+  it("names a local live channel exactly, slashes included", () => {
+    expect(coverageNoteSubject(entry("Security"), local)).toEqual({
+      kind: "channel",
+      source: "Security",
+      channel: "Security",
+    });
+    expect(coverageNoteSubject(entry("Microsoft-Windows-AAD/Operational"), local)).toEqual({
+      kind: "channel",
+      source: "Microsoft-Windows-AAD/Operational",
+      channel: "Microsoft-Windows-AAD/Operational",
+    });
+    // Without a remote session, a machine-like prefix is just part of the name.
+    expect(coverageNoteSubject(entry(`${REMOTE_MACHINE}/Security`), local)).toMatchObject({
+      kind: "channel",
+      channel: `${REMOTE_MACHINE}/Security`,
+    });
+  });
+
+  it("splits a remote read into machine and channel, keeping the channel's own slashes", () => {
+    expect(coverageNoteSubject(entry(`${REMOTE_MACHINE}/Security`), remote)).toEqual({
+      kind: "remote",
+      source: `${REMOTE_MACHINE}/Security`,
+      machine: REMOTE_MACHINE,
+      channel: "Security",
+    });
+    expect(
+      coverageNoteSubject(entry(`${REMOTE_MACHINE}/Microsoft-Windows-AAD/Operational`), remote),
+    ).toMatchObject({
+      kind: "remote",
+      machine: REMOTE_MACHINE,
+      channel: "Microsoft-Windows-AAD/Operational",
+    });
+  });
+
+  it("names a file by its base name: drive, UNC and POSIX paths, and any manifest row", () => {
+    expect(coverageNoteSubject(entry(FILE_PATH), files)).toEqual({
+      kind: "file",
+      source: FILE_PATH,
+      fileName: "Security.evtx",
+    });
+    expect(coverageNoteSubject(entry("\\\\server\\share\\System.evtx"), files)).toMatchObject({
+      kind: "file",
+      fileName: "System.evtx",
+    });
+    expect(coverageNoteSubject(entry("/var/log/Setup.evtx"), files)).toMatchObject({
+      kind: "file",
+      fileName: "Setup.evtx",
+    });
+    expect(coverageNoteSubject(entry("Archive-Security.evtx", true), files)).toMatchObject({
+      kind: "file",
+      fileName: "Archive-Security.evtx",
+    });
   });
 });
 
@@ -316,7 +523,7 @@ describe("EvtxCoverageBanner rail variant (coverage note)", () => {
 
     expect(elevationProbes()).toBe(1);
     expect(notes()).toHaveLength(0);
-    expect(screen.queryByText(/channel not read/)).toBeNull();
+    expect(screen.queryByText(/not read/)).toBeNull();
   });
 
   it("is hidden when not on Windows", async () => {
@@ -362,20 +569,32 @@ describe("EvtxCoverageBanner rail variant (coverage note)", () => {
     });
 
     const { container } = render(<EvtxCoverageBanner variant="rail" />);
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await settle();
 
     expect(container).toBeEmptyDOMElement();
     expect(elevationProbes()).toBe(0);
   });
 
-  it("shows one note per channel, each with its own exact sentence and action", async () => {
+  it("is not drawn while the grid banner is (rail on Details)", async () => {
+    answerElevation(OFFERABLE);
+    useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] });
+    setLayout(true, "details");
+
+    await renderRail();
+    expect(notes()).toHaveLength(0);
+
+    // Back on Insights it shows at once: the probe already answered, nothing remounted.
+    act(() => useEvtxLayoutStore.getState().setRailTab("insights"));
+    expect(notes()).toHaveLength(1);
+    expect(elevationProbes()).toBe(1);
+  });
+
+  it("shows one note per local channel, each with its own exact sentence and action", async () => {
     answerElevation(OFFERABLE);
     useEvtxStore.setState({
       coverageDetails: [
         liveDenied("Security"),
-        liveDenied("CONTOSO-PC01/Microsoft-Windows-Sysmon/Operational", LIVE_REFUSAL_1314),
+        liveDenied("Microsoft-Windows-Sysmon/Operational", LIVE_REFUSAL_1314),
       ],
     });
 
@@ -383,27 +602,26 @@ describe("EvtxCoverageBanner rail variant (coverage note)", () => {
 
     expect(notes().map((note) => note.dataset.coverageNote)).toEqual([
       "Security",
-      "CONTOSO-PC01/Microsoft-Windows-Sysmon/Operational",
+      "Microsoft-Windows-Sysmon/Operational",
     ]);
     expect(
       screen.getByText("Security channel not read. Findings may be incomplete."),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "CONTOSO-PC01/Microsoft-Windows-Sysmon/Operational channel not read. Findings may be incomplete.",
+        "Microsoft-Windows-Sysmon/Operational channel not read. Findings may be incomplete.",
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", {
-        name: "Elevate to read CONTOSO-PC01/Microsoft-Windows-Sysmon/Operational",
-      }),
+      screen.getByRole("button", { name: "Elevate to read Microsoft-Windows-Sysmon/Operational" }),
     ).toBeInTheDocument();
   });
 
-  it("names a files-mode source by its path, once, though the parser and the manifest both report it", async () => {
+  it("names an unreadable file by its base name, once, with the full path as the action's tooltip", async () => {
     answerElevation(OFFERABLE);
     useEvtxStore.setState({
-      coverageDetails: [{ source: FILE_PATH, kind: "accessDenied", reason: FILE_REASON }],
+      sourceMode: "files",
+      coverageDetails: [FILE_GAP],
       sourceManifest: FILE_MANIFEST,
     });
 
@@ -411,8 +629,44 @@ describe("EvtxCoverageBanner rail variant (coverage note)", () => {
 
     expect(notes()).toHaveLength(1);
     expect(
-      screen.getByText(`${FILE_PATH} channel not read. Findings may be incomplete.`),
+      screen.getByText("Security.evtx not read. Findings may be incomplete."),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/channel not read/)).toBeNull();
+    const action = screen.getByRole("button", { name: "Elevate to read Security.evtx" });
+    expect(action).toHaveAccessibleDescription(FILE_PATH);
+  });
+
+  it("keeps a remote channel's note without an Elevate action, whatever the local elevation", async () => {
+    answerElevation(ELEVATED);
+    useEvtxStore.setState({
+      remoteMachine: REMOTE_MACHINE,
+      coverageDetails: [liveDenied(`${REMOTE_MACHINE}/Security`)],
+    });
+
+    await renderRail();
+
+    expect(
+      screen.getByText(`Security channel on ${REMOTE_MACHINE} not read. Findings may be incomplete.`),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+    // Elevating here would not change the remote credentials, so nothing is probed.
+    expect(elevationProbes()).toBe(0);
+  });
+
+  it("offers Elevate for a local channel and not for a remote one", async () => {
+    answerElevation(OFFERABLE);
+    useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] });
+    await renderRail();
+    expect(screen.getByRole("button", { name: "Elevate to read Security" })).toBeInTheDocument();
+    cleanup();
+
+    useEvtxStore.setState({
+      remoteMachine: REMOTE_MACHINE,
+      coverageDetails: [liveDenied(`${REMOTE_MACHINE}/Security`)],
+    });
+    await renderRail();
+    expect(notes()).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /Elevate/ })).toBeNull();
   });
 
   it(`bounds the notes at ${MAX_COVERAGE_NOTES} and counts the rest`, async () => {
@@ -467,6 +721,96 @@ describe("EvtxCoverageBanner rail variant (coverage note)", () => {
     expect(summary.closest("details")).not.toHaveAttribute("open");
     expect(screen.getByText("bundle.zip::logs/Application.evtx: evtx parsed")).toBeInTheDocument();
     expect(elevationProbes()).toBe(0);
+  });
+});
+
+describe("coverage announcer", () => {
+  function liveTexts(): string[] {
+    return Array.from(document.querySelectorAll("[aria-live]")).map(
+      (region) => region.textContent ?? "",
+    );
+  }
+
+  function announcer(): HTMLElement {
+    const region = document.querySelector<HTMLElement>("[data-coverage-announcer]");
+    expect(region).not.toBeNull();
+    return region as HTMLElement;
+  }
+
+  /** The announcer's lines, one element each, as a screen reader reads them. */
+  function lines(): string[] {
+    return Array.from(announcer().children).map((line) => line.textContent ?? "");
+  }
+
+  /** The workspace's coverage surfaces, as it mounts them. */
+  function renderSurfaces() {
+    render(
+      <>
+        <EvtxCoverageBanner variant="announcer" />
+        <EvtxCoverageBanner diagnosisFailed={false} />
+        <EvtxCoverageBanner variant="rail" diagnosisFailed={false} />
+      </>,
+    );
+  }
+
+  it("is a visually hidden polite status region", () => {
+    render(<EvtxCoverageBanner variant="announcer" />);
+    const region = announcer();
+    expect(region).toHaveAttribute("role", "status");
+    expect(region).toHaveAttribute("aria-live", "polite");
+    expect(region).toHaveStyle({ position: "absolute", width: "1px", height: "1px" });
+    expect(region).toBeEmptyDOMElement();
+  });
+
+  it("announces a gap that arrives after the first load once, with the rail on and the banner hidden", async () => {
+    answerElevation(OFFERABLE);
+    setLayout(true, "insights");
+    useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] });
+    renderSurfaces();
+    await settle();
+
+    expect(gridBanner()).toBeNull();
+    expect(lines()).toEqual(["1 gap in this view", `Security: ${LIVE_REFUSAL_5}`]);
+
+    const added = `System: ${LIVE_REFUSAL_1314}`;
+    act(() =>
+      useEvtxStore.setState({
+        coverageDetails: [liveDenied("Security"), liveDenied("System", LIVE_REFUSAL_1314)],
+      }),
+    );
+
+    expect(gridBanner()).toBeNull();
+    expect(lines()).toEqual(["2 gaps in this view", added]);
+    // Once across every live region in the document, not only the announcer.
+    const texts = liveTexts();
+    expect(texts).toHaveLength(1);
+    expect(texts[0].split(added)).toHaveLength(2);
+
+    // An update that adds nothing announces nothing new.
+    act(() =>
+      useEvtxStore.setState({
+        coverageDetails: [liveDenied("Security"), liveDenied("System", LIVE_REFUSAL_1314)],
+      }),
+    );
+    expect(liveTexts()).toEqual(texts);
+
+    // The banner appearing (rail on Details) adds no live text.
+    act(() => useEvtxLayoutStore.getState().setRailTab("details"));
+    expect(gridBanner()).not.toBeNull();
+    expect(liveTexts()).toEqual(texts);
+  });
+
+  it("starts over when a new load clears the gaps", async () => {
+    useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] });
+    render(<EvtxCoverageBanner variant="announcer" />);
+    await settle();
+    expect(announcer()).toHaveTextContent(`Security: ${LIVE_REFUSAL_5}`);
+
+    act(() => useEvtxStore.setState({ coverageDetails: [] }));
+    expect(announcer()).toBeEmptyDOMElement();
+
+    act(() => useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] }));
+    expect(announcer()).toHaveTextContent(`Security: ${LIVE_REFUSAL_5}`);
   });
 });
 

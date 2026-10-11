@@ -536,6 +536,8 @@ export function EventLogWorkspace() {
         overflow: "hidden",
       }}
     >
+      {/* The one polite live region for newly reported gaps, whichever surface shows them. */}
+      <EvtxCoverageBanner variant="announcer" />
       {loadError && (
         <div
           role="alert"
@@ -562,8 +564,7 @@ export function EventLogWorkspace() {
       <EvtxViewBar nowEpoch={nowEpoch} />
       <EvtxFilterBar nowEpoch={nowEpoch} />
       {/* The gap list moved into the rail (the coverage note and the coverage disclosure). This
-          draws it here only while the rail cannot show it: the rail is hidden, or the diagnosis
-          that feeds the disclosure failed. */}
+          draws it here only while no visible surface shows it (`coverageBannerVisible`). */}
       <EvtxCoverageBanner diagnosisFailed={diagnosisError !== null} />
 
       {timelineError && (

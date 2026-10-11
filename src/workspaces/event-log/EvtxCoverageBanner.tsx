@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import { Button, tokens } from "@fluentui/react-components";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Button, Tooltip, tokens } from "@fluentui/react-components";
 import { LockClosed16Regular } from "@fluentui/react-icons";
-import { useEvtxStore } from "./evtx-store";
-import { useEvtxLayoutStore } from "./evtx-layout-store";
+import { useEvtxStore, type EvtxSourceMode } from "./evtx-store";
+import { useEvtxLayoutStore, type EvtxRailTabId } from "./evtx-layout-store";
 import { useUiStore } from "../../stores/ui-store";
 import { LOG_UI_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
 import { readableOn } from "../../lib/color-contrast";
@@ -17,23 +17,29 @@ import type { EventLogSourceCoverage, EvtxArchiveMember, EvtxCoverageGap } from 
 
 const MAX_DISPLAYED_ARCHIVE_MEMBERS = 4_096;
 const MAX_DISPLAYED_COVERAGE_GAPS = 100;
-/** Notes shown one per channel in the rail; the rest are counted. */
+/** Notes shown one per source in the rail; the rest are counted. */
 export const MAX_COVERAGE_NOTES = 3;
 const NOTE_TEXT_FLOOR = 4.5;
 
+const VISUALLY_HIDDEN: CSSProperties = {
+  position: "absolute",
+  width: "1px",
+  height: "1px",
+  overflow: "hidden",
+  clipPath: "inset(50%)",
+  whiteSpace: "nowrap",
+};
+
 type EvtxCoverageBannerProps =
   | {
-      /** The full gap list, drawn above the grid. */
-      variant?: "grid";
-      /**
-       * The diagnosis could not be built, so the rail has no coverage disclosure: the banner then
-       * stays above the grid even while the rail is shown.
-       */
+      /** The full gap list above the grid (the default), or the Insights tab's coverage note. */
+      variant?: "grid" | "rail";
+      /** The diagnosis could not be built, so the rail has no coverage disclosure to show. */
       diagnosisFailed?: boolean;
     }
   | {
-      /** The Insights tab's coverage note (spec 8.13, item 2). */
-      variant: "rail";
+      /** The workspace's one polite live region for newly reported gaps. */
+      variant: "announcer";
     };
 
 /**
@@ -47,41 +53,133 @@ type EvtxCoverageBannerProps =
  * It cannot be dismissed permanently, only collapsed. A gap stays true for as long as the data is
  * on screen, and letting it be dismissed would make the view claim completeness it does not have.
  *
- * Two variants. `rail` is the coverage note in the Insights tab: one note per channel the backend
- * refused to read, with an Elevate action. `grid` is the full list above the grid. The rail's
- * coverage disclosure carries every gap kind, so the grid banner is drawn only while that
- * disclosure cannot be seen: the rail is hidden, or the diagnosis failed. Nothing else in the
- * workspace discloses a gap, so without this a hidden rail would present a partial load as whole.
+ * Three variants, one export (the workspace tests replace this module with a single component):
+ * - `grid`: the full list above the grid, drawn only while no visible surface discloses the gaps
+ *   (`coverageBannerVisible`).
+ * - `rail`: the Insights tab's coverage note (spec 8.13, item 2), one note per source the backend
+ *   refused to read, plus the archive member provenance. Drawn only while the grid banner is not,
+ *   so neither appears twice.
+ * - `announcer`: a visually hidden polite live region, always mounted, that announces newly
+ *   reported gaps whichever surface shows them.
  */
 export function EvtxCoverageBanner(props: EvtxCoverageBannerProps) {
+  if (props.variant === "announcer") return <CoverageAnnouncer />;
+  const diagnosisFailed = props.diagnosisFailed ?? false;
   return props.variant === "rail" ? (
-    <CoverageNotes />
+    <CoverageNotes diagnosisFailed={diagnosisFailed} />
   ) : (
-    <GridBanner diagnosisFailed={props.diagnosisFailed ?? false} />
+    <GridBanner diagnosisFailed={diagnosisFailed} />
   );
 }
 
+export interface CoverageBannerGateInput {
+  /** The channel pane is shown and discloses coverage (spec 8.6). */
+  channelsPanel: boolean;
+  /** The Insights rail is shown. */
+  insightsPanel: boolean;
+  /** The rail's tab; only "insights" shows the note and the coverage disclosure. */
+  railTab: EvtxRailTabId;
+  /** The diagnosis that feeds the coverage disclosure failed. */
+  diagnosisFailed: boolean;
+}
+
 /**
- * The channels whose coverage gap is `accessDenied`, in first-reported order, each once.
+ * Whether the grid banner is drawn: only when no visible surface discloses the load's gaps. The
+ * channel pane does while it is shown; the rail does while it is shown on its Insights tab with a
+ * diagnosis. A gap is never shown as complete, and never shown twice.
+ */
+export function coverageBannerVisible({
+  channelsPanel,
+  insightsPanel,
+  railTab,
+  diagnosisFailed,
+}: CoverageBannerGateInput): boolean {
+  return !channelsPanel && (!insightsPanel || railTab !== "insights" || diagnosisFailed);
+}
+
+/** The one place the gate's inputs are read, so the grid banner and the rail note always agree. */
+function useCoverageBannerVisible(diagnosisFailed: boolean): boolean {
+  const insightsPanel = useEvtxLayoutStore((s) => s.panels.insights);
+  const railTab = useEvtxLayoutStore((s) => s.railTab);
+  return coverageBannerVisible({
+    channelsPanel: false, // #837 (channel pane coverage) flips this to the real panels.channels.
+    insightsPanel,
+    railTab,
+    diagnosisFailed,
+  });
+}
+
+/**
+ * The sources whose coverage gap is `accessDenied`, in first-reported order, each once, by their
+ * exact source.
  *
  * Reads the structured kinds only (the parser's gaps and the source manifest's coverage). Legacy
  * gap strings are left out on purpose: classifying them would mean matching their wording, and a
  * live channel refused with Windows error 5 or 1314 is reported as kind `record` until #931 maps
- * it to `accessDenied`. The name is the gap's source exactly: a live channel name, `machine/channel`
- * for a remote one, or the file path in files mode (an unreadable file has no channel name).
+ * it to `accessDenied`.
  */
-export function accessDeniedChannels(
+export function accessDeniedSources(
   coverageDetails: readonly EvtxCoverageGap[],
   manifestCoverage: readonly EventLogSourceCoverage[],
-): string[] {
-  const channels = new Set<string>();
+): { source: string; manifest: boolean }[] {
+  const sources = new Map<string, boolean>();
   for (const gap of coverageDetails) {
-    if (gap.kind === "accessDenied") channels.add(gap.source);
+    if (gap.kind === "accessDenied" && !sources.has(gap.source)) sources.set(gap.source, false);
   }
   for (const coverage of manifestCoverage) {
-    if (coverage.kind === "accessDenied") channels.add(coverage.path);
+    if (coverage.kind === "accessDenied" && !sources.has(coverage.path)) {
+      sources.set(coverage.path, true);
+    }
   }
-  return [...channels];
+  return [...sources].map(([source, manifest]) => ({ source, manifest }));
+}
+
+/** How a note names its source. Display only: the `accessDenied` kind alone decides a note. */
+export type CoverageNoteSubject =
+  | { kind: "channel"; source: string; channel: string }
+  | { kind: "file"; source: string; fileName: string }
+  | { kind: "remote"; source: string; machine: string; channel: string };
+
+/** A drive-letter, UNC or POSIX absolute path. Channel names never take one of these forms. */
+function isAbsolutePath(source: string): boolean {
+  return /^(?:[A-Za-z]:[\\/]|[\\/]{2}|\/)/.test(source);
+}
+
+/** Splits on both separators so a Windows path is handled on any host. */
+function baseName(path: string): string {
+  const segments = path.split(/[\\/]+/).filter((segment) => segment.length > 0);
+  return segments[segments.length - 1] ?? path;
+}
+
+/**
+ * Names one unread source. A file (a manifest row or an absolute path) has no channel, so it is
+ * named by its base name. A live read of a remote machine reports `machine/channel`; elevating
+ * this app does not change the credentials used there, so it is kept apart from a local channel.
+ */
+export function coverageNoteSubject(
+  { source, manifest }: { source: string; manifest: boolean },
+  { sourceMode, remoteMachine }: { sourceMode: EvtxSourceMode; remoteMachine: string | null },
+): CoverageNoteSubject {
+  if (manifest || isAbsolutePath(source)) {
+    return { kind: "file", source, fileName: baseName(source) };
+  }
+  if (sourceMode === "live" && remoteMachine) {
+    const prefix = `${remoteMachine}/`;
+    const channel = source.startsWith(prefix) ? source.slice(prefix.length) : source;
+    return { kind: "remote", source, machine: remoteMachine, channel };
+  }
+  return { kind: "channel", source, channel: source };
+}
+
+function noteSentence(subject: CoverageNoteSubject): string {
+  switch (subject.kind) {
+    case "channel":
+      return `${subject.channel} channel not read. Findings may be incomplete.`;
+    case "file":
+      return `${subject.fileName} not read. Findings may be incomplete.`;
+    case "remote":
+      return `${subject.channel} channel on ${subject.machine} not read. Findings may be incomplete.`;
+  }
 }
 
 export interface CoverageNoteColors {
@@ -125,7 +223,7 @@ function useCoverageNoteColors(): CoverageNoteColors {
 /**
  * Whether elevation can be offered: Windows, not already elevated, and not back from an elevated
  * restart (the shared coordinator's rule). False until the probe answers, and when it fails. The
- * probe runs only while there is something to offer it for.
+ * probe runs only while there is a local source to offer it for.
  */
 function useElevationOffer(needed: boolean): boolean {
   const [offer, setOffer] = useState(false);
@@ -158,6 +256,21 @@ function openElevationPrompt(): void {
   });
 }
 
+/** The banner's gap lines: legacy strings, live-tail strings and formatted structured gaps. */
+function useCoverageGapMessages(): string[] {
+  const legacyGaps = useEvtxStore((s) => s.coverageGaps);
+  const structuredGaps = useEvtxStore((s) => s.coverageDetails);
+  const tailGaps = useEvtxStore((s) => s.tailCoverageGaps);
+  return useMemo(
+    () => [...new Set([...legacyGaps, ...tailGaps, ...structuredGaps.map(formatCoverageGap)])],
+    [legacyGaps, tailGaps, structuredGaps],
+  );
+}
+
+function omittedGapsLine(omitted: number): string {
+  return `<coverage gaps: ${omitted} omitted by display limit>`;
+}
+
 function useArchiveMemberMessages(archiveMembers: readonly EvtxArchiveMember[]): string[] {
   return useMemo(() => {
     const displayed = archiveMembers.slice(0, MAX_DISPLAYED_ARCHIVE_MEMBERS);
@@ -185,39 +298,90 @@ function ArchiveMemberList({ messages }: { messages: readonly string[] }) {
 }
 
 /**
- * The rail variant: one note per channel not read, then the archive member provenance.
- *
- * Not a live region (the spec gives it none). The lock icon is decorative; the sentence carries the
- * state, and each action is named for its channel. Hidden where elevation cannot help (already
- * elevated, or not Windows); the gap itself stays listed in the coverage disclosure below.
+ * Announces gaps as they are reported, once each, with the banner's own wording: the count, then
+ * each new gap line. It starts empty and fills after mounting, so the first gaps are announced too.
+ * A new load that clears the gaps starts over.
  */
-function CoverageNotes() {
+function CoverageAnnouncer() {
+  const gaps = useCoverageGapMessages();
+  const announcedRef = useRef<ReadonlySet<string>>(new Set());
+  const [fresh, setFresh] = useState<readonly string[]>([]);
+
+  useEffect(() => {
+    if (gaps.length === 0) {
+      announcedRef.current = new Set();
+      setFresh([]);
+      return;
+    }
+    const announced = announcedRef.current;
+    const added = gaps.filter((gap) => !announced.has(gap));
+    if (added.length === 0) return;
+    announcedRef.current = new Set([...announced, ...added]);
+    setFresh(added);
+  }, [gaps]);
+
+  const shown = fresh.slice(0, MAX_DISPLAYED_COVERAGE_GAPS);
+  const omitted = fresh.length - shown.length;
+  return (
+    <div role="status" aria-live="polite" data-coverage-announcer="" style={VISUALLY_HIDDEN}>
+      {fresh.length > 0 && (
+        <>
+          <div>{summarizeCoverageGaps(gaps)}</div>
+          {shown.map((gap, index) => (
+            <div key={`${index}:${gap}`}>{gap}</div>
+          ))}
+          {omitted > 0 && <div>{omittedGapsLine(omitted)}</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The rail variant: one note per source not read, then the archive member provenance.
+ *
+ * Not a live region (the spec gives it none; the announcer speaks for every surface). The lock icon
+ * is decorative; the sentence carries the state. A local channel or a file gets an Elevate action
+ * named for it, and is hidden where elevation cannot help (already elevated, or not Windows); a
+ * remote channel's note has no action, since elevating here does not change the remote
+ * credentials. Every hook runs before the gate, so the note does not remount (and re-probe) when
+ * the gate changes. The gap itself stays listed in the coverage disclosure below.
+ */
+function CoverageNotes({ diagnosisFailed }: { diagnosisFailed: boolean }) {
   const structuredGaps = useEvtxStore((s) => s.coverageDetails);
   const sourceManifest = useEvtxStore((s) => s.sourceManifest);
+  const sourceMode = useEvtxStore((s) => s.sourceMode);
+  const remoteMachine = useEvtxStore((s) => s.remoteMachine);
   const archiveMembers = useEvtxStore((s) => s.archiveMembers);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const bannerVisible = useCoverageBannerVisible(diagnosisFailed);
   const colors = useCoverageNoteColors();
   const railText = useRailTextColors();
-  const channels = useMemo(
-    () => accessDeniedChannels(structuredGaps, sourceManifest?.coverage ?? []),
-    [structuredGaps, sourceManifest],
+  const subjects = useMemo(
+    () =>
+      accessDeniedSources(structuredGaps, sourceManifest?.coverage ?? []).map((entry) =>
+        coverageNoteSubject(entry, { sourceMode, remoteMachine }),
+      ),
+    [structuredGaps, sourceManifest, sourceMode, remoteMachine],
   );
-  const canElevate = useElevationOffer(channels.length > 0);
+  const canElevate = useElevationOffer(subjects.some((subject) => subject.kind !== "remote"));
   const archiveMemberMessages = useArchiveMemberMessages(archiveMembers);
   const fontSize = Math.max(10, getLogListMetrics(logListFontSize).fontSize - 2);
 
-  const shownChannels = canElevate ? channels.slice(0, MAX_COVERAGE_NOTES) : [];
-  const omittedChannels = canElevate ? channels.length - shownChannels.length : 0;
-  if (shownChannels.length === 0 && archiveMembers.length === 0) return null;
+  if (bannerVisible) return null;
+  const noted = subjects.filter((subject) => subject.kind === "remote" || canElevate);
+  const shown = noted.slice(0, MAX_COVERAGE_NOTES);
+  const omitted = noted.length - shown.length;
+  if (shown.length === 0 && archiveMembers.length === 0) return null;
 
   return (
     <div style={{ display: "grid", gap: "8px", fontFamily: LOG_UI_FONT_FAMILY, fontSize: `${fontSize}px` }}>
-      {shownChannels.length > 0 && (
+      {shown.length > 0 && (
         <section aria-label="Channels not read" style={{ display: "grid", gap: "6px" }}>
-          {shownChannels.map((channel) => (
+          {shown.map((subject) => (
             <div
-              key={channel}
-              data-coverage-note={channel}
+              key={subject.source}
+              data-coverage-note={subject.source}
               style={{
                 display: "flex",
                 alignItems: "flex-start",
@@ -234,31 +398,16 @@ function CoverageNotes() {
                 style={{ flexShrink: 0, marginTop: "1px", color: colors.text }}
               />
               <span style={{ flex: 1, minWidth: 0, wordBreak: "break-word" }}>
-                {channel} channel not read. Findings may be incomplete.
+                {noteSentence(subject)}
               </span>
-              <button
-                type="button"
-                aria-label={`Elevate to read ${channel}`}
-                onClick={openElevationPrompt}
-                style={{
-                  flexShrink: 0,
-                  padding: 0,
-                  border: "none",
-                  background: "none",
-                  cursor: "pointer",
-                  font: "inherit",
-                  fontWeight: 600,
-                  color: colors.action,
-                  textDecoration: "underline",
-                }}
-              >
-                Elevate
-              </button>
+              {subject.kind !== "remote" && (
+                <ElevateAction subject={subject} color={colors.action} />
+              )}
             </div>
           ))}
-          {omittedChannels > 0 && (
+          {omitted > 0 && (
             <div style={{ color: railText.secondary }}>
-              +{omittedChannels} more {omittedChannels === 1 ? "channel" : "channels"} not read
+              +{omitted} more {omitted === 1 ? "channel" : "channels"} not read
             </div>
           )}
         </section>
@@ -287,19 +436,52 @@ function CoverageNotes() {
   );
 }
 
+/** The note's Elevate action. A file's full path is its tooltip (and its description). */
+function ElevateAction({
+  subject,
+  color,
+}: {
+  subject: Exclude<CoverageNoteSubject, { kind: "remote" }>;
+  color: string;
+}) {
+  const name = subject.kind === "file" ? subject.fileName : subject.channel;
+  const button = (
+    <button
+      type="button"
+      aria-label={`Elevate to read ${name}`}
+      onClick={openElevationPrompt}
+      style={{
+        flexShrink: 0,
+        padding: 0,
+        border: "none",
+        background: "none",
+        cursor: "pointer",
+        font: "inherit",
+        fontWeight: 600,
+        color,
+        textDecoration: "underline",
+      }}
+    >
+      Elevate
+    </button>
+  );
+  return subject.kind === "file" ? (
+    <Tooltip content={subject.source} relationship="description">
+      {button}
+    </Tooltip>
+  ) : (
+    button
+  );
+}
+
+/** The full list above the grid. Not a live region: the announcer speaks for every surface. */
 function GridBanner({ diagnosisFailed }: { diagnosisFailed: boolean }) {
-  const legacyGaps = useEvtxStore((s) => s.coverageGaps);
-  const structuredGaps = useEvtxStore((s) => s.coverageDetails);
-  const tailGaps = useEvtxStore((s) => s.tailCoverageGaps);
+  const gaps = useCoverageGapMessages();
   const archiveMembers = useEvtxStore((s) => s.archiveMembers);
-  const railShown = useEvtxLayoutStore((s) => s.panels.insights);
+  const bannerVisible = useCoverageBannerVisible(diagnosisFailed);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const [collapsed, setCollapsed] = useState(false);
 
-  const gaps = useMemo(
-    () => [...new Set([...legacyGaps, ...tailGaps, ...structuredGaps.map(formatCoverageGap)])],
-    [legacyGaps, tailGaps, structuredGaps]
-  );
   const displayedGaps = useMemo(
     () => gaps.slice(0, MAX_DISPLAYED_COVERAGE_GAPS),
     [gaps],
@@ -307,8 +489,7 @@ function GridBanner({ diagnosisFailed }: { diagnosisFailed: boolean }) {
   const omittedGaps = gaps.length - displayedGaps.length;
   const archiveMemberMessages = useArchiveMemberMessages(archiveMembers);
 
-  // The rail's coverage disclosure lists every gap while the rail is shown and has a diagnosis.
-  if (railShown && !diagnosisFailed) return null;
+  if (!bannerVisible || (gaps.length === 0 && archiveMemberMessages.length === 0)) return null;
 
   const { fontSize, rowLineHeight } = getLogListMetrics(logListFontSize);
   const summary =
@@ -316,68 +497,51 @@ function GridBanner({ diagnosisFailed }: { diagnosisFailed: boolean }) {
       ? summarizeCoverageGaps(gaps)
       : `${archiveMembers.length} archive member${archiveMembers.length === 1 ? "" : "s"} in this view`;
 
-  // The live region remains mounted so screen readers announce newly loaded gaps and member
-  // provenance. An empty region stays unstyled and carries no children.
-  const empty = gaps.length === 0 && archiveMemberMessages.length === 0;
-
   return (
     <div
-      role="status"
-      aria-live="polite"
-      style={
-        empty
-          ? undefined
-          : {
-              flexShrink: 0,
-              display: "flex",
-              flexDirection: "column",
-              gap: "4px",
-              padding: "6px 12px",
-              fontFamily: LOG_UI_FONT_FAMILY,
-              fontSize,
-              lineHeight: `${rowLineHeight}px`,
-              color: tokens.colorPaletteDarkOrangeForeground1,
-              backgroundColor: tokens.colorPaletteDarkOrangeBackground1,
-              borderBottom: `1px solid ${tokens.colorPaletteDarkOrangeBorderActive}`,
-            }
-      }
+      data-coverage-banner=""
+      style={{
+        flexShrink: 0,
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
+        padding: "6px 12px",
+        fontFamily: LOG_UI_FONT_FAMILY,
+        fontSize,
+        lineHeight: `${rowLineHeight}px`,
+        color: tokens.colorPaletteDarkOrangeForeground1,
+        backgroundColor: tokens.colorPaletteDarkOrangeBackground1,
+        borderBottom: `1px solid ${tokens.colorPaletteDarkOrangeBorderActive}`,
+      }}
     >
-      {empty ? null : (
-        <>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ fontWeight: tokens.fontWeightSemibold }}>{summary}</span>
-            <Button
-              size="small"
-              appearance="transparent"
-              aria-expanded={!collapsed}
-              onClick={() => setCollapsed((value) => !value)}
-            >
-              {collapsed ? "Show" : "Hide"}
-            </Button>
-          </div>
-          {!collapsed && (
-            <>
-              <div style={{ maxHeight: "200px", overflowY: "auto" }}>
-                <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
-                  {displayedGaps.map((gap, index) => (
-                    <li key={`${index}:${gap}`} style={{ wordBreak: "break-word" }}>
-                      {gap}
-                    </li>
-                  ))}
-                </ul>
-                {omittedGaps > 0 && (
-                  <div>{`<coverage gaps: ${omittedGaps} omitted by display limit>`}</div>
-                )}
-                {archiveMemberMessages.length > 0 && (
-                  <details>
-                    <summary>Archive member provenance ({archiveMembers.length})</summary>
-                    <ArchiveMemberList messages={archiveMemberMessages} />
-                  </details>
-                )}
-              </div>
-            </>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <span style={{ fontWeight: tokens.fontWeightSemibold }}>{summary}</span>
+        <Button
+          size="small"
+          appearance="transparent"
+          aria-expanded={!collapsed}
+          onClick={() => setCollapsed((value) => !value)}
+        >
+          {collapsed ? "Show" : "Hide"}
+        </Button>
+      </div>
+      {!collapsed && (
+        <div style={{ maxHeight: "200px", overflowY: "auto" }}>
+          <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
+            {displayedGaps.map((gap, index) => (
+              <li key={`${index}:${gap}`} style={{ wordBreak: "break-word" }}>
+                {gap}
+              </li>
+            ))}
+          </ul>
+          {omittedGaps > 0 && <div>{omittedGapsLine(omittedGaps)}</div>}
+          {archiveMemberMessages.length > 0 && (
+            <details>
+              <summary>Archive member provenance ({archiveMembers.length})</summary>
+              <ArchiveMemberList messages={archiveMemberMessages} />
+            </details>
           )}
-        </>
+        </div>
       )}
     </div>
   );

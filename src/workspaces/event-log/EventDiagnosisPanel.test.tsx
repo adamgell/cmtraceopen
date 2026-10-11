@@ -12,6 +12,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 import { getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore } from "./evtx-store";
+import { useEvtxLayoutStore } from "./evtx-layout-store";
 import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
 import { DETAIL_RENDER_CAP, OUTCOME_LABELS, EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import type {
@@ -487,7 +488,18 @@ describe("EventDiagnosisPanel", () => {
           ? Promise.resolve({ platformSupported: true, isElevated: false })
           : Promise.reject(new Error(`unexpected command ${command}`)),
       );
-      useEvtxStore.setState({ coverageDetails: [deniedSecurity], sourceManifest: null, archiveMembers: [] });
+      useEvtxStore.setState({
+        coverageDetails: [deniedSecurity],
+        sourceManifest: null,
+        archiveMembers: [],
+        sourceMode: "live",
+        remoteMachine: null,
+      });
+      // The rail shown on its Insights tab: the one layout where the note is drawn.
+      useEvtxLayoutStore.setState({
+        panels: { channels: true, insights: true, dock: false },
+        railTab: "insights",
+      });
     });
 
     afterEach(() => {
@@ -515,14 +527,20 @@ describe("EventDiagnosisPanel", () => {
       ).toBeTruthy();
     });
 
-    it("shows while a first build is pending and after a build failed", async () => {
+    it("shows while a first build is pending", async () => {
+      render(<EventDiagnosisPanel summary={null} updating />);
+      await settle();
+      expect(screen.getByText(NOTE)).toBeTruthy();
+    });
+
+    it("steps aside after a build failed, when the grid banner carries the gaps instead", async () => {
       const { rerender } = render(<EventDiagnosisPanel summary={null} updating />);
       await settle();
       expect(screen.getByText(NOTE)).toBeTruthy();
 
       rerender(<EventDiagnosisPanel summary={null} error="engine unavailable" />);
       await settle();
-      expect(screen.getByText(NOTE)).toBeTruthy();
+      expect(screen.queryByText(NOTE)).toBeNull();
     });
 
     it("is not drawn without an accessDenied gap", async () => {
