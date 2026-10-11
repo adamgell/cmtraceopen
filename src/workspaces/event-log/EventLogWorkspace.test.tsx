@@ -607,6 +607,24 @@ describe("event-viewer shared font metrics", () => {
     );
     timeline.unmount();
   });
+  it("keeps the header over its columns when the grid scrolls sideways", () => {
+    seedEventLog();
+    useEvtxStore.setState({ groupBy: [] });
+
+    const timeline = render(<EvtxTimeline />);
+    const header = timeline.container.querySelector<HTMLElement>("[data-evtx-table-header]")!;
+    const grid = timeline.getByRole("grid");
+    expect(header.scrollLeft).toBe(0);
+
+    grid.scrollLeft = 120;
+    fireEvent.scroll(grid);
+    expect(header.scrollLeft).toBe(120);
+
+    grid.scrollLeft = 0;
+    fireEvent.scroll(grid);
+    expect(header.scrollLeft).toBe(0);
+    timeline.unmount();
+  });
   it("keeps a 100,000-record view addressable with a bounded DOM window", () => {
     seedEventLog();
     const records = Array.from({ length: 100_000 }, (_, index) => ({
