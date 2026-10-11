@@ -24,7 +24,8 @@ export type EvtxFixedColumnId =
   | "processId"
   | "threadId"
   | "keywords"
-  | "message";
+  | "message"
+  | "links";
 
 /**
  * A column produced by an event map, such as `PayloadData1` or `RemoteHost`.
@@ -99,22 +100,30 @@ export interface EvtxColumnSpec {
   defaultVisible: boolean;
 }
 
-/** Every column, in the order a fresh install presents them. */
+/**
+ * Every column, in the order a fresh install presents them.
+ *
+ * Default widths are the mockup widths scaled by 13/12 and rounded (spec 8.7). They apply only
+ * where a configuration carries no width override, so a saved width is never replaced.
+ */
 export const EVTX_COLUMNS: EvtxColumnSpec[] = [
-  { id: "level", label: "Level", defaultWidth: 40, defaultVisible: true },
-  { id: "timestamp", label: "Event Time", defaultWidth: 165, defaultVisible: true },
-  { id: "eventId", label: "Event ID", defaultWidth: 50, defaultVisible: true },
+  { id: "level", label: "Level", defaultWidth: 32, defaultVisible: true },
+  { id: "timestamp", label: "Event Time", defaultWidth: 154, defaultVisible: true },
+  { id: "eventId", label: "Event ID", defaultWidth: 52, defaultVisible: true },
   { id: "recordId", label: "Record ID", defaultWidth: 70, defaultVisible: false },
-  { id: "channel", label: "Channel", defaultWidth: 140, defaultVisible: true },
-  { id: "provider", label: "Provider", defaultWidth: 160, defaultVisible: true },
+  { id: "channel", label: "Channel", defaultWidth: 120, defaultVisible: true },
+  { id: "provider", label: "Provider", defaultWidth: 162, defaultVisible: true },
   { id: "computer", label: "Computer", defaultWidth: 120, defaultVisible: false },
   { id: "task", label: "Task", defaultWidth: 60, defaultVisible: false },
   { id: "opcode", label: "Opcode", defaultWidth: 60, defaultVisible: false },
   { id: "processId", label: "PID", defaultWidth: 60, defaultVisible: false },
   { id: "threadId", label: "TID", defaultWidth: 60, defaultVisible: false },
   { id: "keywords", label: "Keywords", defaultWidth: 140, defaultVisible: false },
-  // Last and unbounded: the description absorbs whatever width remains.
+  // Unbounded: the description absorbs whatever width remains.
   { id: "message", label: "Description", defaultWidth: null, defaultVisible: true },
+  // After the description, at the right edge (spec 8.7). It holds a count of correlation edges,
+  // not a field of the event, so it has no text value (see `fixedColumnValue`).
+  { id: "links", label: "Links", defaultWidth: 44, defaultVisible: true },
 ];
 
 const COLUMN_IDS = new Set<string>(EVTX_COLUMNS.map((column) => column.id));
@@ -305,5 +314,10 @@ function fixedColumnValue(
       return record.keywords ?? "";
     case "message":
       return record.message;
+    // Not a field of the event: the count comes from the correlation edges, which the record does
+    // not carry. Empty rather than "0", so quick-filter search never matches a value nothing
+    // established, and an unknown count is never read as none.
+    case "links":
+      return "";
   }
 }
