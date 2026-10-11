@@ -410,7 +410,60 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
     role: "selection text",
     minimum: 4.5,
     colors: (v) => ({ selectionForeground: v.selection.foreground }),
-    placements: [{ surface: "selected", section: "6.2 selected row text" }],
+    placements: [
+      { surface: "selected", section: "6.2 selected row text" },
+      {
+        surface: "selected",
+        section:
+          "8.7 selected table row: Time, ID, Provider, Channel, Message, Links and marker control text (issue #836)",
+      },
+    ],
+  },
+  {
+    // Every text role of a tinted table row is the level's rowText (D3, issue #836): Time,
+    // Provider, ID, Channel, Message, the links cell and the marker controls. The spec 8.7
+    // colors for those (fg2, fg3, the brand link) measured 2.45:1 on the classic Error row.
+    role: "tinted table row text",
+    minimum: 4.5,
+    colors: (v) =>
+      Object.fromEntries(
+        (["Critical", "Error", "Warning"] as const).map((l) => [
+          l,
+          v.levels[l].rowText,
+        ]),
+      ),
+    placements: [
+      {
+        surface: "ownRow",
+        section:
+          "8.7 tinted table row: Time, ID, Provider, Channel, Message, Links and marker control text (issue #836)",
+      },
+    ],
+  },
+  {
+    // A plain (Information or Verbose) row keeps the 8.7 neutral hierarchy.
+    role: "plain table row text",
+    minimum: 4.5,
+    colors: () => ({
+      foreground1: tokens.colorNeutralForeground1,
+      foreground2: tokens.colorNeutralForeground2,
+      brandLink: tokens.colorBrandForegroundLink,
+    }),
+    placements: [
+      {
+        surface: "surface",
+        section:
+          "8.7 plain table row: ID and Message (fg1), Time and Provider (fg2), Links (brand link), marker controls (fg2)",
+      },
+    ],
+  },
+  {
+    role: "table header text",
+    minimum: 4.5,
+    colors: () => ({ foreground2: tokens.colorNeutralForeground2 }),
+    placements: [
+      { surface: "group", section: "8.7 table header labels on Background3" },
+    ],
   },
   {
     role: "selected data color",
