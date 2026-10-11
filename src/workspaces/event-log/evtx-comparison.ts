@@ -41,7 +41,8 @@ export interface PriorWindow {
    * instant a compared channel's current read was issued, not the workspace clock, so it does not
    * equal `nowEpoch`; a consumer must count its current side over this period
    * (`countCurrentPeriod`) and not over a window measured from `nowEpoch`, or the two sides stop
-   * meeting. Events a live tail appended after it are outside the period and are not counted.
+   * meeting. Records the live tail appended are never counted, whatever their timestamp: a
+   * subscription can deliver an event late with a timestamp inside the period.
    */
   anchorEpoch: number;
   /** Inclusive epoch-millisecond bounds. */
