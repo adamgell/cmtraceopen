@@ -7,6 +7,10 @@ import {
   sortDiagnostics,
 } from "./dsregcmd-verdict";
 import {
+  getMdmVisibilityLabel,
+  toneForMdmVisibility,
+} from "./dsregcmd-formatters";
+import {
   buildAnalysisResult,
   buildDerived,
   buildDiagnostic,
@@ -269,6 +273,128 @@ describe("getMdmState", () => {
       expect(getMdmState(result).kind).toBe("no-enrollment-registry");
     });
   });
+});
+
+/// Case (a) of the reducer-contract ruling on #924: an empty enrollments
+/// registry beside an observed EnterpriseMgmt task GUID contradicts itself, so
+/// the parser leaves `mdmEnrolled` null and raises no warning. The chip must
+/// not turn that into a negative.
+describe("MDM state for an empty registry beside a task GUID (#924 case a)", () => {
+  const caseA = (urls: { mdmUrl?: string; mdmComplianceUrl?: string }) =>
+    makeResult({
+      ...urls,
+      mdmEnrolled: null,
+      enrollments: [],
+      taskGuids: [GUID],
+    });
+
+  it("reports URLs present (neutral), never No enrollment (registry)", () => {
+    const result = caseA({ mdmUrl: URL_A, mdmComplianceUrl: URL_B });
+    expect(result.enrollmentEvidence?.enrollmentCount).toBe(0);
+    expect(getMdmState(result)).toEqual({
+      kind: "urls-present",
+      label: "URLs present",
+      tone: "neutral",
+    });
+    expect(getVerdictHeadline(result)).toBe("Entra joined · MDM URLs present");
+    expect(toneForMdmVisibility(result)).toBe("good");
+  });
+
+  it("reports No URLs (neutral) without URLs, never No enrollment (registry)", () => {
+    const result = caseA({});
+    expect(getMdmState(result)).toEqual({
+      kind: "no-urls",
+      label: "No URLs",
+      tone: "neutral",
+    });
+    expect(getMdmVisibilityLabel(result.derived)).toBe("Unknown");
+    expect(toneForMdmVisibility(result)).toBe("neutral");
+  });
+});
+
+/// The six MDM states (URLs shown or not x enrolled true, unknown or false) on
+/// a joined and a not-joined device, built as the parser produces them (pinned
+/// on the Rust side by `mdm_enrollment_rule_six_states_joined_and_not_joined`).
+/// The visibility label warns exactly when the chip does.
+describe("MDM surfaces for the six MDM states, joined and not joined", () => {
+  type Enrolled = boolean | null;
+  interface Row {
+    joined: boolean;
+    urls: boolean;
+    enrolled: Enrolled;
+    label: string;
+    labelTone: string;
+    chip: string;
+    chipTone: string;
+    headline: string;
+  }
+
+  const ENTRA = "Entra joined";
+  const NOT_JOINED = "Not joined to Entra ID";
+  const ROWS: Row[] = [
+    { joined: true, urls: true, enrolled: true, label: "Present", labelTone: "good", chip: "Enrolled (registry)", chipTone: "pass", headline: `${ENTRA} · MDM enrollment confirmed in registry` },
+    { joined: true, urls: true, enrolled: null, label: "Present", labelTone: "good", chip: "URLs present", chipTone: "neutral", headline: `${ENTRA} · MDM URLs present` },
+    { joined: true, urls: true, enrolled: false, label: "Not enrolled", labelTone: "warn", chip: "No enrollment (registry)", chipTone: "warn", headline: `${ENTRA} · No MDM enrollment in registry` },
+    { joined: true, urls: false, enrolled: true, label: "Registry only", labelTone: "good", chip: "Enrolled (registry)", chipTone: "pass", headline: `${ENTRA} · MDM enrollment confirmed in registry` },
+    { joined: true, urls: false, enrolled: null, label: "Unknown", labelTone: "neutral", chip: "No URLs", chipTone: "neutral", headline: `${ENTRA} · No MDM URLs reported` },
+    { joined: true, urls: false, enrolled: false, label: "Not enrolled", labelTone: "warn", chip: "No enrollment (registry)", chipTone: "warn", headline: `${ENTRA} · No MDM enrollment in registry` },
+    { joined: false, urls: true, enrolled: true, label: "Present", labelTone: "good", chip: "Enrolled (registry)", chipTone: "pass", headline: NOT_JOINED },
+    { joined: false, urls: true, enrolled: null, label: "Present", labelTone: "good", chip: "URLs present", chipTone: "neutral", headline: NOT_JOINED },
+    { joined: false, urls: true, enrolled: false, label: "Not enrolled", labelTone: "neutral", chip: "URLs present", chipTone: "neutral", headline: NOT_JOINED },
+    { joined: false, urls: false, enrolled: true, label: "Registry only", labelTone: "good", chip: "Enrolled (registry)", chipTone: "pass", headline: NOT_JOINED },
+    { joined: false, urls: false, enrolled: null, label: "Unknown", labelTone: "neutral", chip: "No URLs", chipTone: "neutral", headline: NOT_JOINED },
+    { joined: false, urls: false, enrolled: false, label: "Not enrolled", labelTone: "neutral", chip: "No URLs", chipTone: "neutral", headline: NOT_JOINED },
+  ];
+
+  /** The analysis the parser returns for one row. */
+  function parserResult({ joined, urls, enrolled }: Row): DsregcmdAnalysisResult {
+    const diagnostics: DsregcmdDiagnosticInsight[] = [];
+    if (enrolled === true && !urls) {
+      diagnostics.push(buildDiagnostic({ id: "mdm-confirmed-via-registry", severity: "Info" }));
+    }
+    if (enrolled === false && joined) {
+      diagnostics.push(buildDiagnostic({ id: "enrollment-missing-on-joined", severity: "Warning" }));
+    }
+    const facts = buildFacts(urls ? { mdmUrl: URL_A, mdmComplianceUrl: URL_B } : {});
+    facts.joinState.azureAdJoined = joined;
+    facts.joinState.domainJoined = false;
+    return buildAnalysisResult({
+      facts,
+      derived: buildDerived({
+        joinType: joined ? "EntraIdJoined" : "NotJoined",
+        mdmEnrolled: enrolled,
+        mdmUrlsPresent: urls ? true : null,
+        missingMdm: urls ? false : null,
+        complianceUrlPresent: urls ? true : null,
+        missingComplianceUrl: urls ? false : null,
+      }),
+      diagnostics,
+      enrollmentEvidence:
+        enrolled === null
+          ? null
+          : {
+              enrollmentCount: enrolled ? 1 : 0,
+              enrollments: enrolled
+                ? [buildEnrollmentEntry({ guid: GUID, enrollmentState: 1 })]
+                : [],
+            },
+      scheduledTaskEvidence: enrolled ? { enterpriseMgmtGuids: [GUID] } : null,
+    });
+  }
+
+  it.each(ROWS)(
+    "joined=$joined urls=$urls enrolled=$enrolled: $label ($labelTone), chip $chip ($chipTone)",
+    (row) => {
+      const result = parserResult(row);
+      const chip = getMdmState(result);
+      expect(getMdmVisibilityLabel(result.derived)).toBe(row.label);
+      expect(toneForMdmVisibility(result)).toBe(row.labelTone);
+      expect(chip.label).toBe(row.chip);
+      expect(chip.tone).toBe(row.chipTone);
+      expect(getVerdictHeadline(result)).toBe(row.headline);
+      expect(toneForMdmVisibility(result) === "warn").toBe(chip.tone === "warn");
+    },
+  );
 });
 
 describe("getVerdictHeadline", () => {
