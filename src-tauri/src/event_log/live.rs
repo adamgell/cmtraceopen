@@ -542,11 +542,9 @@ fn project_polling_tail_scan(
     scan: ChannelScan,
     dedup: &mut ProviderGapDedup,
 ) -> PollingTailProjection {
-    // A tail batch carries its gaps as text, so each one keeps its message and nothing is dropped.
-    let mut coverage_gaps = Vec::new();
-    for gap in scan.gaps {
-        push_bounded_tail_coverage_gap(&mut coverage_gaps, gap.message);
-    }
+    // A tail batch carries its gaps as text. The scan's gaps are already bounded by the same rule,
+    // so they are taken as they are: bounding them again would reset the summary's count to 1.
+    let mut coverage_gaps: Vec<String> = scan.gaps.into_iter().map(|gap| gap.message).collect();
     for gap in scan.provider_gaps {
         if dedup.keep(&gap) {
             push_bounded_tail_coverage_gap(&mut coverage_gaps, format_provider_gap(&gap));
@@ -3565,6 +3563,33 @@ mod portable_tests {
                 "Security: the Event Log service refused the channel query (Windows error 5: Access is denied)"
                     .to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn polling_tail_keeps_the_count_a_full_scan_coalesced() {
+        // The scan is bounded by the tail's own rule, so its summary already carries the true
+        // count. Bounding it a second time would replace that count with 1.
+        let mut scan = ChannelScan {
+            records: Vec::new(),
+            delivered: 0,
+            gaps: Vec::new(),
+            provider_gaps: Vec::new(),
+            cancelled: false,
+        };
+        for index in 0..MAX_TAIL_COVERAGE_GAPS + 5 {
+            push_bounded_scan_gap(&mut scan.gaps, ScanGap::record(format!("gap-{index}")));
+        }
+
+        let projected = project_polling_tail_scan(scan, &mut ProviderGapDedup::persistent_tail());
+
+        assert_eq!(projected.coverage_gaps.len(), MAX_TAIL_COVERAGE_GAPS);
+        assert_eq!(projected.coverage_gaps[0], "gap-0");
+        assert_eq!(
+            projected.coverage_gaps.last(),
+            Some(&format!(
+                "{TAIL_COVERAGE_SUMMARY_PREFIX}6{TAIL_COVERAGE_SUMMARY_SUFFIX}"
+            ))
         );
     }
 
