@@ -158,7 +158,7 @@ describe("level toggles", () => {
     expect(toggle("Error")).toHaveAttribute("aria-pressed", "true");
     expect(toggle("Critical")).toHaveAttribute("aria-pressed", "false");
     // A deselected level still reports what is loaded, so the operator can see what turning it on adds.
-    expect(toggle("Critical")).toHaveAccessibleDescription("1 events loaded");
+    expect(toggle("Critical")).toHaveAccessibleDescription("1 event loaded");
   });
 
   it("toggles a level in the store", () => {
@@ -632,3 +632,68 @@ describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
     });
   },
 );
+
+/**
+ * Windows contrast themes force every color to a system color, which would leave a pressed toggle
+ * with nothing but a heavier weight. The pressed toggle must paint a Highlight block in that mode,
+ * and the dots must keep a ring. jsdom cannot apply forced colors, so this reads the rules.
+ */
+describe("the level toggle in forced-colors mode", () => {
+  const DOT = "evtx-level-dot";
+  const COUNT = "evtx-level-count";
+
+  function forced(
+    element: HTMLElement,
+    pseudo: "" | ":hover" | ":active",
+    descendant: "" | typeof DOT | typeof COUNT,
+    property: string,
+  ): string[] {
+    const classes = Array.from(element.classList).filter((name) => name !== DOT && name !== COUNT);
+    const selectors = classes.map((name) => `.${name}${pseudo}${descendant ? ` .${descendant}` : ""}`);
+    const values: string[] = [];
+    for (const sheet of Array.from(document.styleSheets)) {
+      for (const rule of Array.from(sheet.cssRules)) {
+        if (!(rule instanceof CSSMediaRule)) continue;
+        if (!rule.media.mediaText.includes("forced-colors: active")) continue;
+        for (const inner of Array.from(rule.cssRules)) {
+          if (inner instanceof CSSStyleRule && selectors.includes(inner.selectorText)) {
+            // System color keywords are case-insensitive and jsdom lowercases them.
+            const value = inner.style.getPropertyValue(property).toLowerCase();
+            if (value) values.push(value);
+          }
+        }
+      }
+    }
+    return values;
+  }
+
+  beforeEach(() => seed({ filterLevels: new Set<EvtxLevel>(["Error"]) }));
+
+  it("paints a pressed toggle as a Highlight block at rest, hovered and held", () => {
+    render(<EvtxFilterBar nowEpoch={0} />);
+    const pressed = toggle("Error");
+    expect(pressed).toHaveAttribute("aria-pressed", "true");
+    for (const pseudo of ["", ":hover", ":active"] as const) {
+      expect(forced(pressed, pseudo, "", "background-color"), `pressed${pseudo} surface`).toEqual(["highlight"]);
+      expect(forced(pressed, pseudo, "", "color"), `pressed${pseudo} label`).toEqual(["highlighttext"]);
+      expect(forced(pressed, pseudo, COUNT, "color"), `pressed${pseudo} count`).toEqual(["highlighttext"]);
+      expect(forced(pressed, pseudo, DOT, "outline-color"), `pressed${pseudo} ring`).toEqual(["highlighttext"]);
+    }
+  });
+
+  it("leaves an unpressed toggle on system colors and rings its dot in CanvasText", () => {
+    render(<EvtxFilterBar nowEpoch={0} />);
+    const unpressed = toggle("Warning");
+    expect(unpressed).toHaveAttribute("aria-pressed", "false");
+    for (const pseudo of ["", ":hover", ":active"] as const) {
+      expect(forced(unpressed, pseudo, "", "background-color"), `unpressed${pseudo}`).toEqual([]);
+      expect(forced(unpressed, pseudo, DOT, "outline-color"), `unpressed${pseudo} ring`).toEqual(["canvastext"]);
+    }
+  });
+
+  it("keeps every dot's level color, so only the ring and label change", () => {
+    render(<EvtxFilterBar nowEpoch={0} />);
+    const dot = toggle("Error").querySelector<HTMLElement>(`.${DOT}`)!;
+    expect(forced(dot, "", "", "forced-color-adjust")).toEqual(["none"]);
+  });
+});

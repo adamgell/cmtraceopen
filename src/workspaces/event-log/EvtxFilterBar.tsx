@@ -10,10 +10,16 @@
  * with at least one loaded channel, every toggle calls `refreshBeforeLoad` in `evtx-store.ts`, which
  * runs `refreshLoadedChannels`: it empties `records`, sets `isLoading` and queries every loaded
  * channel again. The level predicate only reaches the service when it is a strict subset without
- * Information (`levelsFilteredAtSource`); the reload happens either way. The row therefore never
- * presents a toggle as instant: the group is `aria-busy`, a spinner shows beside it, the counts
- * read as unknown rather than zero while the records are gone, and each toggle's description says
- * it reloads. In file mode a toggle is a local filter and nothing is queried.
+ * Information (`levelsFilteredAtSource`); the reload happens either way. In file mode a toggle is a
+ * local filter and nothing is queried.
+ *
+ * What the operator sees in the full workspace: the emptied records make `EventLogWorkspace` return
+ * its full-screen "Loading event logs..." spinner (`isLoading && records.length === 0`), which
+ * unmounts this row, the toggle just pressed and keyboard focus until the first batch streams in
+ * (pinned in EventLogWorkspace.test.tsx; a finding for Main, not changed here because the early
+ * return also governs the first live load). This row's own loading state shows once batches
+ * repopulate `records` while `isLoading` continues: the group is `aria-busy`, a spinner shows beside
+ * it, the counts read as unknown rather than zero, and each toggle's description says it reloads.
  */
 import { useMemo, type CSSProperties } from "react";
 import {
@@ -64,6 +70,23 @@ const RELOAD_NOTE = "Changing a level reloads the loaded channels from the live 
 /** Plain class names on the dot and the count, so a toggle's state rules can reach them. */
 const DOT_CLASS = "evtx-level-dot";
 const COUNT_CLASS = "evtx-level-count";
+
+/**
+ * Windows contrast themes. The theme colors above do not apply there: the browser forces every
+ * color to a system color, which would leave a pressed toggle with only its heavier weight and
+ * drop the dots. Fluent's own checked ToggleButton answers the same way (Highlight and
+ * HighlightText), and so does this: a pressed toggle is a Highlight block, every dot keeps its
+ * level color inside a CanvasText ring, and a dot on a pressed toggle rings in HighlightText.
+ */
+const FORCED_COLORS = "@media (forced-colors: active)";
+const FORCED_PRESSED = {
+  backgroundColor: "Highlight",
+  ...shorthands.borderColor("Highlight"),
+  color: "HighlightText",
+  forcedColorAdjust: "none",
+  [`& .${COUNT_CLASS}`]: { color: "HighlightText" },
+  [`& .${DOT_CLASS}`]: { outlineColor: "HighlightText" },
+} as const;
 
 const useStyles = makeStyles({
   levelGroup: {
@@ -117,6 +140,11 @@ const useStyles = makeStyles({
       outlineColor: tokens.colorStrokeFocus2,
       outlineOffset: "1px",
     },
+    [FORCED_COLORS]: {
+      [`& .${DOT_CLASS}`]: { outlineColor: "CanvasText" },
+      ":hover": { [`& .${DOT_CLASS}`]: { outlineColor: "CanvasText" } },
+      ":active": { [`& .${DOT_CLASS}`]: { outlineColor: "CanvasText" } },
+    },
   },
   // The level is shown. Hover and mouse-down keep the selection surface, so the dot's ring is
   // measured against one surface for all three.
@@ -141,6 +169,13 @@ const useStyles = makeStyles({
       [`& .${COUNT_CLASS}`]: { color: "var(--evtx-level-count-pressed)" },
       [`& .${DOT_CLASS}`]: { outlineColor: "var(--evtx-level-ring-pressed)" },
     },
+    // Hover and mouse-down repeat the block: the rules above are pseudo-class rules and would
+    // otherwise out-rank the base one and paint the theme's selection surface.
+    [FORCED_COLORS]: {
+      ...FORCED_PRESSED,
+      ":hover": FORCED_PRESSED,
+      ":active": FORCED_PRESSED,
+    },
   },
   dot: {
     width: "8px",
@@ -150,6 +185,8 @@ const useStyles = makeStyles({
     outlineStyle: "solid",
     outlineWidth: "1px",
     outlineColor: "transparent",
+    // Keeps the level color; the ring is what the forced palette draws.
+    [FORCED_COLORS]: { forcedColorAdjust: "none" },
   },
   count: {
     fontFamily: tokens.fontFamilyNumeric,
@@ -289,7 +326,7 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
           const known = countIsKnown(level);
           const descriptionId = `evtx-level-count-${level}`;
           const description = known
-            ? `${levelCounts[level].toLocaleString()} events loaded`
+            ? `${levelCounts[level].toLocaleString()} ${levelCounts[level] === 1 ? "event" : "events"} loaded`
             : isLoading
               ? "Count unavailable while events load"
               : `Count unavailable: the live query leaves out ${level} events while this level is hidden`;
