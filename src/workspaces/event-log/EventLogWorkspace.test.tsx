@@ -1,8 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const LEVEL_BADGE_PRESENT_OFFSET = 9;
-const LEVEL_BADGE_ABSENT_OFFSET = 5;
 const virtualizerState = vi.hoisted(() => ({
   measured: [] as HTMLElement[],
   measuredSizes: new Map<number, number>(),
@@ -17,14 +15,9 @@ const virtualizerState = vi.hoisted(() => ({
   visibleCount: null as number | null,
   scrollToIndex: vi.fn(),
   recalculate: () => undefined,
-  measureElementSize: (element: HTMLElement) => {
-    const hasLevelBadge = element.querySelector("[data-evtx-level-badge]") !== null;
-    return element.getAttribute("role") === "row" &&
-      !element.hasAttribute("data-evtx-marker-key")
-      ? Number.parseFloat(element.style.height)
-      : Number.parseFloat(element.style.lineHeight) +
-          (hasLevelBadge ? LEVEL_BADGE_PRESENT_OFFSET : LEVEL_BADGE_ABSENT_OFFSET);
-  },
+  // Every row, record or group, carries its border-box height (spec D1), so a measured row is the
+  // height it declares.
+  measureElementSize: (element: HTMLElement) => Number.parseFloat(element.style.height),
   resizeItem: (index: number, size: number) => {
     virtualizerState.resizeItemCalls += 1;
     virtualizerState.resizedSizes.set(index, size);
@@ -391,11 +384,11 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.measured).toContain(recordRow);
     expect(virtualizerState.items[1]).toMatchObject({
       index: 1,
-      size: smallList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET,
+      size: smallList.rowHeight,
       start: smallList.rowHeight,
     });
     expect(virtualizerState.totalSize).toBe(
-      smallList.rowHeight + smallList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      smallList.rowHeight * 2
     );
     expect(groupRow.style.boxSizing).toBe("border-box");
     expect(groupRow.style.height).toBe(`${smallList.rowHeight}px`);
@@ -457,12 +450,12 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.measured).toContain(recordRowLarge);
     expect(virtualizerState.items[1]).toMatchObject({
       index: 1,
-      size: largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET,
+      size: largeList.rowHeight,
       start: largeList.rowHeight,
     });
     const groupRowLarge = screen.getAllByRole("row")[0];
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      largeList.rowHeight * 2
     );
     groupRowLarge.focus();
     fireEvent.keyDown(groupRowLarge, { key: "ArrowDown" });
@@ -509,7 +502,7 @@ describe("event-viewer shared font metrics", () => {
     const initialMeasureCalls = virtualizerState.measureCalls;
     const smallList = getLogListMetrics(MIN_LOG_LIST_FONT_SIZE);
     expect(virtualizerState.initialItems[1].size).toBe(
-      smallList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      smallList.rowHeight
     );
 
     expect(channelInput.style.fontSize).toBe(`${MIN_LOG_LIST_FONT_SIZE}px`);
@@ -536,11 +529,11 @@ describe("event-viewer shared font metrics", () => {
     expect(recordRow.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
     expect(virtualizerState.resizedSizes.get(1)).toBe(
-      largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      largeList.rowHeight
     );
     expect(virtualizerState.items[1].start).toBe(largeList.rowHeight);
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      largeList.rowHeight * 2
     );
   });
   it("updates connected rows while estimating offscreen rows after a font change", () => {
@@ -569,13 +562,12 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
 
     expect(virtualizerState.resizedSizes.get(1)).toBe(
-      largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      largeList.rowHeight
     );
     expect(virtualizerState.resizedSizes.has(2)).toBe(false);
     expect(virtualizerState.items).toHaveLength(2);
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight +
-        (largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET) * 2,
+      largeList.rowHeight * 3,
     );
   });
   it("keeps a 100,000-record view addressable with a bounded DOM window", () => {
@@ -645,7 +637,7 @@ describe("event-viewer shared font metrics", () => {
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
     expect(virtualizerState.resizedSizes.get(1)).toBe(
-      largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      largeList.rowHeight
     );
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
     timeline.unmount();
@@ -673,7 +665,7 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.resizedSizes.has(1)).toBe(false);
     expect(virtualizerState.items).toHaveLength(1);
     expect(virtualizerState.totalSize).toBe(
-      (largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET) * 2
+      largeList.rowHeight * 2
     );
     timeline.unmount();
   });
@@ -701,7 +693,7 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.resizedSizes.get(0)).toBe(5);
     expect(virtualizerState.totalSize).toBe(5);
   });
-  it("uses the smaller record cache when the level column is hidden", () => {
+  it("sizes a record row from the metrics whether or not the level column is shown", () => {
     seedEventLog();
     useEvtxStore.setState((state) => ({
       columnConfig: {
@@ -715,7 +707,7 @@ describe("event-viewer shared font metrics", () => {
     const timeline = render(<EvtxTimeline />);
     expect(recordGridRows(timeline.container)).toHaveLength(1);
     expect(virtualizerState.initialItems[1].size).toBe(
-      getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).rowLineHeight + LEVEL_BADGE_ABSENT_OFFSET
+      getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).rowHeight
     );
 
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
@@ -723,10 +715,10 @@ describe("event-viewer shared font metrics", () => {
 
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
     expect(virtualizerState.resizedSizes.get(1)).toBe(
-      largeList.rowLineHeight + LEVEL_BADGE_ABSENT_OFFSET
+      largeList.rowHeight
     );
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + largeList.rowLineHeight + LEVEL_BADGE_ABSENT_OFFSET
+      largeList.rowHeight * 2
     );
   });
 });
