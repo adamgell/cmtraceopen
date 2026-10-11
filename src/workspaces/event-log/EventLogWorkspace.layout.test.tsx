@@ -94,6 +94,20 @@ describe("EventLogWorkspace three-column shell", () => {
     }
   });
 
+  it("caps the channel region and the rail on the body row's own children, not on a sized wrapper", () => {
+    render(<EventLogWorkspace />);
+    const row = region("main")!.parentElement as HTMLElement;
+    // Both regions are direct children of the row, whose width is definite, so 40% is 40% of it.
+    for (const name of ["channels", "rail"]) {
+      const el = region(name)!;
+      expect(el.parentElement).toBe(row);
+      expect(el).toHaveStyle({ maxWidth: "40%", minWidth: "0px" });
+    }
+    // The pane inside the channel region carries no percentage cap of its own.
+    const pane = region("channels")!.firstElementChild as HTMLElement;
+    expect(pane.style.maxWidth).toBe("");
+  });
+
   it("hides and shows the channel pane without discarding its state", () => {
     render(<EventLogWorkspace />);
     const search = screen.getByTestId("channel-picker");
