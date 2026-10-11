@@ -896,8 +896,9 @@ describe("event-log live operations", () => {
     const filter = document.querySelector<HTMLInputElement>(
       'input[placeholder="Filter channels..."]',
     )!;
+    // The live tail control is the footer's Resume (tail off) / Pause (tail on) link-button.
     const liveTailButton = Array.from(document.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Start live tail",
+      (button) => button.textContent?.trim() === "Resume",
     )!;
     await waitFor(() => expect(document.querySelector('[role="status"]')).toHaveFocus());
     liveTailButton.focus();
