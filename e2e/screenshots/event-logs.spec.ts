@@ -282,6 +282,10 @@ test.describe("event-logs screenshots", () => {
     const rail = await page.locator('[data-evtx-region="rail"]').boundingBox();
     // The rail is 340 px wide at its default (spec 5.2).
     expect(Math.round(rail?.width ?? 0)).toBe(340);
+    // And the channel pane is 250 px including its 1 px border (spec 5.2).
+    // Measure the pane itself (the wrapper's child), not the wrapper around it.
+    const channels = await page.locator('[data-evtx-region="channels"] > *').first().boundingBox();
+    expect(Math.round(channels?.width ?? 0)).toBe(250);
     await expect(page.getByRole("region", { name: "Level mix" })).toBeVisible();
     await assertNoHostPaths(page);
     await page.screenshot({
