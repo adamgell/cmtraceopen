@@ -12,6 +12,7 @@ import {
   type DisplayPhaseAssessment,
   type FactGroup,
   type FactRow,
+  activeEnrollmentCount,
   enrollmentGuidKey,
   formatBool,
   formatCertificateValidityRange,
@@ -747,23 +748,32 @@ export function buildEnrollmentStatusGroup(
   if (!result.enrollmentEvidence) {
     return [];
   }
-  const { facts } = result;
+  const { facts, derived } = result;
+  const activeCount = activeEnrollmentCount(result.enrollmentEvidence);
   return [
     {
       id: "enrollment-status",
       title: "Enrollment Status",
-      caption: "MDM enrollment entries found in the registry.",
+      caption:
+        "Keys under the Enrollments registry key, and how many are active (EnrollmentState 1).",
       rows: withNotReportedMetadata([
         {
-          label: "Enrollment Count",
+          // Counts every GUID key, whatever its values: it errs high on
+          // purpose for the negative, so it is never "good". It warns only for
+          // the parser's negative on a joined device, the same predicate as
+          // `enrollment-missing-on-joined`, and is neutral otherwise (an empty
+          // registry beside a task GUID, or a device that is not joined).
+          label: "Enrollment registry keys",
           value: String(result.enrollmentEvidence.enrollmentCount),
           tone:
-            result.enrollmentEvidence.enrollmentCount === 0 &&
-            facts.joinState.azureAdJoined === true
+            derived.mdmEnrolled === false && facts.joinState.azureAdJoined === true
               ? ("warn" as const)
-              : result.enrollmentEvidence.enrollmentCount > 1
-                ? ("warn" as const)
-                : ("good" as const),
+              : ("neutral" as const),
+        },
+        {
+          label: "Active enrollments (EnrollmentState 1)",
+          value: String(activeCount),
+          tone: activeCount > 1 ? ("warn" as const) : ("neutral" as const),
         },
         ...(() => {
           // GUID identity ignores braces and case, as the parser compares it.

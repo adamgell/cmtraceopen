@@ -4,6 +4,7 @@ import {
 } from "../../lib/date-time-format";
 import type {
   DsregcmdAnalysisResult,
+  DsregcmdEnrollmentEvidence,
   DsregcmdEvidenceSource,
   DsregcmdFacts,
   DsregcmdPolicyEvidenceValue,
@@ -510,6 +511,40 @@ const ENROLLMENT_GUID = new RegExp(
 export function enrollmentGuidKey(guid: string | null | undefined): string | null {
   const match = guid == null ? null : ENROLLMENT_GUID.exec(guid);
   return match ? (match[1] ?? match[2]).toLowerCase() : null;
+}
+
+/**
+ * The number of active enrollments: distinct enrollment GUIDs (compared
+ * ignoring braces and case) whose `enrollmentState` is exactly 1 once all the
+ * entries of that GUID are reconciled. A missing state, any other state,
+ * entries of one GUID that disagree on the state, and an entry without a
+ * GUID-shaped value do not count. `providerId` plays no part.
+ *
+ * Every positive claim about enrollments uses this count; `enrollmentCount`
+ * counts registry keys for the negative and errs high on purpose (reducer-
+ * contract ruling 2 on #924). The parser's `active_enrollment_count`
+ * (crates/cmtraceopen-parser/src/dsregcmd/extended.rs) is the same
+ * definition, tested on the same fixture matrix.
+ */
+export function activeEnrollmentCount(
+  evidence: Pick<DsregcmdEnrollmentEvidence, "enrollments">,
+): number {
+  const states = new Map<string, number[]>();
+  for (const entry of evidence.enrollments) {
+    const key = enrollmentGuidKey(entry.guid);
+    if (key === null) {
+      continue;
+    }
+    const guidStates = states.get(key) ?? [];
+    if (entry.enrollmentState !== null) {
+      guidStates.push(entry.enrollmentState);
+    }
+    states.set(key, guidStates);
+  }
+  return [...states.values()].filter(
+    (guidStates) =>
+      guidStates.length > 0 && guidStates.every((state) => state === 1),
+  ).length;
 }
 
 /**
