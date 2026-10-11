@@ -97,7 +97,6 @@ const UNAVAILABLE_STATES: ReadonlySet<ChannelReadState> = new Set([
 ]);
 
 const useStyles = makeStyles({
-  row: { ":hover": { backgroundColor: tokens.colorNeutralBackground2Hover } },
   disclosure: {
     ":focus-visible": {
       outlineStyle: "solid",
@@ -1041,7 +1040,6 @@ const ChannelRow = memo(function ChannelRow({
     <div
       data-channel-row={channel.name}
       data-channel-state={state}
-      className={styles.row}
       style={{
         display: "flex",
         flexDirection: "column",
