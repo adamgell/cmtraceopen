@@ -18,6 +18,7 @@
 import { tokens } from "@fluentui/react-components";
 import { contrastRatio, readableOn } from "../../lib/color-contrast";
 import type { CMTraceTheme } from "../../lib/themes/types";
+import { evtxActiveTextColor } from "./evtx-active-state";
 import { resolveToken, type EvtxVisualTokens } from "./evtx-visual-tokens";
 
 export type LevelToggleState = "rest" | "hover" | "active" | "pressed";
@@ -78,21 +79,24 @@ export function levelToggleStates(
   const surface = (state: LevelToggleState) => resolve(LEVEL_TOGGLE_BACKGROUNDS[state]);
 
   // Fluent's own foreground for the surface in each unpressed state, so the label follows the
-  // library's hover and press behavior wherever that behavior is readable. Pressed uses the spec's
-  // active-toggle text (6.2) and falls back to black or white where that misses 4.5:1.
-  const labelPreferred: Record<LevelToggleState, string> = {
+  // library's hover and press behavior wherever that behavior is readable.
+  const labelPreferred = {
     rest: resolve(tokens.colorNeutralForeground1),
     hover: resolve(tokens.colorNeutralForeground1Hover),
     active: resolve(tokens.colorNeutralForeground1Pressed),
-    pressed: resolve(tokens.colorBrandForeground1),
-  };
+  } as const;
 
   const build = (
     state: LevelToggleState,
     dotRing: string | null,
   ): LevelToggleStateVisual => {
     const background = surface(state);
-    const label = readableText(background, [labelPreferred[state]]);
+    // Pressed is the spec's active-toggle text (6.2) on the selection surface: the same rule the view
+    // bar's active tab and checked panel toggles use, so it comes from the one copy of it.
+    const label =
+      state === "pressed"
+        ? evtxActiveTextColor(theme)
+        : readableText(background, [labelPreferred[state]]);
     // The count is de-emphasized (spec: colorNeutralForeground3), then the secondary text token,
     // then the label itself, which is already readable. Solarized-dark and dracula fall through to
     // the secondary token at rest; high contrast reaches the label on every non-neutral surface.

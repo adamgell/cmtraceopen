@@ -18,6 +18,7 @@ import {
   levelToggleStates,
   type LevelToggleState,
 } from "./evtx-level-toggle";
+import { evtxActiveTextColor } from "./evtx-active-state";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import { EVTX_LEVELS } from "./evtx-filter";
 
@@ -112,6 +113,10 @@ describe.each(themes)("level toggle contrast in the %s theme", (id, theme) => {
     expect(ratio, `${id}: ${state} count ${states[state].count}`).toBeGreaterThanOrEqual(
       TEXT_MINIMUM,
     );
+  });
+
+  it("takes the pressed label from the view bar's active text rule, not a second copy of it", () => {
+    expect(states.pressed.label, id).toBe(evtxActiveTextColor(theme));
   });
 
   it("uses the spec's pressed text, colorBrandForeground1, wherever it is readable", () => {
