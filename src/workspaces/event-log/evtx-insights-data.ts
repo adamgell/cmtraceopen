@@ -5,6 +5,8 @@
  * in `evtx-filter.ts` for the filter row; when it lands, one of the two should call the other so
  * the rail and the filter row never disagree about a count.
  */
+import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
+import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
 import type {
   DiagnosisEventEvidence,
   DiagnosisFinding,
@@ -182,13 +184,18 @@ export function eventEvidenceLabel(
 /** The redaction token the engine writes: `[kind:16 hex digits]`, as in `[host:0123456789abcdef]`. */
 const REDACTION_TOKEN = /\[[a-z]+:[0-9a-f]{16}\]/g;
 
-/** The analysis transport digest-bounds identity fields over this many UTF-8 bytes. */
-const IDENTITY_BYTE_LIMIT = 256;
-
-const utf8 = new TextEncoder();
+/** The suffix `boundUtf8WithDigest` writes on a value it bounded. */
+const TRUNCATED_SUFFIX = /\u2026\[truncated:([0-9a-f]{16})\]$/;
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** `evidence` with each redaction token a non-empty wildcard and the rest literal, anchored. */
+function matchesWithTokens(evidence: string, raw: string): boolean {
+  if (!evidence.match(REDACTION_TOKEN)) return evidence === raw;
+  const segments = evidence.split(REDACTION_TOKEN).map(escapeRegExp);
+  return new RegExp(`^${segments.join(".+")}$`, "s").test(raw);
 }
 
 /**
@@ -196,16 +203,24 @@ function escapeRegExp(text: string): string {
  * The engine redacts identifiers partially: a profile segment or a machine name inside a longer
  * string becomes a `[kind:hex16]` token (`C:\Users\[user:...]\Downloads\System.evtx`,
  * `Remote: [host:...]`). A value with tokens is compared with each token as a non-empty wildcard
- * and the rest literal; a value without tokens must be equal. A record value over the transport's
- * identity byte limit reaches the engine digest-bounded and can never match literally, so that
- * field is not compared; the unique-match rule still guards against a wrong match.
+ * and the rest literal; a value without tokens must be equal.
+ *
+ * An identity field over the transport's byte limit reaches the engine digest-bounded: a prefix
+ * plus `\u2026[truncated:hex16]`. When the EVIDENCE carries that suffix, the record's value is
+ * bounded the same way; its digest must equal the evidence's, and the prefixes are compared with
+ * the same token rule. Evidence without the suffix is never matched against a long value as if it
+ * were bounded.
  */
 export function redactedValueMatches(evidenceValue: string, recordValue: string): boolean {
-  if (utf8.encode(recordValue).length > IDENTITY_BYTE_LIMIT) return true;
-  const tokens = evidenceValue.match(REDACTION_TOKEN);
-  if (!tokens) return evidenceValue === recordValue;
-  const segments = evidenceValue.split(REDACTION_TOKEN).map(escapeRegExp);
-  return new RegExp(`^${segments.join(".+")}$`, "s").test(recordValue);
+  const truncated = TRUNCATED_SUFFIX.exec(evidenceValue);
+  if (!truncated) return matchesWithTokens(evidenceValue, recordValue);
+  const bounded = boundUtf8WithDigest(recordValue, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
+  const boundedSuffix = TRUNCATED_SUFFIX.exec(bounded);
+  if (!boundedSuffix || boundedSuffix[1] !== truncated[1]) return false;
+  return matchesWithTokens(
+    evidenceValue.slice(0, truncated.index),
+    bounded.slice(0, boundedSuffix.index),
+  );
 }
 
 /** The record's identity text in the engine's order, or null when the provider never numbered it. */
@@ -226,15 +241,22 @@ export function evidenceMatchesRecord(
   record: EvtxRecord,
 ): boolean {
   if (value.eventId !== record.eventId) return false;
+  // Record identity first: it is a string compare, so a live tail does not build patterns for every
+  // record that merely shares the event ID.
+  const own = recordIdentityText(record);
+  if (own === null) return false;
+  if (hasRecordIdText(value.recordIdText)) {
+    if (value.recordIdText !== own) return false;
+  } else if (value.fallbackIdentity) {
+    return false;
+  } else if (value.recordId === 0 || String(value.recordId) !== own) {
+    return false;
+  }
   if (!redactedValueMatches(value.provider, record.provider)) return false;
   if (value.channel && !redactedValueMatches(value.channel, record.channel)) return false;
   if (value.machine && !redactedValueMatches(value.machine, record.computer)) return false;
   if (value.source && !redactedValueMatches(value.source, record.sourceLabel)) return false;
-  const own = recordIdentityText(record);
-  if (own === null) return false;
-  if (hasRecordIdText(value.recordIdText)) return value.recordIdText === own;
-  if (value.fallbackIdentity) return false;
-  return value.recordId !== 0 && String(value.recordId) === own;
+  return true;
 }
 
 /**

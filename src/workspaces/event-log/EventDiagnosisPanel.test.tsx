@@ -820,13 +820,31 @@ describe("EventDiagnosisPanel", () => {
       }
     });
 
-    it("dims the omitted-row counts inside the disclosures", () => {
+    // Opacity multiplies down the tree, so the number that matters is the effective one.
+    const effectiveOpacity = (element: Element | null) => {
+      let opacity = 1;
+      for (let node = element; node; node = node.parentElement) {
+        const own = (node as HTMLElement).style?.opacity;
+        if (own) opacity *= Number(own);
+      }
+      return opacity;
+    };
+
+    it("dims each omitted-row count once: 0.6 effective, inside a disclosure or not", () => {
       render(<EventDiagnosisPanel summary={bounded} updating />);
       expand(/Coverage gaps/);
       expand("Show diagnosis details");
-      busy(screen.getByText("3 coverage gaps omitted."));
-      busy(screen.getByText("4 correlations omitted."));
-      busy(screen.getByText("2 error-token event details omitted."));
+      for (const text of [
+        "2 actionable findings omitted.",
+        "3 coverage gaps omitted.",
+        "4 correlations omitted.",
+        "2 error-token event details omitted.",
+      ]) {
+        expect(effectiveOpacity(screen.getByText(text)), text).toBeCloseTo(0.6, 5);
+      }
+      // The rows inside a stale disclosure carry no dimming of their own.
+      expect(screen.getByText("3 coverage gaps omitted.").style.opacity).toBe("");
+      expect(screen.getByText("2 actionable findings omitted.").style.opacity).toBe("0.6");
     });
 
     it("dims 'No actionable findings.'", () => {

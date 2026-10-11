@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
+import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
 import {
   buildSameIdSeries,
   correlationBreakdown,
@@ -161,11 +163,52 @@ describe("redactedValueMatches", () => {
     expect(redactedValueMatches(`a.b(${HOST})`, "aXb(PC)")).toBe(false);
   });
 
-  it("does not compare a field the transport digest-bounded (record value over 256 bytes)", () => {
+  it("anchors the pattern at both ends", () => {
+    const evidence = `bundle\\${HOST}\\System.evtx`;
+    expect(redactedValueMatches(evidence, "bundle\\PC\\System.evtx")).toBe(true);
+    expect(redactedValueMatches(evidence, "old-bundle\\PC\\System.evtx")).toBe(false);
+    expect(redactedValueMatches(evidence, "bundle\\PC\\System.evtx.bak")).toBe(false);
+  });
+
+  describe("digest-bounded identity fields (the real boundUtf8WithDigest)", () => {
     const long = `Microsoft-Windows-${"Very".repeat(80)}-Provider`;
-    // The engine saw a truncated form plus a digest, so no literal match is possible.
-    expect(redactedValueMatches("Microsoft-Windows-VeryVery...[digest]", long)).toBe(true);
-    expect(redactedValueMatches("short", "different")).toBe(false);
+    const bounded = boundUtf8WithDigest(long, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
+
+    it("bounds the value for real: a prefix plus the truncated suffix", () => {
+      expect(bounded).not.toBe(long);
+      expect(bounded).toMatch(/\u2026\[truncated:[0-9a-f]{16}\]$/);
+    });
+
+    it("matches the same long value, bounded the same way", () => {
+      expect(redactedValueMatches(bounded, long)).toBe(true);
+    });
+
+    it("does not match another long value, even one sharing the prefix: the digest differs", () => {
+      expect(redactedValueMatches(bounded, `${long}-other`)).toBe(false);
+    });
+
+    it("does not match a short record value, or treat an unbounded evidence value as bounded", () => {
+      expect(redactedValueMatches(bounded, "short")).toBe(false);
+      expect(redactedValueMatches("short", long)).toBe(false);
+      expect(redactedValueMatches(long, long)).toBe(true);
+    });
+
+    it("strips the suffix before tokenizing, so it is not read as a redaction token", () => {
+      // Without stripping, `[truncated:hex16]` would look like a token and match any digest.
+      const other = boundUtf8WithDigest(`${long}x`, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
+      expect(redactedValueMatches(other, long)).toBe(false);
+    });
+
+    it("matches a bounded value whose prefix had a machine name redacted", () => {
+      const path = `bundle\\LAB-PC-07\\${"x".repeat(300)}.evtx`;
+      const boundedPath = boundUtf8WithDigest(path, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
+      const redacted = boundedPath.replace("LAB-PC-07", HOST);
+      expect(redacted).not.toBe(boundedPath);
+      expect(redactedValueMatches(redacted, path)).toBe(true);
+      expect(
+        redactedValueMatches(redacted, `bundle\\LAB-PC-07\\${"x".repeat(301)}.evtx`),
+      ).toBe(false);
+    });
   });
 });
 
@@ -206,10 +249,15 @@ describe("findingForRecord", () => {
     const longProvider = `Microsoft-Windows-${"Very".repeat(80)}-Provider`;
     const longChannel = `${longProvider}/Admin`;
     const rec = record(1, { provider: longProvider, channel: longChannel });
+    const bound = (value: string) =>
+      boundUtf8WithDigest(value, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
     const finding = findingWith(
-      evidence({ provider: "Microsoft-Windows-VeryVery[bounded]", channel: "Microsoft-Windows-VeryVery[bounded]/Admin" }),
+      evidence({ provider: bound(longProvider), channel: bound(longChannel) }),
     );
     expect(findingForRecord([finding], rec, [rec])).toBe(finding);
+    // Another record whose long provider differs does not match, though the prefix is shared.
+    const other = record(1, { provider: `${longProvider}-b`, channel: longChannel });
+    expect(findingForRecord([finding], other, [other])).toBeNull();
   });
   it("rejects a different raw machine or source around a token", () => {
     const wrong = findingWith(evidence({ machine: "PC-2" }));

@@ -730,7 +730,7 @@ function OmittedRows({
   return count > 0 ? (
     <span
       aria-busy={stale || undefined}
-      style={{ fontSize: `${sizes.small}px`, color: railText.secondary, opacity: stale ? 0.6 : 1 }}
+      style={{ fontSize: `${sizes.small}px`, color: railText.secondary, opacity: stale ? 0.6 : undefined }}
     >
       {omittedLabel(count, singular)}
     </span>
@@ -753,7 +753,7 @@ function Disclosure({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sizes: RailSizes;
-  /** The label's count and the rows are from the previous build. */
+  /** The label's count and the rows are from the previous build. The rows inherit the dimming. */
   stale?: boolean;
   children: ReactNode;
 }) {
@@ -941,7 +941,6 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
             count={coverageGaps.omitted}
             singular="coverage gap"
             sizes={sizes}
-            stale={updating}
           />
         </Disclosure>
       )}
@@ -971,7 +970,6 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
             count={correlations.omitted}
             singular="correlation"
             sizes={sizes}
-            stale={updating}
           />
           {events.items.map((event, index) => (
             <EventRow key={`${event.family}-${index}`} event={event} sizes={sizes} />
@@ -980,7 +978,6 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
             count={events.omitted}
             singular="error-token event detail"
             sizes={sizes}
-            stale={updating}
           />
         </Disclosure>
       )}

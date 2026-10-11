@@ -73,6 +73,7 @@ export function useThrottledValue<T>(value: T, delayMs: number): T {
   useEffect(
     () => () => {
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+      timerRef.current = null;
     },
     [],
   );
