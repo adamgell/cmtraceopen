@@ -27,7 +27,8 @@ export type EvtxSubsetSkipReason =
   | "archive"
   | "textLog"
   | "notEvtx"
-  | "noRecordId";
+  | "noRecordId"
+  | "idTooLarge";
 
 const plural = (count: number, one: string, many = `${one}s`) => (count === 1 ? one : many);
 
@@ -45,6 +46,8 @@ export function describeSkippedRecords({ reason, records }: EvtxSubsetSkipped): 
       return `${n} ${plural(records, "event")} not read from an .evtx file`;
     case "noRecordId":
       return `${n} ${plural(records, "event")} without an EventRecordID (they cannot be selected by ID)`;
+    case "idTooLarge":
+      return `${n} ${plural(records, "event")} with an EventRecordID above ${MAX_EXACT_RECORD_ID} (too large for the query to match exactly)`;
   }
 }
 
@@ -55,6 +58,7 @@ const SKIP_REASON_ORDER: readonly EvtxSubsetSkipReason[] = [
   "textLog",
   "notEvtx",
   "noRecordId",
+  "idTooLarge",
 ];
 
 export interface EvtxSubsetSourcePlan extends EvtxSubsetSourceRequest {
@@ -92,6 +96,17 @@ export function eventRecordIdText(record: EvtxRecord): string | null {
   return null;
 }
 
+/**
+ * The largest EventRecordID the Event Log query language can match exactly: XPath numbers are
+ * IEEE doubles. The backend refuses a source that asks for a larger one, so such an event is set
+ * aside here and listed, instead of failing every other event of its source.
+ */
+const MAX_EXACT_RECORD_ID = "9007199254740991";
+
+function exceedsExactRange(id: string): boolean {
+  return BigInt(id) > BigInt(MAX_EXACT_RECORD_ID);
+}
+
 /** What the file parser writes when an event's System block names no computer. */
 const UNKNOWN_COMPUTER = "Unknown";
 
@@ -124,15 +139,15 @@ function classify(record: EvtxRecord): Classification {
     // The label says "Live", not which channel, so the record's own channel names the source.
     // The live path stamps the channel that was queried, which is the one to export from.
     if (record.channel.length === 0) return { kind: "skip", reason: "notEvtx" };
-    return id === null
-      ? { kind: "skip", reason: "noRecordId" }
-      : { kind: "export", source: "channel", path: record.channel, computer, id };
+    if (id === null) return { kind: "skip", reason: "noRecordId" };
+    if (exceedsExactRange(id)) return { kind: "skip", reason: "idTooLarge" };
+    return { kind: "export", source: "channel", path: record.channel, computer, id };
   }
   if (label.includes(ARCHIVE_MEMBER_SEPARATOR)) return { kind: "skip", reason: "archive" };
   if (!label.toLowerCase().endsWith(".evtx")) return { kind: "skip", reason: "notEvtx" };
-  return id === null
-    ? { kind: "skip", reason: "noRecordId" }
-    : { kind: "export", source: "file", path: label, computer, id };
+  if (id === null) return { kind: "skip", reason: "noRecordId" };
+  if (exceedsExactRange(id)) return { kind: "skip", reason: "idTooLarge" };
+  return { kind: "export", source: "file", path: label, computer, id };
 }
 
 export function planEvtxSubsetSources(records: readonly EvtxRecord[]): EvtxSubsetPlan {

@@ -1353,6 +1353,21 @@ describe("event-log manifest commands", () => {
     [{ folder: "C:\\out", files: [{ ...subsetFile, exportedRecords: -1 }] }],
     [{ folder: "C:\\out", files: [{ ...subsetFile, warnings: "none" }] }],
     [{ folder: "C:\\out", files: [{ ...subsetFile, messagesArchived: "yes" }] }],
+    // The read-back is all or nothing: a count without its comparisons would read as a clean file.
+    [{ folder: "C:\\out", files: [{ ...subsetFile, missing: null }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, unrequested: null }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, missing: null, unrequested: null }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, exportedRecords: null }] }],
+    // A failed file was never read back, so it carries none of the three.
+    [{ folder: "C:\\out", files: [{ ...subsetFile, status: "failed" }] }],
+    [
+      {
+        folder: "C:\\out",
+        files: [
+          { ...subsetFile, status: "failed", exportedRecords: null, missing: null, unrequested: { count: 0, sample: [] } },
+        ],
+      },
+    ],
     // The comparison with the request must be present and well formed: absent is not "none".
     [{ folder: "C:\\out", files: [{ ...subsetFile, missing: undefined }] }],
     [{ folder: "C:\\out", files: [{ ...subsetFile, unrequested: { count: -1, sample: [] } }] }],

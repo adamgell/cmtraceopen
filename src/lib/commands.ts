@@ -1476,9 +1476,9 @@ function isEvtxSubsetIdDifference(value: unknown): boolean {
 }
 
 function isEvtxSubsetFileResult(value: unknown): value is EvtxSubsetFileResult {
-  return (
-    isCommandRecord(value) &&
-    hasCommandFields(value, {
+  if (
+    !isCommandRecord(value) ||
+    !hasCommandFields(value, {
       kind: (field) => field === "channel" || field === "file",
       sourcePath: (field) => typeof field === "string",
       fileName: (field) => typeof field === "string",
@@ -1493,7 +1493,16 @@ function isEvtxSubsetFileResult(value: unknown): value is EvtxSubsetFileResult {
       error: (field) => field === null || typeof field === "string",
       warnings: isStringArray,
     })
-  );
+  ) {
+    return false;
+  }
+  // The read-back either happened or it did not: the count and both comparisons are all present or
+  // all null, and a failed file was never read back. A mix would be shown as a verified, clean
+  // file (a null comparison reads as "nothing differs"), which no real read-back produces.
+  const readBack = [value.exportedRecords, value.missing, value.unrequested];
+  const verified = readBack.every((field) => field !== null);
+  const unverified = readBack.every((field) => field === null);
+  return value.status === "failed" ? unverified : verified || unverified;
 }
 
 function decodeEventLogSubsetResult(

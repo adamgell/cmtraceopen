@@ -83,16 +83,36 @@ describe("planEvtxSubsetSources", () => {
     const path = "C:\\logs\\Setup.evtx";
     const plan = planEvtxSubsetSources([
       record({ sourceLabel: path, eventRecordId: 10, eventRecordIdText: "10" }),
-      record({ sourceLabel: path, eventRecordId: 11, eventRecordIdText: "9007199254740993" }),
+      record({ sourceLabel: path, eventRecordId: 11, eventRecordIdText: "9007199254740991" }),
     ]);
     expect(plan.sources).toEqual([
       {
         kind: "file",
         path,
-        recordGroups: [{ computer: "HOST", recordIds: ["10", "9007199254740993"] }],
+        recordGroups: [{ computer: "HOST", recordIds: ["10", "9007199254740991"] }],
         recordCount: 2,
       },
     ]);
+  });
+
+  it("sets aside an id above 2^53-1 and still exports the rest of its source", () => {
+    const plan = planEvtxSubsetSources([
+      record({ channel: "System", eventRecordId: 5 }),
+      record({ channel: "System", eventRecordId: 6, eventRecordIdText: "9007199254740992" }),
+      record({ channel: "System", eventRecordId: 7, eventRecordIdText: "9007199254740991" }),
+      record({ channel: "System", eventRecordId: 8, eventRecordIdText: "18446744073709551615" }),
+    ]);
+    // The largest id the query can match exactly is still sent; the two above it are listed.
+    expect(plan.sources).toHaveLength(1);
+    expect(plan.sources[0].recordGroups).toEqual([
+      { computer: "HOST", recordIds: ["5", "9007199254740991"] },
+    ]);
+    expect(plan.skipped).toEqual([{ reason: "idTooLarge", records: 2 }]);
+    expect(plan.skipped.map(describeSkippedRecords)).toEqual([
+      "2 events with an EventRecordID above 9007199254740991 (too large for the query to match exactly)",
+    ]);
+    expect(plan.exportableRecords).toBe(2);
+    expect(plan.skippedRecords).toBe(2);
   });
 
   it("sends each id once and treats sources that differ only by case as one", () => {

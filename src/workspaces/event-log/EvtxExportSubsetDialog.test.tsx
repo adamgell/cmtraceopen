@@ -182,7 +182,7 @@ describe("EvtxExportSubsetDialog", () => {
     const onFinished = vi.fn();
     renderDialog(
       [
-        record({ channel: "System", eventRecordId: 2 ** 60, eventRecordIdText: "1152921504606846976" }),
+        record({ channel: "System", eventRecordId: 2 ** 53, eventRecordIdText: "9007199254740991" }),
         record({ channel: "Application", eventRecordId: 3 }),
       ],
       { onFinished },
@@ -204,7 +204,7 @@ describe("EvtxExportSubsetDialog", () => {
         {
           kind: "channel",
           path: "System",
-          recordGroups: [{ computer: "HOST", recordIds: ["1152921504606846976"] }],
+          recordGroups: [{ computer: "HOST", recordIds: ["9007199254740991"] }],
         },
       ],
     });
