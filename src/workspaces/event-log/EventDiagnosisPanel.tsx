@@ -90,7 +90,7 @@ interface GroupedCoverageGap {
 }
 
 /** Actionable means every class except `coverageGap`, matching `actionableFindingCount`. */
-function actionableFindings(findings: DiagnosisFinding[]): DiagnosisFinding[] {
+export function actionableFindings(findings: DiagnosisFinding[]): DiagnosisFinding[] {
   return findings.filter((finding) => finding.class !== "coverageGap");
 }
 

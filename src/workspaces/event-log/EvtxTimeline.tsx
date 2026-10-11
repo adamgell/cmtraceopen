@@ -297,6 +297,17 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     previousUiRowKeysRef.current = uiRowKeys;
   }, [measureConnectedRow, uiRowKeys]);
 
+  // A selection made outside the grid (Details previous and next, spec section 9) keeps its row in
+  // view. `align: "auto"` leaves a row that is already visible where it is.
+  const lastScrolledRecordIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (selectedRecordId === null || lastScrolledRecordIdRef.current === selectedRecordId) return;
+    const selectedRowIndex = rowIndexByRecordId.get(selectedRecordId);
+    if (selectedRowIndex === undefined) return;
+    lastScrolledRecordIdRef.current = selectedRecordId;
+    virtualizer.scrollToIndex(selectedRowIndex, { align: "auto" });
+  }, [rowIndexByRecordId, selectedRecordId, virtualizer]);
+
   const virtualRows = virtualizer.getVirtualItems();
 
   const fontSize = metrics.fontSize;

@@ -9,7 +9,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { EvtxInsightsRail } from "./EvtxInsightsRail";
-import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
+import { evtxRailPanelId, sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
 import { useMarkerStore } from "../../stores/marker-store";
@@ -110,18 +110,18 @@ describe("EvtxInsightsRail", () => {
     useEvtxStore.setState({ selectedRecordId: RECORD.id });
     render(<EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />);
 
-    expect(screen.getByLabelText("Operational diagnosis")).toBeInTheDocument();
+    expect(screen.getByLabelText("Operational diagnosis")).toBeVisible();
     expect(screen.queryByRole("region", { name: "Event log details" })).toBeNull();
 
     fireEvent.click(tab("Event 1000"));
 
     expect(useEvtxLayoutStore.getState().railTab).toBe("details");
     expect(screen.getByRole("region", { name: "Event log details" })).toBeInTheDocument();
-    expect(screen.queryByLabelText("Operational diagnosis")).toBeNull();
-    expect(screen.getByRole("tabpanel")).toHaveAttribute(
-      "aria-labelledby",
-      tab("Event 1000").id,
-    );
+    // Insights stays mounted but hidden, so its state survives.
+    expect(screen.getByLabelText("Operational diagnosis", { selector: "section" })).not.toBeVisible();
+    const panel = document.getElementById(evtxRailPanelId("details")) as HTMLElement;
+    expect(panel).toHaveAttribute("aria-labelledby", tab("Event 1000").id);
+    expect(tab("Event 1000")).toHaveAttribute("aria-controls", panel.id);
   });
 
   it('labels the Details tab "Event {id}" while a record is selected', () => {
@@ -154,7 +154,18 @@ describe("EvtxInsightsRail", () => {
 
     expect(useEvtxStore.getState().selectedRecordId).toBeNull();
     expect(tab("Insights 1")).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByLabelText("Operational diagnosis")).toBeInTheDocument();
+    expect(screen.getByLabelText("Operational diagnosis")).toBeVisible();
+  });
+
+  it("moves focus to the Insights tab when Close removes the focused button", () => {
+    render(<EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />);
+    act(() => selectRecordAndShowDetails(RECORD.id));
+    const close = screen.getByRole("button", { name: "Close details" });
+    close.focus();
+
+    fireEvent.click(close);
+
+    expect(tab("Insights 1")).toHaveFocus();
   });
 
   it("shows Insights when the persisted tab is Chains, which does not exist yet", () => {
@@ -169,5 +180,107 @@ describe("EvtxInsightsRail", () => {
     render(<EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />);
     fireEvent.click(tab("Details"));
     expect(screen.getByText("Select a record to view details.")).toBeInTheDocument();
+  });
+
+  describe("restart, rebuilds and cost", () => {
+    const withGap: DiagnosisSummary = {
+      ...SUMMARY,
+      coverageGaps: [
+        { id: "g", source: "x.log", state: "absent", detail: "Not captured.", evidence: [] },
+      ],
+      overview: { ...SUMMARY.overview, coverageGapCount: 1 },
+    };
+
+    it("opens on Insights after a restart that left the tab on Details with nothing selected", () => {
+      useEvtxLayoutStore.setState({ railTab: "details" });
+      render(<EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />);
+
+      expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
+      expect(screen.getByLabelText("Operational diagnosis")).toBeVisible();
+    });
+
+    it("keeps Details when it was left on a record that is still selected", () => {
+      useEvtxStore.setState({ selectedRecordId: RECORD.id });
+      useEvtxLayoutStore.setState({ railTab: "details" });
+      render(<EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />);
+
+      expect(useEvtxLayoutStore.getState().railTab).toBe("details");
+    });
+
+    it("keeps the open disclosures and the scroll position across a row click and back", () => {
+      render(<EvtxInsightsRail summary={withGap} records={[RECORD]} />);
+      fireEvent.click(screen.getByText(/Coverage gaps/, { selector: "summary" }));
+      const panel = document.getElementById(evtxRailPanelId("insights")) as HTMLElement;
+      panel.scrollTop = 240;
+      fireEvent.scroll(panel);
+
+      act(() => selectRecordAndShowDetails(RECORD.id));
+      expect(panel).not.toBeVisible();
+      act(() => useEvtxLayoutStore.getState().setRailTab("insights"));
+
+      expect(
+        (screen.getByText(/Coverage gaps/, { selector: "summary" }).closest("details") as HTMLDetailsElement).open,
+      ).toBe(true);
+      expect(panel.scrollTop).toBe(240);
+    });
+
+    it("keeps showing the previous diagnosis, marked as updating, while it rebuilds", () => {
+      const { rerender } = render(
+        <EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />,
+      );
+      rerender(<EvtxInsightsRail summary={null} records={[RECORD]} pending />);
+
+      expect(screen.getByText("Enrollment failed")).toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent("Updating diagnosis...");
+      expect(tab("Insights 1")).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Level mix" })).toBeInTheDocument();
+    });
+
+    it("drops the previous diagnosis once the build fails, and says so", () => {
+      const { rerender } = render(<EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />);
+      rerender(<EvtxInsightsRail summary={null} records={[RECORD]} error="boom" />);
+
+      expect(screen.queryByText("Enrollment failed")).toBeNull();
+      expect(screen.getByRole("status")).toHaveTextContent("Diagnosis could not be built: boom");
+    });
+
+    it("says there is nothing to diagnose when there is no input and no build running", () => {
+      render(<EvtxInsightsRail summary={null} records={[]} />);
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "There are no events or text logs to diagnose.",
+      );
+    });
+
+    it("debounces the record-derived cards by 75 ms", () => {
+      vi.useFakeTimers();
+      try {
+        const { rerender } = render(<EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />);
+        const level = () => screen.getByRole("region", { name: "Level mix" });
+        expect(level()).toHaveTextContent("Error 1");
+
+        rerender(
+          <EvtxInsightsRail
+            summary={SUMMARY}
+            records={[RECORD, { ...RECORD, id: 2, level: "Warning" }]}
+          />,
+        );
+        expect(level()).not.toHaveTextContent("Warning");
+        act(() => void vi.advanceTimersByTime(74));
+        expect(level()).not.toHaveTextContent("Warning");
+        act(() => void vi.advanceTimersByTime(2));
+        expect(level()).toHaveTextContent("Warning 1");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("skips the record-derived cards while the rail is hidden", () => {
+      useEvtxLayoutStore.getState().setPanel("insights", false);
+      render(<EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />);
+      expect(screen.queryByRole("region", { name: "Level mix" })).toBeNull();
+
+      act(() => useEvtxLayoutStore.getState().setPanel("insights", true));
+      expect(screen.getByRole("region", { name: "Level mix" })).toBeInTheDocument();
+    });
   });
 });

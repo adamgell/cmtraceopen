@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Tab, TabList, tokens } from "@fluentui/react-components";
-import { Dismiss12Regular } from "@fluentui/react-icons";
+import {
+  ArrowDown16Regular,
+  ArrowRight12Regular,
+  ArrowUp16Regular,
+  Dismiss12Regular,
+} from "@fluentui/react-icons";
 import { invoke } from "@tauri-apps/api/core";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
@@ -22,14 +27,65 @@ import {
 } from "./evtx-marker-adapter";
 import { useEvtxStore } from "./evtx-store";
 import { EvtxMarkerControls } from "./EvtxTimelineRow";
-import { useEvtxLayoutStore } from "./evtx-layout-store";
+import {
+  evtxRailTabId,
+  useEvtxLayoutStore,
+} from "./evtx-layout-store";
+import { sortRecords } from "./evtx-filter";
+import {
+  buildSameIdSeries,
+  findRecordById,
+  findingForRecord,
+  formatCount,
+  neighborRecordId,
+} from "./evtx-insights-data";
 import { formatEventTime } from "./evtx-time";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
+import { EVTX_TIME_WINDOW_LABELS, type DiagnosisFinding, type EvtxRecord } from "./types";
 
 /** How many EventData fields the Details tab shows before "Show all". */
 const EVENT_DATA_PREVIEW_COUNT = 6;
 
 type DetailSubTab = "details" | "xml";
+const detailSubTabId = (tab: DetailSubTab) => `evtx-detail-tab-${tab}`;
+const detailSubPanelId = (tab: DetailSubTab) => `evtx-detail-panel-${tab}`;
+
+/** 24 bars, 22 px tall. Decorative: the counts beside it carry the numbers. */
+function Sparkline({ bins, color }: { bins: number[]; color: string }) {
+  const max = Math.max(...bins, 1);
+  return (
+    <svg
+      aria-hidden="true"
+      focusable="false"
+      viewBox={`0 0 ${bins.length} 22`}
+      preserveAspectRatio="none"
+      style={{ width: "100%", height: "22px", display: "block" }}
+    >
+      {bins.map((count, index) =>
+        count > 0 ? (
+          <rect
+            key={index}
+            x={index + 0.1}
+            width={0.8}
+            y={22 - Math.max(1.5, (count / max) * 22)}
+            height={Math.max(1.5, (count / max) * 22)}
+            fill={color}
+          />
+        ) : null,
+      )}
+    </svg>
+  );
+}
+
+interface EvtxDetailPaneProps {
+  /** The visible records, for Previous and Next and the Same ID card. */
+  visibleRecords?: readonly EvtxRecord[];
+  /** Actionable findings in display order, for the finding callout. */
+  findings?: readonly DiagnosisFinding[];
+}
+
+const NO_RECORDS: readonly EvtxRecord[] = [];
+const NO_FINDINGS: readonly DiagnosisFinding[] = [];
 
 /** One error code found in an event's text, as the parser crate reports it. */
 interface ErrorCodeMention {
@@ -45,7 +101,10 @@ interface ErrorCodeMention {
   known: boolean;
 }
 
-export function EvtxDetailPane() {
+export function EvtxDetailPane({
+  visibleRecords = NO_RECORDS,
+  findings = NO_FINDINGS,
+}: EvtxDetailPaneProps) {
   const markersByFile = useMarkerStore((s) => s.markersByFile);
   const records = useEvtxStore((s) => s.records);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
@@ -53,6 +112,9 @@ export function EvtxDetailPane() {
   const [showAllEventData, setShowAllEventData] = useState(false);
   const setSelectedRecordId = useEvtxStore((s) => s.setSelectedRecordId);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  const timeWindow = useEvtxStore((s) => s.timeWindow);
+  const sortField = useEvtxStore((s) => s.sortField);
+  const sortDirection = useEvtxStore((s) => s.sortDirection);
   const setRailTab = useEvtxLayoutStore((s) => s.setRailTab);
   const visuals = useEvtxVisualTokens();
   const logListFontSize = useUiStore((s) => s.logListFontSize);
@@ -69,10 +131,25 @@ export function EvtxDetailPane() {
   const monoFontSize = Math.max(10, fontSize - 1);
   const labelFontSize = Math.max(10, fontSize - 2);
 
-  const record = useMemo(() => {
-    if (selectedRecordId == null) return null;
-    return records.find((r) => r.id === selectedRecordId) ?? null;
-  }, [records, selectedRecordId]);
+  const record = useMemo(
+    () => findRecordById(records, selectedRecordId),
+    [records, selectedRecordId],
+  );
+  // The grid's own order, so Previous and Next walk the rows the way they read.
+  const ordered = useMemo(
+    () => (visibleRecords.length > 0 ? sortRecords(visibleRecords, sortField, sortDirection) : NO_RECORDS),
+    [visibleRecords, sortField, sortDirection],
+  );
+  const previousId = neighborRecordId(ordered, selectedRecordId, -1);
+  const nextId = neighborRecordId(ordered, selectedRecordId, 1);
+  const sameId = useMemo(
+    () => (record && visibleRecords.length > 0 ? buildSameIdSeries(visibleRecords, record) : null),
+    [record, visibleRecords],
+  );
+  const finding = useMemo(
+    () => (record ? findingForRecord(findings, record) : null),
+    [record, findings],
+  );
   /**
    * The text an operator is reading here: the message and the event data, which
    * is where MDM, AppX and Windows Update codes tend to sit. `rawXml` repeats
@@ -169,12 +246,17 @@ export function EvtxDetailPane() {
     term: string;
     value: string;
     mono?: boolean;
+    numeric?: boolean;
     title?: string;
   }> = [
     { term: "Channel", value: record.channel },
     { term: "Provider", value: record.provider },
-    { term: "Record ID", value: String(record.eventRecordIdText ?? record.eventRecordId) },
-    ...(processText ? [{ term: "Process", value: processText }] : []),
+    {
+      term: "Record ID",
+      value: String(record.eventRecordIdText ?? record.eventRecordId),
+      numeric: true,
+    },
+    ...(processText ? [{ term: "Process", value: processText, numeric: true }] : []),
     ...(record.userSid
       ? [
           {
@@ -251,11 +333,32 @@ export function EvtxDetailPane() {
         <Button
           size="small"
           appearance="subtle"
+          icon={<ArrowUp16Regular />}
+          aria-label="Previous event"
+          disabled={previousId === null}
+          onClick={() => previousId !== null && setSelectedRecordId(previousId)}
+          style={{ minWidth: "24px", width: "24px", height: "24px", padding: 0 }}
+        />
+        <Button
+          size="small"
+          appearance="subtle"
+          icon={<ArrowDown16Regular />}
+          aria-label="Next event"
+          disabled={nextId === null}
+          onClick={() => nextId !== null && setSelectedRecordId(nextId)}
+          style={{ minWidth: "24px", width: "24px", height: "24px", padding: 0 }}
+        />
+        <Button
+          size="small"
+          appearance="subtle"
           icon={<Dismiss12Regular />}
           aria-label="Close details"
           onClick={() => {
             setSelectedRecordId(null);
             setRailTab("insights");
+            // This button is about to unmount; hand focus to the Insights tab, which is always
+            // rendered, so a keyboard user keeps their place (spec section 10).
+            document.getElementById(evtxRailTabId("insights"))?.focus();
           }}
         />
       </div>
@@ -271,11 +374,22 @@ export function EvtxDetailPane() {
           flexShrink: 0,
         }}
       >
-        <Tab value="details">Details</Tab>
-        <Tab value="xml">XML</Tab>
+        {(["details", "xml"] as const).map((tab) => (
+          <Tab
+            key={tab}
+            id={detailSubTabId(tab)}
+            value={tab}
+            aria-controls={detailSubPanelId(tab)}
+          >
+            {tab === "details" ? "Details" : "XML"}
+          </Tab>
+        ))}
       </TabList>
 
       <div
+        role="tabpanel"
+        id={detailSubPanelId(subTab)}
+        aria-labelledby={detailSubTabId(subTab)}
         style={{
           flex: 1,
           minHeight: 0,
@@ -354,7 +468,9 @@ export function EvtxDetailPane() {
                       wordBreak: "break-all",
                       fontFamily: definition.mono
                         ? LOG_MONOSPACE_FONT_FAMILY
-                        : tokens.fontFamilyNumeric,
+                        : definition.numeric
+                          ? tokens.fontFamilyNumeric
+                          : undefined,
                     }}
                   >
                     {definition.value}
@@ -508,6 +624,89 @@ export function EvtxDetailPane() {
                   </Button>
                 )}
               </div>
+            )}
+
+            {sameId && (
+              <div
+                aria-label="Same ID"
+                role="group"
+                style={{
+                  display: "grid",
+                  gap: "6px",
+                  padding: "8px 10px",
+                  borderRadius: "6px",
+                  backgroundColor: tokens.colorNeutralBackground1,
+                  border: `1px solid ${tokens.colorNeutralStroke2}`,
+                  flexShrink: 0,
+                }}
+              >
+                <div style={sectionHeading}>
+                  Same ID in{" "}
+                  {timeWindow === "all"
+                    ? "the loaded events"
+                    : `the ${EVTX_TIME_WINDOW_LABELS[timeWindow].toLowerCase()}`}
+                </div>
+                {sameId.bins.length > 0 && (
+                  <Sparkline bins={sameId.bins} color={visuals.singleSeries} />
+                )}
+                <div
+                  style={{
+                    fontSize: `${Math.max(10, listFontSize - 2)}px`,
+                    color: tokens.colorNeutralForeground2,
+                  }}
+                >
+                  <span style={{ fontFamily: tokens.fontFamilyNumeric }}>
+                    {formatCount(sameId.occurrences)}
+                  </span>{" "}
+                  {sameId.occurrences === 1 ? "occurrence" : "occurrences"}
+                  {sameId.firstEpoch !== null && (
+                    <>
+                      {" \u00b7 first "}
+                      <span style={{ fontFamily: tokens.fontFamilyNumeric }}>
+                        {formatEventTime(sameId.firstEpoch, timeZoneMode)}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {finding && (
+              <button
+                type="button"
+                onClick={() => {
+                  setRailTab("insights");
+                  // The Insights panel stays mounted, so its card exists; focus it once the tab is
+                  // visible.
+                  requestAnimationFrame(() => {
+                    const card = Array.from(
+                      document.querySelectorAll<HTMLElement>("[data-finding-id]"),
+                    ).find((element) => element.dataset.findingId === finding.findingId);
+                    card?.scrollIntoView?.({ block: "nearest" });
+                    card?.focus();
+                  });
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "8px",
+                  padding: "8px 10px",
+                  borderRadius: "6px",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  font: "inherit",
+                  fontSize: `${Math.max(10, listFontSize - 2)}px`,
+                  fontWeight: 600,
+                  flexShrink: 0,
+                  backgroundColor: visuals.findingCallout.background,
+                  border: `1px solid ${visuals.findingCallout.border}`,
+                  color: visuals.findingCallout.foreground,
+                }}
+              >
+                <span>Part of finding: {finding.title}</span>
+                <ArrowRight12Regular aria-hidden="true" />
+              </button>
             )}
 
             {/* Metadata the definition grid does not carry. System-block fields render only when

@@ -3,6 +3,7 @@ import {
   buildSameIdSeries,
   correlationBreakdown,
   eventEvidenceLabel,
+  findRecordById,
   findingForRecord,
   formatCount,
   neighborRecordId,
@@ -182,5 +183,15 @@ describe("correlationBreakdown", () => {
 describe("formatCount", () => {
   it("uses the locale's thousands separator like the status bar", () => {
     expect(formatCount(1331)).toBe((1331).toLocaleString());
+  });
+});
+
+describe("findRecordById", () => {
+  it("finds a record by index and falls back to a scan when ids are not indexes", () => {
+    const records = [record(0), record(1), record(7)];
+    expect(findRecordById(records, 1)).toBe(records[1]);
+    expect(findRecordById(records, 7)).toBe(records[2]);
+    expect(findRecordById(records, 99)).toBeNull();
+    expect(findRecordById(records, null)).toBeNull();
   });
 });

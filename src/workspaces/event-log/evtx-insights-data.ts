@@ -239,3 +239,17 @@ export function correlationBreakdown(summary: DiagnosisSummary): CorrelationBrea
     correlations: exact + candidate + ambiguous,
   };
 }
+
+/**
+ * The record with `id`. Record ids are assigned as indexes when records are merged, so the index
+ * is tried first and a scan is only the fallback; the lookup is O(1) in the common case.
+ */
+export function findRecordById(
+  records: readonly EvtxRecord[],
+  id: number | null,
+): EvtxRecord | null {
+  if (id === null) return null;
+  const direct = records[id];
+  if (direct?.id === id) return direct;
+  return records.find((record) => record.id === id) ?? null;
+}

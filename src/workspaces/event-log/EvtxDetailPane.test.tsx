@@ -1,6 +1,10 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { tokens } from "@fluentui/react-components";
+import { contrastRatio } from "../../lib/color-contrast";
+import { getAllThemes } from "../../lib/themes";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EvtxRecord } from "./types";
+import type { DiagnosisFinding, EvtxRecord } from "./types";
+import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 
 const invoke = vi.hoisted(() => vi.fn());
 
@@ -351,3 +355,188 @@ describe("EvtxDetailPane rail layout", () => {
     expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
   });
 });
+
+describe("EvtxDetailPane rail extras", () => {
+  const rec = (id: number, overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
+    ...RECORD,
+    id,
+    eventRecordId: 500 + id,
+    timestampEpoch: Date.parse("2026-08-22T12:00:00Z") + id * 60_000,
+    ...overrides,
+  });
+  const records = [rec(0), rec(1), rec(2)];
+
+  beforeEach(() => {
+    invoke.mockReset();
+    invoke.mockResolvedValue(null);
+    useEvtxStore.getState().reset();
+    useEvtxStore.setState({
+      records,
+      selectedRecordId: 1,
+      timeZoneMode: "utc",
+      timeWindow: "all",
+      sortField: "time",
+      sortDirection: "asc",
+    });
+    useEvtxLayoutStore.setState(sanitizeLayout({ railTab: "details" }));
+    useMarkerStore.setState({
+      markersByFile: new Map(),
+      loadingFiles: new Set(["event-log:Application.evtx"]),
+    });
+  });
+
+  it("moves through the visible records in grid order with Previous and Next", () => {
+    render(<EvtxDetailPane visibleRecords={records} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Next event" }));
+    expect(useEvtxStore.getState().selectedRecordId).toBe(2);
+    expect(screen.getByRole("button", { name: "Next event" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Previous event" }));
+    fireEvent.click(screen.getByRole("button", { name: "Previous event" }));
+    expect(useEvtxStore.getState().selectedRecordId).toBe(0);
+    expect(screen.getByRole("button", { name: "Previous event" })).toBeDisabled();
+  });
+
+  it("follows the grid's sort direction", () => {
+    useEvtxStore.setState({ sortDirection: "desc" });
+    render(<EvtxDetailPane visibleRecords={records} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Next event" }));
+    expect(useEvtxStore.getState().selectedRecordId).toBe(0);
+  });
+
+  it("disables both when the selection is not among the visible records", () => {
+    render(<EvtxDetailPane visibleRecords={[records[0]]} />);
+    expect(screen.getByRole("button", { name: "Next event" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Previous event" })).toBeDisabled();
+  });
+
+  it("sizes the header buttons at 24 px", () => {
+    render(<EvtxDetailPane visibleRecords={records} />);
+    expect(screen.getByRole("button", { name: "Next event" })).toHaveStyle({
+      width: "24px",
+      height: "24px",
+    });
+  });
+
+  it("counts same ID and provider occurrences, never binning a record without a timestamp", () => {
+    const withBad = [...records, rec(3, { timestampEpoch: 0 }), rec(4, { provider: "Other" })];
+    useEvtxStore.setState({ records: withBad });
+    render(<EvtxDetailPane visibleRecords={withBad} />);
+
+    const card = screen.getByRole("group", { name: "Same ID" });
+    expect(card).toHaveTextContent("Same ID in the loaded events");
+    expect(card).toHaveTextContent("4 occurrences");
+    expect(card).toHaveTextContent("first 2026-08-22 12:00:00.000");
+    const svg = card.querySelector("svg") as SVGElement;
+    expect(svg).toHaveAttribute("aria-hidden", "true");
+    expect(svg).toHaveStyle({ height: "22px" });
+    // 24 bins, and only the three timestamped matches are drawn.
+    expect(svg.getAttribute("viewBox")).toBe("0 0 24 22");
+    expect(svg.querySelectorAll("rect")).toHaveLength(3);
+  });
+
+  it("names the time window the card covers", () => {
+    useEvtxStore.setState({ timeWindow: "24h" });
+    render(<EvtxDetailPane visibleRecords={records} />);
+    expect(screen.getByRole("group", { name: "Same ID" })).toHaveTextContent(
+      "Same ID in the last 24 hours",
+    );
+  });
+
+  it("draws the sparkline with a color that reaches 3:1 on the card surface in every theme", () => {
+    for (const theme of getAllThemes()) {
+      const visuals = buildEvtxVisualTokens(theme);
+      const surface = resolveToken(tokens.colorNeutralBackground1, theme);
+      expect(
+        contrastRatio(resolveToken(visuals.singleSeries, theme), surface),
+        theme.id,
+      ).toBeGreaterThanOrEqual(3);
+    }
+    expect(getAllThemes()).toHaveLength(7);
+  });
+
+  const finding: DiagnosisFinding = {
+    findingId: "f-9",
+    class: "confirmedFailure",
+    severity: "error",
+    confidence: "high",
+    title: "Enrollment failed",
+    summary: "s",
+    evidence: [
+      {
+        kind: "event",
+        value: {
+          source: "Application.evtx",
+          provider: "Example Provider",
+          eventId: 100,
+          recordId: 501,
+          channel: "Application",
+        },
+      },
+    ],
+    coverageGaps: [],
+    recommendedChecks: [],
+  };
+
+  it("shows the finding callout only for a record that is event evidence of a finding", () => {
+    const { rerender } = render(<EvtxDetailPane visibleRecords={records} findings={[finding]} />);
+    expect(screen.getByRole("button", { name: /Part of finding: Enrollment failed/ })).toBeInTheDocument();
+
+    act(() => useEvtxStore.setState({ selectedRecordId: 2 }));
+    rerender(<EvtxDetailPane visibleRecords={records} findings={[finding]} />);
+    expect(screen.queryByRole("button", { name: /Part of finding/ })).toBeNull();
+  });
+
+  it("switches to Insights and focuses the finding's card when the callout is activated", async () => {
+    render(
+      <>
+        <article data-finding-id="f-9" tabIndex={-1} aria-label="card" />
+        <EvtxDetailPane visibleRecords={records} findings={[finding]} />
+      </>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Part of finding/ }));
+
+    expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
+    await waitFor(() => expect(screen.getByLabelText("card")).toHaveFocus());
+  });
+
+  it("links the Details and XML sub-tabs to their panel", () => {
+    render(<EvtxDetailPane visibleRecords={records} />);
+
+    const detailsTab = screen.getByRole("tab", { name: "Details" });
+    const panel = document.getElementById(detailsTab.getAttribute("aria-controls") as string)!;
+    expect(panel).toHaveAttribute("role", "tabpanel");
+    expect(panel).toHaveAttribute("aria-labelledby", detailsTab.id);
+
+    fireEvent.click(screen.getByRole("tab", { name: "XML" }));
+    const xmlTab = screen.getByRole("tab", { name: "XML" });
+    const xmlPanel = document.getElementById(xmlTab.getAttribute("aria-controls") as string)!;
+    expect(xmlPanel).toHaveAttribute("aria-labelledby", xmlTab.id);
+    expect(xmlPanel).toContainElement(screen.getByLabelText("Raw event XML"));
+  });
+
+  it("sizes the XML view from the details font size", () => {
+    useUiStore.setState({ logDetailsFontSize: 15 });
+    render(<EvtxDetailPane visibleRecords={records} />);
+    fireEvent.click(screen.getByRole("tab", { name: "XML" }));
+
+    const xml = screen.getByLabelText("Raw event XML");
+    // The XML text is one step under the details mono size (details size minus 1, minus 1 more).
+    expect(xml.style.fontSize).toBe("13px");
+    expect(screen.getByRole("region", { name: "Event log details" })).toHaveStyle({
+      fontSize: "15px",
+    });
+  });
+
+  it("renders Channel and Provider in the UI font and the record ID in the numeric font", () => {
+    render(<EvtxDetailPane visibleRecords={records} />);
+    const valueOf = (term: string) =>
+      screen.getByText(term).nextElementSibling as HTMLElement;
+    expect(valueOf("Channel").style.fontFamily).toBe("");
+    expect(valueOf("Provider").style.fontFamily).toBe("");
+    expect(valueOf("Record ID").style.fontFamily).toContain("fontFamilyNumeric");
+  });
+});
+

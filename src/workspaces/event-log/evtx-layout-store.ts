@@ -34,6 +34,10 @@ export const EVTX_VIEW_LABELS: Record<EvtxViewId, string> = {
 export const EVTX_VIEW_PANEL_ID = "evtx-view-panel";
 export const evtxViewTabId = (view: EvtxViewId) => `evtx-view-tab-${view}`;
 
+/** Ids that link each rail tab to its panel. */
+export const evtxRailTabId = (tab: "insights" | "chains" | "details") => `evtx-rail-tab-${tab}`;
+export const evtxRailPanelId = (tab: "insights" | "chains" | "details") => `evtx-rail-panel-${tab}`;
+
 /** Tab ids of the Insights rail (spec section 8.13: Insights, Chains, Details). */
 export const EVTX_RAIL_TAB_IDS = ["insights", "chains", "details"] as const;
 export type EvtxRailTabId = (typeof EVTX_RAIL_TAB_IDS)[number];

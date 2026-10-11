@@ -647,7 +647,12 @@ export function EventLogWorkspace() {
           />
           {/* The rail scrolls its own tab bodies under a fixed tablist, so this wrapper does not. */}
           <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-            <EvtxInsightsRail summary={diagnosis} records={analysisRecords} />
+            <EvtxInsightsRail
+              summary={diagnosis}
+              records={analysisRecords}
+              pending={timelinePending}
+              error={diagnosisError}
+            />
           </div>
         </aside>
       </div>
