@@ -66,7 +66,7 @@ const tab = (name: string) => screen.getByRole("tab", { name });
 describe("EvtxInsightsRail", () => {
   beforeEach(() => {
     invoke.mockReset();
-    invoke.mockResolvedValue([]);
+    invoke.mockResolvedValue(null);
     localStorage.clear();
     useEvtxLayoutStore.setState(sanitizeLayout(undefined));
     useEvtxStore.getState().reset();
