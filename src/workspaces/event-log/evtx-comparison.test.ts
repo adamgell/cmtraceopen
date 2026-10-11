@@ -1272,7 +1272,7 @@ describe("a live comparison", () => {
     const session = begin({
       currentPeriodGaps: [
         "System: 40 events could not be rendered and are missing from this view",
-        "live tail batch 3 was not received",
+        "Application: 3 events could not be read and are missing from this view",
       ],
     });
     deliver(session, "System", systemEvents(1));
@@ -1284,7 +1284,7 @@ describe("a live comparison", () => {
     expect(outcome.result.counts.total).toBe(1);
     expect(outcome.result.gaps).toEqual([
       "Current period: System: 40 events could not be rendered and are missing from this view",
-      "Current period: live tail batch 3 was not received",
+      "Current period: Application: 3 events could not be read and are missing from this view",
     ]);
   });
 

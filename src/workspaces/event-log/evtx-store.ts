@@ -433,6 +433,11 @@ let activeRequestId = "initial";
  * When the live tail last appended a batch; 0 until one has, and cleared by the next load. It only
  * says whether the grid holds events the comparison leaves out: a tail reads events that have not
  * happened yet, so it never extends the period a load covered.
+ *
+ * Known limitation: any later load clears it, though the events the tail appended stay in
+ * `records` for channels that load does not refresh. They remain on the grid and outside the period
+ * compared, but the "(live tail)" note is no longer shown for them. The comparison itself is
+ * unaffected.
  */
 let lastTailAppendEpoch = 0;
 /**
@@ -2968,7 +2973,8 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
       currentPeriodGaps.add(formatCoverageGap(detail));
     }
   }
-  for (const gap of state.tailCoverageGaps) currentPeriodGaps.add(gap);
+  // Tail gaps are not among these: the comparison never counts the tail's events, so what the tail
+  // did or did not deliver does not bear on its completeness. The note below covers it.
 
   // The tail's events are on the grid and outside the period compared; say so.
   const notes =

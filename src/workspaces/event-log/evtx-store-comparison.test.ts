@@ -1387,17 +1387,13 @@ describe("the current period's own gaps", () => {
     }
   });
 
-  it("makes the comparison partial for a live-tail gap", async () => {
+  it("is not made partial by a live-tail gap, since the tail's events are never counted", async () => {
     await resetStore({ tailCoverageGaps: ["System: live tail batch 3 was not received"] });
 
     const outcome = await compareAndSettle();
 
-    expect(outcome.status).toBe("partial");
-    if (outcome.status === "partial") {
-      expect(outcome.result.gaps).toEqual([
-        "Current period: System: live tail batch 3 was not received",
-      ]);
-    }
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") expect(outcome.result.gaps).toEqual([]);
   });
 
   it("does not count a gap that belongs to a channel the comparison does not read", async () => {
