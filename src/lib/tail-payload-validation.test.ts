@@ -375,6 +375,6 @@ describe("Windows Firewall transport", () => {
 });
 
 it("accepts explicit unparsed entries in tail payloads", () => {
-  const value = payload({ entries: [entry({ entryKind: "Fragment" })], observedThroughLine: 1 });
+  const value = payload({ entries: [entry({ tags: ["cmtrace:unparsed-ime-record"] })], observedThroughLine: 1 });
   expect(parseTailPayload(value)).toEqual(value);
 });

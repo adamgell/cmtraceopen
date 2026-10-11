@@ -70,8 +70,13 @@ describe("LogRow severity rendering", () => {
  it("identifies incomplete records without changing their raw message", () => {
    // Sanitized IME orphan suffix shape; values and payload are synthetic.
    const raw = '  suffix]LOG]!><component="Synthetic">  ';
-   const row = renderRow("Info", { entryKind: "Fragment", message: raw });
+   const row = renderRow("Info", { tags: ["cmtrace:unparsed-ime-record"], format: "Plain", message: raw });
    expect(row.querySelector('[aria-label="Unparsed"]')).not.toBeNull();
    expect(row.textContent).toContain("[Unparsed record]");
    expect(row.querySelector(".col-message")?.textContent).toContain(raw);
  });
+
+it("does not treat arbitrary structured-log tags as IME framing diagnostics", () => {
+  const row = renderRow("Info", { tags: ["cmtrace:unparsed-ime-record"], format: "CmtLog" });
+  expect(row.textContent).not.toContain("[Unparsed record]");
+});

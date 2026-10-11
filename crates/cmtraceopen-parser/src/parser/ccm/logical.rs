@@ -1,10 +1,12 @@
 use chrono::{FixedOffset, Local, LocalResult, TimeZone, Utc};
 use regex::Regex;
 
-use crate::models::log_entry::{EntryKind, LogEntry, LogFormat, Severity};
+use crate::models::log_entry::{LogEntry, LogFormat, Severity};
 use crate::parser::ccm::{build_timestamp, format_thread_display, severity_from_type_field};
 use crate::parser::severity::detect_severity_from_text;
 use std::sync::OnceLock;
+
+const UNPARSED_IME_TAG: &str = "cmtrace:unparsed-ime-record";
 
 const RECORD_START: &str = "<![LOG[";
 const ATTRS_START: &str = "]LOG]!><";
@@ -114,7 +116,7 @@ struct ParsedImeRecord {
     thread_display: Option<String>,
     source_file: Option<String>,
     format: LogFormat,
-    entry_kind: Option<EntryKind>,
+    is_fragment: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -206,12 +208,14 @@ pub fn parse_ime_entries(content: &str, file_path: &str) -> (Vec<LogEntry>, u32)
             dns_event_id: None,
             zone_name: None,
             firewall: None,
-            entry_kind: entry.entry_kind,
+            entry_kind: None,
             whatif: None,
             section_name: None,
             section_color: None,
             iteration: None,
-            tags: None,
+            tags: entry
+                .is_fragment
+                .then(|| vec![UNPARSED_IME_TAG.to_string()]),
         })
         .collect();
 
@@ -231,7 +235,12 @@ pub fn parse_ime_entries(content: &str, file_path: &str) -> (Vec<LogEntry>, u32)
 /// - `[PowerShell] Script parameters tamper validation` → source_file = "PowerShell"
 fn enrich_subsystem_source(mut entries: Vec<LogEntry>) -> Vec<LogEntry> {
     for entry in &mut entries {
-        if entry.entry_kind == Some(EntryKind::Fragment) || entry.source_file.is_some() {
+        if entry
+            .tags
+            .as_ref()
+            .is_some_and(|tags| tags.iter().any(|tag| tag == UNPARSED_IME_TAG))
+            || entry.source_file.is_some()
+        {
             continue;
         }
         if let Some(subsystem) = extract_subsystem_prefix(&entry.message) {
@@ -383,7 +392,7 @@ fn parse_record(
         thread_display,
         source_file,
         format: LogFormat::Ccm,
-        entry_kind: None,
+        is_fragment: false,
     })
 }
 
@@ -736,7 +745,7 @@ fn push_unmatched_segment(
                 thread_display: None,
                 source_file: None,
                 format: LogFormat::Plain,
-                entry_kind: Some(EntryKind::Fragment),
+                is_fragment: true,
             });
             *parse_errors += 1;
         }
@@ -779,7 +788,7 @@ fn parse_fallback_lines(content: &str, max_entries: usize) -> ParsedImeChunk {
                 thread_display: None,
                 source_file: None,
                 format: LogFormat::Plain,
-                entry_kind: None,
+                is_fragment: false,
             });
         } else {
             entries.push(ParsedImeRecord {
@@ -798,13 +807,13 @@ fn parse_fallback_lines(content: &str, max_entries: usize) -> ParsedImeChunk {
                 thread_display: None,
                 source_file: None,
                 format: LogFormat::Plain,
-                entry_kind: Some(EntryKind::Fragment),
+                is_fragment: true,
             });
         }
     }
 
     ParsedImeChunk {
-        parse_errors: entries.iter().filter(|entry| entry.entry_kind.is_some()).count() as u32,
+        parse_errors: entries.iter().filter(|entry| entry.is_fragment).count() as u32,
         entries,
     }
 }
@@ -817,16 +826,39 @@ mod tests {
     // observed in a local IME capture. Payload, metadata, identifiers and dates
     // are replaced with synthetic values; no captured source text is embedded.
 
+    #[test]
+    fn diagnostic_marker_is_serialized_without_changing_the_public_entry_kind() {
+        let (fragments, _) = parse_ime_entries("unframed text", "AgentExecutor.log");
+        let json = serde_json::to_value(&fragments[0]).unwrap();
+        assert_eq!(json["tags"], serde_json::json!([UNPARSED_IME_TAG]));
+        assert!(json.get("entryKind").is_none());
+        let text = format!("<![LOG[{UNPARSED_IME_TAG}]LOG]!><component=\"Synthetic\" type=\"1\">");
+        let (complete, errors) = parse_ime_entries(&text, "AgentExecutor.log");
+        assert_eq!(errors, 0);
+        assert_eq!(complete[0].tags, None);
+    }
 
     #[test]
     fn timestamped_fallback_and_complete_subsystem_records_keep_their_semantics() {
-        let (entries, errors) = parse_ime_entries("2026-10-11 12:00:00 error happened\nordinary text", "AgentExecutor.log");
+        let (entries, errors) = parse_ime_entries(
+            "2026-10-11 12:00:00 error happened\nordinary text",
+            "AgentExecutor.log",
+        );
         assert_eq!(errors, 1);
         assert_eq!(entries[0].entry_kind, None);
-        assert_eq!(entries[0].timestamp_display.as_deref(), Some("2026-10-11 12:00:00"));
+        assert_eq!(
+            entries[0].timestamp_display.as_deref(),
+            Some("2026-10-11 12:00:00")
+        );
         assert_eq!(entries[0].severity, Severity::Error);
-        assert_eq!(entries[1].entry_kind, Some(EntryKind::Fragment));
-        let (entries, errors) = parse_ime_entries("<![LOG[[PowerShell] completed]LOG]!><component=\"Synthetic\" type=\"1\" file=\"\">", "AgentExecutor.log");
+        assert_eq!(
+            entries[1].tags.as_deref(),
+            Some(&[UNPARSED_IME_TAG.to_string()][..])
+        );
+        let (entries, errors) = parse_ime_entries(
+            "<![LOG[[PowerShell] completed]LOG]!><component=\"Synthetic\" type=\"1\" file=\"\">",
+            "AgentExecutor.log",
+        );
         assert_eq!(errors, 0);
         assert_eq!(entries[0].source_file.as_deref(), Some("PowerShell"));
         assert_eq!(entries[0].entry_kind, None);
@@ -845,7 +877,10 @@ mod tests {
         for (entry, line) in entries[1..3].iter().zip([3, 4]) {
             assert_eq!(entry.message, suffix);
             assert_eq!(entry.line_number, line);
-            assert_eq!(entry.entry_kind, Some(EntryKind::Fragment));
+            assert_eq!(
+                entry.tags.as_deref(),
+                Some(&[UNPARSED_IME_TAG.to_string()][..])
+            );
             assert_eq!(entry.component, None);
             assert_eq!(entry.thread, None);
             assert_eq!(entry.severity, Severity::Info);
@@ -861,7 +896,10 @@ mod tests {
         assert_eq!(errors, 1);
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
-        assert_eq!(entry.entry_kind, Some(crate::models::log_entry::EntryKind::Fragment));
+        assert_eq!(
+            entry.tags.as_deref(),
+            Some(&[UNPARSED_IME_TAG.to_string()][..])
+        );
         assert_eq!(entry.message, raw);
         assert_eq!(entry.line_number, 1);
         assert_eq!(entry.component, None);

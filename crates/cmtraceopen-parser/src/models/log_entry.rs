@@ -15,7 +15,8 @@ pub enum Severity {
     Error,
 }
 
-/// Distinguishes structured display roles and unframed IME source text.
+/// Distinguishes the role of a CmtLog entry: regular log line, section divider, loop
+/// iteration marker, or file header.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum EntryKind {
     #[default]
@@ -23,8 +24,6 @@ pub enum EntryKind {
     Section,
     Iteration,
     Header,
-    /// Source text that cannot be framed as a complete IME record.
-    Fragment,
 }
 
 /// Which log format was detected/used to parse this entry.
@@ -305,7 +304,8 @@ pub struct LogEntry {
     /// Iteration identifier for Iteration entries (CmtLog)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub iteration: Option<String>,
-    /// Arbitrary tag list attached to a log entry (CmtLog)
+    /// Arbitrary tags attached to a log entry. IME parsing uses
+    /// `cmtrace:unparsed-ime-record` for source text without a complete frame.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
 }

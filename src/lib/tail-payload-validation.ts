@@ -83,7 +83,7 @@ const PARSER_SPECIALIZATIONS = new Set([
   "intuneDeviceInventoryAdaptor",
   "intuneDeviceInventoryRotationFailure",
 ]);
-const ENTRY_KINDS = new Set(["Log", "Section", "Iteration", "Header", "Fragment"]);
+const ENTRY_KINDS = new Set(["Log", "Section", "Iteration", "Header"]);
 const ERROR_CODE_OUTCOMES = new Set<ErrorCodeOutcome>([
   "failure",
   "success",
