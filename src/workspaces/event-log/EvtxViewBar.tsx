@@ -255,7 +255,10 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
         aria-label="Layout"
         style={{
           display: "inline-flex",
-          border: `1px solid ${tokens.colorNeutralStroke1}`,
+          // An inset outline rather than a border, so the group is exactly the 28 px of its
+          // buttons and the bar measures 6 + 28 + 6 plus its bottom border (spec 5.1: ~40).
+          outline: `1px solid ${tokens.colorNeutralStroke1}`,
+          outlineOffset: "-1px",
           borderRadius: "6px",
           overflow: "hidden",
         }}
