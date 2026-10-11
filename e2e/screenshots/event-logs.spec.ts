@@ -246,19 +246,22 @@ test.describe("event-logs screenshots", () => {
     // 404 at record 89131, the first piece of evidence of the top finding. The engine's evidence is
     // the redacted display projection (machine as a [host:...] token, source as the file path), and
     // the callout matches on event ID, provider, channel and record ID, so this record matches
-    // uniquely. It goes through the same action a row click calls, and the grid scrolls the row
-    // into view.
-    await page.evaluate(async () => {
-      const { useEvtxStore } = await import("/src/workspaces/event-log/evtx-store.ts");
-      const { selectRecordAndShowDetails } = await import(
-        "/src/workspaces/event-log/evtx-select-record.ts"
-      );
-      const record = useEvtxStore
-        .getState()
-        .records.find((candidate) => candidate.eventRecordId === 89131 && candidate.eventId === 404);
-      if (!record) throw new Error("fixture record 404 / 89131 is not loaded");
-      selectRecordAndShowDetails(record.id);
+    // uniquely. A real row click drives it into Details: newest first, this record is row 1026 of
+    // 1331, below the fold of a virtualized list, so scroll it into the rendered window first (the
+    // way the Phase 2 capture did), then click it.
+    const grid = page.getByRole("grid", { name: timelineGridName });
+    await grid.evaluate((el) => {
+      // Rows are not a fixed height (the level badge column varies), so scale by the list's own
+      // height: a few rows above row 1026 of 1331.
+      el.scrollTop = Math.floor((el.scrollHeight * 1022) / 1331);
     });
+    const row = grid
+      .getByRole("row")
+      .filter({ hasText: "15:43:23" })
+      .filter({ hasText: "MDM Configurati" })
+      .first();
+    await expect(row).toBeVisible();
+    await row.click();
     const detail = page.getByRole("region", { name: "Event log details" });
     await expect(detail).toContainText("Command failure status");
     await expect(detail.getByRole("button", { name: /Part of finding/ })).toBeVisible();
