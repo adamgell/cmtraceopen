@@ -467,16 +467,21 @@ function OverviewBlock({
 function RailCard({
   title,
   sizes,
+  stale = false,
   children,
 }: {
   title: string;
   sizes: RailSizes;
+  /** Its numbers are from the previous build: dimmed and marked busy. */
+  stale?: boolean;
   children: ReactNode;
 }) {
   return (
     <section
       aria-label={title}
+      aria-busy={stale || undefined}
       style={{
+        opacity: stale ? 0.6 : 1,
         display: "grid",
         gap: "8px",
         padding: "10px 12px",
@@ -616,9 +621,11 @@ function TopEventIdsCard({
 function CorrelationSummaryCard({
   summary,
   sizes,
+  stale,
 }: {
   summary: DiagnosisSummary;
   sizes: RailSizes;
+  stale: boolean;
 }) {
   const breakdown = correlationBreakdown(summary);
   const total = summary.overview.correlationCount;
@@ -626,7 +633,7 @@ function CorrelationSummaryCard({
   const lineStyle = { fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground2 };
   const mutedStyle = { fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground3 };
   return (
-    <RailCard title="Correlations" sizes={sizes}>
+    <RailCard title="Correlations" sizes={sizes} stale={stale}>
       {breakdown.complete ? (
         <div style={lineStyle}>
           <Count value={breakdown.correlations} />{" "}
@@ -707,14 +714,19 @@ function OmittedRows({
   count,
   singular,
   sizes,
+  stale = false,
 }: {
   count: number;
   singular: string;
   sizes: RailSizes;
+  stale?: boolean;
 }) {
   const railText = useRailTextColors();
   return count > 0 ? (
-    <span style={{ fontSize: `${sizes.small}px`, color: railText.secondary }}>
+    <span
+      aria-busy={stale || undefined}
+      style={{ fontSize: `${sizes.small}px`, color: railText.secondary, opacity: stale ? 0.6 : 1 }}
+    >
       {omittedLabel(count, singular)}
     </span>
   ) : null;
@@ -729,19 +741,24 @@ function Disclosure({
   open,
   onOpenChange,
   sizes,
+  stale = false,
   children,
 }: {
   label: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sizes: RailSizes;
+  /** The label's count and the rows are from the previous build. */
+  stale?: boolean;
   children: ReactNode;
 }) {
   const labelId = useId();
   return (
     <details
       open={open}
+      aria-busy={stale || undefined}
       style={{
+        opacity: stale ? 0.6 : 1,
         padding: "8px 12px",
         borderRadius: "6px",
         backgroundColor: tokens.colorNeutralBackground1,
@@ -868,7 +885,14 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
       />
 
       {summary.overview.actionableFindingCount === 0 ? (
-        <div style={{ fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground2 }}>
+        <div
+          aria-busy={updating || undefined}
+          style={{
+            fontSize: `${sizes.small}px`,
+            color: tokens.colorNeutralForeground2,
+            opacity: updating ? 0.6 : 1,
+          }}
+        >
           No actionable findings.
         </div>
       ) : (
@@ -887,6 +911,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
             count={findings.omitted}
             singular="actionable finding"
             sizes={sizes}
+            stale={updating}
           />
         </>
       )}
@@ -897,6 +922,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
           open={coverageOpen}
           onOpenChange={setCoverageOpen}
           sizes={sizes}
+          stale={updating}
         >
           {coverageGaps.items.map(({ gap, occurrences }) => (
             <CoverageGapRow
@@ -906,14 +932,19 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
               sizes={sizes}
             />
           ))}
-          <OmittedRows count={coverageGaps.omitted} singular="coverage gap" sizes={sizes} />
+          <OmittedRows
+            count={coverageGaps.omitted}
+            singular="coverage gap"
+            sizes={sizes}
+            stale={updating}
+          />
         </Disclosure>
       )}
 
       {recordCards}
 
       {(summary.overview.correlationCount > 0 || summary.correlations.length > 0) && (
-        <CorrelationSummaryCard summary={summary} sizes={sizes} />
+        <CorrelationSummaryCard summary={summary} sizes={sizes} stale={updating} />
       )}
 
       {(hasDetails || correlations.omitted > 0 || events.omitted > 0) && (
@@ -922,6 +953,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
           open={detailsOpen}
           onOpenChange={setDetailsOpen}
           sizes={sizes}
+          stale={updating}
         >
           {correlations.items.map((edge, index) => (
             <CorrelationRow
@@ -930,7 +962,12 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
               sizes={sizes}
             />
           ))}
-          <OmittedRows count={correlations.omitted} singular="correlation" sizes={sizes} />
+          <OmittedRows
+            count={correlations.omitted}
+            singular="correlation"
+            sizes={sizes}
+            stale={updating}
+          />
           {events.items.map((event, index) => (
             <EventRow key={`${event.family}-${index}`} event={event} sizes={sizes} />
           ))}
@@ -938,6 +975,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
             count={events.omitted}
             singular="error-token event detail"
             sizes={sizes}
+            stale={updating}
           />
         </Disclosure>
       )}

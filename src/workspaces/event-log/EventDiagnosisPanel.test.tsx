@@ -785,6 +785,56 @@ describe("EventDiagnosisPanel", () => {
     });
   });
 
+  describe("counts from the previous build while a rebuild is pending", () => {
+    const busy = (element: Element | null) => {
+      expect(element).not.toBeNull();
+      expect(element).toHaveAttribute("aria-busy", "true");
+      expect(element).toHaveStyle({ opacity: "0.6" });
+    };
+    const bounded: DiagnosisSummary = {
+      ...summary,
+      overview: {
+        ...summary.overview,
+        actionableFindingCount: 3,
+        coverageGapCount: 4,
+        correlationCount: 5,
+        errorTokenEventCount: 3,
+      },
+    };
+
+    it("dims every one of them and clears the marks when the build lands", () => {
+      const { rerender } = render(<EventDiagnosisPanel summary={bounded} updating />);
+      busy(screen.getByText(/Coverage gaps/, { selector: "summary" }).closest("details"));
+      busy(screen.getByRole("region", { name: "Correlations" }));
+      busy(screen.getByText("2 actionable findings omitted."));
+      busy(screen.getByText(/Show diagnosis details/, { selector: "summary" }).closest("details"));
+
+      rerender(<EventDiagnosisPanel summary={bounded} />);
+      for (const element of [
+        screen.getByText(/Coverage gaps/, { selector: "summary" }).closest("details"),
+        screen.getByRole("region", { name: "Correlations" }),
+        screen.getByText("2 actionable findings omitted."),
+      ]) {
+        expect(element).not.toHaveAttribute("aria-busy");
+        expect(element).toHaveStyle({ opacity: "1" });
+      }
+    });
+
+    it("dims the omitted-row counts inside the disclosures", () => {
+      render(<EventDiagnosisPanel summary={bounded} updating />);
+      expand(/Coverage gaps/);
+      expand("Show diagnosis details");
+      busy(screen.getByText("3 coverage gaps omitted."));
+      busy(screen.getByText("4 correlations omitted."));
+      busy(screen.getByText("2 error-token event details omitted."));
+    });
+
+    it("dims 'No actionable findings.'", () => {
+      render(<EventDiagnosisPanel summary={neutralSummary("noFindings")} updating />);
+      busy(screen.getByText("No actionable findings."));
+    });
+  });
+
   describe("scope line", () => {
     it("states the scope the shown summary was built from, not the new record count", () => {
       const three = [record(1, 1, "Error"), record(2, 1, "Error"), record(3, 1, "Error")];
