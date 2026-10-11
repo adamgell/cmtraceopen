@@ -9,7 +9,11 @@
  *
  * Pure, so the grouping is testable without the dialog.
  */
-import type { EvtxSubsetResult, EvtxSubsetSourceRequest } from "../../lib/commands";
+import type {
+  EvtxSubsetFileResult,
+  EvtxSubsetResult,
+  EvtxSubsetSourceRequest,
+} from "../../lib/commands";
 import type { EvtxRecord } from "./types";
 
 /** `source_label` the live path stamps on every record read from a local channel. */
@@ -54,7 +58,7 @@ const SKIP_REASON_ORDER: readonly EvtxSubsetSkipReason[] = [
 ];
 
 export interface EvtxSubsetSourcePlan extends EvtxSubsetSourceRequest {
-  /** Distinct events that will be requested from this source. */
+  /** Distinct events (machine and EventRecordID) that will be requested from this source. */
   recordCount: number;
 }
 
@@ -72,21 +76,42 @@ export interface EvtxSubsetPlan {
 }
 
 /**
- * The decimal `EventRecordID` of a record. The lossless text field wins over the number, because
- * the number is a JavaScript double and cannot hold every u64. Zero with no text is the live
- * path's "the XML had no EventRecordID" default, not an identity.
+ * The decimal `EventRecordID` of a record, by the same rule the store sorts and identifies records
+ * with: lossless text when it is a non-zero decimal (leading zeros stripped), else the number when
+ * the record carries no text. All-zero text, and zero with no text, are the live path's "the XML
+ * had no EventRecordID" default, not an identity.
  */
 export function eventRecordIdText(record: EvtxRecord): string | null {
-  const text = record.eventRecordIdText;
-  if (typeof text === "string" && /^\d+$/.test(text)) return text;
-  if (Number.isSafeInteger(record.eventRecordId) && record.eventRecordId > 0) {
+  const rawText = record.eventRecordIdText?.trim() ?? "";
+  if (/^\d+$/.test(rawText) && !/^0+$/.test(rawText)) {
+    return rawText.replace(/^0+(?=\d)/, "");
+  }
+  if (!rawText && Number.isSafeInteger(record.eventRecordId) && record.eventRecordId > 0) {
     return String(record.eventRecordId);
   }
   return null;
 }
 
+/** What the file parser writes when an event's System block names no computer. */
+const UNKNOWN_COMPUTER = "Unknown";
+
+/**
+ * The machine an event was logged on, or null when it names none. The machine is part of an
+ * event's identity: a log that collects events can hold the same EventRecordID from two machines.
+ */
+function computerOf(record: EvtxRecord): string | null {
+  const name = record.computer.trim();
+  return name === "" || name === UNKNOWN_COMPUTER ? null : record.computer;
+}
+
 type Classification =
-  | { kind: "export"; source: EvtxSubsetSourceRequest["kind"]; path: string; id: string }
+  | {
+      kind: "export";
+      source: EvtxSubsetSourceRequest["kind"];
+      path: string;
+      computer: string | null;
+      id: string;
+    }
   | { kind: "skip"; reason: EvtxSubsetSkipReason };
 
 function classify(record: EvtxRecord): Classification {
@@ -94,25 +119,33 @@ function classify(record: EvtxRecord): Classification {
   const label = record.sourceLabel;
   if (label.startsWith(REMOTE_SOURCE_PREFIX)) return { kind: "skip", reason: "remote" };
   const id = eventRecordIdText(record);
+  const computer = computerOf(record);
   if (label === LIVE_SOURCE_LABEL) {
     // The label says "Live", not which channel, so the record's own channel names the source.
     // The live path stamps the channel that was queried, which is the one to export from.
     if (record.channel.length === 0) return { kind: "skip", reason: "notEvtx" };
     return id === null
       ? { kind: "skip", reason: "noRecordId" }
-      : { kind: "export", source: "channel", path: record.channel, id };
+      : { kind: "export", source: "channel", path: record.channel, computer, id };
   }
   if (label.includes(ARCHIVE_MEMBER_SEPARATOR)) return { kind: "skip", reason: "archive" };
   if (!label.toLowerCase().endsWith(".evtx")) return { kind: "skip", reason: "notEvtx" };
   return id === null
     ? { kind: "skip", reason: "noRecordId" }
-    : { kind: "export", source: "file", path: label, id };
+    : { kind: "export", source: "file", path: label, computer, id };
 }
 
 export function planEvtxSubsetSources(records: readonly EvtxRecord[]): EvtxSubsetPlan {
   // Keyed case-insensitively: Windows treats channel names and paths that way, and the backend
-  // refuses a request that lists one source twice.
-  const groups = new Map<string, { source: EvtxSubsetSourceRequest; ids: Set<string> }>();
+  // refuses a request that lists one source twice. Machines are kept exactly as logged.
+  const groups = new Map<
+    string,
+    {
+      kind: EvtxSubsetSourceRequest["kind"];
+      path: string;
+      byComputer: Map<string | null, Set<string>>;
+    }
+  >();
   const skippedByReason = new Map<EvtxSubsetSkipReason, number>();
 
   for (const record of records) {
@@ -124,23 +157,34 @@ export function planEvtxSubsetSources(records: readonly EvtxRecord[]): EvtxSubse
     const key = `${outcome.source}\u0000${outcome.path.toLowerCase()}`;
     let group = groups.get(key);
     if (!group) {
-      group = {
-        source: { kind: outcome.source, path: outcome.path, recordIds: [] },
-        ids: new Set(),
-      };
+      group = { kind: outcome.source, path: outcome.path, byComputer: new Map() };
       groups.set(key, group);
     }
-    group.ids.add(outcome.id);
+    let ids = group.byComputer.get(outcome.computer);
+    if (!ids) {
+      ids = new Set();
+      group.byComputer.set(outcome.computer, ids);
+    }
+    ids.add(outcome.id);
   }
 
   const sources: EvtxSubsetSourcePlan[] = [...groups.values()]
-    .map(({ source, ids }) => {
-      const recordIds = [...ids];
-      return { ...source, recordIds, recordCount: recordIds.length };
+    .map(({ kind, path, byComputer }) => {
+      const recordGroups = [...byComputer.entries()].map(([computer, ids]) => ({
+        computer,
+        recordIds: [...ids],
+      }));
+      return {
+        kind,
+        path,
+        recordGroups,
+        recordCount: recordGroups.reduce((sum, group) => sum + group.recordIds.length, 0),
+      };
     })
     .sort(
       (a, b) =>
-        a.kind.localeCompare(b.kind) || a.path.localeCompare(b.path, undefined, { sensitivity: "base" }),
+        a.kind.localeCompare(b.kind) ||
+        a.path.localeCompare(b.path, undefined, { sensitivity: "base" }),
     );
   const skipped = SKIP_REASON_ORDER
     .filter((reason) => skippedByReason.has(reason))
@@ -154,13 +198,39 @@ export function planEvtxSubsetSources(records: readonly EvtxRecord[]): EvtxSubse
   };
 }
 
-/** The one-line outcome for the view bar's status line and the top of the result list. */
-export function summarizeEvtxSubsetResult(result: EvtxSubsetResult): string {
+/**
+ * Whether a written file was checked against the request and found to differ from it: an event
+ * that was asked for is missing, or one that was not asked for is there. A file that could not be
+ * read back is unverified, which is a different state and is stated as such.
+ */
+export function fileDiffersFromRequest(file: EvtxSubsetFileResult): boolean {
+  return (
+    file.status === "exported" &&
+    ((file.missing?.count ?? 0) > 0 || (file.unrequested?.count ?? 0) > 0)
+  );
+}
+
+/**
+ * The one-line outcome, for the done heading, the polite announcement and the view bar's status
+ * line (the last stays on screen after the dialog is gone). It must not read as a complete export
+ * of the view when it is not, so it says how many events were left out of the plan, and how many
+ * files were found to differ from the request.
+ */
+export function summarizeEvtxSubsetResult(result: EvtxSubsetResult, notIncluded = 0): string {
   const total = result.files.length;
   const exported = result.files.filter((file) => file.status === "exported");
   const failed = total - exported.length;
+  const differing = result.files.filter(fileDiffersFromRequest).length;
+  const notes: string[] = [];
+  if (exported.length > 0 && failed > 0) notes.push(`${failed} failed`);
+  if (notIncluded > 0) notes.push(`${notIncluded.toLocaleString()} not included`);
+  if (differing > 0) {
+    notes.push(`${differing} ${plural(differing, "file differs", "files differ")} from the request`);
+  }
+  const suffix = notes.map((note) => `; ${note}`).join("");
+
   if (exported.length === 0) {
-    return `Nothing was exported: ${total} EVTX subset ${plural(total, "file")} failed.`;
+    return `Nothing was exported: ${total} EVTX subset ${plural(total, "file")} failed${suffix}.`;
   }
   const verified = exported.every((file) => file.exportedRecords !== null);
   const events = exported.reduce(
@@ -170,8 +240,9 @@ export function summarizeEvtxSubsetResult(result: EvtxSubsetResult): string {
   const eventText = `${events.toLocaleString()} ${plural(events, "event")}${
     verified ? "" : ", counts not verified"
   }`;
-  if (failed === 0) {
-    return `Exported ${exported.length} EVTX subset ${plural(exported.length, "file")} (${eventText}).`;
-  }
-  return `Exported ${exported.length} of ${total} EVTX subset files (${eventText}); ${failed} failed.`;
+  const files =
+    failed === 0
+      ? `${exported.length} EVTX subset ${plural(exported.length, "file")}`
+      : `${exported.length} of ${total} EVTX subset files`;
+  return `Exported ${files} (${eventText})${suffix}.`;
 }

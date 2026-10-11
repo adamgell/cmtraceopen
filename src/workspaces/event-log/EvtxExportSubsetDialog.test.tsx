@@ -42,6 +42,8 @@ const exportedFile = (partial: Record<string, unknown> = {}) => ({
   requestedRecords: 1,
   status: "exported",
   exportedRecords: 1,
+  missing: { count: 0, sample: [] },
+  unrequested: { count: 0, sample: [] },
   messagesArchived: true,
   error: null,
   warnings: [],
@@ -88,7 +90,7 @@ function renderDialog(
 async function chooseFolder(folder = "C:\\out") {
   vi.mocked(open).mockResolvedValueOnce(folder);
   await act(async () => {
-    fireEvent.click(button("Choose folder..."));
+    fireEvent.click(button("Choose folder\u2026"));
   });
   await waitFor(() => expect(exportButton()).not.toHaveAttribute("aria-disabled", "true"));
 }
@@ -110,6 +112,28 @@ describe("EvtxExportSubsetDialog", () => {
     expect(within(dialog).getByRole("note")).toHaveTextContent(EVTX_SUBSET_UNREDACTED_NOTICE);
     expect(exportButton()).toBeInTheDocument();
     expect(button("Cancel")).toBeInTheDocument();
+  });
+
+  it("describes the alert dialog by the unredacted warning, so it is read before any button", async () => {
+    renderDialog();
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveAccessibleName("Export EVTX subset");
+    expect(dialog).toHaveAccessibleDescription(EVTX_SUBSET_UNREDACTED_NOTICE);
+    // The same element the visible notice is, not a copy of its text.
+    expect(dialog.getAttribute("aria-describedby")).toBe(
+      within(dialog).getByRole("note").getAttribute("id"),
+    );
+  });
+
+  it("drops the description once the form, and its warning, is replaced by the result", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(SUCCESS);
+    renderDialog();
+    await chooseFolder();
+    await act(async () => {
+      fireEvent.click(exportButton());
+    });
+    await screen.findByRole("list", { name: "Exported files" });
+    expect(screen.getByRole("alertdialog")).not.toHaveAttribute("aria-describedby");
   });
 
   it("puts initial focus on Cancel, not on the export button", async () => {
@@ -143,7 +167,7 @@ describe("EvtxExportSubsetDialog", () => {
     renderDialog();
     await screen.findByRole("alertdialog");
     await act(async () => {
-      fireEvent.click(button("Choose folder..."));
+      fireEvent.click(button("Choose folder\u2026"));
     });
     expect(open).toHaveBeenCalledWith(
       expect.objectContaining({ directory: true, multiple: false }),
@@ -172,8 +196,16 @@ describe("EvtxExportSubsetDialog", () => {
     expect(invoke).toHaveBeenCalledWith("evtx_export_subset", {
       folder: "C:\\out",
       sources: [
-        { kind: "channel", path: "Application", recordIds: ["3"] },
-        { kind: "channel", path: "System", recordIds: ["1152921504606846976"] },
+        {
+          kind: "channel",
+          path: "Application",
+          recordGroups: [{ computer: "HOST", recordIds: ["3"] }],
+        },
+        {
+          kind: "channel",
+          path: "System",
+          recordGroups: [{ computer: "HOST", recordIds: ["1152921504606846976"] }],
+        },
       ],
     });
     const files = await screen.findByRole("list", { name: "Exported files" });
@@ -217,7 +249,7 @@ describe("EvtxExportSubsetDialog", () => {
     fireEvent.click(button("Cancel"));
     fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Exporting..." })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Exporting\u2026" })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Exporting EVTX subset files");
 
     await act(async () => {
@@ -260,7 +292,9 @@ describe("EvtxExportSubsetDialog", () => {
       files: [
         exportedFile({
           exportedRecords: null,
-          warnings: ["the record count could not be verified (cannot open the exported file)"],
+          missing: null,
+          unrequested: null,
+          warnings: ["which events the file holds could not be verified (cannot open the exported file)"],
         }),
         exportedFile({
           sourcePath: "System",
@@ -269,6 +303,8 @@ describe("EvtxExportSubsetDialog", () => {
           requestedRecords: 2,
           status: "failed",
           exportedRecords: null,
+          missing: null,
+          unrequested: null,
           messagesArchived: false,
           error: "EvtExportLog: access denied (needs elevation)",
         }),
@@ -284,9 +320,97 @@ describe("EvtxExportSubsetDialog", () => {
       "Exported 1 of 2 EVTX subset files (1 event, counts not verified); 1 failed.",
     );
     expect(files).toHaveTextContent("Application-subset.evtx: 1 requested, count not verified");
-    expect(files).toHaveTextContent("Warning: the record count could not be verified");
+    expect(files).toHaveTextContent("Warning: which events the file holds could not be verified");
     expect(files).toHaveTextContent("System-subset.evtx Failed");
     expect(files).toHaveTextContent("access denied (needs elevation)");
+  });
+
+  it("says which events are missing and which are extra, never a bare 'N of M'", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      folder: "C:\\out",
+      files: [
+        exportedFile({
+          sourcePath: "Application",
+          requestedRecords: 3,
+          exportedRecords: 2,
+          missing: { count: 1, sample: ["2"] },
+          warnings: ["1 requested event not in the file (EventRecordID 2); the log may have wrapped"],
+        }),
+        exportedFile({
+          sourcePath: "System",
+          fileName: "System-subset.evtx",
+          outputPath: "C:\\out\\System-subset.evtx",
+          requestedRecords: 1,
+          exportedRecords: 2,
+          unrequested: { count: 1, sample: ["HOST-B: 100"] },
+          warnings: ["the file also holds 1 event that was not requested (EventRecordID HOST-B: 100)"],
+        }),
+      ],
+    });
+    renderDialog();
+    await chooseFolder();
+    await act(async () => {
+      fireEvent.click(exportButton());
+    });
+    const files = await screen.findByRole("list", { name: "Exported files" });
+    expect(files).toHaveTextContent("Application-subset.evtx: 2 events in the file (3 requested; 1 missing)");
+    expect(files).toHaveTextContent("System-subset.evtx: 2 events in the file (1 requested; 1 not requested)");
+    expect(files).not.toHaveTextContent("2 of 1");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Exported 2 EVTX subset files (4 events); 2 files differ from the request.",
+    );
+  });
+
+  it("keeps saying what was left out after the export, in the heading, the live region and the list", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ folder: "C:\\out", files: [SUCCESS.files[0]] });
+    const onFinished = vi.fn();
+    renderDialog(
+      [
+        record({ channel: "Application", eventRecordId: 3 }),
+        record({ originKind: "log", sourceLabel: "C:\\logs\\a.log" }),
+        record({ sourceLabel: "bundle.zip::System.evtx", eventRecordId: 4 }),
+        record({ sourceLabel: "bundle.zip::System.evtx", eventRecordId: 5 }),
+      ],
+      { onFinished },
+    );
+    await chooseFolder();
+    await act(async () => {
+      fireEvent.click(exportButton());
+    });
+    await screen.findByRole("list", { name: "Exported files" });
+    const summary = "Exported 1 EVTX subset file (1 event); 3 not included.";
+    expect(screen.getByRole("status")).toHaveTextContent(summary);
+    // Once in the live region and once, visibly, as the heading of the result.
+    expect(screen.getAllByText(summary)).toHaveLength(2);
+    // The view bar's status line outlives the dialog, so it carries the same words.
+    expect(onFinished).toHaveBeenCalledWith(summary);
+    expect(screen.getByText("Not included")).toBeInTheDocument();
+    expect(screen.getByText("1 text log line (not Windows events)")).toBeInTheDocument();
+  });
+
+  it("sends the same id from two machines as two events, one group each", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ folder: "C:\\out", files: [] });
+    renderDialog([
+      record({ channel: "ForwardedEvents", computer: "HOST-A", eventRecordId: 100 }),
+      record({ channel: "ForwardedEvents", computer: "HOST-B", eventRecordId: 100 }),
+    ]);
+    const list = await screen.findByRole("list", { name: "Sources" });
+    expect(list).toHaveTextContent("ForwardedEvents2 events");
+    await chooseFolder();
+    await act(async () => {
+      fireEvent.click(exportButton());
+    });
+    expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({
+      sources: [
+        {
+          path: "ForwardedEvents",
+          recordGroups: [
+            { computer: "HOST-A", recordIds: ["100"] },
+            { computer: "HOST-B", recordIds: ["100"] },
+          ],
+        },
+      ],
+    });
   });
 
   it("names what cannot be exported instead of leaving it out silently", async () => {

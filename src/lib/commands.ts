@@ -107,13 +107,31 @@ export interface EvtxClearResponse {
 /** What an EVTX subset is cut from: a registered channel, or an `.evtx` file on disk. */
 export type EvtxSubsetSourceKind = "channel" | "file";
 
+/**
+ * The events of one source that were logged by one machine. `EventRecordID` is only unique per
+ * log on the machine that wrote it, so a log that collects events (ForwardedEvents) can hold the
+ * same ID twice; the machine is part of an event's identity and the export query names it.
+ */
+export interface EvtxSubsetRecordGroup {
+  /** `System/Computer` of these events, or null when they carry none. */
+  computer: string | null;
+  /** `EventRecordID`s as decimal strings, so a large one is never rounded in transit. */
+  recordIds: string[];
+}
+
 /** One source log and the events to keep from it. */
 export interface EvtxSubsetSourceRequest {
   kind: EvtxSubsetSourceKind;
   /** The channel name, or the absolute `.evtx` path. */
   path: string;
-  /** `EventRecordID`s as decimal strings, so a large one is never rounded in transit. */
-  recordIds: string[];
+  recordGroups: EvtxSubsetRecordGroup[];
+}
+
+/** Events on one side of the comparison between the request and the written file. */
+export interface EvtxSubsetIdDifference {
+  count: number;
+  /** The first few, as `EventRecordID` or `computer: EventRecordID`. Capped; `count` is the whole. */
+  sample: string[];
 }
 
 export type EvtxSubsetFileStatus = "exported" | "failed";
@@ -128,6 +146,10 @@ export interface EvtxSubsetFileResult {
   status: EvtxSubsetFileStatus;
   /** Events found by reading the written file back; null means "not verified", never zero. */
   exportedRecords: number | null;
+  /** Requested events the file does not hold; null when the file could not be read back. */
+  missing: EvtxSubsetIdDifference | null;
+  /** Events the file holds that were not requested; null when it could not be read back. */
+  unrequested: EvtxSubsetIdDifference | null;
   /** True only when the localized messages were archived next to the file. */
   messagesArchived: boolean;
   error: string | null;
@@ -1442,6 +1464,17 @@ export async function clearEventLogChannel(
   return response;
 }
 
+function isEvtxSubsetIdDifference(value: unknown): boolean {
+  return (
+    value === null ||
+    (isCommandRecord(value) &&
+      hasCommandFields(value, {
+        count: isNonNegativeCommandCount,
+        sample: isStringArray,
+      }))
+  );
+}
+
 function isEvtxSubsetFileResult(value: unknown): value is EvtxSubsetFileResult {
   return (
     isCommandRecord(value) &&
@@ -1454,6 +1487,8 @@ function isEvtxSubsetFileResult(value: unknown): value is EvtxSubsetFileResult {
       status: (field) => field === "exported" || field === "failed",
       exportedRecords: (field) =>
         field === null || isNonNegativeCommandCount(field),
+      missing: isEvtxSubsetIdDifference,
+      unrequested: isEvtxSubsetIdDifference,
       messagesArchived: (field) => typeof field === "boolean",
       error: (field) => field === null || typeof field === "string",
       warnings: isStringArray,
@@ -1485,7 +1520,10 @@ export async function exportEventLogSubset(
   // not describe this request, and showing it would report files that were never asked for.
   if (
     result.files.length !== sources.length ||
-    result.files.some((file, index) => file.sourcePath !== sources[index].path)
+    result.files.some(
+      (file, index) =>
+        file.sourcePath !== sources[index].path || file.kind !== sources[index].kind,
+    )
   ) {
     return invalidCommandResponse("evtx_export_subset");
   }

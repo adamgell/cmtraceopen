@@ -541,21 +541,28 @@ describe("EVTX subset menu entry", () => {
   it("reports a finished subset as visible status without touching the polite announcement region", async () => {
     vi.mocked(open).mockReset().mockResolvedValue("C:\\out");
     vi.mocked(invoke).mockReset().mockImplementation(async (_command, args) => {
-      const { sources } = args as { sources: Array<{ path: string; recordIds: string[] }> };
+      const { sources } = args as {
+        sources: Array<{ path: string; recordGroups: Array<{ recordIds: string[] }> }>;
+      };
       return {
         folder: "C:\\out",
-        files: sources.map((source) => ({
+        files: sources.map((source) => {
+          const events = source.recordGroups.reduce((sum, group) => sum + group.recordIds.length, 0);
+          return {
           kind: "channel",
           sourcePath: source.path,
           fileName: `${source.path}-subset.evtx`,
           outputPath: `C:\\out\\${source.path}-subset.evtx`,
-          requestedRecords: source.recordIds.length,
+          requestedRecords: events,
           status: "exported",
-          exportedRecords: source.recordIds.length,
+          exportedRecords: events,
+          missing: { count: 0, sample: [] },
+          unrequested: { count: 0, sample: [] },
           messagesArchived: true,
           error: null,
           warnings: [],
-        })),
+          };
+        }),
       };
     });
     render(<EvtxViewBar nowEpoch={0} />);
@@ -568,7 +575,7 @@ describe("EVTX subset menu entry", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
     await screen.findByRole("alertdialog");
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Choose folder..." }));
+      fireEvent.click(screen.getByRole("button", { name: "Choose folder\u2026" }));
     });
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Export unredacted" })).not.toHaveAttribute(
@@ -603,7 +610,7 @@ describe("EVTX subset menu entry", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
     await screen.findByRole("alertdialog");
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Choose folder..." }));
+      fireEvent.click(screen.getByRole("button", { name: "Choose folder\u2026" }));
     });
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Export unredacted" })).not.toHaveAttribute(

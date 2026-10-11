@@ -1302,13 +1302,21 @@ describe("event-log manifest commands", () => {
     requestedRecords: 2,
     status: "exported",
     exportedRecords: 2,
+    missing: { count: 0, sample: [] },
+    unrequested: { count: 0, sample: [] },
     messagesArchived: true,
     error: null,
     warnings: [],
   };
-  const subsetSources = [{ kind: "channel" as const, path: "System", recordIds: ["5", "6"] }];
+  const subsetSources = [
+    {
+      kind: "channel" as const,
+      path: "System",
+      recordGroups: [{ computer: "HOST-A", recordIds: ["5", "6"] }],
+    },
+  ];
 
-  it("sends the folder and the record ids as text, and returns the validated per-file results", async () => {
+  it("sends the folder and the record ids as text per computer, and returns the validated per-file results", async () => {
     const response = { folder: "C:\\out", files: [subsetFile] };
     invokeMock.mockResolvedValueOnce(response);
 
@@ -1319,10 +1327,19 @@ describe("event-log manifest commands", () => {
     });
   });
 
-  it("accepts a failed file with no verified count", async () => {
+  it("accepts a failed file, and an exported one whose read-back could not be done", async () => {
     const response = {
       folder: "C:\\out",
-      files: [{ ...subsetFile, status: "failed", exportedRecords: null, error: "access denied" }],
+      files: [
+        {
+          ...subsetFile,
+          status: "failed",
+          exportedRecords: null,
+          missing: null,
+          unrequested: null,
+          error: "access denied",
+        },
+      ],
     };
     invokeMock.mockResolvedValueOnce(response);
     await expect(exportEventLogSubset("C:\\out", subsetSources)).resolves.toEqual(response);
@@ -1336,8 +1353,14 @@ describe("event-log manifest commands", () => {
     [{ folder: "C:\\out", files: [{ ...subsetFile, exportedRecords: -1 }] }],
     [{ folder: "C:\\out", files: [{ ...subsetFile, warnings: "none" }] }],
     [{ folder: "C:\\out", files: [{ ...subsetFile, messagesArchived: "yes" }] }],
-    // A reply that does not describe the request: wrong source, extra file, or missing file.
+    // The comparison with the request must be present and well formed: absent is not "none".
+    [{ folder: "C:\\out", files: [{ ...subsetFile, missing: undefined }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, unrequested: { count: -1, sample: [] } }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, missing: { count: 1, sample: [5] } }] }],
+    // A reply that does not describe the request: wrong source, wrong kind, extra file, or
+    // missing file.
     [{ folder: "C:\\out", files: [{ ...subsetFile, sourcePath: "Application" }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, kind: "file" }] }],
     [{ folder: "C:\\out", files: [subsetFile, subsetFile] }],
     [{ folder: "C:\\out", files: [] }],
   ])("rejects a malformed or mismatched subset reply (%#)", async (reply) => {

@@ -2,6 +2,12 @@
  * "EVTX subset..." (spec 8.17): copies the events on screen into new `.evtx` files, one per
  * source log, with `EvtExportLog`.
  *
+ * Deviation from spec 8.17, to be confirmed by the maintainer: it asks for "a summary toast" that
+ * lists the files and the record count for each. The app has no toast host, so the list is the
+ * dialog's done view and the one-line outcome stays in the view bar's status line after the dialog
+ * is closed. Two readings of the same section are made in the backend: `{source-label}` is the
+ * file stem for an `.evtx` source, and names that collide are numbered `{label}-N-subset.evtx`.
+ *
  * The files are raw copies, so the shared redaction module cannot apply. The dialog therefore
  * puts the unredacted warning next to the one button that starts the export, and starts with
  * focus on Cancel so that Enter or Space on opening can never export by accident.
@@ -12,6 +18,7 @@
  */
 import {
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -53,6 +60,7 @@ import {
   describeSkippedRecords,
   planEvtxSubsetSources,
   summarizeEvtxSubsetResult,
+  type EvtxSubsetSkipped,
 } from "./evtx-subset-sources";
 import type { EvtxRecord } from "./types";
 
@@ -97,6 +105,9 @@ export function EvtxExportSubsetDialog({
   const smallFontSize = `${Math.max(10, metrics.fontSize - 1)}px`;
 
   const plan = useMemo(() => planEvtxSubsetSources(records), [records]);
+  // Fluent labels the surface by its title only, so the gate's wording is wired as its description:
+  // a screen-reader user hears the warning when the dialog opens, before reaching any button.
+  const noticeId = useId();
   const [folder, setFolder] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("ready");
   const [result, setResult] = useState<EvtxSubsetResult | null>(null);
@@ -106,7 +117,7 @@ export function EvtxExportSubsetDialog({
   const startedRef = useRef(false);
 
   // Fluent moves focus to the first focusable element when a dialog opens, which here would be
-  // "Choose folder...". The spec wants Cancel, so it is focused explicitly. This runs after
+  // "Choose folder\u2026". The spec wants Cancel, so it is focused explicitly. This runs after
   // Fluent's own effect: Dialog is a child of this component, and children's effects run first.
   const cancelRef = useRef<HTMLButtonElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
@@ -121,7 +132,7 @@ export function EvtxExportSubsetDialog({
   const exporting = phase === "exporting";
   const announcement =
     phase === "done" && result
-      ? summarizeEvtxSubsetResult(result)
+      ? summarizeEvtxSubsetResult(result, plan.skippedRecords)
       : exporting
         ? "Exporting EVTX subset files"
         : "";
@@ -152,11 +163,11 @@ export function EvtxExportSubsetDialog({
     try {
       const response = await exportEventLogSubset(
         folder,
-        plan.sources.map(({ kind, path, recordIds }) => ({ kind, path, recordIds })),
+        plan.sources.map(({ kind, path, recordGroups }) => ({ kind, path, recordGroups })),
       );
       setResult(response);
       setPhase("done");
-      onFinished?.(summarizeEvtxSubsetResult(response));
+      onFinished?.(summarizeEvtxSubsetResult(response, plan.skippedRecords));
     } catch (exportError) {
       // Nothing was exported when the whole request is refused (an existing file, a bad folder),
       // so the operator can fix the cause here and try again.
@@ -182,7 +193,11 @@ export function EvtxExportSubsetDialog({
         if (!data.open && !exporting) onClose();
       }}
     >
-      <DialogSurface style={{ maxWidth: "640px", fontFamily: LOG_UI_FONT_FAMILY }}>
+      <DialogSurface
+        style={{ maxWidth: "640px", fontFamily: LOG_UI_FONT_FAMILY }}
+        // The warning is only on screen until the result replaces the form.
+        aria-describedby={phase === "done" ? undefined : noticeId}
+      >
         <DialogBody>
           <DialogTitle>Export EVTX subset</DialogTitle>
           <DialogContent>
@@ -205,6 +220,8 @@ export function EvtxExportSubsetDialog({
               {phase === "done" && result ? (
                 <SubsetResult
                   result={result}
+                  skipped={plan.skipped}
+                  notIncluded={plan.skippedRecords}
                   smallFontSize={smallFontSize}
                   warningColor={warningColor}
                   errorColor={errorColor}
@@ -263,16 +280,7 @@ export function EvtxExportSubsetDialog({
                     </p>
                   )}
 
-                  {plan.skipped.length > 0 && (
-                    <div style={{ fontSize: smallFontSize, color: mutedColor }}>
-                      <div style={{ fontWeight: 600 }}>Not included</div>
-                      <ul style={{ margin: "2px 0 0", paddingLeft: "18px" }}>
-                        {plan.skipped.map((entry) => (
-                          <li key={entry.reason}>{describeSkippedRecords(entry)}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
+                  <NotIncluded skipped={plan.skipped} fontSize={smallFontSize} color={mutedColor} />
 
                   <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                     <Button
@@ -284,7 +292,7 @@ export function EvtxExportSubsetDialog({
                         if (!exporting) void chooseFolder();
                       }}
                     >
-                      Choose folder...
+                      {"Choose folder\u2026"}
                     </Button>
                     <span
                       data-evtx-subset-folder
@@ -309,6 +317,7 @@ export function EvtxExportSubsetDialog({
                   </div>
 
                   <div
+                    id={noticeId}
                     role="note"
                     style={{
                       display: "flex",
@@ -365,7 +374,7 @@ export function EvtxExportSubsetDialog({
                     if (canExport) void runExport();
                   }}
                 >
-                  {exporting ? "Exporting..." : "Export unredacted"}
+                  {exporting ? "Exporting\u2026" : "Export unredacted"}
                 </Button>
               </>
             )}
@@ -376,23 +385,55 @@ export function EvtxExportSubsetDialog({
   );
 }
 
+/** The events the plan left out and why, shown before and after the export. */
+function NotIncluded({
+  skipped,
+  fontSize,
+  color,
+}: {
+  skipped: EvtxSubsetSkipped[];
+  fontSize: string;
+  color: string;
+}): ReactElement | null {
+  if (skipped.length === 0) return null;
+  return (
+    <div style={{ fontSize, color }}>
+      <div style={{ fontWeight: 600 }}>Not included</div>
+      <ul style={{ margin: "2px 0 0", paddingLeft: "18px" }}>
+        {skipped.map((entry) => (
+          <li key={entry.reason}>{describeSkippedRecords(entry)}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function SubsetResult({
   result,
+  skipped,
+  notIncluded,
   smallFontSize,
   warningColor,
   errorColor,
 }: {
   result: EvtxSubsetResult;
+  skipped: EvtxSubsetSkipped[];
+  notIncluded: number;
   smallFontSize: string;
   warningColor: string;
   errorColor: string;
 }): ReactElement {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-      <div style={{ fontWeight: 600 }}>{summarizeEvtxSubsetResult(result)}</div>
+      <div style={{ fontWeight: 600 }}>{summarizeEvtxSubsetResult(result, notIncluded)}</div>
       <div style={{ fontSize: smallFontSize, color: tokens.colorNeutralForeground2, overflowWrap: "anywhere" }}>
         Saved to <span style={{ fontFamily: LOG_MONOSPACE_FONT_FAMILY }}>{result.folder}</span>
       </div>
+      <NotIncluded
+        skipped={skipped}
+        fontSize={smallFontSize}
+        color={tokens.colorNeutralForeground2}
+      />
       <ul
         aria-label="Exported files"
         style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: "8px" }}
@@ -411,13 +452,22 @@ function SubsetResult({
   );
 }
 
+/**
+ * What the written file holds, by what was found in it. Never a bare "N of M": a file can be short
+ * of what was asked for, hold events nobody asked for, or both, and each is said on its own.
+ */
 function recordCountText(file: EvtxSubsetFileResult): string {
   const requested = file.requestedRecords.toLocaleString();
+  const noun = (count: number) => (count === 1 ? "event" : "events");
   if (file.exportedRecords === null) return `${requested} requested, count not verified`;
-  if (file.exportedRecords === file.requestedRecords) {
-    return `${file.exportedRecords.toLocaleString()} ${file.exportedRecords === 1 ? "event" : "events"}`;
-  }
-  return `${file.exportedRecords.toLocaleString()} of ${requested} requested events`;
+  const missing = file.missing?.count ?? 0;
+  const unrequested = file.unrequested?.count ?? 0;
+  const held = `${file.exportedRecords.toLocaleString()} ${noun(file.exportedRecords)}`;
+  if (missing === 0 && unrequested === 0) return held;
+  const parts = [`${requested} requested`];
+  if (missing > 0) parts.push(`${missing.toLocaleString()} missing`);
+  if (unrequested > 0) parts.push(`${unrequested.toLocaleString()} not requested`);
+  return `${held} in the file (${parts.join("; ")})`;
 }
 
 function SubsetResultRow({
