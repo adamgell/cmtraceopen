@@ -22,18 +22,18 @@ use super::event_node::{extract_event_data, extract_system_fields, parse_event_x
 use super::models::{
     ChannelEnabledState, ChannelSourceType, EvtxClearResult, EvtxClearStatus, EvtxTailStatus,
 };
-use super::models::{EvtxChannelInfo, EvtxCoverageGap, EvtxRecord};
+use super::models::{EvtxChannelInfo, EvtxCoverageGap, EvtxCoverageGapKind, EvtxRecord};
 // Only the Windows-only provider-message recovery path and its tests name this type, so it is
 // imported under the same gate: importing it unconditionally warns on macOS and Linux builds.
 #[cfg(any(target_os = "windows", test))]
 use super::models::EvtxField;
 #[cfg(any(target_os = "windows", test))]
-use super::models::{
-    EvtxCoverageGapKind, EvtxLiveMode, EvtxTailBatch, ProviderMessageCoverage, ProviderMessageStage,
-};
+use super::models::{EvtxLiveMode, EvtxTailBatch, ProviderMessageCoverage, ProviderMessageStage};
 #[cfg(any(target_os = "windows", test))]
 use super::parser::DescriptionOutcome;
 use super::provider_db::ProviderStore;
+#[cfg(any(target_os = "windows", test))]
+use super::query_failure::channel_failure_kind;
 #[cfg(target_os = "windows")]
 use cmtraceopen_parser::event_query::build_query;
 use cmtraceopen_parser::event_query::EventQueryFilter;
@@ -99,8 +99,8 @@ pub struct ChannelScan {
     /// Reporting the length instead would tell the frontend a fully read channel held no events,
     /// which is the same wrong answer as a channel that failed.
     pub delivered: usize,
-    /// Operator-facing explanations of what is missing. Empty means the channel was read whole.
-    pub gaps: Vec<String>,
+    /// What is missing and why. Empty means the channel was read whole.
+    pub gaps: Vec<ScanGap>,
     /// Description failures for records that were still delivered successfully.
     pub provider_gaps: Vec<EvtxCoverageGap>,
     /// True when the read stopped because the operator cancelled the request. The records and
@@ -108,41 +108,67 @@ pub struct ChannelScan {
     pub cancelled: bool,
 }
 
-#[cfg(any(target_os = "windows", test))]
+/// One reason part of a channel is missing from a scan, with the coverage kind it reports.
+///
+/// The kind is decided where the Windows error code is still in hand. Recovering it later from the
+/// message would mean matching localized text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct QueryPathStatus {
-    path: String,
-    status: u32,
+pub struct ScanGap {
+    pub kind: EvtxCoverageGapKind,
+    /// Operator-facing explanation, prefixed with the channel path it describes.
+    pub message: String,
+}
+
+impl ScanGap {
+    /// Records the channel holds that this view does not show.
+    pub fn record(message: String) -> Self {
+        Self {
+            kind: EvtxCoverageGapKind::Record,
+            message,
+        }
+    }
 }
 
 #[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum QueryStatusInspection {
+pub(super) struct QueryPathStatus {
+    pub(super) path: String,
+    pub(super) status: u32,
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum QueryStatusInspection {
     Available(Vec<QueryPathStatus>),
     Unavailable { path: String, detail: String },
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn append_query_status_gaps(scan: &mut ChannelScan, inspection: &QueryStatusInspection) {
+pub(super) fn append_query_status_gaps(scan: &mut ChannelScan, inspection: &QueryStatusInspection) {
     match inspection {
         QueryStatusInspection::Available(statuses) => {
             for status in statuses.iter().filter(|status| status.status != 0) {
-                push_bounded_tail_coverage_gap(
+                push_bounded_scan_gap(
                     &mut scan.gaps,
-                    format!(
-                        "{}: the Event Log service {}",
-                        status.path,
-                        describe_query_status(status.status)
-                    ),
+                    ScanGap {
+                        kind: channel_failure_kind(status.status, EvtxCoverageGapKind::Record),
+                        message: format!(
+                            "{}: the Event Log service {}",
+                            status.path,
+                            describe_query_status(status.status)
+                        ),
+                    },
                 );
             }
         }
+        // Not a refusal of the channel, whatever code the inspection failed with: the query ran,
+        // and only its per-path status could not be read back.
         QueryStatusInspection::Unavailable { path, detail } => {
-            push_bounded_tail_coverage_gap(
+            push_bounded_scan_gap(
                 &mut scan.gaps,
-                format!(
+                ScanGap::record(format!(
                     "{path}: query status could not be inspected after EvtQuery; channel completeness is unknown ({detail})"
-                ),
+                )),
             );
         }
     }
@@ -515,7 +541,11 @@ fn project_polling_tail_scan(
     scan: ChannelScan,
     dedup: &mut ProviderGapDedup,
 ) -> PollingTailProjection {
-    let mut coverage_gaps = scan.gaps;
+    // A tail batch carries its gaps as text, so each one keeps its message and nothing is dropped.
+    let mut coverage_gaps = Vec::new();
+    for gap in scan.gaps {
+        push_bounded_tail_coverage_gap(&mut coverage_gaps, gap.message);
+    }
     for gap in scan.provider_gaps {
         if dedup.keep(&gap) {
             push_bounded_tail_coverage_gap(&mut coverage_gaps, format_provider_gap(&gap));
@@ -1123,13 +1153,21 @@ fn query_channel_inner(
                         win32_code(&error),
                         error.code().0 as u32
                     );
-                    push_bounded_tail_coverage_gap(
+                    // A refusal partway through is still a refusal, so it reports as one; the
+                    // message keeps how much of the channel was read before it.
+                    push_bounded_scan_gap(
                         &mut gaps,
-                        format!(
-                            "{coverage_channel}: stopped after {} events, the channel could not be read further ({})",
-                            produced,
-                            format_source_error("EvtNext", &error, remote),
-                        ),
+                        ScanGap {
+                            kind: channel_failure_kind(
+                                win32_code(&error),
+                                EvtxCoverageGapKind::Record,
+                            ),
+                            message: format!(
+                                "{coverage_channel}: stopped after {} events, the channel could not be read further ({})",
+                                produced,
+                                format_source_error("EvtNext", &error, remote),
+                            ),
+                        },
                     );
                     break;
                 }
@@ -1267,22 +1305,24 @@ fn query_channel_inner(
         // Counted and reported rather than passed over. Events that never arrived look exactly like
         // evidence that the thing being investigated did not happen.
         log::warn!("event=evtx_live_query_gap channel=\"{channel}\" unparsable={unparsable}");
-        push_bounded_tail_coverage_gap(
+        push_bounded_scan_gap(
             &mut gaps,
-            format!(
+            ScanGap::record(format!(
                 "{coverage_channel}: {unparsable} events could not be read and are missing from this view"
-            ),
+            )),
         );
     }
     if unrenderable > 0 {
         log::warn!("event=evtx_live_query_gap channel=\"{channel}\" unrenderable={unrenderable}");
-        push_bounded_tail_coverage_gap(
+        // Per-event failures counted together under the first one's text. One code does not
+        // describe them all, and the channel itself was read, so they stay record gaps.
+        push_bounded_scan_gap(
             &mut gaps,
-            format!(
+            ScanGap::record(format!(
                 "{coverage_channel}: {unrenderable} events could not be rendered and are missing \
                  from this view ({})",
                 first_render_error.unwrap_or_else(|| "EvtRender failed".to_string())
-            ),
+            )),
         );
     }
     if message_failures > 0 {
@@ -1323,20 +1363,42 @@ const TAIL_COVERAGE_SUMMARY_SUFFIX: &str = " additional live tail diagnostics we
 
 #[cfg(any(target_os = "windows", test))]
 fn push_bounded_tail_coverage_gap(gaps: &mut Vec<String>, gap: String) {
+    push_bounded_gap(gaps, gap, |gap| gap, |summary| summary);
+}
+
+/// Bounds a scan's gaps by the same rule as a tail's. The summary entry stands for gaps of any
+/// kind, so it claims no particular one and reports as a record gap.
+#[cfg(any(target_os = "windows", test))]
+fn push_bounded_scan_gap(gaps: &mut Vec<ScanGap>, gap: ScanGap) {
+    push_bounded_gap(gaps, gap, |gap| &mut gap.message, ScanGap::record);
+}
+
+/// Appends `gap`, coalescing everything past [`MAX_TAIL_COVERAGE_GAPS`] into one trailing summary.
+///
+/// `message` reaches an entry's text and `summary` builds the summary entry, so plain-text tail
+/// gaps and typed scan gaps share one bound and one counting rule.
+#[cfg(any(target_os = "windows", test))]
+fn push_bounded_gap<T>(
+    gaps: &mut Vec<T>,
+    gap: T,
+    message: fn(&mut T) -> &mut String,
+    summary: fn(String) -> T,
+) {
     if gaps.len() < MAX_TAIL_COVERAGE_GAPS - 1 {
         gaps.push(gap);
         return;
     }
     if gaps.len() == MAX_TAIL_COVERAGE_GAPS - 1 {
-        gaps.push(format!(
+        gaps.push(summary(format!(
             "{TAIL_COVERAGE_SUMMARY_PREFIX}1{TAIL_COVERAGE_SUMMARY_SUFFIX}"
-        ));
+        )));
         return;
     }
 
-    let Some(summary) = gaps.last_mut() else {
+    let Some(last) = gaps.last_mut() else {
         return;
     };
+    let summary = message(last);
     let Some(omitted) = summary
         .strip_prefix(TAIL_COVERAGE_SUMMARY_PREFIX)
         .and_then(|summary| summary.strip_suffix(TAIL_COVERAGE_SUMMARY_SUFFIX))
@@ -3201,10 +3263,12 @@ mod portable_tests {
 
         assert_eq!(scan.records.len(), 0);
         assert!(
-            scan.gaps
-                .iter()
-                .any(|gap| gap.contains("Security") && gap.contains("Windows error 5")),
-            "tolerated access-denied query status must stay visible as coverage"
+            scan.gaps.iter().any(|gap| {
+                gap.kind == EvtxCoverageGapKind::AccessDenied
+                    && gap.message.contains("Security")
+                    && gap.message.contains("Windows error 5")
+            }),
+            "tolerated access-denied query status must stay visible as access-denied coverage"
         );
     }
 
@@ -3239,8 +3303,14 @@ mod portable_tests {
         assert_eq!(
             scan.gaps,
             vec![
-                "Security: the Event Log service refused the channel query (Windows error 5: Access is denied)".to_string(),
-                "System: the Event Log service refused the channel query (Windows error 1314: A required privilege is not held by the client)".to_string(),
+                ScanGap {
+                    kind: EvtxCoverageGapKind::AccessDenied,
+                    message: "Security: the Event Log service refused the channel query (Windows error 5: Access is denied)".to_string(),
+                },
+                ScanGap {
+                    kind: EvtxCoverageGapKind::AccessDenied,
+                    message: "System: the Event Log service refused the channel query (Windows error 1314: A required privilege is not held by the client)".to_string(),
+                },
             ]
         );
     }
@@ -3288,9 +3358,10 @@ mod portable_tests {
         assert_eq!(scan.records.len(), 1);
         assert!(
             scan.gaps.iter().any(|gap| {
-                gap.contains("Application")
-                    && gap.contains("query status")
-                    && gap.contains("Windows error 122")
+                gap.kind == EvtxCoverageGapKind::Record
+                    && gap.message.contains("Application")
+                    && gap.message.contains("query status")
+                    && gap.message.contains("Windows error 122")
             }),
             "missing query-status inspection must become explicit coverage uncertainty"
         );
@@ -3318,9 +3389,9 @@ mod portable_tests {
         assert_eq!(scan.records[0].message, "kept record");
         assert_eq!(
             scan.gaps,
-            vec![
+            vec![ScanGap::record(
                 "Application: query status could not be inspected after EvtQuery; channel completeness is unknown (EvtGetQueryInfo(EvtQueryNames): Windows error 122)".to_string(),
-            ]
+            )]
         );
     }
 
@@ -3375,9 +3446,11 @@ mod portable_tests {
         ));
         assert!(
             scan.gaps.iter().any(|gap| {
-                gap.contains("Application")
-                    && gap.contains("channel completeness is unknown")
-                    && gap.contains("EvtGetQueryInfo returned no query paths or statuses")
+                gap.message.contains("Application")
+                    && gap.message.contains("channel completeness is unknown")
+                    && gap
+                        .message
+                        .contains("EvtGetQueryInfo returned no query paths or statuses")
             }),
             "empty query-status data must stay visible as unknown completeness"
         );
@@ -3402,14 +3475,16 @@ mod portable_tests {
         );
 
         assert_eq!(scan.records.len(), 1);
+        // The inspection failed with error 5, but the channel query itself ran: this is unknown
+        // completeness, a record gap, and never an access-denied claim about the channel.
         assert_eq!(
             scan.gaps,
-            vec![
+            vec![ScanGap::record(
                 "Security: query status could not be inspected after EvtQuery; channel completeness is unknown (EvtGetQueryInfo(EvtQueryStatuses): Windows error 5)".to_string(),
-            ]
+            )]
         );
         assert!(
-            !scan.gaps[0].contains("refused the channel query"),
+            !scan.gaps[0].message.contains("refused the channel query"),
             "inspection failures must not fabricate a second access-denied gap"
         );
     }
@@ -3433,11 +3508,79 @@ mod portable_tests {
         );
 
         assert!(
-            scan.gaps
-                .iter()
-                .any(|gap| gap.contains("HOST-A/Security") && !gap.contains(": Security")),
-            "remote gaps must identify machine/channel"
+            scan.gaps.iter().any(|gap| {
+                gap.kind == EvtxCoverageGapKind::AccessDenied
+                    && gap.message.contains("HOST-A/Security")
+                    && !gap.message.contains(": Security")
+            }),
+            "remote gaps must identify machine/channel and keep the refusal's kind"
         );
+    }
+
+    #[test]
+    fn polling_tail_keeps_a_refused_channel_visible() {
+        // A tail batch carries text, so the refusal must survive the projection as its message.
+        let mut scan = ChannelScan {
+            records: Vec::new(),
+            delivered: 0,
+            gaps: Vec::new(),
+            provider_gaps: Vec::new(),
+            cancelled: false,
+        };
+        append_query_status_gaps(
+            &mut scan,
+            &QueryStatusInspection::Available(vec![QueryPathStatus {
+                path: "Security".to_string(),
+                status: 5,
+            }]),
+        );
+
+        let projected = project_polling_tail_scan(scan, &mut ProviderGapDedup::persistent_tail());
+
+        assert_eq!(
+            projected.coverage_gaps,
+            vec![
+                "Security: the Event Log service refused the channel query (Windows error 5: Access is denied)"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn scan_gaps_share_the_tail_bound_and_keep_the_kinds_that_fit() {
+        let summary = |omitted: usize| {
+            format!("{TAIL_COVERAGE_SUMMARY_PREFIX}{omitted}{TAIL_COVERAGE_SUMMARY_SUFFIX}")
+        };
+        let mut gaps = vec![ScanGap {
+            kind: EvtxCoverageGapKind::AccessDenied,
+            message: "Security: refused".to_string(),
+        }];
+        for index in 1..MAX_TAIL_COVERAGE_GAPS {
+            push_bounded_scan_gap(&mut gaps, ScanGap::record(format!("gap-{index}")));
+        }
+
+        assert_eq!(gaps.len(), MAX_TAIL_COVERAGE_GAPS);
+        assert_eq!(gaps[0].kind, EvtxCoverageGapKind::AccessDenied);
+        assert_eq!(gaps.last(), Some(&ScanGap::record(summary(1))));
+
+        push_bounded_scan_gap(
+            &mut gaps,
+            ScanGap {
+                kind: EvtxCoverageGapKind::AccessDenied,
+                message: "overflow".to_string(),
+            },
+        );
+        assert_eq!(gaps.len(), MAX_TAIL_COVERAGE_GAPS);
+        assert_eq!(gaps.last(), Some(&ScanGap::record(summary(2))));
+
+        // Text gaps are bounded by the same rule.
+        let mut text = Vec::new();
+        for index in 0..=MAX_TAIL_COVERAGE_GAPS {
+            push_bounded_tail_coverage_gap(&mut text, format!("gap-{index}"));
+        }
+        assert_eq!(text.len(), MAX_TAIL_COVERAGE_GAPS);
+        assert_eq!(text[0], "gap-0");
+        assert_eq!(text.last(), Some(&summary(2)));
     }
 
     fn test_record(message: &str) -> EvtxRecord {

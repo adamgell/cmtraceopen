@@ -125,17 +125,15 @@ struct QueryAggregation {
 impl QueryAggregation {
     fn absorb_scan(&mut self, coverage_source: &str, scan: super::live::ChannelScan) {
         self.parse_errors = self.parse_errors.saturating_add(scan.gaps.len() as u32);
-        self.error_messages.extend(scan.gaps.iter().cloned());
+        self.error_messages
+            .extend(scan.gaps.iter().map(|gap| gap.message.clone()));
         self.coverage_gaps.extend(scan.gaps.into_iter().map(|gap| {
             let reason = gap
+                .message
                 .strip_prefix(&format!("{coverage_source}: "))
-                .unwrap_or(&gap)
+                .unwrap_or(&gap.message)
                 .to_string();
-            EvtxCoverageGap::new(
-                coverage_source.to_string(),
-                EvtxCoverageGapKind::Record,
-                reason,
-            )
+            EvtxCoverageGap::new(coverage_source.to_string(), gap.kind, reason)
         }));
         self.error_messages.extend(
             scan.provider_gaps
@@ -1579,10 +1577,10 @@ mod tests {
             super::super::live::ChannelScan {
                 records: Vec::new(),
                 delivered: 0,
-                gaps: vec![
+                gaps: vec![super::super::live::ScanGap::record(
                     "remote-host/ForwardedEvents: one event could not be read and is missing"
                         .to_string(),
-                ],
+                )],
                 provider_gaps: Vec::new(),
                 cancelled: false,
             },
@@ -1600,6 +1598,98 @@ mod tests {
         assert_eq!(
             aggregation.coverage_gaps[1].kind,
             super::super::models::EvtxCoverageGapKind::Record
+        );
+    }
+
+    /// Runs one channel query status through the scan and the aggregation, as a live load does.
+    fn absorb_query_status(
+        coverage_source: &str,
+        path: &str,
+        status: u32,
+    ) -> super::QueryAggregation {
+        let mut scan = super::super::live::ChannelScan {
+            records: Vec::new(),
+            delivered: 0,
+            gaps: Vec::new(),
+            provider_gaps: Vec::new(),
+            cancelled: false,
+        };
+        super::super::live::append_query_status_gaps(
+            &mut scan,
+            &super::super::live::QueryStatusInspection::Available(vec![
+                super::super::live::QueryPathStatus {
+                    path: path.to_string(),
+                    status,
+                },
+            ]),
+        );
+        let mut aggregation = super::QueryAggregation::default();
+        aggregation.absorb_scan(coverage_source, scan);
+        aggregation
+    }
+
+    #[test]
+    fn a_channel_the_service_refuses_is_reported_as_access_denied() {
+        // An unelevated live load of Security gets one of these two from the service. Filing it as
+        // a record gap hides the one fix the operator has: reading it elevated.
+        for (code, error_text) in [
+            (5, "Windows error 5: Access is denied"),
+            (
+                1314,
+                "Windows error 1314: A required privilege is not held by the client",
+            ),
+        ] {
+            let aggregation = absorb_query_status("Security", "Security", code);
+
+            assert_eq!(aggregation.coverage_gaps.len(), 1, "code {code}");
+            let gap = &aggregation.coverage_gaps[0];
+            assert_eq!(
+                gap.kind,
+                super::super::models::EvtxCoverageGapKind::AccessDenied,
+                "code {code}"
+            );
+            assert_eq!(gap.source, "Security");
+            assert!(
+                gap.reason.contains(error_text),
+                "the detail keeps the service's error text: {}",
+                gap.reason
+            );
+            // The frontend drops the legacy string only when it equals the formatted gap, so the
+            // two must stay identical or a regex-classified duplicate comes back.
+            assert_eq!(
+                aggregation.error_messages,
+                vec![format!("{}: {}", gap.source, gap.reason)]
+            );
+            assert_eq!(aggregation.parse_errors, 1);
+            assert_eq!(
+                super::diagnosis_coverage_state(gap.kind),
+                cmtraceopen_parser::diagnosis::CoverageState::AccessDenied
+            );
+        }
+    }
+
+    #[test]
+    fn a_remote_channel_the_service_refuses_is_reported_as_access_denied() {
+        let aggregation = absorb_query_status("HOST-A/Security", "HOST-A/Security", 5);
+
+        assert_eq!(aggregation.coverage_gaps.len(), 1);
+        assert_eq!(
+            aggregation.coverage_gaps[0].kind,
+            super::super::models::EvtxCoverageGapKind::AccessDenied
+        );
+        assert_eq!(aggregation.coverage_gaps[0].source, "HOST-A/Security");
+    }
+
+    #[test]
+    fn a_channel_query_failure_that_is_not_a_refusal_stays_a_record_gap() {
+        let aggregation = absorb_query_status("Application", "Application", 15007);
+
+        assert_eq!(aggregation.coverage_gaps.len(), 1);
+        let gap = &aggregation.coverage_gaps[0];
+        assert_eq!(gap.kind, super::super::models::EvtxCoverageGapKind::Record);
+        assert_eq!(
+            gap.reason,
+            "the Event Log service reported a channel query failure (Windows error 15007)"
         );
     }
 
