@@ -27,9 +27,12 @@ import {
   PopoverSurface,
   PopoverTrigger,
   ToggleButton,
+  makeStyles,
   tokens,
 } from "@fluentui/react-components";
 import {
+  ArrowDown16Regular,
+  ArrowUp16Regular,
   ChartMultiple20Regular,
   Checkmark12Regular,
   Flowchart20Regular,
@@ -54,6 +57,7 @@ import {
   type EvtxGroupField,
 } from "./evtx-filter";
 import {
+  EVTX_PANELS_AVAILABLE,
   EVTX_VIEW_IDS,
   EVTX_VIEW_LABELS,
   EVTX_VIEW_PANEL_ID,
@@ -73,11 +77,41 @@ const VIEW_ICONS: Record<EvtxViewId, FluentIcon> = {
   correlation: Flowchart20Regular,
 };
 
-const PANEL_TOGGLES: ReadonlyArray<{ id: EvtxPanelId; label: string }> = [
-  { id: "channels", label: "Channels" },
-  { id: "insights", label: "Insights" },
-  { id: "dock", label: "Correlation dock" },
+const PANEL_TOGGLES: ReadonlyArray<{
+  id: EvtxPanelId;
+  label: string;
+  /** Shown while the panel has no content; the toggle stays focusable so the reason is reachable. */
+  unavailableReason: string;
+}> = [
+  { id: "channels", label: "Channels", unavailableReason: "" },
+  { id: "insights", label: "Insights", unavailableReason: "" },
+  {
+    id: "dock",
+    label: "Correlation dock",
+    unavailableReason: "Available when the correlation dock ships",
+  },
 ];
+
+const useStyles = makeStyles({
+  // The tablist clips to its rounded corners, so the focus ring is drawn INSIDE each tab
+  // (negative offset) instead of outside, where it would be cut off.
+  layoutTab: {
+    ":focus-visible": {
+      outlineStyle: "solid",
+      outlineWidth: "2px",
+      outlineColor: tokens.colorStrokeFocus2,
+      outlineOffset: "-2px",
+    },
+  },
+  visuallyHidden: {
+    position: "absolute",
+    width: "1px",
+    height: "1px",
+    overflow: "hidden",
+    clipPath: "inset(50%)",
+    whiteSpace: "nowrap",
+  },
+});
 
 const GROUP_FIELDS: EvtxGroupField[] = ["eventId", "provider", "channel", "level", "day"];
 const NO_GROUPING = "__none__";
@@ -89,6 +123,7 @@ interface EvtxViewBarProps {
 }
 
 export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
+  const styles = useStyles();
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
   const controlFontSize = `${Math.max(11, metrics.fontSize - 1)}px`;
@@ -273,6 +308,7 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
                 tabRefs.current[view] = element;
               }}
               id={evtxViewTabId(view)}
+              className={styles.layoutTab}
               type="button"
               role="tab"
               aria-selected={selected}
@@ -320,16 +356,23 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
       <span style={{ fontSize: labelFontSize, color: tokens.colorNeutralForeground2 }}>
         Panels
       </span>
-      {PANEL_TOGGLES.map(({ id, label }) => {
+      {PANEL_TOGGLES.map(({ id, label, unavailableReason }) => {
         const checked = panels[id];
+        const available = EVTX_PANELS_AVAILABLE[id];
+        const reasonId = `evtx-panel-reason-${id}`;
         return (
+          <span key={id} style={{ display: "inline-flex" }}>
           <ToggleButton
-            key={id}
             shape="rounded"
             size="small"
             checked={checked}
+            disabledFocusable={!available}
+            title={available ? undefined : unavailableReason}
+            aria-describedby={available ? undefined : reasonId}
             icon={checked ? <Checkmark12Regular /> : undefined}
-            onClick={() => setPanel(id, !checked)}
+            onClick={() => {
+              if (available) setPanel(id, !checked);
+            }}
             style={{
               ...small,
               fontWeight: checked ? 600 : 400,
@@ -343,16 +386,38 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
           >
             {label}
           </ToggleButton>
+          {!available && (
+            <span id={reasonId} className={styles.visuallyHidden}>
+              {unavailableReason}
+            </span>
+          )}
+          </span>
         );
       })}
 
-      <div style={{ flex: 1 }} />
-
-      {exportState && (
-        <span style={{ fontSize: labelFontSize, color: tokens.colorNeutralForeground3 }}>
-          {exportState}
-        </span>
-      )}
+      {/*
+        The spacer doubles as the export status, so a long message is ellipsized into the free
+        space instead of widening the cluster and wrapping the bar onto a second row (spec 5.1).
+        The full text stays in the title and in the live region.
+      */}
+      <div
+        role="status"
+        aria-live="polite"
+        data-evtx-export-status
+        title={exportState ?? undefined}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          textAlign: "right",
+          fontSize: labelFontSize,
+          color: tokens.colorNeutralForeground3,
+        }}
+      >
+        {exportState}
+      </div>
       {isExporting && (
         <Button
           size="small"
@@ -508,7 +573,7 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
               onClick={() => reorderTarget && moveColumnBy(reorderTarget, -1)}
               style={small}
             >
-              {"↑"}
+              <ArrowUp16Regular />
             </Button>
             <Button
               size="small"
@@ -522,7 +587,7 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
               onClick={() => reorderTarget && moveColumnBy(reorderTarget, 1)}
               style={small}
             >
-              {"↓"}
+              <ArrowDown16Regular />
             </Button>
           </div>
         </PopoverSurface>

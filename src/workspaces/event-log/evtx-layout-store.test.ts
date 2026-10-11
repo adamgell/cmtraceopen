@@ -3,11 +3,13 @@ import {
   DEFAULT_DOCK_HEIGHT,
   DEFAULT_RAIL_WIDTH,
   EVTX_LAYOUT_STORAGE_KEY,
+  EVTX_LAYOUT_VERSION,
   MAX_RAIL_WIDTH,
   MIN_DOCK_HEIGHT,
   MIN_RAIL_WIDTH,
   clampDockHeight,
   maxDockHeightFor,
+  migrateLayout,
   sanitizeLayout,
   useEvtxLayoutStore,
   type EvtxViewId,
@@ -18,10 +20,10 @@ function reset() {
   useEvtxLayoutStore.setState(sanitizeLayout(undefined));
 }
 
-async function rehydrateFrom(stored: unknown) {
+async function rehydrateFrom(stored: unknown, version = EVTX_LAYOUT_VERSION) {
   localStorage.setItem(
     EVTX_LAYOUT_STORAGE_KEY,
-    JSON.stringify({ state: stored, version: 1 }),
+    JSON.stringify({ state: stored, version }),
   );
   await useEvtxLayoutStore.persist.rehydrate();
 }
@@ -29,7 +31,7 @@ async function rehydrateFrom(stored: unknown) {
 describe("evtx-layout-store", () => {
   beforeEach(reset);
 
-  it("starts on the table with channels and insights shown and the dock hidden", () => {
+  it("starts on the table with the channel pane and the Insights rail shown", () => {
     const state = useEvtxLayoutStore.getState();
     expect(state.activeView).toBe("table");
     expect(state.panels).toEqual({ channels: true, insights: true, dock: false });
@@ -42,12 +44,24 @@ describe("evtx-layout-store", () => {
     const store = useEvtxLayoutStore.getState();
     store.setActiveView("correlation");
     store.setRailTab("details");
-    store.setPanel("dock", true);
     store.togglePanel("channels");
     const state = useEvtxLayoutStore.getState();
     expect(state.activeView).toBe("correlation");
     expect(state.railTab).toBe("details");
-    expect(state.panels).toEqual({ channels: false, insights: true, dock: true });
+    expect(state.panels).toEqual({ channels: false, insights: true, dock: false });
+  });
+
+  it("refuses to show a panel that has no content yet", () => {
+    const store = useEvtxLayoutStore.getState();
+    store.setPanel("dock", true);
+    store.togglePanel("dock");
+    store.togglePanel("insights");
+    store.togglePanel("insights");
+    expect(useEvtxLayoutStore.getState().panels).toEqual({
+      channels: true,
+      insights: true,
+      dock: false,
+    });
   });
 
   it("ignores an unknown view or tab", () => {
@@ -84,13 +98,13 @@ describe("evtx-layout-store", () => {
   });
 
   it("persists exactly the five layout keys and nothing else", () => {
-    useEvtxLayoutStore.getState().setPanel("dock", true);
+    useEvtxLayoutStore.getState().setPanel("channels", false);
     const stored = JSON.parse(localStorage.getItem(EVTX_LAYOUT_STORAGE_KEY) ?? "{}");
-    expect(stored.version).toBe(1);
+    expect(stored.version).toBe(2);
     expect(Object.keys(stored.state).sort()).toEqual(
       ["activeView", "dockHeight", "panels", "railTab", "railWidth"],
     );
-    expect(stored.state.panels.dock).toBe(true);
+    expect(stored.state.panels.channels).toBe(false);
   });
 
   it("restores a valid persisted layout", async () => {
@@ -103,7 +117,8 @@ describe("evtx-layout-store", () => {
     });
     const state = useEvtxLayoutStore.getState();
     expect(state.activeView).toBe("charts");
-    expect(state.panels).toEqual({ channels: false, insights: true, dock: true });
+    // The dock has no content yet, so a persisted true is forced back to false.
+    expect(state.panels).toEqual({ channels: false, insights: true, dock: false });
     expect(state.railTab).toBe("chains");
     expect(state.railWidth).toBe(400);
     expect(state.dockHeight).toBe(250);
@@ -112,7 +127,7 @@ describe("evtx-layout-store", () => {
   it("sanitizes bad persisted values and drops unknown keys", async () => {
     await rehydrateFrom({
       activeView: "heatmap",
-      panels: { channels: "yes", insights: false, dock: 1, extra: true },
+      panels: { channels: "yes", insights: "no", dock: 1, extra: true },
       railTab: 7,
       railWidth: 99999,
       dockHeight: -4,
@@ -120,7 +135,7 @@ describe("evtx-layout-store", () => {
     });
     const state = useEvtxLayoutStore.getState() as unknown as Record<string, unknown>;
     expect(state.activeView).toBe("table");
-    expect(state.panels).toEqual({ channels: true, insights: false, dock: false });
+    expect(state.panels).toEqual({ channels: true, insights: true, dock: false });
     expect(state.railTab).toBe("insights");
     expect(state.railWidth).toBe(MAX_RAIL_WIDTH);
     expect(state.dockHeight).toBe(MIN_DOCK_HEIGHT);
@@ -131,5 +146,46 @@ describe("evtx-layout-store", () => {
     await rehydrateFrom("garbage");
     expect(useEvtxLayoutStore.getState().activeView).toBe("table");
     expect(useEvtxLayoutStore.getState().railWidth).toBe(DEFAULT_RAIL_WIDTH);
+  });
+
+  describe("version 2 migration", () => {
+    const stored = (insights: boolean) => ({
+      activeView: "grouped",
+      panels: { channels: false, insights, dock: false },
+      railTab: "details",
+      railWidth: 400,
+      dockHeight: 250,
+    });
+
+    it("turns a version 1 Insights false, which the user never chose, into the new default", async () => {
+      await rehydrateFrom(stored(false), 1);
+      const state = useEvtxLayoutStore.getState();
+      expect(state.panels).toEqual({ channels: false, insights: true, dock: false });
+      // Everything else the user did choose is kept.
+      expect(state.activeView).toBe("grouped");
+      expect(state.railWidth).toBe(400);
+    });
+
+    it("keeps a version 2 Insights false, which is the user's own choice", async () => {
+      await rehydrateFrom(stored(false), 2);
+      expect(useEvtxLayoutStore.getState().panels.insights).toBe(false);
+    });
+
+    it("keeps the dock unavailable through the migration", async () => {
+      await rehydrateFrom({ ...stored(false), panels: { channels: true, insights: false, dock: true } }, 1);
+      expect(useEvtxLayoutStore.getState().panels).toEqual({
+        channels: true,
+        insights: true,
+        dock: false,
+      });
+    });
+
+    it("migrates a version 1 envelope with no panels object", () => {
+      expect(migrateLayout({ activeView: "table" }, 1)).toEqual({
+        activeView: "table",
+        panels: { insights: true },
+      });
+      expect(migrateLayout(null, 1)).toBeNull();
+    });
   });
 });

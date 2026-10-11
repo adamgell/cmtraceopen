@@ -51,7 +51,40 @@ export const MIN_DOCK_HEIGHT = 160;
 /** The dock may take at most half the viewport height; applied in pixels at use time. */
 export const MAX_DOCK_HEIGHT_RATIO = 0.5;
 
+/**
+ * Which panels have content to show. The correlation dock (Phase 11) is not built yet, so its
+ * toggle is disabled and a persisted `true` is forced back to `false` on rehydration. The phase
+ * that enables a panel must flip it here AND in `DEFAULT_PANELS`, and must bump the persist
+ * `version` and migrate a persisted `false` to the new default; otherwise users who already hold
+ * `false` never see the new panel. Phase 4 did this for Insights (version 2, `migrateLayout`).
+ */
+export const EVTX_PANELS_AVAILABLE: EvtxPanels = {
+  channels: true,
+  insights: true,
+  dock: false,
+};
+
 const DEFAULT_PANELS: EvtxPanels = { channels: true, insights: true, dock: false };
+
+/** Persist version of the layout envelope. 2: the Insights rail shipped and defaults on. */
+export const EVTX_LAYOUT_VERSION = 2;
+
+/**
+ * Brings an older persisted envelope forward. Under version 1 Insights was unavailable, so every
+ * stored envelope holds `panels.insights === false` that the user never chose; it becomes the new
+ * default. A version 2 envelope is the user's own choice and is left alone.
+ */
+export function migrateLayout(persisted: unknown, version: number): unknown {
+  if (version >= EVTX_LAYOUT_VERSION || !persisted || typeof persisted !== "object") {
+    return persisted;
+  }
+  const source = persisted as Record<string, unknown>;
+  const panels =
+    source.panels && typeof source.panels === "object"
+      ? (source.panels as Record<string, unknown>)
+      : {};
+  return { ...source, panels: { ...panels, insights: DEFAULT_PANELS.insights } };
+}
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
   const number = typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -98,7 +131,8 @@ export function sanitizeLayout(raw: unknown): EvtxPersistedLayout {
     source.panels && typeof source.panels === "object" ? source.panels : {}
   ) as Record<string, unknown>;
   const panel = (id: EvtxPanelId): boolean =>
-    typeof rawPanels[id] === "boolean" ? (rawPanels[id] as boolean) : DEFAULT_PANELS[id];
+    EVTX_PANELS_AVAILABLE[id] &&
+    (typeof rawPanels[id] === "boolean" ? (rawPanels[id] as boolean) : DEFAULT_PANELS[id]);
   return {
     activeView: isOneOf(EVTX_VIEW_IDS, source.activeView) ? source.activeView : "table",
     panels: { channels: panel("channels"), insights: panel("insights"), dock: panel("dock") },
@@ -125,10 +159,14 @@ export const useEvtxLayoutStore = create<EvtxLayoutState>()(
       setActiveView: (view) => {
         if (isOneOf(EVTX_VIEW_IDS, view)) set({ activeView: view });
       },
-      setPanel: (panel, visible) =>
-        set((state) => ({ panels: { ...state.panels, [panel]: visible } })),
-      togglePanel: (panel) =>
-        set((state) => ({ panels: { ...state.panels, [panel]: !state.panels[panel] } })),
+      setPanel: (panel, visible) => {
+        if (!EVTX_PANELS_AVAILABLE[panel]) return;
+        set((state) => ({ panels: { ...state.panels, [panel]: visible } }));
+      },
+      togglePanel: (panel) => {
+        if (!EVTX_PANELS_AVAILABLE[panel]) return;
+        set((state) => ({ panels: { ...state.panels, [panel]: !state.panels[panel] } }));
+      },
       setRailTab: (tab) => {
         if (isOneOf(EVTX_RAIL_TAB_IDS, tab)) set({ railTab: tab });
       },
@@ -138,7 +176,8 @@ export const useEvtxLayoutStore = create<EvtxLayoutState>()(
     }),
     {
       name: EVTX_LAYOUT_STORAGE_KEY,
-      version: 1,
+      version: EVTX_LAYOUT_VERSION,
+      migrate: migrateLayout,
       partialize: (state): EvtxPersistedLayout => ({
         activeView: state.activeView,
         panels: state.panels,
