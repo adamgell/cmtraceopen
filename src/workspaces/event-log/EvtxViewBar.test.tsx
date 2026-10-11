@@ -1,19 +1,50 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
 }));
+const exportMock = vi.hoisted(() => ({ stream: vi.fn() }));
+vi.mock("./event-export-session", () => ({ streamEventLogExport: exportMock.stream }));
 
 import { EvtxViewBar } from "./EvtxViewBar";
 import { useUiStore } from "../../stores/ui-store";
-import type { EvtxRecord } from "./types";
 import { EVTX_EXPORT_FORMATS } from "./evtx-export";
 import { defaultColumnConfig } from "./evtx-columns";
 import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
+import type { EvtxRecord } from "./types";
 
 const TAB_ORDER = ["Table", "Grouped", "Timeline", "Charts", "Correlation"];
+
+const CHANNEL = { name: "Application", eventCount: 1, sourceType: "live" as const };
+const RECORD: EvtxRecord = {
+  id: 1,
+  eventRecordId: 101,
+  timestamp: "2026-08-18T12:00:00Z",
+  timestampEpoch: 1,
+  provider: "Example Provider",
+  channel: "Application",
+  eventId: 42,
+  level: "Information",
+  computer: "TEST-PC",
+  message: "Example event message",
+  eventData: [],
+  rawXml: "<Event />",
+  sourceLabel: "sample.evtx",
+};
+
+function seedChannels() {
+  useEvtxStore.setState({
+    channels: [CHANNEL],
+    records: [RECORD],
+    selectedChannels: new Set(["Application"]),
+    loadedChannels: new Set(["Application"]),
+    timeWindow: "all",
+  });
+}
 
 function resetStores() {
   localStorage.clear();
@@ -73,6 +104,7 @@ describe("EvtxViewBar", () => {
   });
 
   it("exposes the panel toggles with aria-pressed and flips the channel pane", () => {
+    seedChannels();
     render(<EvtxViewBar nowEpoch={0} />);
     const channels = screen.getByRole("button", { name: "Channels" });
     expect(channels).toHaveAttribute("aria-pressed", "true");
@@ -81,7 +113,8 @@ describe("EvtxViewBar", () => {
     expect(useEvtxLayoutStore.getState().panels.channels).toBe(false);
   });
 
-  it("ships the Insights and Correlation dock toggles disabled, with an accessible reason", () => {
+  it("ships the Insights and Correlation dock toggles disabled, with the reason as a description", () => {
+    seedChannels();
     render(<EvtxViewBar nowEpoch={0} />);
     const cases: Array<[string, string]> = [
       ["Insights", "Available when the Insights rail ships"],
@@ -91,8 +124,10 @@ describe("EvtxViewBar", () => {
       const toggle = screen.getByRole("button", { name });
       expect(toggle).toHaveAttribute("aria-pressed", "false");
       expect(toggle).toHaveAttribute("aria-disabled", "true");
-      expect(toggle).toHaveAttribute("title", reason);
+      expect(toggle).not.toHaveAttribute("title");
       expect(toggle).toHaveAccessibleDescription(reason);
+      // Once in the document: no hand-built duplicate for browse mode to read twice.
+      expect(screen.getAllByText(reason)).toHaveLength(1);
       fireEvent.click(toggle);
       expect(toggle).toHaveAttribute("aria-pressed", "false");
     }
@@ -101,6 +136,21 @@ describe("EvtxViewBar", () => {
       insights: false,
       dock: false,
     });
+  });
+
+  it("makes the Channels toggle unavailable, with a reason, when no channels are loaded", () => {
+    render(<EvtxViewBar nowEpoch={0} />);
+    const toggle = screen.getByRole("button", { name: "Channels" });
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(toggle).toHaveAccessibleDescription("No event log channels loaded");
+    fireEvent.click(toggle);
+    expect(useEvtxLayoutStore.getState().panels.channels).toBe(true);
+    cleanup();
+
+    seedChannels();
+    render(<EvtxViewBar nowEpoch={0} />);
+    expect(screen.getByRole("button", { name: "Channels" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("draws the Layout tab focus ring inside the tab so the clipped group cannot cut it off", () => {
@@ -131,8 +181,8 @@ describe("EvtxViewBar", () => {
   it("keeps the export status in the spacer with overflow ellipsis and the full text in the title", () => {
     render(<EvtxViewBar nowEpoch={0} />);
     const status = document.querySelector<HTMLElement>("[data-evtx-export-status]")!;
-    expect(status).toHaveAttribute("role", "status");
-    expect(status).toHaveAttribute("aria-live", "polite");
+    // Visible progress is not a live region; the announcement element is separate.
+    expect(status).not.toHaveAttribute("aria-live");
     expect(status).toHaveStyle({
       overflow: "hidden",
       textOverflow: "ellipsis",
@@ -215,6 +265,129 @@ describe("EvtxViewBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reset columns" }));
     expect(useEvtxStore.getState().columnConfig.order).toEqual(defaults);
   });
+
+  describe("export reporting", () => {
+    const exportJson = async () => {
+      fireEvent.click(
+        screen.getByTitle("Export the events currently shown, using the same filters as the list"),
+      );
+      fireEvent.click(await screen.findByRole("menuitem", { name: "JSON" }));
+    };
+
+    beforeEach(() => {
+      seedChannels();
+      vi.mocked(save).mockReset().mockResolvedValue("/tmp/events.json");
+      exportMock.stream.mockReset();
+    });
+
+    it("announces only the start and the final result for a multi-chunk export", async () => {
+      exportMock.stream.mockImplementation(
+        async ({ onProgress }: { onProgress: (received: number, expected: number) => void }) => {
+          for (let received = 1000; received <= 5000; received += 1000) {
+            await act(async () => onProgress(received, 5000));
+          }
+          return { records: 5000, bytes: 1234 };
+        },
+      );
+      render(<EvtxViewBar nowEpoch={0} />);
+      const live = document.querySelector<HTMLElement>("[data-evtx-export-announcement]")!;
+      expect(live).toHaveAttribute("role", "status");
+      expect(live).toHaveAttribute("aria-live", "polite");
+      const heard: string[] = [];
+      const observer = new MutationObserver(() => heard.push(live.textContent ?? ""));
+      observer.observe(live, { childList: true, characterData: true, subtree: true });
+
+      await exportJson();
+      const status = document.querySelector<HTMLElement>("[data-evtx-export-status]")!;
+      await waitFor(() => expect(status).toHaveTextContent("Exported 5,000 events (1,234 bytes)"));
+      await Promise.resolve();
+      observer.disconnect();
+
+      expect(heard).toEqual(["Export started", "Exported 5,000 events (1,234 bytes)"]);
+    });
+
+    const heardAnnouncements = () => {
+      const live = document.querySelector<HTMLElement>("[data-evtx-export-announcement]")!;
+      const heard: string[] = [];
+      const observer = new MutationObserver(() => heard.push(live.textContent ?? ""));
+      observer.observe(live, { childList: true, characterData: true, subtree: true });
+      return { heard, stop: () => observer.disconnect() };
+    };
+
+    it("announces the same message again, and announces nothing for a failure", async () => {
+      useEvtxStore.setState({ records: [] });
+      render(<EvtxViewBar nowEpoch={0} />);
+      const { heard, stop } = heardAnnouncements();
+      await exportJson();
+      await waitFor(() => expect(heard).toEqual(["Nothing to export"]));
+      await exportJson();
+      await waitFor(() => expect(heard).toEqual(["Nothing to export", "Nothing to export"]));
+      stop();
+      cleanup();
+
+      seedChannels();
+      // Fail after a tick so the start is committed (and announced) before the failure.
+      exportMock.stream.mockImplementationOnce(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        throw new Error("boom");
+      });
+      render(<EvtxViewBar nowEpoch={0} />);
+      const second = heardAnnouncements();
+      await exportJson();
+      await screen.findByRole("alert");
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      // Started, then silence for the failure (the alert carries it).
+      expect(second.heard).toEqual(["Export started", ""]);
+      exportMock.stream.mockImplementationOnce(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return { records: 1, bytes: 1 };
+      });
+      await exportJson();
+      await waitFor(() => expect(second.heard).toContain("Exported 1 events (1 bytes)"));
+      expect(second.heard.filter((text) => text === "Export started")).toHaveLength(2);
+      second.stop();
+    });
+
+    it("clears an old failure when a later attempt ends early, and restores focus on dismiss", async () => {
+      exportMock.stream.mockRejectedValueOnce(new Error("boom"));
+      render(<EvtxViewBar nowEpoch={0} />);
+      await exportJson();
+      fireEvent.click(await screen.findByRole("button", { name: "Dismiss export error" }));
+      expect(screen.getByTitle(/Export the events currently shown/)).toHaveFocus();
+
+      exportMock.stream.mockRejectedValueOnce(new Error("boom again"));
+      await exportJson();
+      await screen.findByRole("alert");
+      // A cancelled save dialog leaves no stale failure behind.
+      vi.mocked(save).mockResolvedValueOnce(null);
+      await exportJson();
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+      // Neither does "Nothing to export".
+      exportMock.stream.mockRejectedValueOnce(new Error("third"));
+      await exportJson();
+      await screen.findByRole("alert");
+      useEvtxStore.setState({ records: [] });
+      await exportJson();
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    });
+
+    it("shows a long failure in full as a dismissable alert under the bar, never truncated", async () => {
+      const detail = "disk full ".repeat(60).trim();
+      exportMock.stream.mockRejectedValue(new Error(detail));
+      render(<EvtxViewBar nowEpoch={0} />);
+      await exportJson();
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(`Export failed: ${detail}`);
+      expect(alert.style.textOverflow).not.toBe("ellipsis");
+      expect(alert.style.whiteSpace).not.toBe("nowrap");
+      expect(alert.closest("[data-evtx-region=view-bar]")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss export error" }));
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
 });
 
 const EXPORT_BUTTON_TITLE =
@@ -276,10 +449,25 @@ describe("EVTX subset menu entry", () => {
     await openExportMenu();
     const item = screen.getByRole("menuitem", { name: /EVTX subset/ });
     expect(item).toHaveAttribute("aria-disabled", "true");
-    expect(item).toHaveAttribute("title", "Not available for remote sources.");
+    // Same treatment as the disabled panel toggles: the reason is the item's description, from a
+    // tooltip that shows on hover and focus, not a title and not a hand-built hidden span.
+    expect(item).not.toHaveAttribute("title");
     expect(item).toHaveAccessibleDescription("Not available for remote sources.");
+    expect(screen.getAllByText("Not available for remote sources.")).toHaveLength(1);
     fireEvent.click(item);
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("keeps the disabled item reachable by keyboard so its reason can be read", async () => {
+    useEvtxStore.setState({ remoteMachine: "SRV01" });
+    render(<EvtxViewBar nowEpoch={0} />);
+    await openExportMenu();
+    const item = screen.getByRole("menuitem", { name: /EVTX subset/ });
+    // Fluent maps a disabled MenuItem to a focusable, aria-disabled one, so focus (and with it the
+    // tooltip) reaches it; it is not removed from the tab/arrow order.
+    expect(item).not.toHaveAttribute("disabled");
+    act(() => item.focus());
+    expect(item).toHaveFocus();
   });
 
   it("opens the dialog with exactly the records the list shows", async () => {
@@ -305,7 +493,108 @@ describe("EVTX subset menu entry", () => {
     expect(document.querySelector("[data-evtx-export-status]")).toHaveTextContent(
       "Nothing to export",
     );
+    // Announced like the other exports' empty case, and again if it is chosen again.
+    expect(document.querySelector("[data-evtx-export-announcement]")).toHaveTextContent(
+      "Nothing to export",
+    );
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("clears an old export failure line when a subset is started", async () => {
+    render(<EvtxViewBar nowEpoch={0} />);
+    exportMock.stream.mockReset().mockRejectedValueOnce(new Error("boom"));
+    vi.mocked(save).mockReset().mockResolvedValue("/tmp/events.json");
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "JSON" }));
+    await screen.findByText(/Export failed: boom/);
+    expect(document.querySelector("[data-evtx-export-error]")).not.toBeNull();
+
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+    await screen.findByRole("alertdialog");
+    expect(document.querySelector("[data-evtx-export-error]")).toBeNull();
+  });
+
+  it("reports a finished subset as visible status without touching the polite announcement region", async () => {
+    vi.mocked(open).mockReset().mockResolvedValue("C:\\out");
+    vi.mocked(invoke).mockReset().mockImplementation(async (_command, args) => {
+      const { sources } = args as { sources: Array<{ path: string; recordIds: string[] }> };
+      return {
+        folder: "C:\\out",
+        files: sources.map((source) => ({
+          kind: "channel",
+          sourcePath: source.path,
+          fileName: `${source.path}-subset.evtx`,
+          outputPath: `C:\\out\\${source.path}-subset.evtx`,
+          requestedRecords: source.recordIds.length,
+          status: "exported",
+          exportedRecords: source.recordIds.length,
+          messagesArchived: true,
+          error: null,
+          warnings: [],
+        })),
+      };
+    });
+    render(<EvtxViewBar nowEpoch={0} />);
+    const live = document.querySelector<HTMLElement>("[data-evtx-export-announcement]")!;
+    const heard: string[] = [];
+    const observer = new MutationObserver(() => heard.push(live.textContent ?? ""));
+    observer.observe(live, { childList: true, characterData: true, subtree: true });
+
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+    await screen.findByRole("alertdialog");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose folder..." }));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Export unredacted" })).not.toHaveAttribute(
+        "aria-disabled",
+        "true",
+      ),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Export unredacted" }));
+    });
+    await screen.findByRole("list", { name: "Exported files" });
+    await waitFor(() =>
+      expect(document.querySelector("[data-evtx-export-status]")).toHaveTextContent(
+        "Exported 2 EVTX subset files (3 events).",
+      ),
+    );
+    observer.disconnect();
+    // The dialog announces its own start and result; the bar's region stays quiet, so it still
+    // carries only the other exports' start and final result.
+    expect(heard).toEqual([]);
+    // A subset that works never uses the failure line under the bar.
+    expect(document.querySelector("[data-evtx-export-error]")).toBeNull();
+  });
+
+  it("shows a refused subset request in the dialog, where it can be retried, not under the bar", async () => {
+    vi.mocked(open).mockReset().mockResolvedValue("C:\\out");
+    vi.mocked(invoke)
+      .mockReset()
+      .mockRejectedValue("These files already exist in C:\\out and are never overwritten: System-subset.evtx.");
+    render(<EvtxViewBar nowEpoch={0} />);
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+    await screen.findByRole("alertdialog");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose folder..." }));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Export unredacted" })).not.toHaveAttribute(
+        "aria-disabled",
+        "true",
+      ),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Export unredacted" }));
+    });
+    const alert = await within(screen.getByRole("alertdialog")).findByRole("alert");
+    expect(alert).toHaveTextContent("never overwritten");
+    expect(document.querySelector("[data-evtx-export-error]")).toBeNull();
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
   });
 
   it("returns focus to the Export button when the dialog is cancelled", async () => {

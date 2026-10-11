@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { lazy } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -29,7 +30,8 @@ vi.mock("./UnifiedTimelineView", () => ({
 }));
 
 import { useLogStore } from "../../stores/log-store";
-import { EventLogWorkspace } from "./EventLogWorkspace";
+import { EventLogWorkspace, EvtxViewHost, type EvtxViewEntry } from "./EventLogWorkspace";
+import { EvtxViewBar } from "./EvtxViewBar";
 import {
   EVTX_LAYOUT_STORAGE_KEY,
   sanitizeLayout,
@@ -186,5 +188,40 @@ describe("EventLogWorkspace three-column shell", () => {
     expect(useEvtxStore.getState().filterSearch).toBe("kept");
     expect(screen.getByTestId("records-table")).toBe(table);
     expect(table).toBeVisible();
+  });
+
+  it("shows the Loading view fallback inside the tabpanel while a lazy view loads, with the tablist mounted", async () => {
+    let resolveView!: (module: { default: () => React.ReactElement }) => void;
+    const Lazy = lazy(
+      () =>
+        new Promise<{ default: () => React.ReactElement }>((resolve) => {
+          resolveView = resolve;
+        }),
+    );
+    const placeholder: EvtxViewEntry = { keepAlive: false, render: () => <div>stub</div> };
+    const views: Record<string, EvtxViewEntry> = {
+      table: placeholder,
+      grouped: placeholder,
+      timeline: placeholder,
+      charts: { keepAlive: false, render: () => <Lazy /> },
+      correlation: placeholder,
+    };
+    useEvtxLayoutStore.setState({ activeView: "charts" });
+    render(
+      <>
+        <EvtxViewBar nowEpoch={0} />
+        <EvtxViewHost views={views as never} activeView="charts" />
+      </>,
+    );
+    const panel = screen.getByRole("tabpanel");
+    expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
+    expect(panel).toHaveTextContent("Loading view");
+
+    await act(async () => {
+      resolveView({ default: () => <div>Charts loaded</div> });
+    });
+    expect(panel).toHaveTextContent("Charts loaded");
+    expect(panel).not.toHaveTextContent("Loading view");
+    expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
   });
 });
