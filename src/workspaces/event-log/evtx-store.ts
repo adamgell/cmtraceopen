@@ -54,6 +54,7 @@ import {
   channelStartGap,
   computePriorWindow,
   isComparisonRequestId,
+  markTailAppended,
   messageTextCriterionActive,
   observeComparisonBatch,
   observeComparisonComplete,
@@ -2688,6 +2689,7 @@ listen<EvtxTailBatch>("evtx-tail-batch", (event) => {
   }
   if (sequences.has(payload.sequence)) return;
   lastTailAppendEpoch = Date.now();
+  markTailAppended(payload.records);
 
   const missing: string[] = [];
   let highest = -1;
@@ -2987,6 +2989,14 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
     lastTailAppendEpoch > anchorEpoch
       ? [`Events after ${new Date(anchorEpoch).toISOString()} (live tail) are not included.`]
       : [];
+  // A collector's forwarded events arrive through subscriptions, in batches, after they were
+  // written. The current period was read once; the previous period is read later and includes its
+  // own late arrivals, so the current side can be low against it.
+  if (channels.some((channel) => channel.toLowerCase() === "forwardedevents")) {
+    notes.push(
+      "ForwardedEvents is delivered by subscriptions; events written to it after the read are not counted, so the current period can be low against the prior period."
+    );
+  }
 
   const session = beginLiveComparison({
     window: state.timeWindow,

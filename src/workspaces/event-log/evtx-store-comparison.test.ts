@@ -1317,7 +1317,37 @@ describe("the anchor of a live comparison", () => {
         }
       );
       expect(current.counts.total).toBe(0);
-      expect(current.outsideWindowRecords).toBe(1);
+      // It is set aside before any period is considered, not found to lie outside one.
+      expect(current.outsideWindowRecords).toBe(0);
+    });
+
+    it("does not count a tail event stamped before the anchor, as a late-delivered event is", async () => {
+      // A subscription can deliver an event after the load has read the channel while its own
+      // timestamp lies inside the period. The tail appends it; it must not be counted.
+      installTailBridge();
+      vi.setSystemTime(ANCHOR + HOUR);
+      await useEvtxStore.getState().startLiveTail();
+      const lateArrival = record("System", { timestampEpoch: ANCHOR - 30 * 60 * 1000 });
+      tailBatch("System", [lateArrival]);
+      vi.setSystemTime(ANCHOR + 2 * HOUR);
+
+      await runAndSettle(ANCHOR + 2 * HOUR);
+
+      const outcome = settled();
+      expect(outcome.status).toBe("complete");
+      if (outcome.status !== "complete") return;
+      expect(useEvtxStore.getState().records).toContain(lateArrival);
+      const current = countCurrentPeriod(useEvtxStore.getState().records, outcome.result, {
+        selectedChannels: useEvtxStore.getState().selectedChannels,
+        filterLevels: useEvtxStore.getState().filterLevels,
+        filterEventIds: "",
+        filterSearch: "",
+        quickFilter: DEFAULT_QUICK_FILTER,
+      });
+      expect(current.counts.total).toBe(0);
+      expect(outcome.result.notes).toEqual([
+        `Events after ${iso(ANCHOR)} (live tail) are not included.`,
+      ]);
     });
 
     it("keeps saying so after the tail is stopped, since its events remain on the grid", async () => {
@@ -1431,6 +1461,39 @@ describe("the current period's own gaps", () => {
     if (outcome.status === "partial") {
       expect(outcome.result.gaps).toEqual(["Current period: System: message text unavailable"]);
     }
+  });
+});
+
+describe("a channel delivered by subscriptions", () => {
+  beforeEach(freezeClockAtAnchor);
+
+  async function compareWith(names: string[]) {
+    await loadLive(["ForwardedEvents"]);
+    vi.setSystemTime(ANCHOR);
+    useEvtxStore.setState({ selectedChannels: new Set(names) });
+    const run = comparePreviousPeriod(ANCHOR);
+    await settleComparisonQueries(names.length);
+    await run;
+    return settled();
+  }
+
+  it("notes that events written after the read are not counted, as a note and not a gap", async () => {
+    const outcome = await compareWith(["System", "ForwardedEvents"]);
+
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") {
+      expect(outcome.result.notes).toEqual([
+        "ForwardedEvents is delivered by subscriptions; events written to it after the read are not counted, so the current period can be low against the prior period.",
+      ]);
+      expect(outcome.result.gaps).toEqual([]);
+    }
+  });
+
+  it("adds no such note when ForwardedEvents is not compared", async () => {
+    const outcome = await compareWith(["System"]);
+
+    expect(outcome.status).toBe("complete");
+    if (outcome.status === "complete") expect(outcome.result.notes).toEqual([]);
   });
 });
 

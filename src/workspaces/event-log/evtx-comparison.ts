@@ -245,6 +245,24 @@ export function createAggregator(
   };
 }
 
+/**
+ * Records the live tail appended. A tail reads events that have not happened yet, so they belong
+ * after the comparison's anchor, but a record's own timestamp does not guarantee it: a subscription
+ * can deliver an event late (a collector's ForwardedEvents) or from a machine whose clock runs
+ * behind. Whatever its timestamp, a record the tail appended is never part of the current period,
+ * which keeps the note that the comparison leaves the tail's events out true by construction.
+ */
+const tailAppendedRecords = new WeakSet<EvtxRecord>();
+
+/** Marks records as appended by the live tail. */
+export function markTailAppended(records: readonly EvtxRecord[]): void {
+  for (const record of records) tailAppendedRecords.add(record);
+}
+
+export function isTailAppended(record: EvtxRecord): boolean {
+  return tailAppendedRecords.has(record);
+}
+
 /** What `countCurrentPeriod` needs of a comparison result. */
 export type CurrentPeriodBasis = Pick<
   ComparisonResult,
@@ -273,7 +291,7 @@ export function countCurrentPeriod(
     { fromMs: prior.anchorEpoch - prior.lengthMs, toMs: prior.anchorEpoch },
     visibility
   );
-  aggregator.add(records);
+  aggregator.add(records.filter((candidate) => !isTailAppended(candidate)));
   const tally = aggregator.finish();
   const withGaps = new Set(basis.channelsWithGaps);
   const channels = new Map(tally.counts.channels);

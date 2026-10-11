@@ -11,6 +11,7 @@ import {
   eventIdentityKey,
   getComparisonState,
   isComparisonRequestId,
+  markTailAppended,
   messageTextCriterionActive,
   observeComparisonBatch,
   observeComparisonComplete,
@@ -320,6 +321,17 @@ describe("countCurrentPeriod", () => {
       basisOf(prior),
       visibility({ filterLevels: new Set<EvtxLevel>(["Error"]) })
     );
+    expect(current.counts.total).toBe(1);
+  });
+
+  it("never counts a record the live tail appended, whatever its timestamp says", () => {
+    const prior = priorFor("24h");
+    const loaded = record({ timestampEpoch: ANCHOR - HOUR });
+    const lateArrival = record({ timestampEpoch: ANCHOR - HOUR });
+    markTailAppended([lateArrival]);
+
+    const current = countCurrentPeriod([loaded, lateArrival], basisOf(prior), visibility());
+
     expect(current.counts.total).toBe(1);
   });
 
