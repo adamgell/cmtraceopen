@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildEvtxChartData,
   buildHideRuleQualifier,
+  chartWindowLabel,
+  countTextLogSources,
+  loadedChannelCountFor,
   CHANNEL_ROW_LIMIT,
   heatStepIndex,
   hourOfDay,
@@ -143,11 +146,11 @@ describe("KPIs", () => {
   });
 
   it("Warnings sublabel is the share of the top two IDs", () => {
-    // 6 visible warning rows, 4 of them events: the two text-log warning lines are
-    // in the count but have no event ID, so they are outside the share.
+    // 6 warning rows on the tile, 4 of them events. The two text-log warning lines have no
+    // event ID, so they are in the denominator and never a top ID: 3 of 6.
     expect(kpi(data, "warnings").value).toBe(6);
     // A/10 has 2 and B/11 has 1 (tie with C/12 broken by event ID): 3 of 4.
-    expect(kpi(data, "warnings").sublabel).toBe("Top 2 IDs = 75%");
+    expect(kpi(data, "warnings").sublabel).toBe("Top 2 IDs = 50%");
   });
 
   it("Warnings sublabel is omitted with fewer than two distinct IDs", () => {
@@ -496,5 +499,134 @@ describe("hourly errors and warnings", () => {
 
   it("has no peak when only informational events exist", () => {
     expect(buildEvtxChartData(input([record()])).peak).toBeNull();
+  });
+});
+
+describe("text-log lines in the figures", () => {
+  const logLine = (overrides: Partial<EvtxChartRecord> = {}) =>
+    record({
+      originKind: "log",
+      channel: "agent.log",
+      sourceLabel: "agent.log",
+      provider: "Agent",
+      eventId: 0,
+      ...overrides,
+    });
+
+  it("counts them, leaves them out of the channel rows, and says how many", () => {
+    const data = buildEvtxChartData(
+      input([record({ channel: "System" }), logLine(), logLine({ level: "Error" })]),
+    );
+    expect(data.textLogLineCount).toBe(2);
+    expect(data.channels.map((c) => c.channel)).toEqual(["System"]);
+    expect(data.heatMap.rows.map((r) => r.channel)).toEqual(["System"]);
+    expect(data.totalEvents).toBe(3);
+  });
+
+  it("with only text logs there are no channel rows, only the count", () => {
+    const data = buildEvtxChartData(input([logLine(), logLine()]));
+    expect(data.channels).toEqual([]);
+    expect(data.heatMap.rows).toEqual([]);
+    expect(data.textLogLineCount).toBe(2);
+  });
+
+  it("keeps a critical text-log line out of the Critical sublabel", () => {
+    const data = buildEvtxChartData(input([logLine({ level: "Critical" })]));
+    expect(kpi(data, "critical").value).toBe(1);
+    expect(kpi(data, "critical").sublabel).toBeNull();
+  });
+
+  it("does not let text-log lines into the ID tallies", () => {
+    const data = buildEvtxChartData(
+      input([record({ eventId: 5, provider: "P" }), logLine(), logLine({ level: "Warning" })]),
+    );
+    expect(kpi(data, "distinctIds").value).toBe(1);
+    expect(data.topIds).toEqual([{ eventId: 5, provider: "P", count: 1 }]);
+  });
+
+  it("separates unplaced events from unplaced text-log lines", () => {
+    const data = buildEvtxChartData(
+      input([
+        record({ timestampEpoch: 0, timestamp: "" }),
+        logLine({ timestampEpoch: 0, timestamp: "" }),
+        logLine({ timestampEpoch: 0, timestamp: "" }),
+      ]),
+    );
+    expect(data.unplacedCount).toBe(3);
+    expect(data.unplacedEventCount).toBe(1);
+  });
+});
+
+describe("placement under a non-UTC zone", () => {
+  // The project's TS config has no Node types; Node applies a runtime TZ change to Date.
+  const env = (globalThis as unknown as { process: { env: Record<string, string | undefined> } })
+    .process.env;
+  const previous = env.TZ;
+  beforeAll(() => {
+    env.TZ = "Asia/Kolkata"; // UTC+05:30, no daylight saving
+  });
+  afterAll(() => {
+    if (previous === undefined) delete env.TZ;
+    else env.TZ = previous;
+  });
+
+  it("local hour differs from UTC hour and follows the zone", () => {
+    const epoch = Date.UTC(2026, 9, 8, 20, 0); // 01:30 the next day in Kolkata
+    expect(hourOfDay({ timestamp: "x", timestampEpoch: epoch }, "utc")).toBe(20);
+    expect(hourOfDay({ timestamp: "x", timestampEpoch: epoch }, "local")).toBe(1);
+  });
+
+  it("places the heat map and hourly figure in the local clock", () => {
+    const data = buildEvtxChartData(
+      input([record({ level: "Error", timestampEpoch: Date.UTC(2026, 9, 8, 20, 0) })], {
+        timeZoneMode: "local",
+      }),
+    );
+    expect(data.hourly[1].errors).toBe(1);
+    expect(data.hourly[20].errors).toBe(0);
+  });
+});
+
+describe("RFC 3339 text for a zero epoch", () => {
+  const zero = (timestamp: string) => ({ timestamp, timestampEpoch: 0 });
+
+  it("accepts a space between date and time, as chrono does", () => {
+    expect(hourOfDay(zero("2026-11-01 01:30:00+02:00"), "utc")).toBe(23);
+    expect(hourOfDay(zero("2026-11-01 01:30:00Z"), "utc")).toBe(1);
+    expect(hourOfDay(zero("2026-11-01t01:30:00z"), "utc")).toBe(1);
+  });
+
+  it("still rejects a space without an offset, and leap seconds", () => {
+    expect(hourOfDay(zero("2026-11-01 01:30:00.000"), "utc")).toBeNull();
+    expect(hourOfDay(zero("2026-06-30T23:59:60Z"), "utc")).toBeNull();
+  });
+});
+
+describe("wiring helpers", () => {
+  it("labels the window for the Events tile", () => {
+    expect(chartWindowLabel("1h")).toBe("1 h");
+    expect(chartWindowLabel("24h")).toBe("24 h");
+    expect(chartWindowLabel("7d")).toBe("7 d");
+    expect(chartWindowLabel("30d")).toBe("30 d");
+    expect(chartWindowLabel("all")).toBe("all loaded");
+  });
+
+  it("counts text-log sources across both origins without double counting", () => {
+    const entries = [{ filePath: "a.log" }, { filePath: "a.log" }, { filePath: "b.log" }];
+    const records = [
+      record({ originKind: "log", sourceLabel: "a.log" }),
+      record({ originKind: "log", sourceLabel: "c.log" }),
+      record({ originKind: "event", sourceLabel: "live" }),
+    ];
+    expect(countTextLogSources(entries, records)).toBe(3);
+    expect(countTextLogSources([], [])).toBe(0);
+  });
+
+  it("counts loaded channels per mode", () => {
+    const loadedChannels = new Set(["A"]);
+    const channels = [{}, {}, {}];
+    expect(loadedChannelCountFor({ sourceMode: "live", loadedChannels, channels })).toBe(1);
+    expect(loadedChannelCountFor({ sourceMode: "files", loadedChannels, channels })).toBe(3);
+    expect(loadedChannelCountFor({ sourceMode: null, loadedChannels, channels })).toBe(3);
   });
 });

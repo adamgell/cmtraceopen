@@ -9,8 +9,11 @@
  * - An event without a usable timestamp is counted as unplaced. It is never
  *   put in hour 0. "Usable" mirrors the engine (`parsed_timestamp_epoch` in
  *   `src-tauri/src/event_log/timeline.rs`): a non-zero epoch, or text that
- *   parses as RFC 3339 or as `%Y-%m-%dT%H:%M:%S%.f` read as UTC. Display text
- *   such as "2026-11-01 01:30:00.000" is never guessed at.
+ *   parses as RFC 3339 (the date and time may be separated by "T", "t" or a
+ *   space, as chrono accepts) or as `%Y-%m-%dT%H:%M:%S%.f` read as UTC. One
+ *   deliberate narrowing: second 60 (a leap second, which chrono accepts) stays
+ *   unplaced, because JavaScript cannot represent it. Display text such as
+ *   "2026-11-01 01:30:00.000" is never guessed at.
  * - Archived text-log lines (`originKind: "log"`) are not Windows events. They
  *   count toward the visible total and the level counts and hours, which
  *   follow the visible rows, but not toward anything keyed by event ID or
@@ -22,7 +25,7 @@
 import type { CorrelationChainModel } from "./evtx-correlation-chains";
 import { parseEventIdSelectors, type EvtxQuickFilter } from "./evtx-filter";
 import type { EvtxTimeZoneMode } from "./evtx-time";
-import type { EvtxLevel, EvtxRecord } from "./types";
+import type { EvtxLevel, EvtxRecord, EvtxTimeWindow } from "./types";
 
 /** Top event IDs shown in figure 2 (spec 8.10). */
 export const TOP_EVENT_ID_LIMIT = 9;
@@ -144,8 +147,62 @@ export interface EvtxChartData {
   hourly: EvtxChartHourly[];
   /** Null when no placed event is an error or a warning. */
   peak: EvtxChartPeak | null;
-  /** Events with no usable timestamp: counted, never placed in an hour. */
+  /** Visible rows (events and text-log lines) with no usable timestamp: never placed in an hour. */
   unplacedCount: number;
+  /** The same, events only: the rows figure 3 would draw. */
+  unplacedEventCount: number;
+  /** Text-log lines among the visible rows. They have no channel, so figures 1 and 3 omit them. */
+  textLogLineCount: number;
+}
+
+/** The window as the Events tile names it: "24 h", "7 d", or "all loaded" when none applies. */
+export function chartWindowLabel(window: EvtxTimeWindow): string {
+  switch (window) {
+    case "1h":
+      return "1 h";
+    case "24h":
+      return "24 h";
+    case "7d":
+      return "7 d";
+    case "30d":
+      return "30 d";
+    case "all":
+      return "all loaded";
+  }
+}
+
+/**
+ * Distinct text-log sources: the file paths of the attached log entries plus the
+ * source labels of archived text-log records, de-duplicated across both. This
+ * counts sources, not lines (`EventLogAnalysisSessionStatus.logItems` counts
+ * placed lines).
+ */
+export function countTextLogSources(
+  entries: readonly { filePath: string }[],
+  records: readonly Pick<EvtxChartRecord, "originKind" | "sourceLabel">[],
+): number {
+  const sources = new Set<string>();
+  for (const entry of entries) sources.add(entry.filePath);
+  for (const record of records) {
+    if (record.originKind === "log") sources.add(record.sourceLabel);
+  }
+  return sources.size;
+}
+
+/**
+ * Loaded channels as the 8.14 status bar counts them. Live mode counts the
+ * channels whose load completed (`loadedChannels`, not every enumerated
+ * channel). Files mode counts the parse result's channels, which is exactly the
+ * set the opened files contributed.
+ */
+export function loadedChannelCountFor(input: {
+  sourceMode: "files" | "live" | null;
+  loadedChannels: ReadonlySet<string>;
+  channels: readonly unknown[];
+}): number {
+  return input.sourceMode === "live"
+    ? input.loadedChannels.size
+    : input.channels.length;
 }
 
 const pad2 = (value: number) => String(value).padStart(2, "0");
@@ -155,14 +212,15 @@ function plural(count: number, one: string, many: string): string {
 }
 
 const RFC3339 =
-  /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
+  /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
 const NAIVE_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
 
 /**
  * The event time in epoch milliseconds, or null when the engine would call it
  * missing. Mirrors `parsed_timestamp_epoch`: a non-zero epoch is taken as is;
- * a zero epoch falls back to the text, which must be RFC 3339 or a zone-less
- * ISO form read as UTC (never `Date.parse` on a display string).
+ * a zero epoch falls back to the text, which must be RFC 3339 (separator "T",
+ * "t" or a space) or a zone-less `T` ISO form read as UTC. Second 60 stays
+ * unplaced (see the module header). Never `Date.parse` on a display string.
  */
 export function placedEpochMs(
   record: Pick<EvtxChartRecord, "timestamp" | "timestampEpoch">,
@@ -172,7 +230,7 @@ export function placedEpochMs(
   if (epoch !== 0) return epoch;
   const text = record.timestamp?.trim() ?? "";
   if (RFC3339.test(text)) {
-    const parsed = Date.parse(text);
+    const parsed = Date.parse(text.replace(/^(\d{4}-\d{2}-\d{2})[Tt ]/, "$1T").toUpperCase());
     return Number.isNaN(parsed) ? null : parsed;
   }
   if (NAIVE_ISO.test(text)) {
@@ -311,6 +369,8 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
     (_, hour) => ({ hour, errors: 0, warnings: 0 }),
   );
   let unplacedCount = 0;
+  let unplacedEventCount = 0;
+  let textLogLineCount = 0;
 
   for (const record of records) {
     byLevel[record.level] += 1;
@@ -323,8 +383,12 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
 
     const hour = hourOfDay(record, timeZoneMode);
     if (hour === null) unplacedCount += 1;
-    else if (record.level === "Error") hourly[hour].errors += 1;
-    else if (record.level === "Warning") hourly[hour].warnings += 1;
+    if (hour === null && isEvent) unplacedEventCount += 1;
+    if (!isEvent) textLogLineCount += 1;
+    if (hour !== null) {
+      if (record.level === "Error") hourly[hour].errors += 1;
+      else if (record.level === "Warning") hourly[hour].warnings += 1;
+    }
 
     if (!isEvent) continue;
     let channel = perChannel.get(record.channel);
@@ -394,14 +458,14 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
     }
   }
 
-  // The share is of warning events: text-log warning lines have no event ID.
+  // The share is of every warning on the tile. A text-log warning line has no
+  // event ID, so it counts toward the denominator and is never a top ID.
   const rankedWarnings = rankIds(warningIds);
-  const eventWarnings = rankedWarnings.reduce((sum, t) => sum + t.count, 0);
   const warningSublabel =
     rankedWarnings.length >= 2
       ? `Top 2 IDs = ${Math.round(
           ((rankedWarnings[0].count + rankedWarnings[1].count) /
-            eventWarnings) *
+            byLevel.Warning) *
             100,
         )}%`
       : null;
@@ -480,5 +544,7 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
     hourly,
     peak,
     unplacedCount,
+    unplacedEventCount,
+    textLogLineCount,
   };
 }

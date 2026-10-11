@@ -164,6 +164,34 @@ describe("EvtxChartsView", () => {
     expect(within(table).getAllByRole("row")).toHaveLength(13);
   });
 
+  it("discloses text-log lines in figures 1 and 3, and shows them instead of empty frames", () => {
+    const lines = [
+      rec({ originKind: "log", channel: "a.log", sourceLabel: "a.log", provider: "A", eventId: 0 }),
+      rec({ originKind: "log", channel: "a.log", sourceLabel: "a.log", provider: "A", eventId: 0 }),
+    ];
+    render(<EvtxChartsView {...props({ records: lines, textLogCount: 1 })} />);
+    expect(screen.getAllByText("2 text-log lines not shown; text logs have no channel")).toHaveLength(2);
+    expect(screen.getByRole("figure", { name: /^Events by channel/ })).toBeInTheDocument();
+    expect(screen.queryByText("a.log")).toBeNull();
+  });
+
+  it("does not show the text-log line when there are none", () => {
+    render(<EvtxChartsView {...props()} />);
+    expect(screen.queryByText(/text-log line/)).toBeNull();
+  });
+
+  it("counts only events in figure 3's unplaced note", () => {
+    const unplacedLog = rec({
+      originKind: "log", channel: "a.log", sourceLabel: "a.log", provider: "A", eventId: 0,
+      timestampEpoch: 0, timestamp: "",
+    });
+    render(<EvtxChartsView {...props({ records: [...records, unplacedLog, unplacedLog] })} />);
+    const heat = screen.getByRole("figure", { name: /heat map/ });
+    expect(heat).toHaveTextContent("1 event has no timestamp and is not placed");
+    const hourly = screen.getByRole("figure", { name: /^Errors and warnings per hour/ });
+    expect(hourly).toHaveTextContent("3 events have no timestamp and are not placed");
+  });
+
   it("does not show the omitted line when every channel fits", () => {
     render(<EvtxChartsView {...props()} />);
     expect(screen.queryByText(/more channel/)).toBeNull();

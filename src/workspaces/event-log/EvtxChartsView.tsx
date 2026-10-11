@@ -6,14 +6,13 @@
  * `React.lazy` (default export).
  *
  * Library spike record (spec 8.10, Library choice; quote in the PR). Figures 3
- * and 4 fall back to token-styled markup (HTML and CSS, not SVG), because the
- * Fluent charts cannot match the spec's density without overrides beyond their
- * public props. Evidence, with `@fluentui/react-charts` 9.3.27:
- * - `HeatMapChart`: `rangeValuesForColorScale` takes hex colors only and d3
- *   interpolates the stops, so the `color-mix()` heat steps (D11) cannot be
- *   passed. There are no cell gap, radius, cell size or empty-cell props, and
- *   the chart draws its own axes. Spec 8.10 needs 2 px gaps, radius 2, 18 px
- *   cells and a defined empty cell.
+ * and 4 are token-styled markup (HTML and CSS) rather than the SVG 8.10 names,
+ * per Main's ruling, because the Fluent charts cannot match the spec's density
+ * without overrides beyond their public props. Evidence, with `@fluentui/react-charts` 9.3.27:
+ * - `HeatMapChart`: it interpolates a continuous d3 color scale between its
+ *   range stops instead of drawing six fixed D11 steps. There are no cell gap,
+ *   radius, cell size or empty-cell props, and the chart draws its own axes.
+ *   Spec 8.10 needs 2 px gaps, radius 2, 18 px cells and a defined empty cell.
  * - `VerticalStackedBarChart` was built and captured through public props
  *   (`hideLegend`, `barGapMax`, `barMinimumHeight`, `barCornerRadius`,
  *   `maxBarWidth`, `xAxisInnerPadding`, `tickValues`, `margins`, a stack
@@ -200,6 +199,23 @@ function OmittedChannelsNote({
   );
 }
 
+/** Text-log lines have no channel, so figures 1 and 3 do not draw them; say so. */
+function TextLogLinesNote({
+  data,
+  metrics,
+}: {
+  data: EvtxChartData;
+  metrics: LogListMetrics;
+}) {
+  const n = data.textLogLineCount;
+  if (n === 0) return null;
+  return (
+    <div style={{ fontSize: Math.max(10, metrics.fontSize - 3), color: tokens.colorNeutralForeground3 }}>
+      {`${n.toLocaleString()} text-log ${n === 1 ? "line" : "lines"} not shown; text logs have no channel`}
+    </div>
+  );
+}
+
 function omittedChannelsText(data: EvtxChartData): string {
   const { channels, events } = data.omittedChannels;
   return `+${channels} more ${channels === 1 ? "channel" : "channels"} (${events.toLocaleString()} events) not shown`;
@@ -256,6 +272,7 @@ function ChannelFigure({
         })}
       </ul>
       <OmittedChannelsNote data={data} metrics={metrics} />
+      <TextLogLinesNote data={data} metrics={metrics} />
     </Figure>
   );
 }
@@ -360,7 +377,7 @@ function HeatMapFigure({
 }) {
   const f = metrics.fontSize;
   const small = Math.max(10, f - 3);
-  const qualifier = [`hour of day, ${timeZoneLabel(timeZoneMode)}`, unplacedNote(data.unplacedCount)]
+  const qualifier = [`hour of day, ${timeZoneLabel(timeZoneMode)}`, unplacedNote(data.unplacedEventCount)]
     .filter(Boolean)
     .join(" · ");
   return (
@@ -407,6 +424,7 @@ function HeatMapFigure({
         <span>More</span>
       </div>
       <OmittedChannelsNote data={data} metrics={metrics} />
+      <TextLogLinesNote data={data} metrics={metrics} />
       <table style={visuallyHidden}>
         <caption>
           {data.omittedChannels.channels > 0
