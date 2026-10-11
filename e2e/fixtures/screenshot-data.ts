@@ -605,7 +605,10 @@ const DSREGCMD_RESULT = {
     captureConfidence: "high",
     captureConfidenceReason:
       "Capture ran in the signed-in user context with a full SSO State section present.",
-    mdmEnrolled: true,
+    // The fixture carries no enrollment registry evidence, so enrollment is
+    // unknown; the MDM URLs above are what make visibility read Present.
+    mdmEnrolled: null,
+    mdmUrlsPresent: true,
     missingMdm: false,
     complianceUrlPresent: true,
     missingComplianceUrl: false,

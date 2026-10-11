@@ -389,7 +389,7 @@ export function DsregcmdWorkspace() {
               confidence.confidence,
               "visible tenant management metadata can be out of scope, not configured, or simply absent from this capture.",
             )}
-            tone={toneForMdmVisibility(result.derived)}
+            tone={toneForMdmVisibility(result)}
           />
           <StatCard
             title="NGC"
@@ -717,7 +717,7 @@ export function DsregcmdWorkspace() {
                 confidence.confidence,
                 `MDM visibility is ${getMdmVisibilityLabel(result.derived)} and compliance URL present is ${formatBool(result.derived.complianceUrlPresent)}. Missing fields are not proof that management is broken.`,
               )}
-              tone={toneForMdmVisibility(result.derived)}
+              tone={toneForMdmVisibility(result)}
             />
             <FlowBox
               title="PRT and session"

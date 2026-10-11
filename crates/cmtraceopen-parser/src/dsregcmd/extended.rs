@@ -1,32 +1,130 @@
+use std::collections::HashMap;
+
 use crate::dsregcmd::models::{
-    DsregcmdAnalysisResult, DsregcmdDiagnosticInsight, DsregcmdJoinType,
+    DsregcmdAnalysisResult, DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry,
+    DsregcmdEnrollmentEvidence, DsregcmdJoinType,
 };
 use crate::intune::apps::windows::ime::models::IntuneDiagnosticSeverity;
 
 use super::derive::issue;
 
-/// Cross-reference enrollment registry entries with scheduled task GUIDs
-/// to upgrade `mdm_enrolled` when dsregcmd output lacks MDM URLs.
-pub fn apply_enrollment_cross_reference(result: &mut DsregcmdAnalysisResult) {
-    if result.derived.mdm_enrolled.is_some() {
-        return;
+/// The bare `8-4-4-4-12` hex form of an enrollment GUID, accepting at most one
+/// pair of surrounding braces; `None` when the value is not GUID-shaped.
+///
+/// Windows names the Enrollments subkeys and the EnterpriseMgmt task folders
+/// with the unbraced GUID (the ESP corpus,
+/// `tests/fixtures/esp/edge-cases.json`, has the same shape), while older
+/// fixtures and hand-made bundles use braces, so both forms have to meet.
+pub fn unbraced_guid(value: &str) -> Option<&str> {
+    let bare = match value.strip_prefix('{') {
+        Some(inner) => inner.strip_suffix('}')?,
+        None => value,
+    };
+    let mut groups = bare.split('-');
+    let shaped = [8, 4, 4, 4, 12].iter().all(|&len| {
+        groups.next().is_some_and(|group| {
+            group.len() == len && group.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    }) && groups.next().is_none();
+    shaped.then_some(bare)
+}
+
+/// Whether two values name the same GUID, ignoring braces and letter case.
+/// A value that is not GUID-shaped matches nothing.
+pub fn same_enrollment_guid(left: &str, right: &str) -> bool {
+    match (unbraced_guid(left), unbraced_guid(right)) {
+        (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
+        _ => false,
     }
-    if let (Some(enrollment), Some(tasks)) =
-        (&result.enrollment_evidence, &result.scheduled_task_evidence)
-    {
-        let confirmed = enrollment.enrollments.iter().any(|e| {
-            e.enrollment_state == Some(1)
-                && e.guid.as_ref().is_some_and(|g| {
-                    tasks
-                        .enterprise_mgmt_guids
-                        .iter()
-                        .any(|t| t.eq_ignore_ascii_case(g))
-                })
-        });
-        if confirmed {
-            result.derived.mdm_enrolled = Some(true);
+}
+
+/// The number of active enrollments: distinct enrollment GUIDs (compared
+/// ignoring braces and case) whose `EnrollmentState` is exactly 1 once all the
+/// entries of that GUID are reconciled. A missing state, any other state,
+/// entries of one GUID that disagree on the state, and an entry without a
+/// GUID-shaped value do not count. `ProviderID` plays no part.
+///
+/// Every positive claim about enrollments uses this count
+/// (`multiple-enrollments` and the Facts tones). `enrollment_count` counts
+/// registry keys for the negative and errs high on purpose, so it never feeds a
+/// positive claim (reducer-contract ruling 2 on #924). `activeEnrollmentCount`
+/// in `src/workspaces/dsregcmd/dsregcmd-formatters.ts` is the same definition,
+/// tested on the same fixture matrix.
+pub fn active_enrollment_count(evidence: &DsregcmdEnrollmentEvidence) -> usize {
+    let mut states: HashMap<String, Vec<u32>> = HashMap::new();
+    for entry in &evidence.enrollments {
+        let Some(guid) = entry.guid.as_deref().and_then(unbraced_guid) else {
+            continue;
+        };
+        let guid_states = states.entry(guid.to_ascii_lowercase()).or_default();
+        if let Some(state) = entry.enrollment_state {
+            guid_states.push(state);
         }
     }
+    states
+        .values()
+        .filter(|guid_states| {
+            !guid_states.is_empty() && guid_states.iter().all(|&state| state == 1)
+        })
+        .count()
+}
+
+/// Set the registry-confirmed `mdm_enrolled` from the enrollment evidence.
+///
+/// [`registry_mdm_enrollment`] is the only producer of the value, and
+/// `enrollment-missing-on-joined` reads the value it sets, so the field and the
+/// diagnostic cannot disagree.
+pub fn apply_enrollment_cross_reference(result: &mut DsregcmdAnalysisResult) {
+    result.derived.mdm_enrolled = registry_mdm_enrollment(result);
+}
+
+/// The registry-confirmed MDM enrollment answer (reducer-contract ruling on
+/// #924, ADR-001 and ADR-003):
+/// - `Some(true)` when an enrollment with `EnrollmentState` 1 has a GUID that
+///   matches an observed EnterpriseMgmt task GUID.
+/// - `Some(false)` only when the Enrollments export was read (`Some`), holds no
+///   enrollment (a zero count and an empty list), and no EnterpriseMgmt task
+///   entry was observed (task evidence absent or its list empty). Absent and
+///   empty task evidence are the same here: a failed task capture is absence
+///   and neither supports nor blocks the negative. Any listed task entry
+///   blocks it, even one that is not GUID-shaped, which only makes the
+///   negative rarer.
+/// - `None` otherwise: the export was not collected, an enrollment exists but
+///   is not confirmed by a task, or an empty registry sits beside an observed
+///   task GUID (a contradiction, so the answer stays unknown).
+///
+/// Join state is not part of this answer; it only gates the warning. Input
+/// order and duplicated or differently written GUIDs do not change it.
+fn registry_mdm_enrollment(result: &DsregcmdAnalysisResult) -> Option<bool> {
+    let enrollment = result.enrollment_evidence.as_ref()?;
+    let task_guids = observed_task_guids(result);
+    if enrollment
+        .enrollments
+        .iter()
+        .any(|entry| is_task_confirmed(entry, task_guids))
+    {
+        return Some(true);
+    }
+    let registry_empty = enrollment.enrollment_count == 0 && enrollment.enrollments.is_empty();
+    (registry_empty && task_guids.is_empty()).then_some(false)
+}
+
+fn observed_task_guids(result: &DsregcmdAnalysisResult) -> &[String] {
+    result
+        .scheduled_task_evidence
+        .as_ref()
+        .map_or(&[], |tasks| tasks.enterprise_mgmt_guids.as_slice())
+}
+
+/// An enrollment in `EnrollmentState` 1 whose GUID matches an EnterpriseMgmt
+/// task GUID, ignoring braces and case.
+fn is_task_confirmed(entry: &DsregcmdEnrollmentEntry, task_guids: &[String]) -> bool {
+    entry.enrollment_state == Some(1)
+        && entry.guid.as_deref().is_some_and(|guid| {
+            task_guids
+                .iter()
+                .any(|task| same_enrollment_guid(task, guid))
+        })
 }
 
 /// Extended diagnostics based on registry evidence collected in Phase 2.
@@ -128,10 +226,10 @@ pub fn build_extended_diagnostics(
     if let Some(enrollment) = result.enrollment_evidence.as_ref() {
         let is_joined = result.facts.join_state.azure_ad_joined == Some(true);
 
-        if enrollment.enrollment_count == 0
-            && is_joined
-            && result.derived.mdm_enrolled != Some(true)
-        {
+        // The warning is exactly the negative `mdm_enrolled` on a joined device:
+        // no other input (URL presence, the count alone) enables or suppresses
+        // it. Join state gates the warning only, never the negative itself.
+        if result.derived.mdm_enrolled == Some(false) && is_joined {
             diagnostics.push(issue(
                 "enrollment-missing-on-joined",
                 IntuneDiagnosticSeverity::Warning,
@@ -147,14 +245,20 @@ pub fn build_extended_diagnostics(
             ));
         }
 
-        if enrollment.enrollment_count > 1 {
+        // A positive claim, so it counts active enrollments only, never the
+        // registry keys that `enrollment_count` counts for the negative.
+        let active = active_enrollment_count(enrollment);
+        if active > 1 {
             diagnostics.push(issue(
                 "multiple-enrollments",
                 IntuneDiagnosticSeverity::Info,
                 "configuration",
                 "Multiple MDM enrollment entries detected",
-                "The device has more than one enrollment entry in the registry, which can indicate dual management or stale enrollment records.",
-                vec![format!("EnrollmentCount: {}", enrollment.enrollment_count)],
+                "The device has more than one active enrollment (EnrollmentState 1) in the registry, which can indicate dual management or stale enrollment records.",
+                vec![
+                    format!("Active enrollments (EnrollmentState 1): {active}"),
+                    format!("Enrollment registry keys: {}", enrollment.enrollment_count),
+                ],
                 vec!["Review enrollment entries and confirm only the expected MDM enrollment is active.".to_string()],
                 Vec::new(),
             ));
@@ -170,14 +274,7 @@ pub fn build_extended_diagnostics(
             (&result.enrollment_evidence, &result.scheduled_task_evidence)
         {
             for entry in &enrollment.enrollments {
-                let guid_matched = entry.enrollment_state == Some(1)
-                    && entry.guid.as_ref().is_some_and(|g| {
-                        tasks
-                            .enterprise_mgmt_guids
-                            .iter()
-                            .any(|t| t.eq_ignore_ascii_case(g))
-                    });
-                if guid_matched {
+                if is_task_confirmed(entry, &tasks.enterprise_mgmt_guids) {
                     let guid_display = entry.guid.as_deref().unwrap_or("(unknown)");
                     let upn_display = entry.upn.as_deref().unwrap_or("(no UPN)");
                     evidence_lines.push(format!(
@@ -486,4 +583,50 @@ pub fn build_event_log_diagnostics(
     }
 
     diagnostics
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{same_enrollment_guid, unbraced_guid};
+
+    #[test]
+    fn unbraced_guid_accepts_both_forms_and_rejects_other_shapes() {
+        let bare = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+        assert_eq!(unbraced_guid(bare), Some(bare));
+        assert_eq!(unbraced_guid(&format!("{{{bare}}}")), Some(bare));
+        assert_eq!(
+            unbraced_guid("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        );
+
+        for not_a_guid in [
+            "",
+            "Context",
+            "Status",
+            "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+            "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}",
+            "{{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}}",
+            "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEE",
+            "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEEE",
+            "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE-0000",
+            "GAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+            "AAAAAAAABBBBCCCCDDDDEEEEEEEEEEEE",
+        ] {
+            assert_eq!(unbraced_guid(not_a_guid), None, "{not_a_guid:?}");
+        }
+    }
+
+    #[test]
+    fn same_enrollment_guid_ignores_braces_and_case_only() {
+        let upper = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+        let lower_braced = "{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}";
+        assert!(same_enrollment_guid(upper, lower_braced));
+        assert!(same_enrollment_guid(lower_braced, upper));
+        assert!(!same_enrollment_guid(
+            upper,
+            "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEF"
+        ));
+        // Equal text that is not GUID-shaped is not an enrollment match.
+        assert!(!same_enrollment_guid("Context", "Context"));
+    }
 }

@@ -184,7 +184,20 @@ export interface DsregcmdDerived {
   phaseSummary: string;
   captureConfidence: DsregcmdCaptureConfidence;
   captureConfidenceReason: string;
+  /**
+   * Registry-confirmed enrollment: true when an enrollment in state 1 matches
+   * an EnterpriseMgmt task GUID; false only when the Enrollments export was
+   * read, holds no enrollment, and the task evidence is absent or lists no
+   * task; null otherwise (missing or unreadable export, an enrollment no task
+   * confirms, or an empty registry beside a listed task). URL presence never
+   * sets it.
+   */
   mdmEnrolled: boolean | null;
+  /**
+   * true when dsregcmd shows an MdmUrl or MdmComplianceUrl; null when it does
+   * not, or shows them empty, "-" or "n/a".
+   */
+  mdmUrlsPresent: boolean | null;
   missingMdm: boolean | null;
   complianceUrlPresent: boolean | null;
   missingComplianceUrl: boolean | null;
@@ -240,6 +253,11 @@ export interface DsregcmdEnrollmentEntry {
 }
 
 export interface DsregcmdEnrollmentEvidence {
+  /**
+   * Enrollment registry keys, whatever their values or state. It errs high on
+   * purpose and feeds only the negative; positive claims use
+   * `activeEnrollmentCount`.
+   */
   enrollmentCount: number;
   enrollments: DsregcmdEnrollmentEntry[];
 }

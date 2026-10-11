@@ -1,4 +1,7 @@
-import { selectTopFindings } from "./dsregcmd-formatters";
+import {
+  hasEnrollmentMissingOnJoined,
+  selectTopFindings,
+} from "./dsregcmd-formatters";
 import type {
   DsregcmdAnalysisResult,
   DsregcmdDiagnosticInsight,
@@ -56,40 +59,16 @@ export function getVerdictTone(result: DsregcmdAnalysisResult): VerdictTone {
     : "neutral";
 }
 
-/**
- * Mirrors `apply_enrollment_cross_reference`
- * (crates/cmtraceopen-parser/src/dsregcmd/extended.rs): an enrollment entry in
- * state 1 whose GUID equals, after `toLowerCase` folding, an EnterpriseMgmt
- * scheduled task GUID.
- *
- * Deliberately omits the Rust `mdm_enrolled` gate of that function
- * (extended.rs:11-13): registry evidence must still confirm enrollment when
- * MDM URLs are present, which is the most common enrolled device.
- */
-function hasRegistryEnrollmentMatch(result: DsregcmdAnalysisResult): boolean {
-  const { enrollmentEvidence, scheduledTaskEvidence } = result;
-  if (!enrollmentEvidence || !scheduledTaskEvidence) {
-    return false;
-  }
-  const taskGuids = scheduledTaskEvidence.enterpriseMgmtGuids.map((guid) =>
-    guid.toLowerCase(),
-  );
-  return enrollmentEvidence.enrollments.some(
-    (entry) =>
-      entry.enrollmentState === 1 &&
-      entry.guid !== null &&
-      taskGuids.includes(entry.guid.toLowerCase()),
-  );
-}
-
 /** MDM chip state. The first matching rule wins (spec 8.4). */
 export function getMdmState(result: DsregcmdAnalysisResult): MdmState {
   const hasDiagnostic = (id: string) =>
     result.diagnostics.some((item) => item.id === id);
 
+  // `mdmEnrolled` is registry-confirmed (apply_enrollment_cross_reference in
+  // the parser), so a matched enrollment shows even when MDM URLs are present.
   if (
-    hasDiagnostic("mdm-confirmed-via-registry") ||
-    hasRegistryEnrollmentMatch(result)
+    result.derived.mdmEnrolled === true ||
+    hasDiagnostic("mdm-confirmed-via-registry")
   ) {
     return {
       kind: "enrolled-registry",
@@ -97,7 +76,8 @@ export function getMdmState(result: DsregcmdAnalysisResult): MdmState {
       tone: "pass",
     };
   }
-  if (hasDiagnostic("enrollment-missing-on-joined")) {
+  // The same predicate as the MDM visibility tone (`toneForMdmVisibility`).
+  if (hasEnrollmentMissingOnJoined(result)) {
     return {
       kind: "no-enrollment-registry",
       label: "No enrollment (registry)",

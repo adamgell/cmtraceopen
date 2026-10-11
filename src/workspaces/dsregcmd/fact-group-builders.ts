@@ -12,6 +12,8 @@ import {
   type DisplayPhaseAssessment,
   type FactGroup,
   type FactRow,
+  activeEnrollmentCount,
+  enrollmentGuidKey,
   formatBool,
   formatCertificateValidityRange,
   formatConfidenceLabel,
@@ -24,6 +26,7 @@ import {
   getPolicyDisplayValue,
   getPolicyEvidenceSummary,
   getPolicyValueTone,
+  hasEnrollmentMissingOnJoined,
   toneForBool,
   toneForCaptureConfidence,
   toneForDomainJoined,
@@ -351,7 +354,7 @@ export function buildManagementGroup(
       {
         label: "MDM Visibility",
         value: getMdmVisibilityLabel(derived),
-        tone: toneForMdmVisibility(derived),
+        tone: toneForMdmVisibility(result),
       },
       {
         label: "MDM URL",
@@ -746,34 +749,42 @@ export function buildEnrollmentStatusGroup(
   if (!result.enrollmentEvidence) {
     return [];
   }
-  const { facts } = result;
+  const activeCount = activeEnrollmentCount(result.enrollmentEvidence);
   return [
     {
       id: "enrollment-status",
       title: "Enrollment Status",
-      caption: "MDM enrollment entries found in the registry.",
+      caption:
+        "Keys under the Enrollments registry key, and how many are active (EnrollmentState 1).",
       rows: withNotReportedMetadata([
         {
-          label: "Enrollment Count",
+          // Counts every GUID key, whatever its values: it errs high on
+          // purpose for the negative, so it is never "good". It warns exactly
+          // when the parser raised `enrollment-missing-on-joined`, read through
+          // the same helper as the MDM chip and the visibility tone, and is
+          // neutral otherwise (an empty registry beside a task GUID, or a
+          // device that is not joined).
+          label: "Enrollment registry keys",
           value: String(result.enrollmentEvidence.enrollmentCount),
-          tone:
-            result.enrollmentEvidence.enrollmentCount === 0 &&
-            facts.joinState.azureAdJoined === true
-              ? ("warn" as const)
-              : result.enrollmentEvidence.enrollmentCount > 1
-                ? ("warn" as const)
-                : ("good" as const),
+          tone: hasEnrollmentMissingOnJoined(result)
+            ? ("warn" as const)
+            : ("neutral" as const),
+        },
+        {
+          label: "Active enrollments (EnrollmentState 1)",
+          value: String(activeCount),
+          tone: activeCount > 1 ? ("warn" as const) : ("neutral" as const),
         },
         ...(() => {
+          // GUID identity ignores braces and case, as the parser compares it.
           const taskGuidSet = new Set(
             (result.scheduledTaskEvidence?.enterpriseMgmtGuids ?? []).map(
-              (g) => g.toLowerCase(),
+              enrollmentGuidKey,
             ),
           );
           return result.enrollmentEvidence!.enrollments.map((e, i) => {
-            const guidLower = e.guid?.toLowerCase();
-            const hasTaskMatch =
-              guidLower != null && taskGuidSet.has(guidLower);
+            const guidKey = enrollmentGuidKey(e.guid);
+            const hasTaskMatch = guidKey !== null && taskGuidSet.has(guidKey);
             return {
               label: `Enrollment ${i + 1}`,
               value: [
@@ -815,8 +826,8 @@ export function buildEnterpriseMgmtTasksGroup(
     (typeof enrollments)[number]
   >();
   for (const enrollment of enrollments) {
-    const key = enrollment.guid?.toLowerCase();
-    if (key && !enrollmentByGuid.has(key)) {
+    const key = enrollmentGuidKey(enrollment.guid);
+    if (key !== null && !enrollmentByGuid.has(key)) {
       enrollmentByGuid.set(key, enrollment);
     }
   }
@@ -835,9 +846,9 @@ export function buildEnterpriseMgmtTasksGroup(
         },
         ...result.scheduledTaskEvidence.enterpriseMgmtGuids.map(
           (guid) => {
-            const matchingEnrollment = enrollmentByGuid.get(
-              guid.toLowerCase(),
-            );
+            const guidKey = enrollmentGuidKey(guid);
+            const matchingEnrollment =
+              guidKey === null ? undefined : enrollmentByGuid.get(guidKey);
             const enrolled =
               matchingEnrollment?.enrollmentState === 1;
             return {

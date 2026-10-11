@@ -637,21 +637,10 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::e
         write_evidence_json(&evidence_event_logs.join("dsregcmd-events.json"), analysis)?;
     }
 
-    // Phase 5: Scheduled task evidence (EnterpriseMgmt GUIDs)
+    // Phase 5: Scheduled task evidence (EnterpriseMgmt GUIDs), written only for
+    // an assessable capture.
     simulate_bundle_io_delay("capture-scheduled-task-evidence");
-    let scheduled_task_evidence = collect_enterprise_mgmt_task_guids();
-    let evidence_scheduled_tasks = bundle_path.join("evidence").join("scheduled-tasks");
-    fs::create_dir_all(&evidence_scheduled_tasks).map_err(|error| {
-        crate::error::AppError::Internal(format!(
-            "Failed to create the live capture's scheduled-task evidence directory '{}': {}",
-            evidence_scheduled_tasks.display(),
-            error
-        ))
-    })?;
-    write_evidence_json(
-        &evidence_scheduled_tasks.join("enterprise-mgmt-tasks.json"),
-        &scheduled_task_evidence,
-    )?;
+    write_scheduled_task_evidence(&bundle_path, collect_enterprise_mgmt_task_guids().as_ref())?;
 
     Ok(LiveCaptureBundle {
         bundle_path,
@@ -662,7 +651,7 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::e
 /// Serialize and write one evidence value, propagating either failure so an
 /// incomplete capture is not reported as successful. The manifest write above
 /// already propagates its own failure.
-#[cfg(target_os = "windows")]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn write_evidence_json<T: serde::Serialize>(
     path: &std::path::Path,
     value: &T,
@@ -674,13 +663,40 @@ fn write_evidence_json<T: serde::Serialize>(
             error
         ))
     })?;
-    fs::write(path, json).map_err(|error| {
+    std::fs::write(path, json).map_err(|error| {
         crate::error::AppError::Internal(format!(
             "Failed to write the live capture evidence '{}': {}",
             path.display(),
             error
         ))
     })
+}
+
+/// Write the EnterpriseMgmt task evidence of a live capture, and return
+/// whether it was written.
+///
+/// Only an assessable capture (`Some`, see `classify_enterprise_mgmt_tasks`) is
+/// written, and its list may be empty. A missing, failed or unrecognized query
+/// (`None`) writes nothing, so the bundle reads it as not collected rather than
+/// as "no tasks".
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn write_scheduled_task_evidence(
+    bundle_path: &Path,
+    evidence: Option<&crate::dsregcmd::DsregcmdScheduledTaskEvidence>,
+) -> Result<bool, crate::error::AppError> {
+    let Some(evidence) = evidence else {
+        return Ok(false);
+    };
+    let directory = bundle_path.join("evidence").join("scheduled-tasks");
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        crate::error::AppError::Internal(format!(
+            "Failed to create the live capture's scheduled-task evidence directory '{}': {}",
+            directory.display(),
+            error
+        ))
+    })?;
+    write_evidence_json(&directory.join("enterprise-mgmt-tasks.json"), evidence)?;
+    Ok(true)
 }
 
 #[cfg(target_os = "windows")]
@@ -802,72 +818,124 @@ fn export_live_registry_evidence(registry_root: &Path) {
 
     for export in LIVE_CAPTURE_REGISTRY_EXPORTS {
         let output_path = registry_root.join(export.file_name);
-        match crate::process_util::hidden_command(&reg_path)
+        let outcome = crate::process_util::hidden_command(&reg_path)
             .args([
                 "export",
                 export.key_path,
                 &output_path.to_string_lossy(),
                 "/y",
             ])
-            .output()
-        {
-            Ok(output) if output.status.success() => {
-                log::info!(
-                    "event=dsregcmd_registry_export_complete key={} file={}",
-                    export.key_path,
-                    output_path.display()
-                );
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                log::error!(
-                    "event=dsregcmd_registry_export_failed key={} file={} exit_code={} stderr={}",
-                    export.key_path,
-                    output_path.display(),
-                    output.status.code().unwrap_or_default(),
-                    stderr
-                );
-            }
-            Err(error) => {
-                log::error!(
-                    "event=dsregcmd_registry_export_failed key={} file={} error={}",
-                    export.key_path,
-                    output_path.display(),
-                    error
-                );
-            }
+            .output();
+        settle_registry_export(export.key_path, &output_path, outcome);
+    }
+}
+
+/// Keep or discard one `reg export` output file from the command's outcome,
+/// and return whether it was kept.
+///
+/// Only a successful exit keeps the file. A non-zero exit or a failure to start
+/// discards it: a failed export can leave a partial file, and a partial
+/// Enrollments export would parse as "no enrollment". With the file gone, the
+/// registry readers see the artifact as not collected (`None`, #883). The live
+/// capture calls this for every export, so this is the whole decision and the
+/// tests exercise it on every host.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn settle_registry_export(
+    key_path: &str,
+    output_path: &Path,
+    outcome: std::io::Result<std::process::Output>,
+) -> bool {
+    match outcome {
+        Ok(output) if output.status.success() => {
+            log::info!(
+                "event=dsregcmd_registry_export_complete key={} file={}",
+                key_path,
+                output_path.display()
+            );
+            true
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            log::error!(
+                "event=dsregcmd_registry_export_failed key={} file={} exit_code={} stderr={}",
+                key_path,
+                output_path.display(),
+                output.status.code().unwrap_or_default(),
+                stderr
+            );
+            discard_failed_registry_export(output_path);
+            false
+        }
+        Err(error) => {
+            log::error!(
+                "event=dsregcmd_registry_export_failed key={} file={} error={}",
+                key_path,
+                output_path.display(),
+                error
+            );
+            discard_failed_registry_export(output_path);
+            false
         }
     }
 }
 
+/// Remove what a failed `reg export` left behind (see `settle_registry_export`).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn discard_failed_registry_export(output_path: &Path) {
+    match std::fs::remove_file(output_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => log::error!(
+            "event=dsregcmd_registry_export_discard_failed file={} error={}",
+            output_path.display(),
+            error
+        ),
+    }
+}
+
+/// Query the EnterpriseMgmt scheduled tasks. `None` when `schtasks` is missing
+/// or the capture is not assessable (see `classify_enterprise_mgmt_tasks`).
 #[cfg(target_os = "windows")]
-fn collect_enterprise_mgmt_task_guids() -> crate::dsregcmd::DsregcmdScheduledTaskEvidence {
-    use regex::Regex;
-
-    let mut evidence = crate::dsregcmd::DsregcmdScheduledTaskEvidence::default();
-
+fn collect_enterprise_mgmt_task_guids() -> Option<crate::dsregcmd::DsregcmdScheduledTaskEvidence> {
     let schtasks_path = match resolve_system32_binary("schtasks.exe") {
         Ok(p) => p,
         Err(e) => {
             log::warn!("event=dsregcmd_schtasks_skipped reason={e}");
-            return evidence;
+            return None;
         }
     };
 
-    let output = match crate::process_util::hidden_command(&schtasks_path)
-        .args([
-            "/query",
-            "/TN",
-            r"\Microsoft\Windows\EnterpriseMgmt",
-            "/FO",
-            "LIST",
-        ])
-        .output()
-    {
-        Ok(o) => o,
+    classify_enterprise_mgmt_tasks(
+        crate::process_util::hidden_command(&schtasks_path)
+            .args([
+                "/query",
+                "/TN",
+                r"\Microsoft\Windows\EnterpriseMgmt",
+                "/FO",
+                "LIST",
+            ])
+            .output(),
+    )
+}
+
+/// Classify one `schtasks /query /TN \Microsoft\Windows\EnterpriseMgmt /FO LIST`
+/// run (reducer-contract ruling 2 on #924, decision 5).
+///
+/// The capture is assessable only when `schtasks` started, exited 0, and its
+/// output references the EnterpriseMgmt path. A spawn error, a non-zero exit
+/// (whatever it printed) and empty or unrecognized output are `None`, logged,
+/// and the live capture writes no task evidence for them. The Windows capture
+/// only runs the process; this is the whole decision, and the tests exercise
+/// it on every host.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn classify_enterprise_mgmt_tasks(
+    outcome: std::io::Result<std::process::Output>,
+) -> Option<crate::dsregcmd::DsregcmdScheduledTaskEvidence> {
+    let output = match outcome {
+        Ok(output) => output,
         Err(e) => {
             log::error!("event=dsregcmd_schtasks_failed error={e}");
-            return evidence;
+            return None;
         }
     };
 
@@ -878,35 +946,69 @@ fn collect_enterprise_mgmt_task_guids() -> crate::dsregcmd::DsregcmdScheduledTas
             output.status.code().unwrap_or_default(),
             stderr
         );
-        return evidence;
+        return None;
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let guid_re = Regex::new(
-        r"\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}",
-    )
-    .expect("valid GUID regex");
-
-    let mut seen = std::collections::HashSet::new();
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("TaskName:") {
-            continue;
-        }
-        for cap in guid_re.find_iter(trimmed) {
-            let guid = cap.as_str().to_string();
-            if seen.insert(guid.to_ascii_uppercase()) {
-                evidence.enterprise_mgmt_guids.push(guid);
-            }
-        }
-    }
+    let Some(enterprise_mgmt_guids) = parse_enterprise_mgmt_task_guids(&stdout) else {
+        log::warn!(
+            "event=dsregcmd_schtasks_unrecognized stdout_chars={} stdout_lines={}",
+            stdout.len(),
+            stdout.lines().count()
+        );
+        return None;
+    };
 
     log::info!(
         "event=dsregcmd_schtasks_complete guid_count={}",
-        evidence.enterprise_mgmt_guids.len()
+        enterprise_mgmt_guids.len()
     );
 
-    evidence
+    Some(crate::dsregcmd::DsregcmdScheduledTaskEvidence {
+        enterprise_mgmt_guids,
+    })
+}
+
+/// The enrollment GUIDs in the output of
+/// `schtasks /query /TN \Microsoft\Windows\EnterpriseMgmt /FO LIST` that exited 0.
+///
+/// Windows files each enrollment's tasks under a folder named after the
+/// enrollment GUID: `\Microsoft\Windows\EnterpriseMgmt\<GUID>\<task>`. No field
+/// label is read, because `schtasks` prints its labels in the display language.
+/// Every line is scanned for the path component right after `EnterpriseMgmt`,
+/// braced or not, so a folder line and the task lines under it name one GUID
+/// once. A GUID deeper in the path, or a non-GUID component there, is not an
+/// enrollment folder. Each GUID is kept as written, once, comparing without
+/// braces or case.
+///
+/// `None` means the output is not assessable: it is empty, or no line
+/// references the EnterpriseMgmt path, so what it says is unknown. `Some(list)`
+/// means the query was read; the list is empty when it named no GUID folder.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn parse_enterprise_mgmt_task_guids(stdout: &str) -> Option<Vec<String>> {
+    let mut references_enterprise_mgmt = false;
+    let mut seen = std::collections::HashSet::new();
+    let mut guids = Vec::new();
+    for line in stdout.lines() {
+        let mut components = line.trim().split('\\').map(str::trim);
+        if !components
+            .by_ref()
+            .any(|component| component.eq_ignore_ascii_case("EnterpriseMgmt"))
+        {
+            continue;
+        }
+        references_enterprise_mgmt = true;
+        let Some(folder) = components.next() else {
+            continue;
+        };
+        let Some(bare) = crate::dsregcmd::extended::unbraced_guid(folder) else {
+            continue;
+        };
+        if seen.insert(bare.to_ascii_lowercase()) {
+            guids.push(folder.to_string());
+        }
+    }
+    references_enterprise_mgmt.then_some(guids)
 }
 
 #[cfg(target_os = "windows")]
@@ -1509,6 +1611,8 @@ mod tests {
             registry_dir.join("enrollments.reg"),
             r#"Windows Registry Editor Version 5.00
 
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments]
+
 [HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\{11111111-2222-3333-4444-555555555555}]
     "UPN"="user@contoso.com"
     "ProviderID"="MS DM Server"
@@ -1629,6 +1733,406 @@ mod tests {
             Some(0)
         );
         assert!(missing(&genuine));
+    }
+
+    /// End to end through `load_bundle_evidence` with a status that shows MDM
+    /// URLs. The URLs never decide enrollment: an export that was not read
+    /// leaves `mdm_enrolled` unknown, and a read root-only export with no task
+    /// evidence is the registry negative.
+    #[test]
+    fn enrollments_export_end_to_end_with_mdm_urls_shown() {
+        let _env_guard = dsregcmd_test_env_lock()
+            .lock()
+            .expect("lock dsregcmd env guard");
+        let status = "\n AzureAdJoined : YES\n DomainJoined : NO\n TenantId : 11111111-2222-3333-4444-555555555555\n DeviceId : abcdefab-1111-2222-3333-abcdefabcdef\n MdmUrl : https://enrollment.manage.microsoft.com/enrollmentserver/discovery.svc\n MdmComplianceUrl : https://portal.manage.microsoft.com/?portalAction=Compliance\n";
+        let analyze = |export: Option<&[u8]>, unreadable: bool| {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let registry_dir = temp_dir.path().join("evidence").join("registry");
+            std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+            let file = registry_dir.join("enrollments.reg");
+            if let Some(bytes) = export {
+                std::fs::write(&file, bytes).expect("write export");
+            }
+            #[cfg(unix)]
+            if unreadable {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000))
+                    .expect("remove permissions");
+            }
+            #[cfg(not(unix))]
+            let _ = unreadable;
+            let evidence =
+                super::load_bundle_evidence(temp_dir.path().to_str().expect("utf8 path"));
+            crate::dsregcmd::analyze_text_with_evidence(status, evidence, chrono::Utc::now())
+                .expect("analysis succeeds")
+        };
+        let missing = |result: &crate::dsregcmd::DsregcmdAnalysisResult| {
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "enrollment-missing-on-joined")
+        };
+        let root_only: &[u8] = b"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n";
+
+        let mut not_read = vec![
+            ("missing", analyze(None, false)),
+            ("empty", analyze(Some(b""), false)),
+            (
+                "undecodable",
+                analyze(Some(&[0x80, 0x81, 0x9D, 0xFF, 0x00, 0xC3]), false),
+            ),
+        ];
+        // A privileged runner can still read a 0o000 file, which is not a gap.
+        let probe = tempfile::NamedTempFile::new().expect("probe file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(probe.path(), std::fs::Permissions::from_mode(0o000))
+                .expect("remove probe permissions");
+        }
+        if std::fs::read(probe.path()).is_err() {
+            not_read.push(("unreadable", analyze(Some(root_only), true)));
+        }
+        for (name, result) in &not_read {
+            assert_eq!(result.derived.mdm_urls_present, Some(true), "{name}");
+            assert!(result.enrollment_evidence.is_none(), "{name}");
+            assert_eq!(result.derived.mdm_enrolled, None, "{name}");
+            assert!(!missing(result), "{name}");
+        }
+
+        let read_empty = analyze(Some(root_only), false);
+        assert_eq!(read_empty.derived.mdm_urls_present, Some(true));
+        assert!(read_empty.scheduled_task_evidence.is_none());
+        assert_eq!(read_empty.derived.mdm_enrolled, Some(false));
+        assert!(missing(&read_empty));
+    }
+
+    /// Synthetic `schtasks /query /FO LIST` lines. The repository holds no
+    /// captured output of this command, so the line shape and the folder
+    /// naming are not anchored to a real device (Windows-lab item). The parse
+    /// reads no label, so the labels here only show that none is needed.
+    fn task_list(task_names: &[&str]) -> String {
+        let mut lines = vec![
+            String::new(),
+            r"Folder: \Microsoft\Windows\EnterpriseMgmt".to_string(),
+            "HostName:                             DEVICE01".to_string(),
+        ];
+        for task_name in task_names {
+            lines.push(format!("TaskName:                             {task_name}"));
+            lines.push("Status:                               Ready".to_string());
+        }
+        lines.join("\r\n")
+    }
+
+    #[test]
+    fn enterprise_mgmt_task_guids_accept_unbraced_folder_names() {
+        let stdout = task_list(&[
+            r"\Microsoft\Windows\EnterpriseMgmt\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\Schedule #1 created by enrollment client",
+            r"\Microsoft\Windows\EnterpriseMgmt\{CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD}\Schedule #1 created by enrollment client",
+        ]);
+
+        assert_eq!(
+            super::parse_enterprise_mgmt_task_guids(&stdout),
+            Some(vec![
+                "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB".to_string(),
+                "{CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD}".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn enterprise_mgmt_task_guids_dedupe_on_canonical_form() {
+        let stdout = task_list(&[
+            r"\Microsoft\Windows\EnterpriseMgmt\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\Schedule #1 created by enrollment client",
+            r"\Microsoft\Windows\EnterpriseMgmt\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\Schedule #3 created by enrollment client",
+            r"\Microsoft\Windows\EnterpriseMgmt\{aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb}\PushLaunch",
+            r"\Microsoft\Windows\EnterpriseMgmt\aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb\Login Schedule created by enrollment client",
+        ]);
+
+        assert_eq!(
+            super::parse_enterprise_mgmt_task_guids(&stdout),
+            Some(vec!["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB".to_string()])
+        );
+    }
+
+    #[test]
+    fn enterprise_mgmt_task_guids_folder_and_task_lines_dedupe_to_one_guid() {
+        let stdout = [
+            r"Folder: \Microsoft\Windows\EnterpriseMgmt\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB",
+            "HostName:      DEVICE01",
+            r"TaskName:      \Microsoft\Windows\EnterpriseMgmt\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\Schedule #1 created by enrollment client",
+            r"TaskName:      \Microsoft\Windows\EnterpriseMgmt\aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb\Schedule #2 created by enrollment client",
+        ]
+        .join("\r\n");
+
+        assert_eq!(
+            super::parse_enterprise_mgmt_task_guids(&stdout),
+            Some(vec!["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB".to_string()])
+        );
+    }
+
+    /// `schtasks` prints its field labels in the display language. No label
+    /// may decide the result; only the path does.
+    #[test]
+    fn enterprise_mgmt_task_guids_localized_labels_are_recognized() {
+        let german = [
+            r"Ordner: \Microsoft\Windows\EnterpriseMgmt\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB",
+            "Hostname:                             GERAET01",
+            r"Aufgabenname:                         \Microsoft\Windows\EnterpriseMgmt\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\Schedule #1 created by enrollment client",
+            "Status:                               Bereit",
+        ]
+        .join("\r\n");
+        let french = [
+            r"Dossier : \Microsoft\Windows\EnterpriseMgmt\CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD",
+            "Nom d'h\u{f4}te :                         POSTE01",
+            r"Nom de la tâche :                    \Microsoft\Windows\EnterpriseMgmt\CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD\Schedule #1 created by enrollment client",
+            "\u{c9}tat :                               Pr\u{ea}t",
+        ]
+        .join("\r\n");
+
+        assert_eq!(
+            super::parse_enterprise_mgmt_task_guids(&german),
+            Some(vec!["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB".to_string()])
+        );
+        assert_eq!(
+            super::parse_enterprise_mgmt_task_guids(&french),
+            Some(vec!["CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD".to_string()])
+        );
+    }
+
+    #[test]
+    fn enterprise_mgmt_task_guids_only_read_the_folder_right_under_enterprise_mgmt() {
+        let stdout = task_list(&[
+            r"\Microsoft\Windows\EnterpriseMgmt\Schedule created by enrollment client",
+            r"\Microsoft\Windows\EnterpriseMgmt\NotAGuid\EEEEEEEE-7777-8888-9999-FFFFFFFFFFFF",
+            r"\Microsoft\Windows\Other\11111111-2222-3333-4444-555555555555\Task",
+        ]);
+
+        assert_eq!(
+            super::parse_enterprise_mgmt_task_guids(&stdout),
+            Some(Vec::new())
+        );
+    }
+
+    /// Output that never references the EnterpriseMgmt path says nothing we
+    /// can read, so the capture is not assessable rather than "no tasks".
+    #[test]
+    fn enterprise_mgmt_task_guids_unrecognized_output_is_not_assessable() {
+        for stdout in [
+            "INFO: There are no scheduled tasks presently available at your access level.",
+            "INFO: Es sind keine geplanten Tasks vorhanden.\r\nAAAAAAAA-1111-2222-3333-BBBBBBBBBBBB",
+            r"TaskName: \Microsoft\Windows\Other\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\Task",
+        ] {
+            assert_eq!(super::parse_enterprise_mgmt_task_guids(stdout), None, "{stdout}");
+        }
+    }
+
+    #[test]
+    fn enterprise_mgmt_task_guids_empty_output_is_not_assessable() {
+        for stdout in ["", "\r\n", "  \r\n\r\n  "] {
+            assert_eq!(
+                super::parse_enterprise_mgmt_task_guids(stdout),
+                None,
+                "{stdout:?}"
+            );
+        }
+    }
+
+    /// The folder was listed and holds no GUID folder: the query was read and
+    /// found no enrollment tasks.
+    #[test]
+    fn enterprise_mgmt_task_guids_folder_without_guid_is_assessable_and_empty() {
+        let stdout = "\r\nFolder: \\Microsoft\\Windows\\EnterpriseMgmt\r\nINFO: There are no scheduled tasks presently available at your access level.\r\n";
+
+        assert_eq!(
+            super::parse_enterprise_mgmt_task_guids(stdout),
+            Some(Vec::new())
+        );
+    }
+
+    fn schtasks_output(code: i32, stdout: &str) -> std::io::Result<std::process::Output> {
+        Ok(std::process::Output {
+            status: exit_status(code),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        })
+    }
+
+    const GUID_TASK_LINE: &str = r"TaskName: \Microsoft\Windows\EnterpriseMgmt\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\Schedule #1 created by enrollment client";
+
+    /// A non-zero exit is not assessable, even when stdout names a GUID folder.
+    #[test]
+    fn enterprise_mgmt_task_guids_non_zero_exit_is_not_assessable() {
+        for code in [1, 2] {
+            assert_eq!(
+                super::classify_enterprise_mgmt_tasks(schtasks_output(code, GUID_TASK_LINE)),
+                None,
+                "exit {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn enterprise_mgmt_task_guids_spawn_error_is_not_assessable() {
+        let outcome = Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "schtasks.exe could not start",
+        ));
+        assert_eq!(super::classify_enterprise_mgmt_tasks(outcome), None);
+    }
+
+    #[test]
+    fn enterprise_mgmt_task_guids_exit_0_with_a_guid_path_is_read() {
+        assert_eq!(
+            super::classify_enterprise_mgmt_tasks(schtasks_output(0, GUID_TASK_LINE)),
+            Some(crate::dsregcmd::DsregcmdScheduledTaskEvidence {
+                enterprise_mgmt_guids: vec!["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB".to_string()],
+            })
+        );
+    }
+
+    #[test]
+    fn enterprise_mgmt_task_guids_exit_0_unrecognized_output_is_not_assessable() {
+        for stdout in [
+            "",
+            "INFO: There are no scheduled tasks presently available at your access level.",
+        ] {
+            assert_eq!(
+                super::classify_enterprise_mgmt_tasks(schtasks_output(0, stdout)),
+                None,
+                "{stdout:?}"
+            );
+        }
+    }
+
+    /// Only an assessable capture is written. Not assessable writes nothing,
+    /// so the bundle reads the task evidence as not collected, never as an
+    /// empty list.
+    #[test]
+    fn enterprise_mgmt_task_guids_are_written_only_when_assessable() {
+        let assessable_empty = crate::dsregcmd::DsregcmdScheduledTaskEvidence::default();
+        let assessable_one = crate::dsregcmd::DsregcmdScheduledTaskEvidence {
+            enterprise_mgmt_guids: vec!["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB".to_string()],
+        };
+        for evidence in [None, Some(&assessable_empty), Some(&assessable_one)] {
+            let bundle = tempfile::tempdir().expect("create temp dir");
+
+            let written = super::write_scheduled_task_evidence(bundle.path(), evidence)
+                .expect("write succeeds");
+
+            assert_eq!(written, evidence.is_some(), "{evidence:?}");
+            assert_eq!(
+                super::load_scheduled_task_evidence_from_bundle(bundle.path()).as_ref(),
+                evidence,
+                "{evidence:?}"
+            );
+        }
+    }
+
+    fn exit_status(code: i32) -> std::process::ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(code << 8)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(u32::try_from(code).expect("exit code"))
+        }
+    }
+
+    fn reg_output(code: i32) -> std::io::Result<std::process::Output> {
+        Ok(std::process::Output {
+            status: exit_status(code),
+            stdout: Vec::new(),
+            stderr: b"ERROR: The system was unable to find the specified registry key or value."
+                .to_vec(),
+        })
+    }
+
+    /// What an interrupted export can leave: the root key header only. Left in
+    /// place it would read as zero enrollments.
+    fn bundle_with_partial_enrollments_export() -> (tempfile::TempDir, std::path::PathBuf) {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let registry_dir = temp_dir.path().join("evidence").join("registry");
+        std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+        let output = registry_dir.join("enrollments.reg");
+        std::fs::write(
+            &output,
+            "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n",
+        )
+        .expect("write partial export");
+        assert_eq!(
+            super::registry::load_enrollment_evidence(temp_dir.path())
+                .map(|evidence| evidence.enrollment_count),
+            Some(0)
+        );
+        (temp_dir, output)
+    }
+
+    /// A `reg export` that exits non-zero or fails to start must leave the
+    /// artifact uncollected, never a partial file that reads as "no
+    /// enrollment". This is the decision the live capture makes for every
+    /// export.
+    #[test]
+    fn enrollments_export_failed_reg_export_is_not_collected() {
+        type RegRun = fn() -> std::io::Result<std::process::Output>;
+        let outcomes: [(&str, RegRun); 3] = [
+            ("exit 1", || reg_output(1)),
+            ("exit 5", || reg_output(5)),
+            ("failed to start", || {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "reg.exe not found",
+                ))
+            }),
+        ];
+        for (name, outcome) in outcomes {
+            let (bundle, output) = bundle_with_partial_enrollments_export();
+
+            let kept = super::settle_registry_export(
+                r"HKLM\SOFTWARE\Microsoft\Enrollments",
+                &output,
+                outcome(),
+            );
+
+            assert!(!kept, "{name}");
+            assert!(!output.exists(), "{name}");
+            assert_eq!(
+                super::registry::load_enrollment_evidence(bundle.path()),
+                None,
+                "{name}"
+            );
+        }
+
+        // A failed export that wrote nothing has nothing to discard.
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let missing = temp_dir.path().join("enrollments.reg");
+        assert!(!super::settle_registry_export(
+            r"HKLM\SOFTWARE\Microsoft\Enrollments",
+            &missing,
+            reg_output(1),
+        ));
+    }
+
+    #[test]
+    fn enrollments_export_successful_reg_export_is_kept() {
+        let (bundle, output) = bundle_with_partial_enrollments_export();
+
+        let kept = super::settle_registry_export(
+            r"HKLM\SOFTWARE\Microsoft\Enrollments",
+            &output,
+            reg_output(0),
+        );
+
+        assert!(kept);
+        assert!(output.exists());
+        assert_eq!(
+            super::registry::load_enrollment_evidence(bundle.path())
+                .map(|evidence| evidence.enrollment_count),
+            Some(0)
+        );
     }
 
     #[test]

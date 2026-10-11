@@ -122,7 +122,7 @@ function buildBundleFixture() {
   );
   writeFileSync(
     join(evidence, "registry", "enrollments.reg"),
-    'Windows Registry Editor Version 5.00\n\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\{11111111-2222-3333-4444-555555555555}]\n    "UPN"="user@contoso.com"\n',
+    'Windows Registry Editor Version 5.00\n\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\n\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\{11111111-2222-3333-4444-555555555555}]\n    "UPN"="user@contoso.com"\n',
   );
 
   writeFileSync(
