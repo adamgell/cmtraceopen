@@ -29,6 +29,7 @@ import {
 import {
   APP_SERVICES_GROUP,
   NO_CHANNEL_STATS,
+  TEXT_LOGS_GROUP,
   WINDOWS_LOGS_GROUP,
   buildChannelPaneModel,
   defaultExpandedGroups,
@@ -37,6 +38,7 @@ import {
   type ChannelPaneModel,
   type ChannelReadState,
   type ChannelRowModel,
+  type TextLogRowModel,
 } from "./evtx-channel-stats";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
@@ -120,18 +122,32 @@ const useStyles = makeStyles({
 const isSwitchedOff = (channel: EvtxChannelInfo) => !channelCanHoldEvents(channel);
 
 /**
- * The pane's primary text color. Foreground1 is the designed color, but on the solarized-dark pane
- * (Background2) it measures 4.11:1, short of the 4.5:1 text floor, so there the pane uses
- * Foreground2 (4.86:1). Every other theme keeps Foreground1. The decision reads the theme's own
- * token values, so a theme whose Foreground1 passes is untouched.
+ * The pane's two text colors the spec draws from Foreground1 (names, labels) and Foreground3
+ * (the eyebrow, the header count, an unavailable channel's name). Each is the designed color
+ * wherever it reaches the 4.5:1 text floor on the pane (Background2) and falls back to
+ * Foreground2 only in the themes where it does not: Foreground1 measures 4.11:1 in solarized-dark,
+ * and Foreground3 measures 2.92:1 there and 3.36:1 in dracula. The decision reads each theme's own
+ * token values, so a theme where the designed color passes is untouched and keeps the dim cue.
  */
-function usePrimaryText(): string {
+interface PaneText {
+  primary: string;
+  muted: string;
+}
+
+function usePaneText(): PaneText {
   const themeId = useUiStore((s) => s.themeId);
   return useMemo(() => {
     const { fluentTheme } = getThemeById(themeId);
-    return contrastRatio(fluentTheme.colorNeutralForeground1, fluentTheme.colorNeutralBackground2) >= 4.5
-      ? tokens.colorNeutralForeground1
-      : tokens.colorNeutralForeground2;
+    const reads = (foreground: string) =>
+      contrastRatio(foreground, fluentTheme.colorNeutralBackground2) >= 4.5;
+    return {
+      primary: reads(fluentTheme.colorNeutralForeground1)
+        ? tokens.colorNeutralForeground1
+        : tokens.colorNeutralForeground2,
+      muted: reads(fluentTheme.colorNeutralForeground3)
+        ? tokens.colorNeutralForeground3
+        : tokens.colorNeutralForeground2,
+    };
   }, [themeId]);
 }
 
@@ -220,7 +236,7 @@ export function ChannelPicker() {
   const captionFontSize = Math.max(10, metrics.fontSize - 3);
   const groupFontSize = Math.max(10, metrics.fontSize - 2);
   const visual = useEvtxVisualTokens();
-  const primaryText = usePrimaryText();
+  const { primary: primaryText, muted: mutedText } = usePaneText();
 
   const records = useEvtxStore((s) => s.records);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
@@ -351,6 +367,14 @@ export function ChannelPicker() {
     return model.channels.filter((c) => c.name.toLowerCase().includes(lower));
   }, [model.channels, search]);
 
+  const filteredTextLogs = useMemo(() => {
+    if (!search.trim()) return null;
+    const lower = search.toLowerCase();
+    return model.textLogs.filter(
+      (row) => row.label.toLowerCase().includes(lower) || row.name.toLowerCase().includes(lower),
+    );
+  }, [model.textLogs, search]);
+
   // The text logs the workspace hands to the analysis session, mirrored from its own scoping.
   const correlatingSources = useMemo(
     () =>
@@ -400,6 +424,7 @@ export function ChannelPicker() {
   const rowEnv = {
     visual,
     primaryText,
+    mutedText,
     windowLabel,
     metrics: rowMetrics,
     onToggleChannel: toggleChannel,
@@ -444,12 +469,12 @@ export function ChannelPicker() {
             flexShrink: 0,
           }}
         >
-          <span style={eyebrowStyle(captionFontSize)}>Channels</span>
+          <span style={eyebrowStyle(captionFontSize, mutedText)}>Channels</span>
           <span
             title={`${model.readCount} of ${model.totalCount} channels read`}
             style={{
               ...numericStyle(captionFontSize),
-              color: tokens.colorNeutralForeground2,
+              color: mutedText,
               minWidth: 0,
               overflow: "hidden",
               textOverflow: "ellipsis",
@@ -736,9 +761,45 @@ export function ChannelPicker() {
                   rowEnv={rowEnv}
                 />
               )}
+
+              {/* Text logs the archive reader listed as channels: not event channels */}
+              {model.textLogs.length > 0 && (
+                <>
+                  <GroupRow
+                    groupKey={TEXT_LOGS_GROUP}
+                    label="Text logs in sources"
+                    expanded={expanded.has(TEXT_LOGS_GROUP)}
+                    onToggle={toggleExpand}
+                    depth={0}
+                    count={model.textLogs.length}
+                    metrics={rowMetrics}
+                  />
+                  {expanded.has(TEXT_LOGS_GROUP) &&
+                    model.textLogs.map((row, position) => (
+                      <TextLogRow
+                        key={row.name}
+                        row={row}
+                        position={position}
+                        depth={1}
+                        selected={selectedChannels.has(row.name)}
+                        {...rowEnv}
+                      />
+                    ))}
+                </>
+              )}
             </>
           )}
-          {filteredChannels && filteredChannels.length === 0 && (
+          {filteredTextLogs?.map((row, position) => (
+            <TextLogRow
+              key={row.name}
+              row={row}
+              position={position}
+              depth={0}
+              selected={selectedChannels.has(row.name)}
+              {...rowEnv}
+            />
+          ))}
+          {filteredChannels && filteredChannels.length === 0 && filteredTextLogs?.length === 0 && (
             <div
               style={{
                 fontSize: `${smallFontSize}px`,
@@ -751,7 +812,12 @@ export function ChannelPicker() {
             </div>
           )}
           {correlatingSources.length > 0 && (
-            <AlsoCorrelating sources={correlatingSources} metrics={rowMetrics} primaryText={primaryText} />
+            <AlsoCorrelating
+              sources={correlatingSources}
+              metrics={rowMetrics}
+              primaryText={primaryText}
+              mutedText={mutedText}
+            />
           )}
         </div>
 
@@ -760,7 +826,7 @@ export function ChannelPicker() {
             tailMode={tailMode}
             tailingChannels={tailChannels.size}
             busy={isLoading}
-            onPause={() => void stopLiveTail()}
+            onStop={() => void stopLiveTail()}
             onResume={() => void startLiveTail()}
             visual={visual}
             primaryText={primaryText}
@@ -803,21 +869,20 @@ interface RowMetrics {
 interface RowEnv {
   visual: EvtxVisualTokens;
   primaryText: string;
+  mutedText: string;
   windowLabel: string;
   metrics: RowMetrics;
   onToggleChannel: (name: string) => void;
   onToggleExpand: (key: string) => void;
 }
 
-const eyebrowStyle = (fontSize: number) =>
+const eyebrowStyle = (fontSize: number, color: string) =>
   ({
     fontSize: `${fontSize}px`,
     fontWeight: 600,
     letterSpacing: ".08em",
     textTransform: "uppercase",
-    // Foreground2 rather than the spec's Foreground3: Foreground3 measures 2.92:1 on the
-    // solarized-dark pane background, short of the 4.5:1 text floor.
-    color: tokens.colorNeutralForeground2,
+    color,
   }) as const;
 
 const numericStyle = (fontSize: number) =>
@@ -844,20 +909,58 @@ function sparklineLabel(row: ChannelRowModel, windowLabel: string): string {
 }
 
 /**
+ * What a screen reader gets for a row, as the checkbox's description: the total (or that there is
+ * none), the counts, the state, the activity chart in words, why the channel is not complete, and
+ * whether the tail covers it. The visible counts and the sparkline repeat this and are hidden from
+ * assistive technology, so each number is read once and the tooltip is never the only carrier.
+ */
+function rowDescription(
+  row: ChannelRowModel,
+  windowLabel: string,
+  { tailing, switchedOff }: { tailing: boolean; switchedOff: boolean },
+): string {
+  const { state, stats } = row;
+  const parts: string[] = [];
+  if (state === "read" || state === "partial") {
+    const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+    parts.push(
+      `${plural(stats.total, "event", "events")}, ${plural(stats.errors, "error", "errors")}, ${plural(stats.warnings, "warning", "warnings")}`,
+    );
+  } else {
+    parts.push("No count");
+  }
+  if (switchedOff) parts.push("Disabled");
+  const stateLabel = STATE_LABELS[state];
+  if (stateLabel !== "") {
+    parts.push(
+      state === "partial"
+        ? "Partial: some events may be missing"
+        : `${stateLabel[0].toUpperCase()}${stateLabel.slice(1)}`,
+    );
+  }
+  parts.push(
+    state === "read" || state === "partial"
+      ? sparklineLabel(row, windowLabel)
+      : `${windowLabel} activity: no data, the channel was not read`,
+  );
+  if (row.reasons.length > 0) parts.push(`Why: ${row.reasons.join("; ")}`);
+  if (tailing) parts.push("Live tail running");
+  return `${parts.join(". ")}.`;
+}
+
+/**
  * The 24-bin activity sparkline. An empty bin draws a 1 px baseline segment, so a channel that
  * was not read is a flat line and never a row of zero-height bars that could read as "no events".
- * The chart is named by `label`, which gives the numbers the bars show.
+ * It is hidden from assistive technology: the row's description carries the same numbers in words.
  */
 function ActivitySparkline({
   bins,
   color,
   baseline,
-  label,
 }: {
   bins: readonly number[];
   color: string;
   baseline: string;
-  label: string;
 }) {
   const heights = scaleActivityBars(bins, SPARKLINE_HEIGHT);
   const unit = SPARKLINE_BIN_UNITS;
@@ -868,8 +971,7 @@ function ActivitySparkline({
     .join("");
   return (
     <svg
-      role="img"
-      aria-label={label}
+      aria-hidden="true"
       width="100%"
       height={SPARKLINE_HEIGHT}
       viewBox={`0 0 ${bins.length * unit} ${SPARKLINE_HEIGHT}`}
@@ -1017,6 +1119,7 @@ const ChannelRow = memo(function ChannelRow({
   disclosure,
   visual,
   primaryText,
+  mutedText,
   windowLabel,
   metrics,
   onToggleChannel,
@@ -1043,7 +1146,7 @@ const ChannelRow = memo(function ChannelRow({
   const nameColor = selected
     ? visual.selection.foreground
     : dimmed
-      ? tokens.colorNeutralForeground2
+      ? mutedText
       : primaryText;
   const stateLabel = STATE_LABELS[state];
   const stateColor = GAP_STATES.has(state)
@@ -1054,7 +1157,7 @@ const ChannelRow = memo(function ChannelRow({
   const countColor = (count: number, levelColor: string) =>
     count > 0 ? levelColor : secondary;
 
-  const summaryId = `${CHANNEL_PANE_ID}-row-${row.index}`;
+  const descriptionId = `${CHANNEL_PANE_ID}-row-${row.index}`;
   const title =
     row.reasons.length > 0 ? `${channel.name}\n${row.reasons.join("\n")}` : channel.name;
 
@@ -1115,7 +1218,7 @@ const ChannelRow = memo(function ChannelRow({
             }}
             disabled={!selectable}
             aria-label={`Select ${channel.name}`}
-            aria-describedby={summaryId}
+            aria-describedby={descriptionId}
             style={{ cursor: "inherit", margin: 0, flexShrink: 0 }}
           />
           <span
@@ -1169,15 +1272,10 @@ const ChannelRow = memo(function ChannelRow({
           bins={showNumbers ? stats.bins : NO_CHANNEL_STATS.bins}
           color={selected ? visual.selectedDataColor : visual.channelColor(row.index)}
           baseline={tokens.colorNeutralStroke2}
-          label={
-            showNumbers
-              ? sparklineLabel(row, windowLabel)
-              : `${windowLabel} activity: no data, the channel was not read`
-          }
         />
       </div>
       <div
-        id={summaryId}
+        aria-hidden="true"
         style={{
           ...numericStyle(metrics.captionFontSize),
           display: "flex",
@@ -1209,6 +1307,89 @@ const ChannelRow = memo(function ChannelRow({
         )}
         {tailing && <span>{"\u00B7 live"}</span>}
       </div>
+      <span id={descriptionId} className={styles.visuallyHidden}>
+        {rowDescription(row, windowLabel, { tailing, switchedOff })}
+      </span>
+    </div>
+  );
+});
+
+/**
+ * A text log an archive reader listed as a channel (a .log inside a .zip). It is not an event
+ * channel, so it has no swatch, no activity chart, no error and warning counts and no read state:
+ * only its name and how many entries it holds. Its checkbox stays, because the selection is what
+ * gates whether the records are shown at all.
+ */
+const TextLogRow = memo(function TextLogRow({
+  row,
+  position,
+  depth,
+  selected,
+  visual,
+  primaryText,
+  metrics,
+  onToggleChannel,
+}: RowEnv & {
+  row: TextLogRowModel;
+  position: number;
+  depth: number;
+  selected: boolean;
+}) {
+  const styles = useStyles();
+  const descriptionId = `${CHANNEL_PANE_ID}-text-log-${position}`;
+  const unit = row.entries === 1 ? "entry" : "entries";
+  return (
+    <div
+      data-text-log-row={row.name}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        padding: `0 12px 0 ${12 + depth * 16}px`,
+        borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+        fontSize: `${metrics.fontSize}px`,
+        backgroundColor: selected ? visual.selection.background : undefined,
+        boxShadow: selected ? `inset 3px 0 0 ${visual.selection.border}` : undefined,
+      }}
+    >
+      <span style={{ width: "14px", flexShrink: 0, marginRight: "4px" }} />
+      <label
+        title={row.name}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "6px",
+          flex: 1,
+          minWidth: 0,
+          height: `${metrics.rowHeight}px`,
+          cursor: "pointer",
+          color: selected ? visual.selection.foreground : primaryText,
+          whiteSpace: "nowrap",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggleChannel(row.name)}
+          aria-label={`Select ${row.name}`}
+          aria-describedby={descriptionId}
+          style={{ cursor: "inherit", margin: 0, flexShrink: 0 }}
+        />
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", flex: 1, minWidth: 0 }}>
+          {row.label}
+        </span>
+        <span
+          style={{
+            ...numericStyle(metrics.captionFontSize),
+            color: selected ? visual.selection.foreground : tokens.colorNeutralForeground2,
+            flexShrink: 0,
+          }}
+        >
+          {`${row.entries.toLocaleString()} ${unit}`}
+        </span>
+      </label>
+      <span id={descriptionId} className={styles.visuallyHidden}>
+        {`${row.entries.toLocaleString()} ${unit}. A text log from an archive, not an event channel.`}
+      </span>
     </div>
   );
 });
@@ -1294,16 +1475,18 @@ function AlsoCorrelating({
   sources,
   metrics,
   primaryText,
+  mutedText,
 }: {
   sources: ReturnType<typeof summarizeLogSources>;
   metrics: RowMetrics;
   primaryText: string;
+  mutedText: string;
 }) {
   const shown = sources.slice(0, MAX_CORRELATING_SOURCES);
   const omitted = sources.length - shown.length;
   return (
     <section aria-label="Also correlating" style={{ padding: "10px 0 6px" }}>
-      <div style={{ ...eyebrowStyle(metrics.captionFontSize), padding: "0 12px 4px" }}>
+      <div style={{ ...eyebrowStyle(metrics.captionFontSize, mutedText), padding: "0 12px 4px" }}>
         Also correlating
       </div>
       {shown.map((source) => (
@@ -1354,7 +1537,7 @@ function LiveTailFooter({
   tailMode,
   tailingChannels,
   busy,
-  onPause,
+  onStop,
   onResume,
   visual,
   primaryText,
@@ -1363,7 +1546,8 @@ function LiveTailFooter({
   tailMode: string | null;
   tailingChannels: number;
   busy: boolean;
-  onPause: () => void;
+  /** Stops the tail: Pause while it runs, Stop when it was asked for and is not running. */
+  onStop: () => void;
   onResume: () => void;
   visual: EvtxVisualTokens;
   primaryText: string;
@@ -1372,6 +1556,9 @@ function LiveTailFooter({
   const on = tailMode !== null;
   // `unsupported` is a tail that was asked for and is not running, so it is not called live.
   const running = on && tailingChannels > 0;
+  // A tail that is not running has nothing to pause: offering Pause would call stopLiveTail on a
+  // tail that never started. It can be stopped (cleared) or, with no tail at all, resumed.
+  const action = running ? "Pause" : on ? "Stop" : "Resume";
   const text = running
     ? `Live tail \u00B7 ${tailingChannels} ${tailingChannels === 1 ? "channel" : "channels"}`
     : on
@@ -1406,11 +1593,11 @@ function LiveTailFooter({
         <Link
           as="button"
           disabled={busy}
-          onClick={on ? onPause : onResume}
-          aria-label={on ? "Pause live tail" : "Resume live tail"}
+          onClick={on ? onStop : onResume}
+          aria-label={`${action} live tail`}
           style={{ fontWeight: 600, flexShrink: 0 }}
         >
-          {on ? "Pause" : "Resume"}
+          {action}
         </Link>
       </div>
       {on && (

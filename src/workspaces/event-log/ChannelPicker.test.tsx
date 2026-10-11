@@ -35,6 +35,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 const { useEvtxStore } = await import("./evtx-store");
 const { ChannelPicker } = await import("./ChannelPicker");
 const { buildEvtxVisualTokens, resolveToken } = await import("./evtx-visual-tokens");
+const { orderChannelNames } = await import("./evtx-channel-order");
 const { useLogStore } = await import("../../stores/log-store");
 const { useUiStore } = await import("../../stores/ui-store");
 
@@ -235,7 +236,13 @@ function paneRow(name: string): HTMLElement {
 }
 
 function rowSparkline(name: string): SVGElement {
-  return within(paneRow(name)).getByRole("img") as unknown as SVGElement;
+  return paneRow(name).querySelector("svg") as SVGElement;
+}
+
+/** What a screen reader gets for a row: the text the checkbox is described by. */
+function rowDescription(name: string): string {
+  const box = within(paneRow(name)).getByRole("checkbox");
+  return document.getElementById(box.getAttribute("aria-describedby")!)!.textContent ?? "";
 }
 
 function plottedBins(name: string): number[] {
@@ -293,11 +300,28 @@ describe("the channel pane header and rows", () => {
     expect(plottedBins("System")).toEqual([18, 19, 21, 23]);
   });
 
-  it("names the sparkline with the numbers it shows and never repeats the channel name", () => {
+  it("hides the sparkline from assistive technology and puts its numbers in the row's description", () => {
     render(<ChannelPicker />);
-    const chart = rowSparkline("System");
-    expect(chart).toHaveAccessibleName("24 h activity: 4 of 24 intervals had events, busiest 1");
-    expect(chart.getAttribute("aria-label")).not.toContain("System");
+    expect(rowSparkline("System")).toHaveAttribute("aria-hidden", "true");
+    expect(within(paneRow("System")).queryByRole("img")).toBeNull();
+    const description = rowDescription("System");
+    expect(description).toContain("4 events, 2 errors, 1 warning");
+    expect(description).toContain("24 h activity: 4 of 24 intervals had events, busiest 1");
+    // The checkbox's own name says which channel; the description does not repeat it.
+    expect(description).not.toContain("System");
+  });
+
+  it("describes the total, or that there is none, so the number is not only in the label", () => {
+    render(<ChannelPicker />);
+    expect(rowDescription("System")).toMatch(/^4 events,/);
+    expect(rowDescription("Setup")).toMatch(/^No count\./);
+    expect(rowDescription("Application")).toMatch(/^0 events, 0 errors, 0 warnings\./);
+  });
+
+  it("hides the visible counts line from assistive technology, since the description says it once", () => {
+    render(<ChannelPicker />);
+    const counts = within(paneRow("System")).getByText("2 err").parentElement!;
+    expect(counts).toHaveAttribute("aria-hidden", "true");
   });
 
   it("says how many events the sparkline leaves out, and never draws them in bin 0", () => {
@@ -311,7 +335,7 @@ describe("the channel pane header and rows", () => {
     render(<ChannelPicker />);
     // One hour before now is the start of the last bin.
     expect(plottedBins("System")).toEqual([23]);
-    expect(rowSparkline("System")).toHaveAccessibleName(
+    expect(rowDescription("System")).toContain(
       "24 h activity: 1 of 24 intervals had events, busiest 1; 2 not plotted (1 without a timestamp, 1 outside the window)",
     );
     // They still count where the channel's events are counted.
@@ -325,7 +349,7 @@ describe("the channel pane header and rows", () => {
     expect(within(row).getByText("0")).toBeInTheDocument();
     expect(within(row).getByText("0 err")).toBeInTheDocument();
     expect(plottedBins("Application")).toEqual([]);
-    expect(rowSparkline("Application")).toHaveAccessibleName("24 h activity: no events");
+    expect(rowDescription("Application")).toContain("24 h activity: no events");
   });
 
   it("gives a channel nobody has loaded a dash and a flat line, never a zero", () => {
@@ -336,8 +360,8 @@ describe("the channel pane header and rows", () => {
     expect(row).toHaveTextContent("not loaded");
     expect(row).not.toHaveTextContent(/\b0\b/);
     expect(plottedBins("Setup")).toEqual([]);
-    expect(rowSparkline("Setup")).toHaveAccessibleName(
-      "24 h activity: no data, the channel was not read",
+    expect(rowDescription("Setup")).toBe(
+      "No count. Not loaded. 24 h activity: no data, the channel was not read.",
     );
   });
 
@@ -553,7 +577,8 @@ describe("channels that could not be read are coverage gaps", () => {
     expect(plottedBins("Security")).toEqual([]);
     // Never a zero: not the total, and not an "0 err" that would say the channel is clean.
     expect(row).not.toHaveTextContent(/\b0\b/);
-    expect(row).not.toHaveTextContent("err");
+    expect(row).not.toHaveTextContent(/\d+ err/);
+    expect(rowDescription("Security")).toContain("No count. Needs elevation.");
   });
 
   it("lists the unreadable source in the tree, counts it as a channel and not as read", () => {
@@ -685,6 +710,310 @@ describe("the Also correlating section", () => {
   });
 });
 
+describe("a row that is not complete says why in text", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("puts the state and the reasons in the description, not only in the tooltip", () => {
+    resetPane({
+      channels: [channel("System", "enabled")],
+      loadedChannels: new Set(["System"]),
+      records: [evtxRecord("System", NOW - HOUR)],
+      coverageDetails: [
+        gapRecord("System", "record", "record 7 could not be decoded"),
+        gapRecord("System", "chunk", "chunk 2 was zero-filled"),
+      ],
+    });
+    render(<ChannelPicker />);
+    const description = rowDescription("System");
+    expect(description).toContain("Partial: some events may be missing");
+    expect(description).toContain("Why: record 7 could not be decoded; chunk 2 was zero-filled");
+    // The tooltip says the same, but it is not the only carrier.
+    expect(paneRow("System").querySelector("label")!.getAttribute("title")).toContain(
+      "record 7 could not be decoded",
+    );
+  });
+
+  it("says a live tail is running in the description", () => {
+    resetPane({
+      channels: [channel("System", "enabled")],
+      loadedChannels: new Set(["System"]),
+      records: [evtxRecord("System", NOW - HOUR)],
+      tailMode: "subscription",
+      tailChannels: new Set(["System"]),
+    });
+    render(<ChannelPicker />);
+    expect(rowDescription("System")).toContain("Live tail running");
+  });
+});
+
+describe("a pane with no source mode", () => {
+  afterEach(cleanup);
+
+  it("does not call enumerated channels read when nothing was queried", () => {
+    // A remote load whose queries all fail clears the source mode but keeps the channel list.
+    resetPane({
+      sourceMode: null,
+      channels: [channel("System", "enabled"), channel("Application", "enabled")],
+    });
+    render(<ChannelPicker />);
+    expect(screen.getByText("0 of 2 read \u00B7 24 h activity")).toBeInTheDocument();
+    expect(paneRow("System")).toHaveAttribute("data-channel-state", "notLoaded");
+    expect(paneRow("System")).toHaveTextContent(DASH);
+    expect(paneRow("System")).not.toHaveTextContent(/\b0\b/);
+  });
+});
+
+describe("live tail gaps", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  const tailing = (tailCoverageGaps: string[]) =>
+    resetPane({
+      channels: [channel("System", "enabled")],
+      loadedChannels: new Set(["System"]),
+      records: [evtxRecord("System", NOW - HOUR)],
+      tailMode: "subscription",
+      tailChannels: new Set(["System"]),
+      tailCoverageGaps,
+    });
+
+  it.each([
+    "System: live tail batch 12 was not received",
+    "System: subscription callback reported an error",
+    "System: 3 events could not be read and are missing from this view",
+  ])("marks the row partial for %s", (gapText) => {
+    tailing([gapText]);
+    render(<ChannelPicker />);
+    expect(paneRow("System")).toHaveAttribute("data-channel-state", "partial");
+    expect(paneRow("System")).toHaveTextContent("partial");
+    expect(rowDescription("System")).toContain(gapText.replace("System: ", ""));
+  });
+
+  it("leaves the row read for a tail that was unavailable, not one that lost events", () => {
+    tailing(["System: live tail unavailable (not supported)"]);
+    render(<ChannelPicker />);
+    expect(paneRow("System")).toHaveAttribute("data-channel-state", "read");
+  });
+});
+
+describe("text logs from archives", () => {
+  const MEMBER = "C:\\cases\\bundle.zip::logs/IntuneManagementExtension.log";
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    resetPane({
+      sourceMode: "files",
+      timeWindow: "all",
+      channels: [
+        {
+          name: "System",
+          eventCount: 1,
+          sourceType: { file: { path: "C:\\cases\\bundle.zip::System.evtx" } },
+        },
+        { name: MEMBER, eventCount: 2, sourceType: { file: { path: "C:\\cases\\bundle.zip" } } },
+      ],
+      selectedChannels: new Set(["System", MEMBER]),
+      records: [
+        evtxRecord("System", NOW - HOUR),
+        { ...evtxRecord(MEMBER, NOW - 2 * HOUR, "Error"), originKind: "log" as const },
+        { ...evtxRecord(MEMBER, NOW - 3 * HOUR), originKind: "log" as const },
+      ],
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  // The name holds backslashes, which a CSS attribute selector would read as escapes.
+  const textLogRow = () =>
+    [...document.querySelectorAll<HTMLElement>("[data-text-log-row]")].find(
+      (row) => row.getAttribute("data-text-log-row") === MEMBER,
+    ) ?? null;
+
+  it("lists the member under 'Text logs in sources', not among the channels", () => {
+    render(<ChannelPicker />);
+    expect(screen.getByRole("button", { name: "Collapse Text logs in sources" })).toBeInTheDocument();
+    expect(textLogRow()).not.toBeNull();
+    expect(document.querySelectorAll("[data-channel-row]")).toHaveLength(1);
+    expect(textLogRow()).toHaveTextContent("IntuneManagementExtension.log");
+  });
+
+  it("shows an entry count and none of an event channel's marks", () => {
+    render(<ChannelPicker />);
+    const row = textLogRow()!;
+    expect(row).toHaveTextContent("2 entries");
+    // No swatch, no sparkline, no error or warning counts, no read state.
+    expect(row.querySelector("svg")).toBeNull();
+    expect(row.querySelector('span[aria-hidden="true"][style*="border-radius"]')).toBeNull();
+    expect(row).not.toHaveTextContent(/\d+ (err|warn)/);
+    expect(row).not.toHaveAttribute("data-channel-state");
+  });
+
+  it("leaves it out of the read count and the total", () => {
+    render(<ChannelPicker />);
+    expect(screen.getByText("1 of 1 read \u00B7 all-time activity")).toBeInTheDocument();
+  });
+
+  it("keeps its checkbox, which gates whether the records are shown", () => {
+    render(<ChannelPicker />);
+    const box = within(textLogRow()!).getByRole("checkbox", { name: `Select ${MEMBER}` });
+    expect(box).toBeChecked();
+    fireEvent.click(box);
+    expect(useEvtxStore.getState().selectedChannels.has(MEMBER)).toBe(false);
+    expect(useEvtxStore.getState().selectedChannels.has("System")).toBe(true);
+    expect(document.getElementById(box.getAttribute("aria-describedby")!)).toHaveTextContent(
+      "2 entries. A text log from an archive, not an event channel.",
+    );
+  });
+
+  it("is found by the channel filter", () => {
+    render(<ChannelPicker />);
+    fireEvent.change(screen.getByPlaceholderText("Filter channels..."), {
+      target: { value: "intune" },
+    });
+    expect(textLogRow()).not.toBeNull();
+    expect(document.querySelector('[data-channel-row="System"]')).toBeNull();
+    expect(screen.queryByText("No channels match filter")).not.toBeInTheDocument();
+  });
+
+  it("does not change the color of an event channel", () => {
+    render(<ChannelPicker />);
+    const swatch = (name: string) =>
+      paneRow(name).querySelector<HTMLElement>('span[aria-hidden="true"][style*="border-radius"]')!;
+    const withLog = swatch("System").style.backgroundColor;
+    cleanup();
+    resetPane({
+      sourceMode: "files",
+      timeWindow: "all",
+      channels: [
+        {
+          name: "System",
+          eventCount: 1,
+          sourceType: { file: { path: "C:\\cases\\bundle.zip::System.evtx" } },
+        },
+      ],
+      selectedChannels: new Set(["System"]),
+      records: [evtxRecord("System", NOW - HOUR)],
+    });
+    render(<ChannelPicker />);
+    expect(swatch("System").style.backgroundColor).toBe(withLog);
+  });
+});
+
+describe("the pane's rows follow orderChannelNames", () => {
+  const NAMES = [
+    "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+    "System",
+    "Contoso/Operational",
+    "Microsoft-Windows-AAD/Operational",
+    "Application",
+    "Contoso",
+    "Security",
+  ];
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    resetPane({
+      channels: NAMES.map((name) => channel(name, "enabled")),
+      loadedChannels: new Set(NAMES),
+      records: NAMES.map((name) => evtxRecord(name, NOW - HOUR)),
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("lists the channels in the order Phase 14's charts will color them in", () => {
+    render(<ChannelPicker />);
+    const shown = [...document.querySelectorAll("[data-channel-row]")].map((row) =>
+      row.getAttribute("data-channel-row"),
+    );
+    expect(shown).toEqual(orderChannelNames(NAMES));
+  });
+
+  it("draws each row's swatch in channelColor(i) for its place in that order", () => {
+    render(<ChannelPicker />);
+    const light = getAllThemes().find((theme) => theme.id === "light")!;
+    const visual = buildEvtxVisualTokens(light);
+    orderChannelNames(NAMES).forEach((name, index) => {
+      const swatch = paneRow(name).querySelector<HTMLElement>(
+        'span[aria-hidden="true"][style*="border-radius"]',
+      )!;
+      expect(toHex(swatch.style.backgroundColor)).toBe(visual.channelColor(index));
+    });
+  });
+});
+
+describe("the dim cue and the eyebrow keep the designed color where it reads", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const path = "C:\\logs\\Security.evtx";
+    resetPane({
+      sourceMode: "files",
+      timeWindow: "all",
+      channels: [
+        { name: "System", eventCount: 1, sourceType: { file: { path: "C:\\logs\\System.evtx" } } },
+      ],
+      selectedChannels: new Set<string>(),
+      records: [evtxRecord("System", NOW - HOUR)],
+      coverageDetails: [gapRecord(path, "accessDenied", "source metadata access was denied")],
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  const colors = () => ({
+    eyebrow: screen.getByText("Channels").style.color,
+    headerCount: screen.getByText(/ read \u00B7 /).style.color,
+    unavailableName: paneRow("Security").querySelector("label")!.style.color,
+    name: paneRow("System").querySelector("label")!.style.color,
+  });
+
+  it("uses Foreground3 for the eyebrow, the header count and an unavailable name where it passes 4.5:1", () => {
+    // Light: Foreground3 on Background2 is 5.93:1.
+    useUiStore.setState({ themeId: "light" });
+    render(<ChannelPicker />);
+    const found = colors();
+    expect(found.eyebrow).toBe(tokens.colorNeutralForeground3);
+    expect(found.headerCount).toBe(tokens.colorNeutralForeground3);
+    expect(found.unavailableName).toBe(tokens.colorNeutralForeground3);
+    // The dim cue: an unavailable name is not drawn like a normal one.
+    expect(found.name).toBe(tokens.colorNeutralForeground1);
+  });
+
+  it.each(["solarized-dark", "dracula"] as const)(
+    "falls back to Foreground2 in %s, where Foreground3 misses 4.5:1",
+    (themeId) => {
+      useUiStore.setState({ themeId });
+      render(<ChannelPicker />);
+      const found = colors();
+      expect(found.eyebrow).toBe(tokens.colorNeutralForeground2);
+      expect(found.headerCount).toBe(tokens.colorNeutralForeground2);
+      expect(found.unavailableName).toBe(tokens.colorNeutralForeground2);
+    },
+  );
+});
+
 describe("the live tail footer", () => {
   let startLiveTail: ReturnType<typeof vi.fn>;
   let stopLiveTail: ReturnType<typeof vi.fn>;
@@ -724,11 +1053,16 @@ describe("the live tail footer", () => {
     expect(stopLiveTail).not.toHaveBeenCalled();
   });
 
-  it("does not call an unsupported tail live", () => {
+  it("does not call an unsupported tail live, and offers Stop rather than Pause", () => {
     useEvtxStore.setState({ tailMode: "unsupported", tailChannels: new Set<string>() });
     render(<ChannelPicker />);
     expect(screen.getByText("Live tail \u00B7 not tailing")).toBeInTheDocument();
     expect(screen.getByLabelText("Live tail mode: unsupported")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pause live tail" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop live tail" }));
+    expect(stopLiveTail).toHaveBeenCalledTimes(1);
+    expect(startLiveTail).not.toHaveBeenCalled();
   });
 
   it("is the only live tail control", () => {
@@ -883,8 +1217,15 @@ function measurePane(container: HTMLElement, theme: CMTraceTheme): MeasuredPair[
     'span[aria-hidden="true"][style*="border-radius"]',
   )) {
     const background = swatch.style.backgroundColor;
-    if (background === "" || background === "transparent") continue;
     const onto = surface(swatch.parentElement!);
+    if (background === "" || background === "transparent") {
+      // A hollow mark (the idle live-tail ring) is drawn by its border alone.
+      const ring = /solid (.+)$/.exec(swatch.style.border)?.[1];
+      if (ring && ring !== "transparent") {
+        pairs.push({ what: `ring ${ring}`, ratio: contrastRatio(resolve(ring), onto), minimum: 3 });
+      }
+      continue;
+    }
     const outline = /solid (.+)$/.exec(swatch.style.border)?.[1];
     if (outline && outline !== "transparent" && toHex(outline) !== toHex(background)) {
       // A mark on the selection background cannot promise 3:1 for its fill (spec 6.3), so it
@@ -974,6 +1315,63 @@ describe("contrast of everything the pane renders", () => {
       expect(pairs.some((pair) => pair.what.startsWith("sparkline bar"))).toBe(true);
       expect(pairs.some((pair) => pair.what.startsWith("swatch outline"))).toBe(true);
 
+      const failures = pairs.filter((pair) => pair.ratio < pair.minimum);
+      expect(
+        failures.map((pair) => `${pair.what}: ${pair.ratio.toFixed(2)}:1 (needs ${pair.minimum})`),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
+    "meets the same floors for the idle footer ring and an empty filter result in %s",
+    (_id, theme) => {
+      resetPane({
+        channels: [channel("System", "enabled")],
+        loadedChannels: new Set(["System"]),
+        records: [evtxRecord("System", NOW - HOUR)],
+      });
+      useUiStore.setState({ themeId: theme.id });
+      const { container } = render(<ChannelPicker />);
+      fireEvent.change(screen.getByPlaceholderText("Filter channels..."), {
+        target: { value: "no such channel" },
+      });
+      expect(screen.getByText("No channels match filter")).toBeInTheDocument();
+      expect(screen.getByText("Live tail off")).toBeInTheDocument();
+
+      const pairs = measurePane(container, theme);
+      expect(pairs.some((pair) => pair.what.startsWith("ring "))).toBe(true);
+      expect(pairs.some((pair) => pair.what === 'text "No channels match filter"')).toBe(true);
+      const failures = pairs.filter((pair) => pair.ratio < pair.minimum);
+      expect(
+        failures.map((pair) => `${pair.what}: ${pair.ratio.toFixed(2)}:1 (needs ${pair.minimum})`),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
+    "meets the same floors for text-log rows, selected and not, in %s",
+    (_id, theme) => {
+      const member = (name: string, at: number) => ({
+        ...evtxRecord(name, at),
+        originKind: "log" as const,
+      });
+      resetPane({
+        sourceMode: "files",
+        timeWindow: "all",
+        channels: [
+          { name: "bundle.zip::a.log", eventCount: 1, sourceType: { file: { path: "bundle.zip" } } },
+          { name: "bundle.zip::b.log", eventCount: 1, sourceType: { file: { path: "bundle.zip" } } },
+        ],
+        selectedChannels: new Set(["bundle.zip::a.log"]),
+        records: [member("bundle.zip::a.log", NOW - HOUR), member("bundle.zip::b.log", NOW - HOUR)],
+      });
+      useUiStore.setState({ themeId: theme.id });
+      const { container } = render(<ChannelPicker />);
+      expect(container.querySelectorAll("[data-text-log-row]")).toHaveLength(2);
+
+      const pairs = measurePane(container, theme);
+      expect(pairs.some((pair) => pair.what === 'text "a.log"')).toBe(true);
+      expect(pairs.some((pair) => pair.what === 'text "1 entry"')).toBe(true);
       const failures = pairs.filter((pair) => pair.ratio < pair.minimum);
       expect(
         failures.map((pair) => `${pair.what}: ${pair.ratio.toFixed(2)}:1 (needs ${pair.minimum})`),
