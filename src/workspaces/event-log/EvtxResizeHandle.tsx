@@ -9,7 +9,14 @@
  * It is a focusable `separator` so a keyboard-only operator can resize too. `direction` states
  * which way the pointer must move to GROW the region, and both drag and arrow keys follow it.
  */
-import { useEffect, useRef, type CSSProperties, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent,
+} from "react";
 import { makeStyles, tokens } from "@fluentui/react-components";
 
 const useStyles = makeStyles({
@@ -18,9 +25,14 @@ const useStyles = makeStyles({
     zIndex: 2,
     backgroundColor: "transparent",
     ":hover": { backgroundColor: tokens.colorNeutralStroke1 },
+    // A real outline (kept in forced-colors mode, where background fills are dropped), drawn
+    // inside the strip, plus the fill for normal themes.
     ":focus-visible": {
       backgroundColor: tokens.colorStrokeFocus2,
-      outlineStyle: "none",
+      outlineStyle: "solid",
+      outlineWidth: "2px",
+      outlineColor: tokens.colorStrokeFocus2,
+      outlineOffset: "-2px",
     },
   },
 });
@@ -61,31 +73,37 @@ export function EvtxResizeHandle({
   const styles = useStyles();
   const dragRef = useRef<{ start: number; startValue: number } | null>(null);
   const horizontal = orientation === "horizontal";
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
 
+  const release = useCallback(() => {
+    if (dragRef.current) {
+      dragRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+  }, []);
+
+  // A drag can also end without a pointerup reaching the handle (window blur, the window losing
+  // focus mid-drag), so release there too, and on unmount.
   useEffect(() => {
-    const release = () => {
-      if (dragRef.current) {
-        dragRef.current = null;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-      }
-    };
-    const onMove = (event: MouseEvent) => {
-      const drag = dragRef.current;
-      if (!drag) return;
-      const position = horizontal ? event.clientY : event.clientX;
-      onChangeRef.current(drag.startValue + (position - drag.start) * direction);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", release);
+    window.addEventListener("blur", release);
     return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", release);
+      window.removeEventListener("blur", release);
       release();
     };
-  }, [horizontal, direction]);
+  }, [release]);
+
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    // The button was released outside the page or the capture was lost: stop rather than follow
+    // a pointer that is no longer dragging.
+    if (event.buttons === 0) {
+      release();
+      return;
+    }
+    const position = horizontal ? event.clientY : event.clientX;
+    onChange(drag.startValue + (position - drag.start) * direction);
+  };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // The key's pointer-axis sign: right and down move toward the end of the axis.
@@ -127,8 +145,11 @@ export function EvtxResizeHandle({
       aria-valuemax={max}
       tabIndex={0}
       onKeyDown={onKeyDown}
-      onMouseDown={(event) => {
+      onPointerDown={(event) => {
+        // Primary button only: a right-click opens the context menu and must not arm a drag.
+        if (event.button !== 0 || !event.isPrimary) return;
         event.preventDefault();
+        event.currentTarget.setPointerCapture?.(event.pointerId);
         dragRef.current = {
           start: horizontal ? event.clientY : event.clientX,
           startValue: value,
@@ -136,6 +157,10 @@ export function EvtxResizeHandle({
         document.body.style.cursor = horizontal ? "row-resize" : "col-resize";
         document.body.style.userSelect = "none";
       }}
+      onPointerMove={onPointerMove}
+      onPointerUp={release}
+      onPointerCancel={release}
+      onLostPointerCapture={release}
       style={position}
     />
   );
