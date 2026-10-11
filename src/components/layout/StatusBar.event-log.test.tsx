@@ -22,6 +22,12 @@ import {
   type EvtxViewId,
 } from "../../workspaces/event-log/evtx-layout-store";
 import { useEvtxStore } from "../../workspaces/event-log/evtx-store";
+import {
+  summarizeEvtxCorrelationStatus,
+  summarizeVisibleRecords,
+  useEvtxCorrelationStatusStore,
+  useEvtxVisibleSummaryStore,
+} from "../../workspaces/event-log/evtx-status-summary";
 import type {
   EvtxChannelInfo,
   EvtxLevel,
@@ -37,11 +43,8 @@ import {
   StatusBar,
   buildEvtxCorrelationSegments,
   buildEvtxCountsSegments,
-  countProblemLevels,
   countTextLogFiles,
   evtxStatusText,
-  summarizeEvtxCorrelationStatus,
-  useEvtxCorrelationStatusStore,
 } from "./StatusBar";
 
 let nextRecordId = 0;
@@ -100,6 +103,21 @@ function resetStores() {
   useEvtxLayoutStore.setState(sanitizeLayout(undefined));
   useLogStore.getState().clear();
   useEvtxCorrelationStatusStore.setState({ status: null });
+  useEvtxVisibleSummaryStore.setState({ summary: null });
+}
+
+/**
+ * What EventLogWorkspace publishes for the source on screen: `visible` is the grid's rows, and
+ * `loaded` defaults to the same (nothing filtered out).
+ */
+function publishRows(visible: EvtxRecord[], loaded = visible.length) {
+  act(() =>
+    useEvtxVisibleSummaryStore
+      .getState()
+      .publish(
+        summarizeVisibleRecords(visible, loaded, useEvtxStore.getState().loadGeneration),
+      ),
+  );
 }
 
 function setLayoutView(view: EvtxViewId) {
@@ -152,16 +170,18 @@ describe("StatusBar Event Logs content", () => {
 
   describe("left segment", () => {
     it("reads Live, channels, text logs, events, errors and warnings for a live source", () => {
+      const records = [
+        record("Error"),
+        record("Error"),
+        record("Warning"),
+        record("Information"),
+      ];
       useEvtxStore.setState({
         sourceMode: "live",
         loadedChannels: new Set(["Application", "System"]),
-        records: [
-          record("Error"),
-          record("Error"),
-          record("Warning"),
-          record("Information"),
-        ],
+        records,
       });
+      publishRows(records);
       useLogStore.setState({
         entries: [
           logEntry(1, "C:\\Logs\\IntuneManagementExtension.log"),
@@ -189,6 +209,7 @@ describe("StatusBar Event Logs content", () => {
         loadedChannels: new Set(),
         records: [record("Warning", "System"), record("Information", "Setup")],
       });
+      publishRows(useEvtxStore.getState().records);
       render(<StatusBar />);
 
       expect(left()).toHaveTextContent(
@@ -197,11 +218,13 @@ describe("StatusBar Event Logs content", () => {
     });
 
     it("uses singular nouns for a count of one", () => {
+      const records = [record("Error")];
       useEvtxStore.setState({
         sourceMode: "live",
         loadedChannels: new Set(["System"]),
-        records: [record("Error")],
+        records,
       });
+      publishRows(records);
       useLogStore.setState({
         entries: [logEntry(1, "C:\\Logs\\only.log")],
         sourceOpenMode: "merged",
@@ -214,22 +237,26 @@ describe("StatusBar Event Logs content", () => {
     });
 
     it("counts a Critical event as an error", () => {
+      const records = [record("Critical"), record("Error"), record("Verbose")];
       useEvtxStore.setState({
         sourceMode: "live",
         loadedChannels: new Set(["System"]),
-        records: [record("Critical"), record("Error"), record("Verbose")],
+        records,
       });
+      publishRows(records);
       render(<StatusBar />);
 
       expect(left()).toHaveTextContent(/3 events · 2 errors · 0 warnings/);
     });
 
     it("scopes text logs to the active source the way the workspace does", () => {
+      const records = [record("Information")];
       useEvtxStore.setState({
         sourceMode: "live",
         loadedChannels: new Set(["System"]),
-        records: [record("Information")],
+        records,
       });
+      publishRows(records);
       useLogStore.setState({
         entries: [
           logEntry(1, "C:\\Logs\\Intune\\a.log"),
@@ -245,11 +272,13 @@ describe("StatusBar Event Logs content", () => {
     });
 
     it("draws every count in the numeric font with tabular figures", () => {
+      const records = [record("Error"), record("Warning")];
       useEvtxStore.setState({
         sourceMode: "live",
         loadedChannels: new Set(["System"]),
-        records: [record("Error"), record("Warning")],
+        records,
       });
+      publishRows(records);
       render(<StatusBar />);
 
       const spans = Array.from(left().querySelectorAll("span"));
@@ -266,86 +295,121 @@ describe("StatusBar Event Logs content", () => {
       }
     });
 
-    it("recounts when records are appended", () => {
+    it("shows the grid's rows and says how many events are loaded behind them", () => {
+      const loaded = [
+        record("Error"),
+        record("Error"),
+        record("Warning"),
+        record("Information"),
+        record("Information"),
+      ];
+      useEvtxStore.setState({
+        sourceMode: "live",
+        loadedChannels: new Set(["System"]),
+        records: loaded,
+      });
+      // A filter narrows the grid to the two Error rows: the chip row reads "Showing 2 of 5".
+      publishRows(loaded.slice(0, 2), loaded.length);
+      render(<StatusBar />);
+
+      expect(left()).toHaveTextContent(/2 events · 2 errors · 0 warnings$/);
+      expect(left()).toHaveAttribute(
+        "title",
+        "Live · 1 channel · 0 text logs · 2 events · 2 errors · 0 warnings (5 loaded)",
+      );
+    });
+
+    it("adds no loaded note when the grid shows every loaded event", () => {
+      const loaded = [record("Error"), record("Warning")];
+      useEvtxStore.setState({
+        sourceMode: "live",
+        loadedChannels: new Set(["System"]),
+        records: loaded,
+      });
+      publishRows(loaded);
+      render(<StatusBar />);
+
+      expect(left().getAttribute("title")).not.toMatch(/loaded/);
+    });
+
+    it("reads the published rows and does not recount the loaded records", () => {
+      useEvtxStore.setState({
+        sourceMode: "live",
+        loadedChannels: new Set(["System"]),
+        records: [record("Error"), record("Error"), record("Error")],
+      });
+      publishRows([record("Warning")], 3);
+      render(<StatusBar />);
+
+      expect(left()).toHaveTextContent(/1 event · 0 errors · 1 warning/);
+    });
+
+    it("follows the workspace as it republishes", () => {
+      const first = [record("Error")];
+      useEvtxStore.setState({
+        sourceMode: "live",
+        loadedChannels: new Set(["System"]),
+        records: first,
+      });
+      publishRows(first);
+      render(<StatusBar />);
+      expect(left()).toHaveTextContent(/1 event · 1 error · 0 warnings/);
+
+      const more = [...first, record("Warning"), record("Warning")];
+      act(() => useEvtxStore.setState({ records: more }));
+      publishRows(more);
+      expect(left()).toHaveTextContent(/3 events · 1 error · 2 warnings/);
+    });
+
+    it("leaves the event counts out, not at zero, until a summary is published", () => {
       useEvtxStore.setState({
         sourceMode: "live",
         loadedChannels: new Set(["System"]),
         records: [record("Error")],
       });
       render(<StatusBar />);
-      expect(left()).toHaveTextContent(/1 event · 1 error · 0 warnings/);
 
-      act(() =>
-        useEvtxStore.setState((state) => ({
-          records: [...state.records, record("Warning"), record("Warning")],
-        })),
-      );
-      expect(left()).toHaveTextContent(/3 events · 1 error · 2 warnings/);
+      expect(left()).toHaveTextContent(/^Live · 1 channel · 0 text logs$/);
+      expect(left()).not.toHaveTextContent(/event|error|warning/);
     });
-  });
 
-  describe("coverage", () => {
-    function loadWithNoErrors() {
+    it("never shows a summary published for another source", () => {
+      const records = [record("Error")];
+      useEvtxStore.setState({
+        sourceMode: "live",
+        loadedChannels: new Set(["System"]),
+        records,
+      });
+      publishRows(records);
+      render(<StatusBar />);
+      expect(left()).toHaveTextContent(/1 event · 1 error/);
+
+      // A new load, refresh, source change or reset bumps the generation. Until the workspace
+      // publishes for the new one, the old counts must not stand in for it.
+      act(() =>
+        useEvtxStore.setState((state) => ({ loadGeneration: state.loadGeneration + 1 })),
+      );
+      expect(left()).toHaveTextContent(/^Live · 1 channel · 0 text logs$/);
+
+      publishRows(records);
+      expect(left()).toHaveTextContent(/1 event · 1 error/);
+    });
+
+    it("adds nothing for coverage gaps: the coverage banner discloses them (spec 2.2)", () => {
+      const records = [record("Information")];
       useEvtxStore.setState({
         sourceMode: "live",
         loadedChannels: new Set(["Application"]),
-        records: [record("Information")],
+        records,
+        coverageGaps: ["Security: access denied"],
+        tailCoverageGaps: ["System: live tail batch 3 was not received"],
       });
-    }
-
-    it("shows no marker when nothing is missing", () => {
-      loadWithNoErrors();
+      publishRows(records);
       render(<StatusBar />);
 
-      expect(left()).not.toHaveTextContent(/coverage/);
-    });
-
-    it.each([
-      ["a legacy gap message", { coverageGaps: ["Security: access denied"] }],
-      [
-        "a structured gap",
-        {
-          coverageDetails: [
-            { source: "Security", kind: "accessDenied" as const, reason: "access denied" },
-          ],
-        },
-      ],
-      ["a live tail gap", { tailCoverageGaps: ["System: live tail batch 3 was not received"] }],
-    ])("says the coverage is incomplete beside the counts for %s", (_name, gaps) => {
-      loadWithNoErrors();
-      useEvtxStore.setState(gaps);
-      render(<StatusBar />);
-
-      // A zero next to a gap is not evidence that nothing failed (soul.md rule 4).
-      expect(left()).toHaveTextContent(
-        "Live · 1 channel · 0 text logs · 1 event · 0 errors · 0 warnings · coverage incomplete",
+      expect(left().textContent).toBe(
+        "Live · 1 channel · 0 text logs · 1 event · 0 errors · 0 warnings",
       );
-    });
-
-    it("says it in the Correlation variant too", () => {
-      loadWithNoErrors();
-      useEvtxStore.setState({ coverageGaps: ["Security: access denied"] });
-      setLayoutView("correlation");
-      act(() =>
-        useEvtxCorrelationStatusStore
-          .getState()
-          .publish({ exact: 0, candidate: 0, ambiguous: 0, unplaced: 0 }),
-      );
-      render(<StatusBar />);
-
-      expect(left()).toHaveTextContent(
-        "Correlation · 0 chains · 0 exact, 0 candidate, 0 ambiguous · 0 not placed · coverage incomplete",
-      );
-    });
-
-    it("drops the marker when the gaps clear", () => {
-      loadWithNoErrors();
-      useEvtxStore.setState({ coverageGaps: ["Security: access denied"] });
-      render(<StatusBar />);
-      expect(left()).toHaveTextContent(/coverage incomplete/);
-
-      act(() => useEvtxStore.setState({ coverageGaps: [] }));
-      expect(left()).not.toHaveTextContent(/coverage/);
     });
   });
 
@@ -510,6 +574,17 @@ describe("StatusBar Event Logs content", () => {
       };
     }
 
+    function publishCorrelation(
+      counts = { exact: 1, candidate: 0, ambiguous: 0, unplaced: 0 },
+    ) {
+      act(() =>
+        useEvtxCorrelationStatusStore.getState().publish({
+          generation: useEvtxStore.getState().loadGeneration,
+          ...counts,
+        }),
+      );
+    }
+
     function loadLive() {
       useEvtxStore.setState({
         sourceMode: "live",
@@ -537,8 +612,15 @@ describe("StatusBar Event Logs content", () => {
         coverageBlocked: 1,
       });
 
-      const status = summarizeEvtxCorrelationStatus(model, 4);
-      expect(status).toEqual({ exact: 1, candidate: 1, ambiguous: 1, unplaced: 4 });
+      const generation = useEvtxStore.getState().loadGeneration;
+      const status = summarizeEvtxCorrelationStatus(model, 4, generation);
+      expect(status).toEqual({
+        generation,
+        exact: 1,
+        candidate: 1,
+        ambiguous: 1,
+        unplaced: 4,
+      });
       act(() => useEvtxCorrelationStatusStore.getState().publish(status));
       render(<StatusBar />);
 
@@ -553,6 +635,7 @@ describe("StatusBar Event Logs content", () => {
       expect(
         evtxStatusText(
           buildEvtxCorrelationSegments({
+            generation: 0,
             exact: 3,
             candidate: 2,
             ambiguous: 7,
@@ -565,6 +648,7 @@ describe("StatusBar Event Logs content", () => {
       expect(
         evtxStatusText(
           buildEvtxCorrelationSegments({
+            generation: 0,
             exact: 1,
             candidate: 0,
             ambiguous: 0,
@@ -586,11 +670,7 @@ describe("StatusBar Event Logs content", () => {
     it("returns to the standard segment when the published counts are cleared", () => {
       loadLive();
       setLayoutView("correlation");
-      act(() =>
-        useEvtxCorrelationStatusStore
-          .getState()
-          .publish({ exact: 1, candidate: 0, ambiguous: 0, unplaced: 0 }),
-      );
+      publishCorrelation();
       render(<StatusBar />);
       expect(left()).toHaveTextContent(/^Correlation · 1 chain/);
 
@@ -600,11 +680,7 @@ describe("StatusBar Event Logs content", () => {
 
     it("keeps the standard segment in every other view even when counts are published", () => {
       loadLive();
-      act(() =>
-        useEvtxCorrelationStatusStore
-          .getState()
-          .publish({ exact: 1, candidate: 0, ambiguous: 0, unplaced: 0 }),
-      );
+      publishCorrelation();
       render(<StatusBar />);
 
       for (const view of ["table", "grouped", "timeline", "charts"] as const) {
@@ -613,47 +689,23 @@ describe("StatusBar Event Logs content", () => {
       }
     });
 
-    it("yields no counts from a bounded edge preview, whose totals it cannot back", () => {
-      const edges = [pair("one", "exact")];
-      const incomplete = buildCorrelationChains({
-        items: [],
-        timelineEdges: edges,
-        // The session holds more edges than the preview carried.
-        totalTimelineEdges: 250,
-        findings: [],
-      });
+    it("never shows counts published for another source", () => {
+      loadLive();
+      setLayoutView("correlation");
+      publishCorrelation();
+      render(<StatusBar />);
+      expect(left()).toHaveTextContent(/^Correlation · 1 chain/);
 
-      expect(incomplete.edgeInputComplete).toBe(false);
-      expect(summarizeEvtxCorrelationStatus(incomplete, 0)).toBeNull();
-    });
-
-    it("yields no counts for an invalid unplaced total", () => {
-      const complete = chainModel();
-      expect(summarizeEvtxCorrelationStatus(complete, 3)).not.toBeNull();
-      expect(summarizeEvtxCorrelationStatus(complete, -1)).toBeNull();
-      expect(summarizeEvtxCorrelationStatus(complete, Number.NaN)).toBeNull();
-      expect(summarizeEvtxCorrelationStatus(complete, 1.5)).toBeNull();
+      act(() =>
+        useEvtxStore.setState((state) => ({ loadGeneration: state.loadGeneration + 1 })),
+      );
+      expect(left()).toHaveTextContent(/^Live · 1 channel · /);
+      expect(left()).not.toHaveTextContent(/chain/);
     });
   });
 });
 
 describe("Event Logs status helpers", () => {
-  it("counts Critical and Error as errors, Warning as warnings, and ignores the rest", () => {
-    const levels: EvtxLevel[] = [
-      "Critical",
-      "Error",
-      "Warning",
-      "Information",
-      "Verbose",
-      "Error",
-    ];
-    expect(countProblemLevels(levels.map((level) => ({ level })))).toEqual({
-      errors: 3,
-      warnings: 1,
-    });
-    expect(countProblemLevels([])).toEqual({ errors: 0, warnings: 0 });
-  });
-
   it("counts distinct log files, not lines", () => {
     expect(
       countTextLogFiles([
@@ -672,13 +724,24 @@ describe("Event Logs status helpers", () => {
           sourceMode: "files",
           channels: 12,
           textLogs: 3,
-          events: 12345,
-          errors: 10,
-          warnings: 2,
+          rows: { visible: 12345, errors: 10, warnings: 2 },
         }),
       ),
     ).toBe(
       `Files · 12 channels · 3 text logs · ${(12345).toLocaleString()} events · 10 errors · 2 warnings`,
     );
+  });
+
+  it("leaves the event counts out when no rows are published", () => {
+    expect(
+      evtxStatusText(
+        buildEvtxCountsSegments({
+          sourceMode: "live",
+          channels: 2,
+          textLogs: 0,
+          rows: null,
+        }),
+      ),
+    ).toBe("Live · 2 channels · 0 text logs");
   });
 });

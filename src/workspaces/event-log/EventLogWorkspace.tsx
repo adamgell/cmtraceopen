@@ -44,6 +44,11 @@ import {
 import { selectVisibleRecords } from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
+import {
+  summarizeVisibleRecords,
+  useEvtxCorrelationStatusStore,
+  useEvtxVisibleSummaryStore,
+} from "./evtx-status-summary";
 import type {
   DiagnosisSummary,
   EvtxCoverageGap,
@@ -226,6 +231,29 @@ export function EventLogWorkspace() {
     ],
   );
   const analysisRecords = useStableRecordMembership(visibleRecords);
+
+  // The global status bar shows the grid's own counts (spec 8.14), so the workspace publishes a
+  // summary of `visibleRecords` above instead of the bar running a second pass. The summary is
+  // keyed by the store's load generation, which every new load, refresh, source change and reset
+  // bumps, so the bar never shows it against another source. It is cleared while a query runs
+  // (`visibleRecords` is empty then, and "0 events" must not read as a result) and on unmount.
+  const loadGeneration = useEvtxStore((s) => s.loadGeneration);
+  useEffect(() => {
+    useEvtxVisibleSummaryStore
+      .getState()
+      .publish(
+        isLoading
+          ? null
+          : summarizeVisibleRecords(visibleRecords, records.length, loadGeneration),
+      );
+  }, [isLoading, visibleRecords, records.length, loadGeneration]);
+  useEffect(
+    () => () => {
+      useEvtxVisibleSummaryStore.getState().publish(null);
+      useEvtxCorrelationStatusStore.getState().publish(null);
+    },
+    [],
+  );
   const channels = useEvtxStore((s) => s.channels);
   const coverageGaps = useEvtxStore((s) => s.coverageGaps);
   const coverageDetails = useEvtxStore((s) => s.coverageDetails);
@@ -352,6 +380,9 @@ export function EventLogWorkspace() {
     setAnalysisStatus(null);
     setInitialTimelinePage(null);
     setTimelineError(null);
+    // Chain counts come from the analysis session just discarded. Phase 10 publishes the next
+    // ones through evtx-status-summary once it has built the chain model.
+    useEvtxCorrelationStatusStore.getState().publish(null);
 
     if (isLoading) {
       setTimelinePending(true);

@@ -13,7 +13,6 @@ import {
   ErrorCircle12Regular,
   Warning12Regular,
 } from "@fluentui/react-icons";
-import { create } from "zustand";
 import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { getBaseName } from "../../lib/file-paths";
 import {
@@ -38,7 +37,6 @@ import { useIntuneStore } from "../../workspaces/intune/intune-store";
 import { useDsregcmdStore } from "../../workspaces/dsregcmd/dsregcmd-store";
 import { useDeploymentStore } from "../../workspaces/deployment/deployment-store";
 import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
-import type { CorrelationChainModel } from "../../workspaces/event-log/evtx-correlation-chains";
 import {
   EVTX_VIEW_LABELS,
   useEvtxLayoutStore,
@@ -52,7 +50,13 @@ import {
   timeZoneLabel,
   type EvtxTimeZoneMode,
 } from "../../workspaces/event-log/evtx-time";
-import type { EvtxRecord } from "../../workspaces/event-log/types";
+import {
+  useEvtxCorrelationStatusStore,
+  useEvtxVisibleSummaryStore,
+  valueForGeneration,
+  type EvtxCorrelationStatus,
+  type EvtxVisibleSummary,
+} from "../../workspaces/event-log/evtx-status-summary";
 import { scopeLogEntries } from "../../workspaces/event-log/unified-timeline";
 import { useSecureBootStore } from "../../workspaces/secureboot/secureboot-store";
 import { getWorkspace } from "../../workspaces/registry";
@@ -151,28 +155,6 @@ function countRuns(count: number, singular: string, plural = `${singular}s`) {
   ] satisfies EvtxStatusSegment;
 }
 
-export interface EvtxProblemCounts {
-  errors: number;
-  warnings: number;
-}
-
-/**
- * Errors and warnings among the loaded records. Critical counts as an error: the grid draws both
- * on the same error row tint (spec D3), so a Critical row that is missing from "errors" would be
- * a red row the count does not account for. Verbose and Information are not problems.
- */
-export function countProblemLevels(
-  records: readonly Pick<EvtxRecord, "level">[],
-): EvtxProblemCounts {
-  let errors = 0;
-  let warnings = 0;
-  for (const record of records) {
-    if (record.level === "Error" || record.level === "Critical") errors += 1;
-    else if (record.level === "Warning") warnings += 1;
-  }
-  return { errors, warnings };
-}
-
 /** Distinct source files among the text-log entries the workspace correlates. */
 export function countTextLogFiles(
   entries: readonly { filePath: string }[],
@@ -184,20 +166,13 @@ export interface EvtxStatusCounts {
   sourceMode: Exclude<EvtxSourceMode, null>;
   channels: number;
   textLogs: number;
-  events: number;
-  errors: number;
-  warnings: number;
+  /**
+   * The workspace's visible-row summary, or null while it is not published for this source (the
+   * workspace is still mounting, or a query has just finished). The three event counts are then
+   * left out rather than shown as zero or recounted here.
+   */
+  rows: Pick<EvtxVisibleSummary, "visible" | "errors" | "warnings"> | null;
 }
-
-/**
- * Appended when the loaded events have coverage gaps (a denied channel, a cancelled or bounded
- * read, a skipped source). The counts then describe what loaded, not the machine: "0 errors"
- * beside a gap is not evidence that nothing failed, so the bar says the coverage is incomplete
- * instead of letting the number stand alone. The gap detail stays in the coverage banner.
- */
-const EVTX_COVERAGE_INCOMPLETE_SEGMENT: EvtxStatusSegment = [
-  { text: "coverage incomplete" },
-];
 
 /** "{Live|Files} · {c} channels · {l} text logs · {n} events · {e} errors · {w} warnings". */
 export function buildEvtxCountsSegments(
@@ -207,49 +182,14 @@ export function buildEvtxCountsSegments(
     [{ text: counts.sourceMode === "live" ? "Live" : "Files" }],
     countRuns(counts.channels, "channel"),
     countRuns(counts.textLogs, "text log"),
-    countRuns(counts.events, "event"),
-    countRuns(counts.errors, "error"),
-    countRuns(counts.warnings, "warning"),
+    ...(counts.rows === null
+      ? []
+      : [
+          countRuns(counts.rows.visible, "event"),
+          countRuns(counts.rows.errors, "error"),
+          countRuns(counts.rows.warnings, "warning"),
+        ]),
   ];
-}
-
-/**
- * What the Correlation view variant of the left segment needs (spec 8.14). `exact` and
- * `candidate` are the chain counts; ambiguous and coverage-blocked rows are not chains (Q-4) and
- * `timestampOnly` / `notCausal` relations are never counted at all (D7).
- */
-export interface EvtxCorrelationStatus {
-  exact: number;
-  candidate: number;
-  ambiguous: number;
-  /** Items the analysis session could not place: the session total, not the capped preview. */
-  unplaced: number;
-}
-
-/**
- * Reduces the chain model to the status counts, or null when they would not be totals.
- *
- * `model.counts` is taken before the 100-row render cap. It is only the session's total when
- * every edge was loaded (`edgeInputComplete`): a bounded edge preview can miss chains, and a
- * missed ambiguous or coverage-blocked edge would also have vetoed a link that is counted. No
- * bound on either direction holds, so an incomplete model yields no counts rather than a
- * number that reads as a total.
- *
- * `totalUnplaced` is `EventLogAnalysisSessionStatus.totalUnplaced`, not the length of
- * `unplacedPreview`, which is capped.
- */
-export function summarizeEvtxCorrelationStatus(
-  model: Pick<CorrelationChainModel, "counts" | "edgeInputComplete">,
-  totalUnplaced: number,
-): EvtxCorrelationStatus | null {
-  if (!model.edgeInputComplete) return null;
-  if (!Number.isSafeInteger(totalUnplaced) || totalUnplaced < 0) return null;
-  return {
-    exact: model.counts.exact,
-    candidate: model.counts.candidate,
-    ambiguous: model.counts.ambiguous,
-    unplaced: totalUnplaced,
-  };
 }
 
 /** "Correlation · {n} chains · {e} exact, {c} candidate, {a} ambiguous · {u} not placed". */
@@ -274,24 +214,6 @@ export function buildEvtxCorrelationSegments(
     ],
   ];
 }
-
-/**
- * The Correlation variant's counts, published by whatever builds the chain model from the
- * analysis session (Phase 10). Until it publishes, or while the model is incomplete or being
- * rebuilt, the status bar keeps the standard segment instead of showing counts it cannot back.
- * The publisher clears it when the analysis session is rebuilt.
- */
-interface EvtxCorrelationStatusState {
-  status: EvtxCorrelationStatus | null;
-  publish: (status: EvtxCorrelationStatus | null) => void;
-}
-
-export const useEvtxCorrelationStatusStore = create<EvtxCorrelationStatusState>()(
-  (set) => ({
-    status: null,
-    publish: (status) => set({ status }),
-  }),
-);
 
 /** `HH:MM:SS` plus the zone label, in the clock the grid shows event times in. */
 export function formatEvtxUpdatedTime(
@@ -415,10 +337,11 @@ export function StatusBar() {
   const evtxIsLoading = useEvtxStore((s) => s.isLoading);
   const evtxLoadedChannelCount = useEvtxStore((s) => s.loadedChannels.size);
   const evtxTimeZoneMode = useEvtxStore((s) => s.timeZoneMode);
-  const evtxCoverageGaps = useEvtxStore((s) => s.coverageGaps);
-  const evtxCoverageDetails = useEvtxStore((s) => s.coverageDetails);
-  const evtxTailCoverageGaps = useEvtxStore((s) => s.tailCoverageGaps);
+  const evtxLoadGeneration = useEvtxStore((s) => s.loadGeneration);
   const evtxLayoutView = useEvtxLayoutStore((s) => s.activeView);
+  // Published by EventLogWorkspace from the rows it already computed. Each carries the load
+  // generation it was computed under and is used only while that is still the current one.
+  const evtxVisibleSummary = useEvtxVisibleSummaryStore((s) => s.summary);
   const evtxCorrelationStatus = useEvtxCorrelationStatusStore((s) => s.status);
   const currentPlatform = useUiStore((s) => s.currentPlatform);
 
@@ -481,16 +404,6 @@ export function StatusBar() {
     return null;
   }, [entries, filteredIds, selectedId]);
 
-  // Counts cover the loaded records, the same total the grid and the chip row's "of {loaded}"
-  // start from. They are derived only while Event Logs is the active workspace and nothing is
-  // loading, and memoized on the records array so a tail append is one pass.
-  const evtxProblemCounts = useMemo(
-    () =>
-      activeView === "event-log" && !evtxIsLoading
-        ? countProblemLevels(evtxRecords)
-        : null,
-    [activeView, evtxIsLoading, evtxRecords],
-  );
   // The text logs Event Logs correlates are the log store's entries after the same scoping the
   // workspace applies before it builds the analysis session.
   const evtxTextLogCount = useMemo(
@@ -580,6 +493,7 @@ export function StatusBar() {
   // replace `leftParts` and `rightStatusText`.
   let leftSegments: readonly EvtxStatusSegment[] | null = null;
   let rightSegments: readonly EvtxStatusSegment[] | null = null;
+  let leftTitleNote = "";
 
   if (activeView === "log") {
     leftParts = [
@@ -796,17 +710,21 @@ export function StatusBar() {
           ? `${evtxRecords.length.toLocaleString()} events loaded...`
           : "Querying event logs...";
       rightTone = "progress";
-    } else if (evtxSourceMode === null || evtxProblemCounts === null) {
+    } else if (evtxSourceMode === null) {
       // Nothing is loaded, so there is nothing to count. Zeros here would read as a result.
       leftSegments = [[{ text: "Ready" }]];
     } else {
-      const coverageIncomplete =
-        evtxCoverageGaps.length > 0 ||
-        evtxCoverageDetails.length > 0 ||
-        evtxTailCoverageGaps.length > 0;
-      const countsSegments =
-        evtxLayoutView === "correlation" && evtxCorrelationStatus !== null
-          ? buildEvtxCorrelationSegments(evtxCorrelationStatus)
+      // The event counts are the grid's rows (spec 8.14 and the acceptance "match the chip row
+      // and the grid"). The bar does not recount: it reads what the workspace computed, and only
+      // while that was computed for the source on screen.
+      const rows = valueForGeneration(evtxVisibleSummary, evtxLoadGeneration);
+      const correlation = valueForGeneration(
+        evtxCorrelationStatus,
+        evtxLoadGeneration,
+      );
+      leftSegments =
+        evtxLayoutView === "correlation" && correlation !== null
+          ? buildEvtxCorrelationSegments(correlation)
           : buildEvtxCountsSegments({
               sourceMode: evtxSourceMode,
               // Live reads report the channels actually loaded. A file parse never fills
@@ -816,13 +734,12 @@ export function StatusBar() {
                   ? evtxLoadedChannelCount
                   : evtxChannels.length,
               textLogs: evtxTextLogCount,
-              events: evtxRecords.length,
-              errors: evtxProblemCounts.errors,
-              warnings: evtxProblemCounts.warnings,
+              rows,
             });
-      leftSegments = coverageIncomplete
-        ? [...countsSegments, EVTX_COVERAGE_INCOMPLETE_SEGMENT]
-        : countsSegments;
+      if (rows !== null && rows.visible !== rows.loaded) {
+        // The chip row's "of {loaded}", for a filter that narrows the grid.
+        leftTitleNote = ` (${rows.loaded.toLocaleString()} loaded)`;
+      }
       rightSegments = [
         [{ text: `${EVTX_VIEW_LABELS[evtxLayoutView]} view` }],
         ...(evtxUpdatedAt === null
@@ -996,7 +913,7 @@ export function StatusBar() {
             </Badge>
             <span
               data-testid="status-bar-left"
-              title={leftStatusText}
+              title={`${leftStatusText}${leftTitleNote}`}
               style={{
                 minWidth: 0,
                 overflow: "hidden",
