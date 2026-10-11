@@ -561,7 +561,10 @@ export function EventLogWorkspace() {
       {isLoading && <ProgressBar style={{ width: "100%", flexShrink: 0 }} />}
       <EvtxViewBar nowEpoch={nowEpoch} />
       <EvtxFilterBar nowEpoch={nowEpoch} />
-      <EvtxCoverageBanner />
+      {/* The gap list moved into the rail (the coverage note and the coverage disclosure). This
+          draws it here only while the rail cannot show it: the rail is hidden, or the diagnosis
+          that feeds the disclosure failed. */}
+      <EvtxCoverageBanner diagnosisFailed={diagnosisError !== null} />
 
       {timelineError && (
         <div
