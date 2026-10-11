@@ -37,6 +37,7 @@ import {
 } from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
 import type { EvtxRecord } from "./types";
+import type { LogEntry } from "../../types/log";
 
 const RECORD: EvtxRecord = {
   id: 1,
@@ -195,5 +196,69 @@ describe("EventLogWorkspace three-column shell", () => {
     expect(useEvtxStore.getState().filterSearch).toBe("kept");
     expect(screen.getByTestId("records-table")).toBe(table);
     expect(table).toBeVisible();
+  });
+});
+
+describe("EventLogWorkspace Charts view wiring", () => {
+  const fresh = { ...RECORD, timestampEpoch: Date.now(), timestamp: new Date().toISOString() };
+
+  beforeEach(() => {
+    localStorage.clear();
+    useEvtxLayoutStore.setState({ ...sanitizeLayout(undefined), activeView: "charts" });
+    useEvtxStore.getState().reset();
+    useEvtxStore.setState({
+      records: [fresh],
+      channels: [
+        { name: "Application", eventCount: 1, sourceType: "live" },
+        { name: "System", eventCount: 0, sourceType: "live" },
+        { name: "Setup", eventCount: 0, sourceType: "live" },
+      ],
+      selectedChannels: new Set(["Application"]),
+      loadedChannels: new Set(["Application"]),
+      isLoading: false,
+      sourceMode: "files",
+      timeWindow: "all",
+    });
+    useLogStore.setState({ entries: [], activeSource: null, sourceOpenMode: "merged" });
+  });
+
+  afterEach(cleanup);
+
+  const eventsTile = async () => {
+    render(<EventLogWorkspace />);
+    await screen.findByTestId("evtx-charts-view", {}, { timeout: 10_000 });
+    return document.querySelector<HTMLElement>('[data-kpi="events"]')!;
+  };
+
+  const logLine = (filePath: string) => ({ filePath }) as unknown as LogEntry;
+
+  it("counts the parse result's channels in files mode, and the window as all loaded", async () => {
+    const tile = await eventsTile();
+    expect(tile).toHaveTextContent("Events (all loaded)");
+    expect(tile).toHaveTextContent("3 channels · 0 text logs");
+  });
+
+  it("counts completed loads (not enumerated channels) in live mode", async () => {
+    useEvtxStore.setState({ sourceMode: "live", timeWindow: "7d" });
+    const tile = await eventsTile();
+    expect(tile).toHaveTextContent("Events (7 d)");
+    expect(tile).toHaveTextContent("1 channel · 0 text logs");
+  });
+
+  it("counts text-log sources, not lines", async () => {
+    useLogStore.setState({
+      entries: [logLine("C:/logs/a.log"), logLine("C:/logs/a.log"), logLine("C:/logs/a.log")],
+    });
+    expect(await eventsTile()).toHaveTextContent("3 channels · 1 text log");
+  });
+
+  it("counts two text-log sources as text logs", async () => {
+    useLogStore.setState({ entries: [logLine("C:/logs/a.log"), logLine("C:/logs/b.log")] });
+    expect(await eventsTile()).toHaveTextContent("3 channels · 2 text logs");
+  });
+
+  it("shows n/a for the chains tile until a timeline page exists", async () => {
+    await eventsTile();
+    expect(screen.getByTestId("kpi-value-chains").textContent).toBe("n/a");
   });
 });

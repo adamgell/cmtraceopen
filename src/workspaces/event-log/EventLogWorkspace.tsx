@@ -46,6 +46,12 @@ import { selectVisibleRecords } from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
 import { buildCorrelationChains } from "./evtx-correlation-chains";
+import {
+  chartWindowLabel,
+  countTextLogSources,
+  loadedChannelCountFor,
+} from "./evtx-chart-data";
+import { orderChannelNames } from "./evtx-channel-order";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 import type {
   DiagnosisSummary,
@@ -545,7 +551,16 @@ export function EventLogWorkspace() {
   const visualTokens = useEvtxVisualTokens();
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const chartMetrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
-  const chartChannelOrder = useMemo(() => channels.map((c) => c.name), [channels]);
+  const chartChannelOrder = useMemo(
+    () => orderChannelNames(channels.map((c) => c.name)),
+    [channels],
+  );
+  const loadedChannels = useEvtxStore((s) => s.loadedChannels);
+  const chartLoadedChannelCount = loadedChannelCountFor({ sourceMode, loadedChannels, channels });
+  const chartTextLogCount = useMemo(
+    () => countTextLogSources(scopedLogEntries, visibleRecords),
+    [scopedLogEntries, visibleRecords],
+  );
   const chartHideRules = useMemo(() => [quickFilter], [quickFilter]);
   // Phase 10c replaces this with the shared chain model. Until then the Charts chains KPI builds
   // its own from the first timeline page and its bounded edge preview, only while Charts is
@@ -569,8 +584,9 @@ export function EventLogWorkspace() {
       hideRules={chartHideRules}
       channelOrder={chartChannelOrder}
       timeZoneMode={timeZoneMode}
-      loadedChannelCount={channels.length}
-      textLogCount={analysisStatus?.logItems ?? 0}
+      loadedChannelCount={chartLoadedChannelCount}
+      textLogCount={chartTextLogCount}
+      windowLabel={chartWindowLabel(timeWindow)}
       metrics={chartMetrics}
       visualTokens={visualTokens}
     />
