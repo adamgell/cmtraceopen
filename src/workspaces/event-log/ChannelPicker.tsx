@@ -110,7 +110,7 @@ function getSortedChildren(node: TreeNode): TreeNode[] {
 
 const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH = 500;
-const DEFAULT_SIDEBAR_WIDTH = 300;
+const DEFAULT_SIDEBAR_WIDTH = 250;
 
 // ── Component ───────────────────────────────────────────────────────────────
 

@@ -30,6 +30,7 @@ vi.mock("./evtx-filter", async (importOriginal) => {
 vi.mock("./SourcePicker", () => ({ SourcePicker: () => null }));
 vi.mock("./ChannelPicker", () => ({ ChannelPicker: () => null }));
 vi.mock("./EvtxFilterBar", () => ({ EvtxFilterBar: () => null }));
+vi.mock("./EvtxViewBar", () => ({ EvtxViewBar: () => null }));
 vi.mock("./EvtxCoverageBanner", () => ({ EvtxCoverageBanner: () => null }));
 vi.mock("./EvtxTimeline", () => ({ EvtxTimeline: () => null }));
 vi.mock("./EvtxDetailPane", () => ({ EvtxDetailPane: () => null }));
