@@ -314,6 +314,16 @@ mod engine {
     /// The predicate for one machine's ranges. With a computer it is
     /// `Computer='X' and (EventRecordID=1 or ...)`, so another machine's event that happens to
     /// carry the same EventRecordID is never selected.
+    ///
+    /// Decision (round 1 review, accepted by the maintainer): the computer is named whenever it is
+    /// known, not only when one source's visible events span several machines. A view filtered to
+    /// one machine over a log that also holds another's (ForwardedEvents) would otherwise still
+    /// select, and write unredacted, the other machine's event with the same EventRecordID; the
+    /// read-back would report it only after the write. The price is that the Computer term is a
+    /// dependency of every export. It is unverified against the service and covered by the Windows
+    /// lab tests: `Computer='X'` and `Computer="X"` inside `System[...]`, for a channel and for a
+    /// file. Under-matching shows as missing events and over-matching as unrequested ones, never
+    /// silently.
     fn unit_predicate(computer_literal: Option<&str>, ranges: &[RecordIdRange]) -> String {
         let terms: Vec<String> = ranges.iter().map(range_term).collect();
         match computer_literal {
@@ -1013,6 +1023,33 @@ mod engine {
         }
     }
 
+    /// Why requested events are not in the file, worded for what is known. A file that holds some of
+    /// them is short, and the log wrapping or being cleared explains a shortfall. A file that holds
+    /// none of them says the query selected none, because a query that names the computer can also
+    /// match nothing when that name is not the one stored in the events.
+    fn missing_warning(export: &PlannedExport, missing: &EvtxSubsetIdDifference) -> String {
+        let listed = sample_text(missing);
+        if missing.count < export.requested {
+            return format!(
+                "{} requested {} not in the file ({listed}); the log may have wrapped or been \
+                 cleared since they were loaded",
+                missing.count,
+                event_noun(missing.count)
+            );
+        }
+        let computer_cause = if export.groups.iter().any(|group| group.computer.is_some()) {
+            ", or the computer name in the query does not match the one stored in the events"
+        } else {
+            ""
+        };
+        format!(
+            "the query matched none of the {} requested {} ({listed}); the log may have wrapped or \
+             been cleared since they were loaded{computer_cause}",
+            missing.count,
+            event_noun(missing.count)
+        )
+    }
+
     fn remove_partial_output(export: &PlannedExport) -> Option<String> {
         if !path_is_taken(&export.target) {
             return None;
@@ -1135,13 +1172,9 @@ mod engine {
                 let comparison = compare_read_back(&export.groups, &actual);
                 result.exported_records = Some(comparison.exported);
                 if comparison.missing.count > 0 {
-                    result.warnings.push(format!(
-                        "{} requested {} not in the file ({}); the log may have wrapped or been \
-                         cleared since they were loaded",
-                        comparison.missing.count,
-                        event_noun(comparison.missing.count),
-                        sample_text(&comparison.missing)
-                    ));
+                    result
+                        .warnings
+                        .push(missing_warning(export, &comparison.missing));
                 }
                 if comparison.unrequested.count > 0 {
                     result.warnings.push(format!(
@@ -2133,7 +2166,6 @@ mod tests {
                     group(Some("HOST-B"), &[100]),
                     // Listed again: merged with the first, and 101 is not counted twice.
                     group(Some("HOST-A"), &[101, 102]),
-                    // Whitespace alone is no computer name.
                 ],
             )],
         )
@@ -2511,6 +2543,61 @@ mod tests {
     }
 
     #[test]
+    fn a_file_holding_none_of_the_requested_events_says_the_query_matched_none_of_them() {
+        // With a computer in the query, a mismatch on the name is a possible cause.
+        let named = exported_file(
+            &[channel_with(
+                "System",
+                vec![group(Some("HOST-A"), &[1, 2, 3])],
+            )],
+            found(&[]),
+        );
+        let warning = named.warnings.join(" | ");
+        assert!(
+            warning.contains("the query matched none of the 3 requested events"),
+            "{warning}"
+        );
+        assert!(warning.contains("wrapped or been cleared"), "{warning}");
+        assert!(
+            warning.contains("computer name in the query does not match"),
+            "{warning}"
+        );
+        assert_eq!(named.missing.as_ref().unwrap().count, 3);
+
+        // Without a computer there is no such cause to name.
+        let unnamed = exported_file(&[channel("System", &[1, 2, 3])], found(&[]));
+        let warning = unnamed.warnings.join(" | ");
+        assert!(
+            warning.contains("the query matched none of the 3"),
+            "{warning}"
+        );
+        assert!(!warning.contains("computer"), "{warning}");
+
+        // A file that holds some of them is short, which is a different account.
+        let short = exported_file(
+            &[channel_with(
+                "System",
+                vec![group(Some("HOST-A"), &[1, 2, 3])],
+            )],
+            Ok(found_on("HOST-A", &[1, 3])),
+        );
+        let warning = short.warnings.join(" | ");
+        assert!(!warning.contains("matched none"), "{warning}");
+        assert!(!warning.contains("computer name"), "{warning}");
+        assert!(warning.contains("wrapped or been cleared"), "{warning}");
+    }
+
+    #[test]
+    fn a_single_requested_event_that_is_absent_is_also_a_query_that_matched_none() {
+        let file = exported_file(&[channel("System", &[7])], found(&[]));
+        let warning = file.warnings.join(" | ");
+        assert!(
+            warning.contains("the query matched none of the 1 requested event (EventRecordID 7)"),
+            "{warning}"
+        );
+    }
+
+    #[test]
     fn extra_events_are_reported_on_their_own_and_not_blamed_on_wrap_around() {
         let file = exported_file(&[channel("System", &[1])], found(&[1, 99]));
         assert_eq!(file.exported_records, Some(2));
@@ -2592,8 +2679,9 @@ mod tests {
 
     #[test]
     fn long_differences_give_the_whole_count_and_a_capped_sample() {
-        let wanted: Vec<u64> = (1..=30).collect();
-        let file = exported_file(&[channel("System", &wanted)], found(&[]));
+        // 31 asked for and the file holds only the last: 30 are missing, which is a shortfall.
+        let wanted: Vec<u64> = (1..=31).collect();
+        let file = exported_file(&[channel("System", &wanted)], found(&[31]));
         let missing = file.missing.unwrap();
         assert_eq!(missing.count, 30);
         assert_eq!(missing.sample.len(), ID_SAMPLE_LIMIT);
@@ -2672,10 +2760,10 @@ mod tests {
         assert!(read_back_evtx(&dir.path().join("missing.evtx")).is_err());
     }
 
-    /// Needs a real capture, which carries real machine data and stays out of the repo. Point
-    /// `CMTRACE_EVTX_FIXTURE` at an .evtx file, and `CMTRACE_EVTX_FIXTURE_RECORDS` at the number of
-    /// events it is known to hold (for example from Event Viewer's log properties), and run with
-    /// `--ignored`.
+    /// Needs a real capture, which carries real machine data and stays out of the repo. Set
+    /// `CMTRACE_EVTX_FIXTURE` to an .evtx file and `CMTRACE_EVTX_FIXTURE_RECORDS` to the number of
+    /// events it is known to hold (for example from Event Viewer's log properties); both are
+    /// required, and the test runs only with `--ignored`.
     #[test]
     #[ignore = "requires a real .evtx via CMTRACE_EVTX_FIXTURE"]
     fn the_read_back_lists_the_events_of_a_real_log() {
@@ -2685,15 +2773,14 @@ mod tests {
             .expect("the fixture reads back without unreadable records");
         assert!(!records.is_empty(), "the fixture holds no events");
         assert!(records.iter().all(|record| record.id > 0));
-        match std::env::var("CMTRACE_EVTX_FIXTURE_RECORDS")
-            .ok()
-            .and_then(|text| text.parse::<usize>().ok())
-        {
-            Some(known) => assert_eq!(records.len(), known),
-            None => eprintln!(
-                "CMTRACE_EVTX_FIXTURE_RECORDS is not set to a number, so the count was not compared."
-            ),
-        }
+        // Required, like the fixture itself: a comparison that can be skipped can pass without
+        // having compared anything.
+        let known: usize = std::env::var("CMTRACE_EVTX_FIXTURE_RECORDS")
+            .expect("set CMTRACE_EVTX_FIXTURE_RECORDS to the number of events the fixture holds")
+            .trim()
+            .parse()
+            .expect("CMTRACE_EVTX_FIXTURE_RECORDS must be a whole number");
+        assert_eq!(records.len(), known);
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -2712,8 +2799,11 @@ mod tests {
 ///     cargo test --features event-log windows_lab -- --ignored
 ///
 /// The fake-backend tests above cover everything around the two API calls; these cover the calls
-/// themselves: the flags, the XPath and structured query the service accepts, the `file://` Select
-/// path, and the code the service returns for an existing target.
+/// themselves: the flags, the XPath and structured queries the service accepts, the `file://`
+/// Select path, the Computer term in every form production sends (`Computer='X'`,
+/// `Computer="X"`, one machine or several, within the per-Select budget), the archive step, and
+/// the code the service returns for an existing target. Production always names the computer, so
+/// every request here does too, with the computer taken from the events themselves.
 #[cfg(all(test, target_os = "windows"))]
 mod windows_lab_tests {
     use std::collections::BTreeSet;
@@ -2727,6 +2817,9 @@ mod windows_lab_tests {
     /// Long enough that any machine in use has well over 60 System events inside it.
     const PROBE_QUERY: &str = "*[System[TimeCreated[timediff(@SystemTime) <= 604800000]]]";
     const NEEDED_EVENTS: usize = 60;
+    /// A machine name no event carries, and one that needs the double-quoted XPath literal.
+    const NO_SUCH_COMPUTER: &str = "NO-SUCH-COMPUTER-CMTRACE-LAB";
+    const NO_SUCH_COMPUTER_WITH_APOSTROPHE: &str = "NO-SUCH-O'BRIEN-PC";
 
     fn planned(
         kind: EvtxSubsetSourceKind,
@@ -2748,9 +2841,16 @@ mod windows_lab_tests {
         }
     }
 
-    /// Exports the last week of System to `probe.evtx` in `dir`, and returns that file with the
-    /// EventRecordIDs it holds, ascending.
-    fn probe(dir: &Path) -> (PathBuf, Vec<u64>) {
+    /// What the probe found: the file, the machine its events name, and the EventRecordIDs of that
+    /// machine's events, ascending.
+    struct Probe {
+        file: PathBuf,
+        computer: String,
+        ids: Vec<u64>,
+    }
+
+    /// Exports the last week of System to `probe.evtx` in `dir`, and reads it back.
+    fn probe(dir: &Path) -> Probe {
         let target = dir.join("probe.evtx");
         let export = planned(
             EvtxSubsetSourceKind::Channel,
@@ -2761,27 +2861,54 @@ mod windows_lab_tests {
         if let Err(error) = WindowsBackend.export_log(&export) {
             panic!("the probe export of System failed: {}", error.message);
         }
-        let found: BTreeSet<u64> = read_back_evtx(&target)
-            .expect("the probe file reads back")
-            .into_iter()
+        let records = read_back_evtx(&target).expect("the probe file reads back");
+        // The local System log is written by this machine alone. Take its name from the events, as
+        // the dialog does, so the request carries exactly what production would send.
+        let computer = records
+            .iter()
+            .find_map(|record| record.computer.clone())
+            .expect("the System events must carry a Computer for this test");
+        let ids: BTreeSet<u64> = records
+            .iter()
+            .filter(|record| record.computer.as_deref() == Some(computer.as_str()))
             .map(|record| record.id)
             .collect();
         assert!(
-            found.len() >= NEEDED_EVENTS,
+            ids.len() >= NEEDED_EVENTS,
             "this test needs {NEEDED_EVENTS} System events from the last week, found {}",
-            found.len()
+            ids.len()
         );
-        (target, found.into_iter().collect())
+        Probe {
+            file: target,
+            computer,
+            ids: ids.into_iter().collect(),
+        }
     }
 
-    fn source(kind: EvtxSubsetSourceKind, path: &str, ids: &[u64]) -> EvtxSubsetSource {
+    fn group(computer: &str, ids: &[u64]) -> EvtxSubsetRecordGroup {
+        EvtxSubsetRecordGroup {
+            computer: Some(computer.to_string()),
+            record_ids: ids.iter().map(u64::to_string).collect(),
+        }
+    }
+
+    fn source(
+        kind: EvtxSubsetSourceKind,
+        path: &str,
+        groups: Vec<EvtxSubsetRecordGroup>,
+    ) -> EvtxSubsetSource {
         EvtxSubsetSource {
             kind,
             path: path.to_string(),
-            record_groups: vec![EvtxSubsetRecordGroup {
-                computer: None,
-                record_ids: ids.iter().map(u64::to_string).collect(),
-            }],
+            record_groups: groups,
+        }
+    }
+
+    /// The source a test exports from: the live System channel, or the probe file.
+    fn from_kind(kind: EvtxSubsetSourceKind, probe: &Probe) -> (EvtxSubsetSourceKind, String) {
+        match kind {
+            EvtxSubsetSourceKind::Channel => (kind, "System".to_string()),
+            EvtxSubsetSourceKind::File => (kind, probe.file.to_string_lossy().into_owned()),
         }
     }
 
@@ -2790,13 +2917,21 @@ mod windows_lab_tests {
         result.files.into_iter().next().expect("one file")
     }
 
-    fn query_is_structured(out: &Path, source: &EvtxSubsetSource) -> bool {
+    fn query_of(out: &Path, source: &EvtxSubsetSource) -> SubsetQuery {
         let plan = plan_subset_export(&out.to_string_lossy(), std::slice::from_ref(source))
             .expect("request planned");
         match &plan.entries[0] {
-            PlanEntry::Ready(export) => export.query.structured,
+            PlanEntry::Ready(export) => export.query.clone(),
             PlanEntry::Failed(failed) => panic!("not planned: {}", failed.error),
         }
+    }
+
+    fn ids_in(path: &str) -> BTreeSet<u64> {
+        read_back_evtx(Path::new(path))
+            .expect("the exported file reads back")
+            .into_iter()
+            .map(|record| record.id)
+            .collect()
     }
 
     fn assert_exported_exactly(file: &EvtxSubsetFileResult, wanted: &[u64]) {
@@ -2826,71 +2961,165 @@ mod windows_lab_tests {
             file.unrequested
         );
         // The IDs read back from the written file, not just their number.
-        let found: BTreeSet<u64> = read_back_evtx(Path::new(&file.output_path))
-            .expect("the exported file reads back")
-            .into_iter()
-            .map(|record| record.id)
-            .collect();
-        assert_eq!(found, wanted.iter().copied().collect::<BTreeSet<u64>>());
+        assert_eq!(
+            ids_in(&file.output_path),
+            wanted.iter().copied().collect::<BTreeSet<u64>>()
+        );
+    }
+
+    /// The spec 8.17 behavior that the file renders without the provider: the archive step ran and
+    /// nothing was left to warn about.
+    fn assert_archived_cleanly(file: &EvtxSubsetFileResult) {
+        assert!(
+            file.messages_archived,
+            "EvtArchiveExportedLog did not succeed: {:?}",
+            file.warnings
+        );
+        assert!(file.warnings.is_empty(), "{:?}", file.warnings);
     }
 
     fn short_range(ids: &[u64]) -> Vec<u64> {
         ids[10..13].to_vec()
     }
 
-    /// Alternate IDs, so none are adjacent and each costs a comparison of its own: 25 of them are
-    /// more than the 20 an XPath may hold.
-    fn more_than_twenty_comparisons(ids: &[u64]) -> Vec<u64> {
-        ids.iter().copied().step_by(2).take(25).collect()
+    /// Alternate IDs, so none are adjacent and each costs a comparison of its own.
+    fn alternate(ids: &[u64], count: usize) -> Vec<u64> {
+        ids.iter().copied().step_by(2).take(count).collect()
+    }
+
+    const BOTH_KINDS: [EvtxSubsetSourceKind; 2] =
+        [EvtxSubsetSourceKind::Channel, EvtxSubsetSourceKind::File];
+
+    #[test]
+    #[ignore = "requires a Windows Event Log service"]
+    fn a_short_range_with_its_computer_is_exported_from_a_live_channel() {
+        let work = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let probe = probe(work.path());
+        let wanted = short_range(&probe.ids);
+        let request = source(
+            EvtxSubsetSourceKind::Channel,
+            "System",
+            vec![group(&probe.computer, &wanted)],
+        );
+        let query = query_of(out.path(), &request);
+        assert!(!query.structured);
+        assert!(query.text.contains("Computer="), "{}", query.text);
+        let file = run_one_source(out.path(), request);
+        assert_exported_exactly(&file, &wanted);
+        assert_archived_cleanly(&file);
     }
 
     #[test]
     #[ignore = "requires a Windows Event Log service"]
-    fn a_short_range_is_exported_from_a_live_channel() {
+    fn a_short_range_with_its_computer_is_exported_from_an_evtx_file() {
         let work = tempfile::tempdir().unwrap();
         let out = tempfile::tempdir().unwrap();
-        let (_, ids) = probe(work.path());
-        let wanted = short_range(&ids);
-        let request = source(EvtxSubsetSourceKind::Channel, "System", &wanted);
-        assert!(!query_is_structured(out.path(), &request));
+        let probe = probe(work.path());
+        let wanted = short_range(&probe.ids);
+        let request = source(
+            EvtxSubsetSourceKind::File,
+            &probe.file.to_string_lossy(),
+            vec![group(&probe.computer, &wanted)],
+        );
+        assert!(!query_of(out.path(), &request).structured);
         assert_exported_exactly(&run_one_source(out.path(), request), &wanted);
     }
 
     #[test]
     #[ignore = "requires a Windows Event Log service"]
-    fn a_structured_query_with_more_than_twenty_comparisons_is_exported_from_a_live_channel() {
-        let work = tempfile::tempdir().unwrap();
-        let out = tempfile::tempdir().unwrap();
-        let (_, ids) = probe(work.path());
-        let wanted = more_than_twenty_comparisons(&ids);
-        let request = source(EvtxSubsetSourceKind::Channel, "System", &wanted);
-        assert!(query_is_structured(out.path(), &request));
-        assert_exported_exactly(&run_one_source(out.path(), request), &wanted);
+    fn more_than_twenty_comparisons_with_the_computer_use_a_structured_query() {
+        // 25 non-adjacent single ids plus the computer is 26 comparisons: over what an XPath may
+        // hold, so every Select carries its own copy of the Computer term. For a file source this
+        // is also the case that needs the `file://` Select path to be what the service expects.
+        for kind in BOTH_KINDS {
+            let work = tempfile::tempdir().unwrap();
+            let out = tempfile::tempdir().unwrap();
+            let probe = probe(work.path());
+            let wanted = alternate(&probe.ids, 25);
+            let (kind, path) = from_kind(kind, &probe);
+            let request = source(kind, &path, vec![group(&probe.computer, &wanted)]);
+            let query = query_of(out.path(), &request);
+            assert!(query.structured, "{kind:?}: {}", query.text);
+            assert!(query.text.contains("Computer="), "{kind:?}: {}", query.text);
+            assert_exported_exactly(&run_one_source(out.path(), request), &wanted);
+        }
     }
 
     #[test]
     #[ignore = "requires a Windows Event Log service"]
-    fn a_short_range_is_exported_from_an_evtx_file() {
-        let work = tempfile::tempdir().unwrap();
-        let out = tempfile::tempdir().unwrap();
-        let (file, ids) = probe(work.path());
-        let wanted = short_range(&ids);
-        let request = source(EvtxSubsetSourceKind::File, &file.to_string_lossy(), &wanted);
-        assert!(!query_is_structured(out.path(), &request));
-        assert_exported_exactly(&run_one_source(out.path(), request), &wanted);
+    fn the_computer_counts_toward_the_limit_exactly_at_the_boundary() {
+        // 19 single ids plus the computer is 20 comparisons: still one XPath. 20 plus the computer
+        // is 21: structured. The service must accept both forms, and the limit is the one assumed.
+        for kind in BOTH_KINDS {
+            for (count, structured) in [(19usize, false), (20usize, true)] {
+                let work = tempfile::tempdir().unwrap();
+                let out = tempfile::tempdir().unwrap();
+                let probe = probe(work.path());
+                let wanted = alternate(&probe.ids, count);
+                let (kind, path) = from_kind(kind, &probe);
+                let request = source(kind, &path, vec![group(&probe.computer, &wanted)]);
+                let query = query_of(out.path(), &request);
+                assert_eq!(
+                    query.structured, structured,
+                    "{kind:?} {count}: {}",
+                    query.text
+                );
+                assert_exported_exactly(&run_one_source(out.path(), request), &wanted);
+            }
+        }
     }
 
     #[test]
     #[ignore = "requires a Windows Event Log service"]
-    fn a_structured_query_with_more_than_twenty_comparisons_is_exported_from_an_evtx_file() {
-        // This is the case that needs the `file://` Select path to be what the service expects.
-        let work = tempfile::tempdir().unwrap();
-        let out = tempfile::tempdir().unwrap();
-        let (file, ids) = probe(work.path());
-        let wanted = more_than_twenty_comparisons(&ids);
-        let request = source(EvtxSubsetSourceKind::File, &file.to_string_lossy(), &wanted);
-        assert!(query_is_structured(out.path(), &request));
-        assert_exported_exactly(&run_one_source(out.path(), request), &wanted);
+    fn a_second_computer_that_matches_nothing_comes_back_missing_and_adds_nothing() {
+        // Two groups: the real machine, and a name no event carries (once plain, once with an
+        // apostrophe so that the double-quoted literal form is used). The second group asks for
+        // other ids than the first. If the query ignored the Computer term it would select those
+        // events under the real machine's name, and they would come back as unrequested.
+        for kind in BOTH_KINDS {
+            for fake in [NO_SUCH_COMPUTER, NO_SUCH_COMPUTER_WITH_APOSTROPHE] {
+                let work = tempfile::tempdir().unwrap();
+                let out = tempfile::tempdir().unwrap();
+                let probe = probe(work.path());
+                let real = short_range(&probe.ids);
+                let other: Vec<u64> = probe.ids[20..24].to_vec();
+                let (kind, path) = from_kind(kind, &probe);
+                let request = source(
+                    kind,
+                    &path,
+                    vec![group(&probe.computer, &real), group(fake, &other)],
+                );
+                let file = run_one_source(out.path(), request);
+                assert_eq!(
+                    file.status,
+                    EvtxSubsetFileStatus::Exported,
+                    "{kind:?} {fake}: {:?}",
+                    file.error
+                );
+                // Only the real machine's events are in the file.
+                assert_eq!(
+                    ids_in(&file.output_path),
+                    real.iter().copied().collect::<BTreeSet<u64>>(),
+                    "{kind:?} {fake}"
+                );
+                assert_eq!(file.exported_records, Some(real.len() as u64));
+                // The fake machine's events were asked for and are reported missing, by name.
+                let missing = file.missing.expect("verified");
+                assert_eq!(missing.count, other.len() as u64, "{kind:?} {fake}");
+                assert!(
+                    missing.sample.iter().all(|entry| entry.starts_with(fake)),
+                    "{:?}",
+                    missing.sample
+                );
+                // And nothing the request did not name was exported alongside.
+                assert_eq!(
+                    file.unrequested.expect("verified").count,
+                    0,
+                    "{kind:?} {fake}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2898,7 +3127,7 @@ mod windows_lab_tests {
     fn an_existing_target_is_refused_and_left_alone() {
         let work = tempfile::tempdir().unwrap();
         let out = tempfile::tempdir().unwrap();
-        let (_, ids) = probe(work.path());
+        let probe = probe(work.path());
         let taken = out.path().join("System-subset.evtx");
         fs::write(&taken, b"someone else's file").unwrap();
 
@@ -2908,7 +3137,7 @@ mod windows_lab_tests {
             &[source(
                 EvtxSubsetSourceKind::Channel,
                 "System",
-                &short_range(&ids),
+                vec![group(&probe.computer, &short_range(&probe.ids))],
             )],
         )
         .unwrap_err();
