@@ -23,6 +23,7 @@ import {
   filesLabel,
   liveDescription,
   liveLabel,
+  liveTailStateFor,
   mostFrequentComputer,
   resolveMachineName,
 } from "./EvtxToolbarAction";
@@ -64,13 +65,24 @@ function loadLive(
     remoteMachine?: string | null;
     records?: EvtxRecord[];
     tailMode?: EvtxLiveMode | null;
+    /** Channels whose load completed. */
+    loadedChannels?: string[];
+    /** Channels whose tail is active; defaults to every loaded channel when a tail is running. */
+    tailChannels?: string[];
   } = {},
 ) {
+  const loadedChannels = options.loadedChannels ?? ["System"];
+  const tailMode = options.tailMode ?? null;
   useEvtxStore.setState({
     sourceMode: "live",
     remoteMachine: options.remoteMachine ?? null,
     records: options.records ?? [record("CONTOSO-PC01")],
-    tailMode: options.tailMode ?? null,
+    loadedChannels: new Set(loadedChannels),
+    tailMode,
+    tailChannels: new Set(
+      options.tailChannels ??
+        (tailMode === null || tailMode === "unsupported" ? [] : loadedChannels),
+    ),
   });
 }
 
@@ -139,12 +151,19 @@ describe("EvtxToolbarAction copy", () => {
       ["subscription", "Live · CONTOSO-PC01 · tailing"],
       ["polling", "Live · CONTOSO-PC01 · polling"],
       ["mixed", "Live · CONTOSO-PC01 · tailing (mixed)"],
-      ["unsupported", "Live · not tailing"],
-    ])("reads the %s tail state as %s", (tailMode, expected) => {
+      ["unsupported", "Live · CONTOSO-PC01 · not tailing"],
+    ])("reads the %s tail state, with every loaded channel followed, as %s", (tailMode, expected) => {
       loadLive({ tailMode });
       render(<EvtxToolbarAction />);
 
       expect(label().textContent).toBe(expected);
+    });
+
+    it("names the machine on an unsupported tail, so a remote source is never mistaken for this computer", () => {
+      loadLive({ remoteMachine: "CONTOSO-SRV01", tailMode: "unsupported" });
+      render(<EvtxToolbarAction />);
+
+      expect(label().textContent).toBe("Live · CONTOSO-SRV01 · not tailing");
     });
 
     it("follows the tail state as it changes", () => {
@@ -152,11 +171,102 @@ describe("EvtxToolbarAction copy", () => {
       render(<EvtxToolbarAction />);
       expect(label().textContent).toBe("Live · CONTOSO-PC01 · tailing");
 
-      act(() => useEvtxStore.setState({ tailMode: "unsupported" }));
-      expect(label().textContent).toBe("Live · not tailing");
+      act(() => useEvtxStore.setState({ tailMode: "unsupported", tailChannels: new Set() }));
+      expect(label().textContent).toBe("Live · CONTOSO-PC01 · not tailing");
     });
 
-    it("keeps the machine name in the description when an unsupported tail drops it from the label", () => {
+    describe("a tail that follows only some of the loaded channels", () => {
+      // The store reports "mixed" for any two distinct per-channel modes, and a channel whose
+      // tail failed to start is recorded as "unsupported". So "mixed" also covers subscriptions
+      // beside a channel that is not followed at all, where nothing polls.
+      const four = ["Application", "Security", "Setup", "System"];
+
+      it.each<[string, EvtxLiveMode]>([
+        ["subscription plus unsupported", "mixed"],
+        ["polling plus unsupported", "mixed"],
+      ])("reads %s as 3 of 4 channels, and never claims polling or a mix", (_name, tailMode) => {
+        loadLive({
+          tailMode,
+          loadedChannels: four,
+          tailChannels: ["Application", "Setup", "System"],
+        });
+        render(<EvtxToolbarAction />);
+
+        expect(label().textContent).toBe("Live · CONTOSO-PC01 · tailing 3 of 4 channels");
+        expect(pill().getAttribute("title")).toBe(
+          "Live event logs from CONTOSO-PC01. Live tail is following 3 of 4 channels. Not followed: Security.",
+        );
+        expect(pill().getAttribute("title")).not.toMatch(/poll|mixed|subscription/i);
+        expect(label().textContent).not.toMatch(/poll|mixed/i);
+      });
+
+      it("names every channel that is not followed, sorted", () => {
+        loadLive({
+          tailMode: "mixed",
+          loadedChannels: four,
+          tailChannels: ["System"],
+        });
+        render(<EvtxToolbarAction />);
+
+        expect(label().textContent).toBe("Live · CONTOSO-PC01 · tailing 1 of 4 channels");
+        expect(pill().getAttribute("title")).toMatch(
+          /Not followed: Application, Security, Setup\.$/,
+        );
+      });
+
+      it("caps a long list of channels that are not followed", () => {
+        const many = Array.from({ length: 14 }, (_, i) => `Channel${String(i).padStart(2, "0")}`);
+        loadLive({ tailMode: "mixed", loadedChannels: many, tailChannels: ["Channel00"] });
+        render(<EvtxToolbarAction />);
+
+        const title = pill().getAttribute("title") ?? "";
+        expect(title).toContain("Channel01");
+        expect(title).toContain("Channel10");
+        expect(title).not.toContain("Channel11");
+        expect(title).toMatch(/and 3 more\.$/);
+      });
+
+      it("reads a tail that follows no loaded channel as not tailing", () => {
+        loadLive({ tailMode: "mixed", loadedChannels: four, tailChannels: [] });
+        render(<EvtxToolbarAction />);
+
+        expect(label().textContent).toBe("Live · CONTOSO-PC01 · not tailing");
+        expect(pill().getAttribute("title")).toMatch(/not following any loaded channel/);
+      });
+
+      it("keeps the mixed copy only when every loaded channel is followed", () => {
+        // Everything followed is active, so a "mixed" here really is subscriptions beside polling.
+        loadLive({ tailMode: "mixed", loadedChannels: four, tailChannels: four });
+        render(<EvtxToolbarAction />);
+
+        expect(label().textContent).toBe("Live · CONTOSO-PC01 · tailing (mixed)");
+        expect(pill().getAttribute("title")).toMatch(
+          /subscriptions for some channels and by polling for others/,
+        );
+      });
+
+      it("counts a channel loaded after the tail started as not followed", () => {
+        loadLive({ tailMode: "subscription", loadedChannels: ["System"], tailChannels: ["System"] });
+        render(<EvtxToolbarAction />);
+        expect(label().textContent).toBe("Live · CONTOSO-PC01 · tailing");
+
+        act(() =>
+          useEvtxStore.setState({ loadedChannels: new Set(["System", "Application"]) }),
+        );
+        expect(label().textContent).toBe("Live · CONTOSO-PC01 · tailing 1 of 2 channels");
+      });
+
+      it("ignores tail channels that are no longer loaded", () => {
+        const state = liveTailStateFor({
+          tailMode: "subscription",
+          tailChannels: new Set(["System", "Cleared"]),
+          loadedChannels: new Set(["System"]),
+        });
+        expect(state).toEqual({ mode: "subscription", followed: 1, loaded: 1, notFollowed: [] });
+      });
+    });
+
+    it("keeps the machine name in the description of an unsupported tail", () => {
       loadLive({ tailMode: "unsupported" });
       render(<EvtxToolbarAction />);
 
@@ -294,10 +404,16 @@ describe("EvtxToolbarAction helpers", () => {
     expect(resolveMachineName(null, [])).toBe(LOCAL_MACHINE_LABEL);
   });
 
-  it("builds the labels the spec fixes", () => {
-    expect(liveLabel("CONTOSO-PC01", "unsupported")).toBe("Live · not tailing");
+  it("builds the labels", () => {
+    const state = (tailMode: EvtxLiveMode | null) =>
+      liveTailStateFor({
+        tailMode,
+        tailChannels: new Set(),
+        loadedChannels: new Set(),
+      });
+    expect(liveLabel("CONTOSO-PC01", state("unsupported"))).toBe("Live · CONTOSO-PC01 · not tailing");
     expect(filesLabel(5)).toBe("Files · 5 sources");
-    expect(liveDescription("CONTOSO-PC01", null)).toContain("CONTOSO-PC01");
+    expect(liveDescription("CONTOSO-PC01", state(null))).toContain("CONTOSO-PC01");
   });
 });
 
@@ -363,7 +479,6 @@ describe("liveSource token as rendered by the pill", () => {
   describe.each(SEVEN_THEMES)("in the %s theme", (themeId) => {
     const theme = themeById(themeId);
     const { liveSource } = buildEvtxVisualTokens(theme);
-    const toolbarSurface = resolveToken(tokens.colorNeutralBackground2, theme).toLowerCase();
 
     function renderLive() {
       useUiStore.setState({ themeId });
@@ -416,24 +531,15 @@ describe("liveSource token as rendered by the pill", () => {
       }
     });
 
-    it("never leaves the border or the fill to tell the pill from the toolbar", () => {
+    it("names the state in text, because neither the fill nor the border can", () => {
       renderLive();
 
-      const fill = opaqueHex(pill().style.backgroundColor, theme);
-      const border = opaqueHex(borderColor(pill()), theme);
-      // The pill sits on the toolbar's neutral background (Toolbar.tsx). These are measured, not
-      // required: the border is decorative and exempt in Phase 1's inventory, and the fill
-      // measures 1.00 to 1.64:1 against the toolbar in these seven themes. Neither is what
-      // identifies the pill, so a retuned border token is not a failure here.
-      for (const ratio of [
-        contrastRatio(fill, toolbarSurface),
-        contrastRatio(border, fill),
-        contrastRatio(border, toolbarSurface),
-      ]) {
-        expect(Number.isFinite(ratio)).toBe(true);
-      }
-
-      // What does identify it is text: the state is spelled out, and the dot is decoration.
+      // The fill is pale green on the toolbar's neutral surface and the border is Phase 1's
+      // decorative token, exempt in its inventory (INVENTORY_EXEMPTIONS). Measured in Phase 1,
+      // the fill separates from the toolbar by only 1.00 to 1.64:1 across these seven themes, so
+      // Adam's criterion that the border not be relied on to identify the pill is met by the
+      // label: the state is spelled out and the dot is decoration. No ratio is asserted for the
+      // fill or the border, so retuning that token is not a failure here.
       expect(label().textContent).toMatch(/^Live · /);
       expect(dot()).toHaveAttribute("aria-hidden", "true");
     });

@@ -56,34 +56,101 @@ export function resolveMachineName(
 }
 
 /**
- * What a running tail adds to the pill. A source whose tail has not been started has nothing to
- * add: the pill then reads like the plain "Live · {machine}" form. An unsupported tail is not a
- * qualifier but a different label; see `liveLabel`.
+ * The tail as the pill reports it: the store's aggregate mode, and which loaded channels the tail
+ * actually follows. The aggregate alone cannot be trusted for the copy. `evtx-store` reports
+ * "mixed" for any two distinct per-channel modes, and a channel whose tail failed to start is
+ * recorded as "unsupported", so "mixed" also covers subscriptions beside a channel that is not
+ * followed at all. `tailChannels` holds the channels whose tail is active; comparing it with
+ * `loadedChannels` says what is really being followed.
  */
-const TAIL_QUALIFIER: Record<Exclude<EvtxLiveMode, "unsupported">, string> = {
+export interface LiveTailState {
+  mode: EvtxLiveMode | null;
+  /** Loaded channels the tail follows. */
+  followed: number;
+  /** Channels whose load completed. */
+  loaded: number;
+  /** Loaded channels the tail does not follow, sorted. */
+  notFollowed: readonly string[];
+}
+
+export function liveTailStateFor(input: {
+  tailMode: EvtxLiveMode | null;
+  tailChannels: ReadonlySet<string>;
+  loadedChannels: ReadonlySet<string>;
+}): LiveTailState {
+  const notFollowed = [...input.loadedChannels]
+    .filter((channel) => !input.tailChannels.has(channel))
+    .sort();
+  return {
+    mode: input.tailMode,
+    followed: input.loadedChannels.size - notFollowed.length,
+    loaded: input.loadedChannels.size,
+    notFollowed,
+  };
+}
+
+/** What the tail adds to the pill, or null when no tail has been started. */
+const ALL_FOLLOWED_QUALIFIER: Record<Exclude<EvtxLiveMode, "unsupported">, string> = {
   subscription: "tailing",
   polling: "polling",
+  // Every followed channel is active, so "mixed" here really is subscriptions beside polling.
   mixed: "tailing (mixed)",
 };
 
-const TAIL_DESCRIPTION: Record<EvtxLiveMode | "idle", string> = {
-  idle: "Live tail is not running.",
+const ALL_FOLLOWED_DESCRIPTION: Record<Exclude<EvtxLiveMode, "unsupported">, string> = {
   subscription: "Live tail is running on event subscriptions.",
   polling: "Live tail is running by polling.",
   mixed: "Live tail is running on subscriptions for some channels and by polling for others.",
-  unsupported: "Live tail is not supported for these channels, so new events are not followed.",
 };
 
-/** "Live · {machine}", with the tail state after it; "Live · not tailing" when it is unsupported. */
-export function liveLabel(machine: string, tailMode: EvtxLiveMode | null): string {
-  if (tailMode === "unsupported") return "Live · not tailing";
-  return tailMode === null
-    ? `Live · ${machine}`
-    : `Live · ${machine} · ${TAIL_QUALIFIER[tailMode]}`;
+const NOT_FOLLOWED_NAME_LIMIT = 10;
+
+/** No loaded channel is followed: an unsupported tail, or a tail whose channels all dropped out. */
+function notTailing(tail: LiveTailState): boolean {
+  return (
+    tail.mode === "unsupported" ||
+    (tail.mode !== null && tail.followed === 0 && tail.loaded > 0)
+  );
 }
 
-export function liveDescription(machine: string, tailMode: EvtxLiveMode | null): string {
-  return `Live event logs from ${machine}. ${TAIL_DESCRIPTION[tailMode ?? "idle"]}`;
+function partlyFollowed(tail: LiveTailState): boolean {
+  return tail.mode !== null && tail.followed > 0 && tail.followed < tail.loaded;
+}
+
+/**
+ * "Live · {machine}", with the tail state after it: "tailing", "polling", "tailing (mixed)" when
+ * every loaded channel is followed, "tailing {k} of {n} channels" when some are not, and
+ * "not tailing" when none is. The machine name is always shown.
+ */
+export function liveLabel(machine: string, tail: LiveTailState): string {
+  if (tail.mode === null) return `Live · ${machine}`;
+  if (tail.mode === "unsupported" || notTailing(tail)) {
+    return `Live · ${machine} · not tailing`;
+  }
+  if (partlyFollowed(tail)) {
+    return `Live · ${machine} · tailing ${tail.followed} of ${tail.loaded} channels`;
+  }
+  return `Live · ${machine} · ${ALL_FOLLOWED_QUALIFIER[tail.mode]}`;
+}
+
+export function liveDescription(machine: string, tail: LiveTailState): string {
+  const head = `Live event logs from ${machine}.`;
+  if (tail.mode === null) return `${head} Live tail is not running.`;
+  if (tail.mode === "unsupported") {
+    return `${head} Live tail is not supported for these channels, so new events are not followed.`;
+  }
+  if (notTailing(tail)) {
+    return `${head} Live tail is not following any loaded channel.`;
+  }
+  if (partlyFollowed(tail)) {
+    const shown = tail.notFollowed.slice(0, NOT_FOLLOWED_NAME_LIMIT).join(", ");
+    const more = tail.notFollowed.length - NOT_FOLLOWED_NAME_LIMIT;
+    return (
+      `${head} Live tail is following ${tail.followed} of ${tail.loaded} channels. ` +
+      `Not followed: ${shown}${more > 0 ? ` and ${more} more` : ""}.`
+    );
+  }
+  return `${head} ${ALL_FOLLOWED_DESCRIPTION[tail.mode]}`;
 }
 
 interface PillRun {
@@ -120,6 +187,8 @@ const PILL_RADIUS_PX = 8;
 export function EvtxToolbarAction() {
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const tailMode = useEvtxStore((s) => s.tailMode);
+  const tailChannels = useEvtxStore((s) => s.tailChannels);
+  const loadedChannels = useEvtxStore((s) => s.loadedChannels);
   const remoteMachine = useEvtxStore((s) => s.remoteMachine);
   const sourceCount = useEvtxStore((s) => s.sourcePaths.length);
   const records = useEvtxStore((s) => s.records);
@@ -143,11 +212,12 @@ export function EvtxToolbarAction() {
         border: tokens.colorNeutralStroke1,
         foreground: tokens.colorNeutralForeground2,
       };
+  const tail = liveTailStateFor({ tailMode, tailChannels, loadedChannels });
   const runs: PillRun[] = live
-    ? [{ text: liveLabel(machine ?? LOCAL_MACHINE_LABEL, tailMode) }]
+    ? [{ text: liveLabel(machine ?? LOCAL_MACHINE_LABEL, tail) }]
     : filesRuns(sourceCount);
   const description = live
-    ? liveDescription(machine ?? LOCAL_MACHINE_LABEL, tailMode)
+    ? liveDescription(machine ?? LOCAL_MACHINE_LABEL, tail)
     : filesDescription(sourceCount);
 
   const pillStyle: CSSProperties = {
