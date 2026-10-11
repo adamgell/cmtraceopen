@@ -24,7 +24,7 @@ import {
 } from "./evtx-filter";
 import type { EvtxRecord, EvtxLevel } from "./types";
 import { visibleColumns } from "./evtx-columns";
-import { EvtxTimelineRow } from "./EvtxTimelineRow";
+import { EvtxTimelineHeader, EvtxTimelineRow } from "./EvtxTimelineRow";
 
 const LEVEL_ORDER: Record<EvtxLevel, number> = {
   Critical: 0,
@@ -397,7 +397,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     );
   }
 
-  return (
+  const grid = (
     <div
       ref={parentRef}
       // Rows contain real marker buttons. A grid permits those controls inside a gridcell while a
@@ -410,7 +410,11 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
       aria-colcount={columns.length + 1}
       style={{
         overflowY: "auto",
-        height: "100%",
+        // Fills what the header leaves, and reserves the gutter the header reserves too, so a
+        // classic scrollbar never moves the rows' columns out from under it.
+        flex: "1 1 auto",
+        minHeight: 0,
+        scrollbarGutter: "stable",
         padding: "0",
         fontFamily: LOG_UI_FONT_FAMILY,
         outline: "none",
@@ -535,6 +539,28 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
           })}
         </div>
       </div>
+    </div>
+  );
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        fontFamily: LOG_UI_FONT_FAMILY,
+      }}
+    >
+      <EvtxTimelineHeader
+        columns={columns}
+        columnConfig={columnConfig}
+        fontSize={fontSize}
+        smallFontSize={smallFontSize}
+        headerLineHeight={metrics.headerLineHeight}
+        sortField={sortField}
+        sortDirection={sortDirection}
+      />
+      {grid}
     </div>
   );
 }

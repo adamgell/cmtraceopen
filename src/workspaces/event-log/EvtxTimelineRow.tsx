@@ -7,7 +7,12 @@ import {
   type MouseEvent,
 } from "react";
 import { tokens } from "@fluentui/react-components";
-import { Link12Regular } from "@fluentui/react-icons";
+import {
+  ChevronDown12Regular,
+  ChevronUp12Regular,
+  Link12Regular,
+  Link16Regular,
+} from "@fluentui/react-icons";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
 } from "../../lib/log-accessibility";
@@ -29,6 +34,7 @@ import {
   type EvtxColumnId,
   type EvtxColumnSpec,
 } from "./evtx-columns";
+import type { EvtxSortField } from "./evtx-store";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import { buildEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 
@@ -737,3 +743,91 @@ export const EvtxTimelineRow = memo(
     );
   })
 );
+
+export interface EvtxTimelineHeaderProps {
+  columns: EvtxColumnSpec[];
+  columnConfig: EvtxColumnConfig;
+  fontSize: number;
+  smallFontSize: number;
+  /** `getLogListMetrics(...).headerLineHeight`. The header is that plus 2 px (spec D1). */
+  headerLineHeight: number;
+  sortField: EvtxSortField;
+  sortDirection: "asc" | "desc";
+}
+
+/**
+ * The column header (spec 8.7): `colorNeutralBackground3`, a `colorNeutralStroke1` bottom border,
+ * 600 weight at the font size minus one. The time header carries the sort direction.
+ *
+ * Presentational and hidden from assistive technology. Every gridcell already names its column
+ * ("Event Time: ..."), and a header row inside the grid would shift every row's `aria-rowindex`.
+ * Sorting stays on the filter bar's Sort control, which is the accessible one.
+ */
+export function EvtxTimelineHeader({
+  columns,
+  columnConfig,
+  fontSize,
+  smallFontSize,
+  headerLineHeight,
+  sortField,
+  sortDirection,
+}: EvtxTimelineHeaderProps) {
+  const SortChevron = sortDirection === "desc" ? ChevronDown12Regular : ChevronUp12Regular;
+  return (
+    <div
+      aria-hidden="true"
+      data-evtx-table-header="true"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        flexShrink: 0,
+        boxSizing: "border-box",
+        height: `${headerLineHeight + 2}px`,
+        paddingLeft: `${ROW_PADDING_X + ROW_SLOT_PX}px`,
+        paddingRight: `${ROW_PADDING_X}px`,
+        gap: `${ROW_GAP_PX}px`,
+        backgroundColor: tokens.colorNeutralBackground3,
+        borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
+        color: tokens.colorNeutralForeground2,
+        fontSize: `${fontSize - 1}px`,
+        fontWeight: 600,
+        lineHeight: `${headerLineHeight}px`,
+        overflow: "hidden",
+        // Reserves the same gutter as the scroller below it, so a classic scrollbar does not
+        // push the rows' columns out from under the header.
+        scrollbarGutter: "stable",
+      }}
+    >
+      <div
+        data-evtx-header-cell="markers"
+        style={{ flexShrink: 0, width: `${markerSlotWidth(smallFontSize)}px`, boxSizing: "border-box" }}
+      />
+      {columns.map((column) => {
+        const centered = column.id === "level" || column.id === "links";
+        return (
+          <div
+            key={column.id}
+            data-evtx-header-cell={column.id}
+            title={column.label}
+            style={{
+              ...columnCellBox(columnConfig, column),
+              display: "flex",
+              alignItems: "center",
+              justifyContent: centered ? "center" : "flex-start",
+              gap: "4px",
+            }}
+          >
+            {column.id === "links" ? (
+              <Link16Regular />
+            ) : (
+              <span style={{ minWidth: 0, ...TRUNCATE }}>{column.label}</span>
+            )}
+            {column.id === "timestamp" && sortField === "time" && (
+              <SortChevron data-evtx-sort-direction={sortDirection} style={{ flex: "none" }} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}

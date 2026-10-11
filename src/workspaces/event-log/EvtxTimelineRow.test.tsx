@@ -20,6 +20,7 @@ import {
 } from "./evtx-columns";
 import {
   buildEvtxRowPalette,
+  EvtxTimelineHeader,
   EvtxTimelineRow,
   markerSlotWidth,
   resolveEvtxRowVisualState,
@@ -902,5 +903,148 @@ describe("EvtxTimelineRow links cell (spec 8.7)", () => {
     renderRow({ columnConfig: config, columns: visibleColumns(config), linkCount: 3 });
     expect(screen.queryByRole("gridcell", { name: /^Links:/ })).toBeNull();
     expect(styleOf(cell(/^Event Time:/)).width).toBe("165px");
+  });
+});
+
+describe("EvtxTimelineHeader (spec 8.7)", () => {
+  function renderHeader(
+    overrides: Partial<React.ComponentProps<typeof EvtxTimelineHeader>> = {},
+  ) {
+    const config = overrides.columnConfig ?? defaultColumnConfig();
+    return render(
+      <EvtxTimelineHeader
+        columns={visibleColumns(config)}
+        columnConfig={config}
+        fontSize={13}
+        smallFontSize={10}
+        headerLineHeight={24}
+        sortField="time"
+        sortDirection="desc"
+        {...overrides}
+      />,
+    );
+  }
+  const header = () => document.querySelector<HTMLElement>("[data-evtx-table-header]")!;
+  const headerCell = (id: string) =>
+    document.querySelector<HTMLElement>(`[data-evtx-header-cell="${id}"]`)!;
+
+  it("is hidden from assistive technology and adds no row to the grid", () => {
+    renderHeader();
+    expect(header()).toHaveAttribute("aria-hidden", "true");
+    expect(screen.queryAllByRole("row")).toHaveLength(0);
+    expect(screen.queryAllByRole("columnheader")).toHaveLength(0);
+  });
+
+  it("is Background3 with a Stroke1 bottom border, 600 weight at the font size minus one", () => {
+    renderHeader();
+    const style = styleOf(header());
+    expect(style.backgroundColor).toBe(tokens.colorNeutralBackground3);
+    expect(style.borderBottom).toBe(`1px solid ${tokens.colorNeutralStroke1}`);
+    expect(style.fontWeight).toBe("600");
+    expect(style.fontSize).toBe("12px");
+    expect(style.color).toBe(tokens.colorNeutralForeground2);
+  });
+
+  it.each([
+    [MIN_LOG_LIST_FONT_SIZE],
+    [13],
+    [MAX_LOG_LIST_FONT_SIZE],
+  ])("is the metrics header line height plus 2 px at list font size %i", (listFontSize) => {
+    const metrics = getLogListMetrics(listFontSize);
+    renderHeader({
+      fontSize: metrics.fontSize,
+      headerLineHeight: metrics.headerLineHeight,
+    });
+    const style = styleOf(header());
+    expect(style.height).toBe(`${metrics.headerLineHeight + 2}px`);
+    expect(style.boxSizing).toBe("border-box");
+    expect(style.fontSize).toBe(`${metrics.fontSize - 1}px`);
+  });
+
+  it("holds its labels at 4.5:1 on Background3 in every theme", () => {
+    const failures: string[] = [];
+    for (const [, theme] of THEMES) {
+      const label = resolveToken(tokens.colorNeutralForeground2, theme);
+      const background = resolveToken(tokens.colorNeutralBackground3, theme);
+      const ratio = contrastRatio(label, background);
+      if (ratio < 4.5) failures.push(`${theme.id} ${label} on ${background} = ${ratio.toFixed(2)}`);
+    }
+    expect(failures, failures.join("; ")).toEqual([]);
+  });
+
+  it("has one cell per visible column, in order, labeled with the column", () => {
+    renderHeader();
+    const ids = [...header().querySelectorAll("[data-evtx-header-cell]")].map((element) =>
+      element.getAttribute("data-evtx-header-cell"),
+    );
+    expect(ids).toEqual(["markers", ...visibleColumns(defaultColumnConfig()).map((c) => c.id)]);
+    expect(headerCell("timestamp")).toHaveTextContent("Event Time");
+    expect(headerCell("provider")).toHaveTextContent("Provider");
+    expect(headerCell("message")).toHaveTextContent("Description");
+  });
+
+  it("shows the Links header as the link icon, with the column name as a tooltip", () => {
+    renderHeader();
+    expect(headerCell("links")).toHaveTextContent("");
+    expect(headerCell("links").querySelector("svg")).not.toBeNull();
+    expect(headerCell("links")).toHaveAttribute("title", "Links");
+  });
+
+  it("puts every column at the same width and x as its row cell", () => {
+    const config = sanitizeColumnConfig({
+      order: ["level", "timestamp", "eventId", "channel", "provider", "message", "links"],
+      widths: { channel: 133 },
+    });
+    renderHeader({ columnConfig: config });
+    renderRow({ columnConfig: config, columns: visibleColumns(config), linkCount: 2 });
+    const rowStyle = styleOf(screen.getByRole("row"));
+    // Same left inset (4 px slot + 12 px padding) and the same right padding.
+    expect(parseFloat(styleOf(header()).paddingLeft)).toBe(parseFloat(rowStyle.paddingLeft));
+    expect(styleOf(header()).paddingRight).toBe(rowStyle.paddingRight);
+    expect(styleOf(header()).gap).toBe(rowStyle.gap);
+    expect(styleOf(headerCell("markers")).width).toBe(styleOf(screen.getAllByRole("gridcell")[0]).width);
+    for (const column of visibleColumns(config)) {
+      const rowCell = styleOf(cell(new RegExp(`^${column.label}:`)));
+      const headCell = styleOf(headerCell(column.id));
+      expect(headCell.width, `${column.id} width`).toBe(rowCell.width);
+      expect(headCell.flexShrink, `${column.id} flex-shrink`).toBe(rowCell.flexShrink);
+      expect(headCell.flexGrow, `${column.id} flex-grow`).toBe(rowCell.flexGrow);
+    }
+    expect(styleOf(headerCell("channel")).width).toBe("133px");
+  });
+
+  it("shows the sort direction on the time header when sorted by time", () => {
+    const view = renderHeader({ sortField: "time", sortDirection: "desc" });
+    expect(headerCell("timestamp").querySelector("[data-evtx-sort-direction]")).toHaveAttribute(
+      "data-evtx-sort-direction",
+      "desc",
+    );
+    const down = headerCell("timestamp").querySelector("svg")!.innerHTML;
+    view.unmount();
+    renderHeader({ sortField: "time", sortDirection: "asc" });
+    expect(headerCell("timestamp").querySelector("[data-evtx-sort-direction]")).toHaveAttribute(
+      "data-evtx-sort-direction",
+      "asc",
+    );
+    // A different glyph, not the same chevron with a different attribute.
+    expect(headerCell("timestamp").querySelector("svg")!.innerHTML).not.toBe(down);
+  });
+
+  it.each(["eventId", "level", "provider", "channel"] as const)(
+    "shows no direction on the time header when sorted by %s",
+    (sortField) => {
+      renderHeader({ sortField });
+      expect(header().querySelector("[data-evtx-sort-direction]")).toBeNull();
+    },
+  );
+
+  it("omits the links header when a saved configuration does not show the column", () => {
+    const config = sanitizeColumnConfig({
+      order: ["level", "timestamp", "message"],
+      widths: { timestamp: 165 },
+    });
+    renderHeader({ columnConfig: config });
+    expect(headerCell("links")).toBeNull();
+    expect(styleOf(headerCell("timestamp")).width).toBe("165px");
   });
 });
