@@ -16,10 +16,9 @@ import { getWorkspace } from "../../workspaces/registry";
 import { EspStatusBarContent } from "../../workspaces/esp-diagnostics/EspStatusBarContent";
 import { useEspDiagnosticsStore } from "../../workspaces/esp-diagnostics/esp-diagnostics-store";
 import { useEvtxStore } from "../../workspaces/event-log/evtx-store";
-import {
-  contrastRatio,
-  pickStatusBarForeground,
-} from "./status-bar-foreground";
+import { contrastRatio, readableOn } from "../../lib/color-contrast";
+import * as statusBarForeground from "./status-bar-foreground";
+import { pickStatusBarForeground } from "./status-bar-foreground";
 
 describe("StatusBar workspace label", () => {
   beforeEach(() => {
@@ -94,6 +93,19 @@ describe("status bar foreground", () => {
     },
   );
 
+  it("rejects a non-hex brand background through pickStatusBarForeground", () => {
+    expect(() => pickStatusBarForeground("red", "#ffffff")).toThrow(
+      /#rgb or #rrggbb/,
+    );
+  });
+
+  it("exports no contrast helpers of its own", () => {
+    // Single source of truth: contrast math lives in lib/color-contrast.
+    const exported = Object.keys(statusBarForeground);
+    expect(exported).not.toContain("contrastRatio");
+    expect(exported).not.toContain("WCAG_AA_NORMAL_TEXT");
+  });
+
   it("keeps the on-brand foreground when it already meets 4.5:1", () => {
     expect(pickStatusBarForeground("#007768", "#ffffff")).toBe("#ffffff");
   });
@@ -114,6 +126,37 @@ describe("status bar foreground", () => {
       expect(
         contrastRatio(foreground, fluent.colorBrandBackground),
       ).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
+    "agrees with readableOn at 4.5:1 in the %s theme",
+    (_id, theme) => {
+      const fluent = theme.fluentTheme as unknown as Record<string, string>;
+      const background = fluent.colorBrandBackground;
+      const preferred = fluent.colorNeutralForegroundOnBrand;
+      expect(pickStatusBarForeground(background, preferred)).toBe(
+        readableOn(background, preferred, 4.5),
+      );
+    },
+  );
+
+  // [label, background, on-brand foreground]
+  it.each([
+    ["equal colors", "#FFFF00", "#FFFF00"],
+    ["just above 4.5:1 (#767676 on white is about 4.54)", "#ffffff", "#767676"],
+    ["just below 4.5:1 (#777777 on white is about 4.48)", "#ffffff", "#777777"],
+    ["mid-grey below the black/white crossover", "#757575", "#ffffff"],
+    ["mid-grey at the black/white crossover", "#777777", "#ffffff"],
+    ["mid-grey above the black/white crossover", "#7a7a7a", "#000000"],
+    ["3-digit hex, preferred kept", "#036", "#fff"],
+    ["3-digit hex, fallback", "#fc0", "#fff"],
+  ] as const)(
+    "agrees with readableOn at 4.5:1 for %s",
+    (_label, background, preferred) => {
+      expect(pickStatusBarForeground(background, preferred)).toBe(
+        readableOn(background, preferred, 4.5),
+      );
     },
   );
 });
