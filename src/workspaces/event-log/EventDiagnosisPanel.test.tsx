@@ -15,7 +15,7 @@ import { useEvtxStore } from "./evtx-store";
 import { useEvtxLayoutStore } from "./evtx-layout-store";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { CoverageClaimsProvider } from "./evtx-coverage-claims";
-import { coverageDisclosureIndex } from "./evtx-coverage";
+import { coverageInputKeys } from "./evtx-coverage";
 import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
 import { DETAIL_RENDER_CAP, OUTCOME_LABELS, EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import type {
@@ -471,6 +471,8 @@ describe("EventDiagnosisPanel", () => {
       state: "accessDenied",
       detail: deniedSecurity.reason,
       evidence: [],
+      // The engine echoes the ordinal of the supplied gap it reports.
+      inputIndices: [0],
     };
     const deniedSummary: DiagnosisSummary = {
       ...summary,
@@ -569,7 +571,7 @@ describe("EventDiagnosisPanel", () => {
             <EvtxCoverageBanner />
             <EventDiagnosisPanel
               summary={deniedSummary}
-              coverageIndex={coverageDisclosureIndex([deniedSecurity])}
+              coverageInput={coverageInputKeys([deniedSecurity], 1)}
               {...props}
             />
           </CoverageClaimsProvider>,

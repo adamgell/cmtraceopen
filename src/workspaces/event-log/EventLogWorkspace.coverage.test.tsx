@@ -73,7 +73,10 @@ function storeGaps(gaps: readonly EvtxCoverageGap[]) {
   return { coverageDetails: [...gaps], coverageGaps: gaps.map(formatCoverageGap) };
 }
 
-/** What the engine answers for a build: the input gaps reported in its coverage. */
+/**
+ * What the engine answers for a build: the input gaps reported in its coverage, each row echoing
+ * the ordinal of the input it reports.
+ */
 function summaryFor(input: readonly EvtxCoverageGap[]): DiagnosisSummary {
   return {
     findings: [],
@@ -84,6 +87,7 @@ function summaryFor(input: readonly EvtxCoverageGap[]): DiagnosisSummary {
       state: "unknown",
       detail: gap.reason,
       evidence: [],
+      inputIndices: [index],
     })),
     correlations: [],
     events: [],
@@ -182,6 +186,29 @@ describe("EventLogWorkspace coverage wiring", () => {
     ]);
 
     await act(async () => resolve());
+    await waitFor(() => expect(screen.getByText("Coverage gaps (2)")).toBeInTheDocument());
+    expect(document.querySelector("[data-coverage-banner]")).toBeNull();
+  });
+
+  it("hands a gap to the rail when the engine rewrote its row's text", async () => {
+    const profile: EvtxCoverageGap = {
+      source: "C:\\Users\\alice\\Downloads\\System.evtx",
+      kind: "chunk",
+      reason: "chunk 3 is missing or zero-filled",
+      chunkId: 3,
+    };
+    // The engine's display projection replaces the profile segment of the row's source.
+    build.mockImplementation(async ({ coverageGaps }: BuildInput) => {
+      const diagnosis = summaryFor(coverageGaps);
+      diagnosis.coverageGaps = diagnosis.coverageGaps.map((row) => ({
+        ...row,
+        source: row.source.replace("\\alice\\", "\\[user]\\"),
+      }));
+      return { status: { sessionId: "session-1", revision: 1 }, initialPage: null, diagnosis };
+    });
+    showLoadedWorkspace([profile, SYSTEM_LIMIT]);
+    render(<EventLogWorkspace />);
+
     await waitFor(() => expect(screen.getByText("Coverage gaps (2)")).toBeInTheDocument());
     expect(document.querySelector("[data-coverage-banner]")).toBeNull();
   });

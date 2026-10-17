@@ -1,11 +1,13 @@
 /**
  * Which coverage surface shows which load gap.
  *
- * The invariant: every current load gap is visible on exactly one rendered surface. A surface
- * (the Insights rail today; the channel pane once Phase 8 adds its claim) claims the gaps it
- * actually renders, while it renders them, keyed by the shared key in evtx-coverage.ts
- * (`formatCoverageGap`, `legacyCoverageDisclosureKey`). The grid banner lists only what no surface
- * claims, so nothing is shown twice and nothing is shown nowhere.
+ * The invariant: every current load gap is disclosed on at least one rendered surface, and the
+ * grid banner never repeats a gap that a rendered surface names. A surface (the Insights rail today;
+ * the channel pane once Phase 8 adds its claim) claims the gaps it names, while it is on screen,
+ * keyed by the shared key in evtx-coverage.ts (`formatCoverageGap`, `legacyCoverageDisclosureKey`).
+ * The grid banner lists only what no surface claims, so no gap goes unshown and the banner repeats
+ * none. Two surfaces may name the same gap (the rail note and the channel pane both name a refused
+ * channel); claims are a union.
  *
  * Claims are registered in a layout effect, and the banner subscribes in a layout effect too, so it
  * re-renders before the browser paints and never shows a frame of gaps a surface is about to claim,

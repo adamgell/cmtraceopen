@@ -18,10 +18,11 @@
  * mount point in both branches keeps it mounted when the first summary lands.
  *
  * Coverage claims (evtx-coverage-claims.tsx): while the panel is on screen and its coverage
- * disclosure renders, it claims the store gaps whose rows the disclosure lists, looked up in the
- * shown summary's input (`coverageIndex`). It claims only what it names: a row past the render cap
- * is counted, not listed, and a gap that arrived after the summary has no row, so the grid banner
- * names both.
+ * disclosure renders, it claims the store gaps whose rows the disclosure lists, joined through the
+ * input ordinals the engine echoes on each row (`inputIndices`) to the shown summary's input keys
+ * (`coverageInput`). The join holds after the engine's redacted display projection rewrites a
+ * row's text. It claims only what it names: a row past the render cap is counted, not listed, and
+ * a gap that arrived after the summary has no row, so the grid banner names both.
  */
 import { memo, useId, useMemo, useState, type ReactNode } from "react";
 import { tokens } from "@fluentui/react-components";
@@ -29,7 +30,7 @@ import { LOG_MONOSPACE_FONT_FAMILY, getLogListMetrics } from "../../lib/log-acce
 import { useUiStore } from "../../stores/ui-store";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { useCoverageClaim } from "./evtx-coverage-claims";
-import { listedCoverageKeys, type CoverageDisclosureIndex } from "./evtx-coverage";
+import { listedCoverageKeys } from "./evtx-coverage";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 import { useRailTextColors } from "./evtx-rail-text";
 import {
@@ -103,8 +104,8 @@ interface EventDiagnosisPanelProps {
   scopeCount?: number | null;
   /** The panel is on screen (the rail is shown on its Insights panel). */
   visible?: boolean;
-  /** The store gaps `summary` was built from, by the row the engine reports for each. */
-  coverageIndex?: CoverageDisclosureIndex | null;
+  /** The shared keys of the gaps `summary` was built from, by input ordinal. */
+  coverageInput?: readonly string[] | null;
 }
 
 /** The note's one mount point across the pending and summary branches. */
@@ -113,6 +114,8 @@ const COVERAGE_NOTE_KEY = "coverage-note";
 interface GroupedCoverageGap {
   gap: DiagnosisCoverageGap;
   occurrences: number;
+  /** The input ordinals of every row grouped here, so a listed group names all of them. */
+  inputIndices: number[];
 }
 
 /** Actionable means every class except `coverageGap`, matching `actionableFindingCount`. */
@@ -136,8 +139,9 @@ function groupCoverageGaps(gaps: DiagnosisCoverageGap[]): GroupedCoverageGap[] {
     const existing = grouped.get(key);
     if (existing) {
       existing.occurrences += 1;
+      existing.inputIndices.push(...(gap.inputIndices ?? []));
     } else {
-      grouped.set(key, { gap, occurrences: 1 });
+      grouped.set(key, { gap, occurrences: 1, inputIndices: [...(gap.inputIndices ?? [])] });
     }
   }
   return [...grouped.values()];
@@ -824,7 +828,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
   error = null,
   scopeCount,
   visible = true,
-  coverageIndex = null,
+  coverageInput = null,
 }: EventDiagnosisPanelProps) {
   // The coverage rows the disclosure lists (grouped, capped at DETAIL_RENDER_CAP).
   const coverageGaps = useMemo(
@@ -835,19 +839,16 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
     [summary],
   );
   const disclosesCoverage =
-    visible && summary !== null && summary.overview.coverageGapCount > 0 && coverageIndex !== null;
+    visible && summary !== null && summary.overview.coverageGapCount > 0 && coverageInput !== null;
   const coverageClaim = useMemo(
     () =>
       disclosesCoverage && coverageGaps
         ? {
-            keys: listedCoverageKeys(
-              coverageIndex!,
-              coverageGaps.items.map(({ gap }) => gap),
-            ),
+            keys: listedCoverageKeys(coverageInput!, coverageGaps.items),
             archiveProvenance: false,
           }
         : null,
-    [disclosesCoverage, coverageIndex, coverageGaps],
+    [disclosesCoverage, coverageInput, coverageGaps],
   );
   useCoverageClaim(coverageClaim);
   const sizes = useRailSizes();

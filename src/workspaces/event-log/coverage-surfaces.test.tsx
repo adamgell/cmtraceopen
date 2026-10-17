@@ -20,12 +20,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { EvtxInsightsRail } from "./EvtxInsightsRail";
 import { CoverageClaimsProvider } from "./evtx-coverage-claims";
-import {
-  coverageDisclosureIndex,
-  formatCoverageGap,
-  mergeDiagnosisCoverageGaps,
-  type CoverageDisclosureIndex,
-} from "./evtx-coverage";
+import { coverageInputKeys, formatCoverageGap, mergeDiagnosisCoverageGaps } from "./evtx-coverage";
 import { sanitizeLayout, useEvtxLayoutStore, type EvtxRailTabId } from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
 import { resetElevationCoordinatorForTests } from "../../lib/elevation";
@@ -81,24 +76,54 @@ function storeGaps(gaps: readonly EvtxCoverageGap[]) {
   return { coverageDetails: [...gaps], coverageGaps: gaps.map(formatCoverageGap) };
 }
 
-/** A summary built from `input`, with the input gaps in its coverage as the engine maps them. */
-function summaryOf(input: readonly EvtxCoverageGap[]): {
-  summary: DiagnosisSummary;
-  index: CoverageDisclosureIndex;
-} {
+/** How a fake engine row shows a gap: its source and detail after the engine's projection. */
+interface RowText {
+  source: string;
+  detail: string;
+}
+
+interface EngineOptions {
+  /** Rewrites a row's text, as the engine's redacted display projection does. */
+  redact?: (text: string) => string;
+  /** Gaps whose rows the engine leaves out (truncated); still counted in the overview. */
+  omit?: readonly EvtxCoverageGap[];
+}
+
+/**
+ * A summary built from `input` the way the engine reports supplied gaps: one row per gap, its
+ * detail with the chunk it names, its ordinal echoed in `inputIndices`.
+ */
+function summaryOf(
+  input: readonly EvtxCoverageGap[],
+  { redact = (text) => text, omit = [] }: EngineOptions = {},
+): { summary: DiagnosisSummary; input: readonly string[]; display: Map<string, RowText> } {
   const store = storeGaps(input);
   const diagnosisInput = mergeDiagnosisCoverageGaps(store.coverageDetails, [], store.coverageGaps, []);
+  const omitted = new Set(omit.map(formatCoverageGap));
+  const display = new Map<string, RowText>();
+  const rows = diagnosisInput.flatMap((gap, index) => {
+    if (omitted.has(formatCoverageGap(gap))) return [];
+    const source = redact(gap.source);
+    const detail = redact(
+      gap.chunkId === undefined ? gap.reason : `${gap.reason} (chunk ${gap.chunkId})`,
+    );
+    display.set(formatCoverageGap(gap), { source, detail });
+    return [
+      {
+        id: `coverage-${index}`,
+        source,
+        state: gap.kind === "accessDenied" ? ("accessDenied" as const) : ("unknown" as const),
+        detail,
+        evidence: [],
+        inputIndices: [index],
+      },
+    ];
+  });
   return {
     summary: {
       findings: [],
       evidence: [],
-      coverageGaps: diagnosisInput.map((gap, index) => ({
-        id: `coverage-${index}`,
-        source: gap.source,
-        state: gap.kind === "accessDenied" ? "accessDenied" : "unknown",
-        detail: gap.reason,
-        evidence: [],
-      })),
+      coverageGaps: rows,
       correlations: [],
       events: [],
       overview: {
@@ -112,19 +137,22 @@ function summaryOf(input: readonly EvtxCoverageGap[]): {
         errorTokenEventCount: 0,
       },
     },
-    index: coverageDisclosureIndex(diagnosisInput),
+    input: coverageInputKeys(diagnosisInput, diagnosisInput.length),
+    display,
   };
 }
 
 interface RailProps {
   summary: DiagnosisSummary | null;
-  index: CoverageDisclosureIndex | null;
+  input: readonly string[] | null;
   pending: boolean;
   error: string | null;
+  /** How the shown summary's rows read; the identity when absent. */
+  display?: ReadonlyMap<string, RowText>;
 }
 
 /** The rail and the banner as the workspace mounts them; the aside is hidden with the rail. */
-function Surfaces({ summary, index, pending, error }: RailProps) {
+function Surfaces({ summary, input, pending, error }: RailProps) {
   const insights = useEvtxLayoutStore((s) => s.panels.insights);
   return (
     <CoverageClaimsProvider>
@@ -135,7 +163,7 @@ function Surfaces({ summary, index, pending, error }: RailProps) {
           records={[RECORD]}
           pending={pending}
           error={error}
-          summaryCoverageIndex={index}
+          summaryCoverageInput={input}
         />
       </aside>
     </CoverageClaimsProvider>
@@ -171,8 +199,12 @@ function expandCoverageDisclosures(): void {
 }
 
 /** Where `gap` is visible: listed by the banner, and shown by the rail (note or disclosure). */
-function occurrences(gap: EvtxCoverageGap): { banner: number; rail: number } {
+function occurrences(
+  gap: EvtxCoverageGap,
+  display: ReadonlyMap<string, RowText> | undefined,
+): { banner: number; rail: number } {
   const line = formatCoverageGap(gap);
+  const row = display?.get(line) ?? { source: gap.source, detail: gap.reason };
   const banner = Array.from(document.querySelectorAll("[data-coverage-banner] li")).filter(
     (item) =>
       !item.closest("[data-archive-provenance]") &&
@@ -187,8 +219,8 @@ function occurrences(gap: EvtxCoverageGap): { banner: number; rail: number } {
   const disclosure = Array.from(document.querySelectorAll("span")).some((span) => {
     const text = span.textContent ?? "";
     return (
-      text.startsWith(`Coverage: ${gap.source} (`) &&
-      text.includes(`): ${gap.reason} (`) &&
+      text.startsWith(`Coverage: ${row.source} (`) &&
+      text.includes(`): ${row.detail} (`) &&
       isVisible(span)
     );
   });
@@ -207,13 +239,29 @@ interface Row {
   finalGaps?: readonly EvtxCoverageGap[];
 }
 
-function shownFor(gaps: readonly EvtxCoverageGap[]): RailProps {
-  const built = summaryOf(gaps);
-  return { summary: built.summary, index: built.index, pending: false, error: null };
+function shownFor(gaps: readonly EvtxCoverageGap[], options?: EngineOptions): RailProps {
+  const built = summaryOf(gaps, options);
+  return {
+    summary: built.summary,
+    input: built.input,
+    pending: false,
+    error: null,
+    display: built.display,
+  };
 }
 const SHOWN = shownFor(LOADED);
-const BUILDING: RailProps = { summary: null, index: null, pending: true, error: null };
-const FAILED: RailProps = { summary: null, index: null, pending: false, error: "engine unavailable" };
+const BUILDING: RailProps = { summary: null, input: null, pending: true, error: null };
+const FAILED: RailProps = { summary: null, input: null, pending: false, error: "engine unavailable" };
+
+/** A files-mode source under a user profile, with a rejected chunk (parser.rs chunk gaps). */
+const PROFILE_CHUNK: EvtxCoverageGap = {
+  source: "C:\\Users\\alice\\Downloads\\System.evtx",
+  kind: "chunk",
+  reason: "chunk 3 is missing or zero-filled",
+  chunkId: 3,
+};
+/** The engine's display projection replaces the profile segment of a path. */
+const redactProfile = (text: string) => text.replace("\\Users\\alice\\", "\\Users\\[user]\\");
 
 /** Five local channels refused: the note draws three and counts the other two. */
 const MANY_DENIED = ["Security", "Setup", "Sysmon", "LAPS", "AppLocker"].map(
@@ -265,6 +313,27 @@ const ROWS: Row[] = [
     elevation: OFFERABLE,
     gaps: MANY_RECORDS,
     steps: [shownFor(MANY_RECORDS)],
+  },
+  {
+    name: "a redacted profile path in the engine's rows",
+    insights: true,
+    railTab: "insights",
+    elevation: OFFERABLE,
+    gaps: [PROFILE_CHUNK, ...LOADED],
+    steps: [shownFor([PROFILE_CHUNK, ...LOADED], { redact: redactProfile })],
+  },
+  {
+    // The second summary lists Setup's new row and leaves out Application's.
+    name: "a second summary that lists different rows",
+    insights: true,
+    railTab: "insights",
+    elevation: OFFERABLE,
+    gaps: [SYSTEM_LIMIT, APPLICATION_RECORD],
+    steps: [
+      shownFor([SYSTEM_LIMIT, APPLICATION_RECORD]),
+      shownFor([SYSTEM_LIMIT, APPLICATION_RECORD, SETUP_MISSING], { omit: [APPLICATION_RECORD] }),
+    ],
+    finalGaps: [SYSTEM_LIMIT, APPLICATION_RECORD, SETUP_MISSING],
   },
 ];
 
@@ -322,9 +391,10 @@ describe("every current load gap is visible on exactly one rendered surface", ()
     expandCoverageDisclosures();
 
     const current = row.finalGaps ?? row.gaps;
+    const shown = row.steps[row.steps.length - 1];
     const placements = Object.fromEntries(
       current.map((gap) => {
-        const { banner, rail } = occurrences(gap);
+        const { banner, rail } = occurrences(gap, shown.display);
         return [formatCoverageGap(gap), banner + rail];
       }),
     );

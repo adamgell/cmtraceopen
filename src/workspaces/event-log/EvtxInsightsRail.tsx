@@ -29,7 +29,6 @@ import {
   type EvtxRailTabId,
 } from "./evtx-layout-store";
 import { findRecordById, formatCount } from "./evtx-insights-data";
-import type { CoverageDisclosureIndex } from "./evtx-coverage";
 import { useRailTextColors } from "./evtx-rail-text";
 import { useEvtxStore } from "./evtx-store";
 import type { DiagnosisFinding, DiagnosisSummary, EvtxRecord } from "./types";
@@ -43,11 +42,10 @@ interface EvtxInsightsRailProps {
   /** Why the last diagnosis build failed. */
   error?: string | null;
   /**
-   * The store gaps `summary` was built from, by the row the engine reports for each
-   * (`coverageDisclosureIndex`). Retained with the summary, so the panel claims only gaps of the
-   * summary it shows.
+   * The shared keys of the gaps `summary` was built from, by input ordinal (`coverageInputKeys`).
+   * Retained with the summary, so the panel claims only gaps of the summary it shows.
    */
-  summaryCoverageIndex?: CoverageDisclosureIndex | null;
+  summaryCoverageInput?: readonly string[] | null;
 }
 
 /** Tabs the rail can show today, in order. Phase 10c adds "chains" between the two. */
@@ -108,7 +106,7 @@ export function EvtxInsightsRail({
   records,
   pending = false,
   error = null,
-  summaryCoverageIndex = null,
+  summaryCoverageInput = null,
 }: EvtxInsightsRailProps) {
   const railTab = useEvtxLayoutStore((s) => s.railTab);
   const setRailTab = useEvtxLayoutStore((s) => s.setRailTab);
@@ -142,19 +140,19 @@ export function EvtxInsightsRail({
 
   // The diagnosis is cleared while it rebuilds. Keep showing the previous build, marked as
   // updating, so the reader's place survives a live-tail batch; drop it on failure or no input.
-  // The visible-event count and the coverage index are stored WITH the summary, so the scope line
+  // The visible-event count and the coverage input keys are stored WITH the summary, so the scope line
   // states the scope the shown numbers were built from, and the coverage claim covers only gaps the
   // shown summary was built from, never the store's newer ones.
   const lastBuildRef = useRef<{
     summary: DiagnosisSummary;
     scopeCount: number;
-    coverageIndex: CoverageDisclosureIndex | null;
+    coverageInput: readonly string[] | null;
   } | null>(null);
   if (summary && lastBuildRef.current?.summary !== summary) {
     lastBuildRef.current = {
       summary,
       scopeCount: records.length,
-      coverageIndex: summaryCoverageIndex,
+      coverageInput: summaryCoverageInput,
     };
   }
   if (error || (!summary && !pending)) lastBuildRef.current = null;
@@ -257,7 +255,7 @@ export function EvtxInsightsRail({
           // The panel is on screen only while the rail is shown on the tab that renders it (a
           // persisted tab this build lacks renders Insights, so it counts as Insights here).
           visible={insightsActive}
-          coverageIndex={shown?.coverageIndex ?? null}
+          coverageInput={shown?.coverageInput ?? null}
         />
       </div>
       {activeTab === "details" && (

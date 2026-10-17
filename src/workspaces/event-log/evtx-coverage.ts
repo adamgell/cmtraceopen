@@ -285,7 +285,7 @@ export function mergeDiagnosisCoverageGaps(
  * and filed under `event-log` or `live-tail` when it names no source), so a gap in the store and
  * the diagnosis input it became share one key. The grid banner keys its lines with these, and a
  * surface showing a summary claims the keys of the input gaps whose rows it lists
- * (`coverageDisclosureIndex`, `listedCoverageKeys`).
+ * (`coverageInputKeys`, `listedCoverageKeys`).
  */
 export function legacyCoverageDisclosureKey(message: string, origin: "legacy" | "tail"): string {
   return formatCoverageGap(
@@ -294,59 +294,35 @@ export function legacyCoverageDisclosureKey(message: string, origin: "legacy" | 
 }
 
 /**
- * The detail the diagnosis engine reports for an input gap: its reason, followed by the chunk and
- * the event record it names. Mirrors `diagnosis_finding_for_gap` in
- * src-tauri/src/event_log/commands.rs.
+ * The shared key of each diagnosis input gap (`mergeDiagnosisCoverageGaps` output), by its ordinal:
+ * the store gap that input became. Only the first `ordinalCount` reach the engine at their own
+ * ordinal (`diagnosisCoverageInputOrdinalCount`); a bounded transport's notice takes the next one
+ * and belongs to no store gap. Gaps beyond the frontend bound are not in the input, and the
+ * synthetic bound gap's key matches no store gap.
  */
-export function diagnosisCoverageDetail(gap: EvtxCoverageGap): string {
-  const record =
-    gap.eventRecordIdText ?? (gap.eventRecordId === undefined ? undefined : String(gap.eventRecordId));
-  if (gap.chunkId !== undefined && record !== undefined) {
-    return `${gap.reason} (chunk ${gap.chunkId}, event record ${record})`;
-  }
-  if (gap.chunkId !== undefined) return `${gap.reason} (chunk ${gap.chunkId})`;
-  if (record !== undefined) return `${gap.reason} (event record ${record})`;
-  return gap.reason;
-}
-
-/** The store gap keys behind each diagnosis coverage row, by the row's source and detail. */
-export type CoverageDisclosureIndex = ReadonlyMap<string, readonly string[]>;
-
-function coverageRowIdentity(source: string, detail: string): string {
-  return JSON.stringify([source, detail]);
-}
-
-/**
- * Indexes a diagnosis input (`mergeDiagnosisCoverageGaps` output) by the row the engine reports
- * for each gap, so a surface claims a gap only when it lists that gap's row. Gaps beyond the
- * frontend bound are not in the input, so no row stands for them; the synthetic bound gap's key
- * matches no store gap.
- */
-export function coverageDisclosureIndex(
+export function coverageInputKeys(
   diagnosisInput: readonly EvtxCoverageGap[],
-): CoverageDisclosureIndex {
-  const index = new Map<string, string[]>();
-  for (const gap of diagnosisInput) {
-    const identity = coverageRowIdentity(gap.source, diagnosisCoverageDetail(gap));
-    const keys = index.get(identity) ?? [];
-    const key = formatCoverageGap(gap);
-    if (!keys.includes(key)) keys.push(key);
-    index.set(identity, keys);
-  }
-  return index;
+  ordinalCount: number,
+): readonly string[] {
+  return diagnosisInput.slice(0, ordinalCount).map(formatCoverageGap);
 }
 
 /**
- * The store gap keys the listed rows name. A row the surface only counts names no gap, so it
- * claims none: the banner names those instead.
+ * The store gap keys the listed rows name, joined through the ordinals the engine echoes on each
+ * row (`inputIndices`). The join survives the engine's redacted display projection, which rewrites
+ * a row's text. A row the surface only counts names no gap, so it is not passed here, and an
+ * engine-found row has no ordinals.
  */
 export function listedCoverageKeys(
-  index: CoverageDisclosureIndex,
-  listedRows: readonly { source: string; detail: string }[],
+  inputKeys: readonly string[],
+  listedRows: readonly { inputIndices?: readonly number[] }[],
 ): Set<string> {
   const keys = new Set<string>();
   for (const row of listedRows) {
-    for (const key of index.get(coverageRowIdentity(row.source, row.detail)) ?? []) keys.add(key);
+    for (const ordinal of row.inputIndices ?? []) {
+      const key = inputKeys[ordinal];
+      if (key !== undefined) keys.add(key);
+    }
   }
   return keys;
 }

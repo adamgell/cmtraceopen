@@ -62,8 +62,9 @@ type EvtxCoverageBannerProps =
  * It cannot be dismissed permanently, only collapsed. A gap stays true for as long as the data is
  * on screen, and letting it be dismissed would make the view claim completeness it does not have.
  *
- * Every current gap is shown on exactly one rendered surface (evtx-coverage-claims.tsx). Three
- * variants, one export (the workspace tests replace this module with a single component):
+ * Every current load gap is disclosed on at least one rendered surface, and the grid banner never
+ * repeats a gap that a rendered surface names (evtx-coverage-claims.tsx). Three variants, one
+ * export (the workspace tests replace this module with a single component):
  * - `grid`: the gaps, and the archive provenance, that no surface claims. Not drawn when every one
  *   is claimed.
  * - `rail`: the Insights tab's coverage note, one note per source the backend refused to read, plus
@@ -71,9 +72,12 @@ type EvtxCoverageBannerProps =
  * - `announcer`: a visually hidden polite live region, always mounted, that announces newly
  *   reported gaps whichever surface shows them.
  *
- * The channel pane (spec 8.6, Phase 8) will claim exactly the gaps its model attributes: its rows
- * plus its disclosure of gaps it cannot attribute to a channel. Gaps it leaves out, such as
- * inventory-only archive members, stay with the banner.
+ * The channel pane (spec 8.6, Phase 8) will claim exactly the gaps its model names: its rows plus
+ * its disclosure of gaps it cannot attribute to a channel. Gaps it leaves out, such as
+ * inventory-only archive members, stay with the banner. The pane and the rail note may both name a
+ * refused channel ("needs elevation" in 8.6, the note in 8.13 item 2); only the banner must not
+ * repeat it. The pane is hidden with `display: none`, not unmounted, so like the rail it must pass
+ * a visible flag and claim only while it is on screen.
  */
 export function EvtxCoverageBanner(props: EvtxCoverageBannerProps) {
   if (props.variant === "announcer") return <CoverageAnnouncer />;
