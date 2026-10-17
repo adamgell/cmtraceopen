@@ -361,7 +361,11 @@ class DisjointSet {
   }
 }
 
-function messageHead(message: string): string {
+/**
+ * The first non-empty line of a message, cut to the title head (80 code points, "..." when cut).
+ * Exported so the dock names an entry's message exactly as a chain title does.
+ */
+export function messageHead(message: string): string {
   const line =
     message
       .split(/\r?\n/)
