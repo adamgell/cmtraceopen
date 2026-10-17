@@ -66,6 +66,12 @@ confidence-threshold = 0.8
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
+# The RUSTSEC-2026-0367/0368/0369 ignores above are justified only for the zip that
+# tauri-plugin-updater pulls in. This ban fails the check if a zip below the patched
+# 9.0.1 enters the graph through any other crate, so the ignore cannot hide a new path.
+deny = [
+    { name = "zip", version = "<9.0.1", wrappers = ["tauri-plugin-updater"], reason = "zip <9.0.1 is affected by RUSTSEC-2026-0367/0368/0369; only tauri-plugin-updater's copy is accepted (see the advisory ignores)" },
+]
 
 [sources]
 unknown-registry = "warn"
