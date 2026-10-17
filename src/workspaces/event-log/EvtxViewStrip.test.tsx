@@ -1,8 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { tokens } from "@fluentui/react-components";
 
 const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
@@ -17,12 +17,22 @@ import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes, getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import { deferred } from "../../test-utils/deferred";
+import { viewImportSummary } from "./EvtxViewDialogs";
 import { EvtxViewStrip, evtxStripMutedTextColor, exportFileStem } from "./EvtxViewStrip";
 import { DEFAULT_QUICK_FILTER } from "./evtx-filter";
 import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { captureCriteria, sanitizeCriteria } from "./evtx-saved-filters";
 import { cancelActiveLoad, useEvtxStore } from "./evtx-store";
-import { EVTX_BUILT_IN_VIEWS, MAX_CUSTOM_VIEWS, parseViewExport, type EvtxViewBody } from "./evtx-views";
+import {
+  buildViewExport,
+  ENROLLMENT_TRIAGE_ID,
+  EVTX_BUILT_IN_VIEWS,
+  listViews,
+  MAX_CUSTOM_VIEWS,
+  MAX_VIEW_FILE_LENGTH,
+  parseViewExport,
+  type EvtxViewBody,
+} from "./evtx-views";
 import { EVTX_VIEWS_STORAGE_KEY, useEvtxViewStore } from "./evtx-views-store";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import type { EvtxRecord } from "./types";
@@ -892,6 +902,177 @@ describe("EvtxViewStrip context menu", () => {
       ["x".repeat(100), "x".repeat(40)],
     ])("turns %j into %j", (name, stem) => {
       expect(exportFileStem(name)).toBe(stem);
+    });
+  });
+});
+
+describe("EvtxViewStrip Import views...", () => {
+  beforeEach(() => {
+    reset();
+    vi.mocked(open).mockReset();
+    vi.mocked(readTextFile).mockReset();
+  });
+  afterEach(cleanup);
+
+  const bodyOf = (name: string, patch: Partial<EvtxViewBody> = {}): EvtxViewBody => ({
+    name,
+    criteria: sanitizeCriteria({ beforeLoad: { levels: ["Error"], eventIds: "41", timeWindow: "7d" } }),
+    layout: null,
+    ...patch,
+  });
+  const openNewDialog = () => {
+    render(<EvtxViewStrip />);
+    fireEvent.click(card("New view"));
+    return screen.getByRole("dialog", { name: "New view" });
+  };
+  const importFile = async (text: string | Promise<string>) => {
+    vi.mocked(open).mockResolvedValue("C:\\views\\shared.json");
+    vi.mocked(readTextFile).mockReturnValue(Promise.resolve(text));
+    const dialog = openNewDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Import views..." }));
+    return dialog;
+  };
+
+  it("is offered in the New view dialog, and not in the Rename dialog", async () => {
+    makeView("Mine");
+    const dialog = openNewDialog();
+    expect(within(dialog).getByRole("button", { name: "Import views..." })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.contextMenu(card("Mine"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename..." }));
+    const rename = await screen.findByRole("dialog", { name: "Rename view" });
+    expect(within(rename).queryByRole("button", { name: "Import views..." })).toBeNull();
+  });
+
+  it("imports the views in a file, says how many it added, replaced and skipped, and closes", async () => {
+    const mine = makeView("Mine");
+    const file = JSON.parse(buildViewExport([bodyOf("Mine", { layout: null }), bodyOf("Shared"), bodyOf("Enrollment triage")]));
+    file.views.push({ name: "Broken", criteria: { beforeLoad: { levels: ["Nonsense"] } } });
+    await importFile(JSON.stringify(file));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const notice = screen.getByText("Imported 2 views, 1 replaced, 1 skipped.");
+    expect(notice).toHaveAttribute("role", "status");
+    const views = useEvtxViewStore.getState().views;
+    expect(views.map((v) => v.name)).toEqual(["Mine", "Shared", "Enrollment triage (2)"]);
+    expect(views[0].id).toBe(mine.id);
+    expect(views[0].criteria.beforeLoad.eventIds).toBe("41");
+    // The built-in is still the only built-in, and still its own.
+    expect(listViews(views).filter((v) => v.builtIn)).toHaveLength(1);
+    expect(views.some((v) => v.id === ENROLLMENT_TRIAGE_ID)).toBe(false);
+    await waitFor(() => expect(card("New view")).toHaveFocus());
+    // The next thing the operator does clears it.
+    fireEvent.click(card("Shared"));
+    expect(screen.queryByText("Imported 2 views, 1 replaced, 1 skipped.")).toBeNull();
+  });
+
+  it("stays open and changes nothing when the picker is cancelled", async () => {
+    vi.mocked(open).mockResolvedValue(null);
+    const dialog = openNewDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Import views..." }));
+    await waitFor(() => expect(open).toHaveBeenCalled());
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Import views..." })).toBeEnabled());
+    expect(readTextFile).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "New view" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+    expect(useEvtxViewStore.getState().views).toEqual([]);
+  });
+
+  it.each<[string, string, RegExp]>([
+    ["text that is not JSON", "{not json", /not JSON/],
+    ["a file of another schema", JSON.stringify({ schema: 2, views: [] }), /schema 1/],
+    ["a saved-filter file", JSON.stringify({ schema: 2, filters: [] }), /schema 1/],
+    ["no schema", JSON.stringify({ views: [] }), /schema 1/],
+    ["a list that is not a list", JSON.stringify({ schema: 1, views: {} }), /no list of views/],
+    ["a file over the limit", "x".repeat(MAX_VIEW_FILE_LENGTH + 1), /larger than 1 MB/],
+  ])("says why %s was not imported, and keeps the dialog open", async (_label, text, message) => {
+    makeView("Existing");
+    const before = JSON.stringify(useEvtxViewStore.getState().views);
+    const dialog = await importFile(text);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByRole("dialog", { name: "New view" })).toBeInTheDocument();
+    expect(JSON.stringify(useEvtxViewStore.getState().views)).toBe(before);
+  });
+
+  it("says so when the file cannot be read", async () => {
+    vi.mocked(open).mockResolvedValue("C:\\views\\gone.json");
+    vi.mocked(readTextFile).mockRejectedValue(new Error("The system cannot find the file specified. (os error 2)"));
+    const dialog = openNewDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Import views..." }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "That file could not be read. The system cannot find the file specified. (os error 2)",
+    );
+  });
+
+  it("takes in nothing a hostile file asks for: no transient criteria, no built-in, no id", async () => {
+    const hostile = {
+      name: "Hostile",
+      id: ENROLLMENT_TRIAGE_ID,
+      builtIn: true,
+      timeRange: { startMs: 1, endMs: 2 },
+      criteria: { ...bodyOf("x").criteria, recordScope: { kind: "finding" }, scopeRecordIds: [1] },
+      layout: { activeView: "table", panels: { channels: true, insights: true, dock: true }, timeRange: 1 },
+    };
+    await importFile(`{"schema":1,"views":[${JSON.stringify(hostile)},{"name":"Proto","__proto__":{"polluted":1},"criteria":{}}]}`);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByText("Imported 2 views.")).toBeInTheDocument();
+    const views = useEvtxViewStore.getState().views;
+    expect(views.map((v) => v.name)).toEqual(["Hostile", "Proto"]);
+    expect(views.every((v) => v.id !== ENROLLMENT_TRIAGE_ID)).toBe(true);
+    expect(views[0].layout?.panels.dock).toBe(false);
+    expect(JSON.stringify(views)).not.toMatch(TRANSIENT);
+    expect(JSON.stringify(views)).not.toMatch(/builtIn|polluted/);
+    expect(localStorage.getItem(EVTX_VIEWS_STORAGE_KEY)).not.toMatch(TRANSIENT);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(listViews(views).filter((v) => v.builtIn)).toHaveLength(1);
+  });
+
+  it("leaves out what does not fit in the library and counts it", async () => {
+    for (let i = 0; i < MAX_CUSTOM_VIEWS - 1; i += 1) makeView(`V${i}`);
+    await importFile(buildViewExport([bodyOf("One more"), bodyOf("Too many")]));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByText("Imported 1 view, 1 skipped.")).toBeInTheDocument();
+    expect(useEvtxViewStore.getState().views).toHaveLength(MAX_CUSTOM_VIEWS);
+  });
+
+  it("does not open a second picker while one is open", async () => {
+    const picking = deferred<string | null>();
+    vi.mocked(open).mockReturnValue(picking.promise);
+    const dialog = openNewDialog();
+    const button = within(dialog).getByRole("button", { name: "Import views..." });
+    fireEvent.click(button);
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(open).toHaveBeenCalledTimes(1);
+    picking.resolve(null);
+    await waitFor(() => expect(button).toBeEnabled());
+  });
+
+  it("round-trips: what Export wrote is what Import reads", async () => {
+    const made = makeView("Round trip", { layout: { activeView: "grouped", panels: { channels: true, insights: false, dock: false } } });
+    const exported = buildViewExport([made]);
+    useEvtxViewStore.getState().remove(made.id);
+    await importFile(exported);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const [again] = useEvtxViewStore.getState().views;
+    expect({ name: again.name, criteria: again.criteria, layout: again.layout }).toEqual({
+      name: made.name,
+      criteria: made.criteria,
+      layout: made.layout,
+    });
+    expect(again.id).not.toBe(made.id);
+  });
+
+  describe("the summary", () => {
+    it.each([
+      [{ added: 1, replaced: 0, skipped: 0 }, "Imported 1 view."],
+      [{ added: 0, replaced: 0, skipped: 0 }, "Imported 0 views."],
+      [{ added: 3, replaced: 0, skipped: 0 }, "Imported 3 views."],
+      [{ added: 2, replaced: 1, skipped: 0 }, "Imported 2 views, 1 replaced."],
+      [{ added: 0, replaced: 0, skipped: 4 }, "Imported 0 views, 4 skipped."],
+      [{ added: 2, replaced: 3, skipped: 1 }, "Imported 2 views, 3 replaced, 1 skipped."],
+    ])("%j reads %j", (counts, text) => {
+      expect(viewImportSummary(counts)).toBe(text);
     });
   });
 });

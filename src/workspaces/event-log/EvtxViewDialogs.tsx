@@ -18,7 +18,14 @@ import {
   Input,
   tokens,
 } from "@fluentui/react-components";
-import { MAX_CUSTOM_VIEWS, MAX_VIEW_NAME_LENGTH } from "./evtx-views";
+import {
+  MAX_CUSTOM_VIEWS,
+  MAX_VIEW_FILE_LENGTH,
+  MAX_VIEW_NAME_LENGTH,
+  SAVED_VIEW_SCHEMA,
+  type EvtxViewImportFailure,
+  type EvtxViewMerge,
+} from "./evtx-views";
 import type { EvtxViewFailure } from "./evtx-views-store";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 
@@ -40,6 +47,34 @@ export function viewFailureMessage(reason: EvtxViewFailure, name: string): strin
   }
 }
 
+/** Why a file was not imported, for the dialog to say. */
+export function viewImportFailureMessage(reason: EvtxViewImportFailure): string {
+  switch (reason) {
+    case "too-large":
+      return `That file is larger than ${MAX_VIEW_FILE_LENGTH / 1_048_576} MB, so it was not read.`;
+    case "not-json":
+      return "That file is not JSON, so it was not read.";
+    case "unsupported-schema":
+      return `That is not a view file this version can read. It reads schema ${SAVED_VIEW_SCHEMA}.`;
+    case "not-a-view-file":
+      return "That file has no list of views.";
+  }
+}
+
+/** How picking and reading an import file ended. A cancelled picker is not a failure and not a success. */
+export type EvtxViewImportOutcome =
+  | { kind: "imported" }
+  | { kind: "cancelled" }
+  | { kind: "failed"; message: string };
+
+/** What an import did, in counts: "Imported 2 views, 1 replaced, 1 skipped." */
+export function viewImportSummary(result: Pick<EvtxViewMerge, "added" | "replaced" | "skipped">): string {
+  const parts = [`Imported ${result.added} ${result.added === 1 ? "view" : "views"}`];
+  if (result.replaced > 0) parts.push(`${result.replaced} replaced`);
+  if (result.skipped > 0) parts.push(`${result.skipped} skipped`);
+  return `${parts.join(", ")}.`;
+}
+
 const DIALOG_STYLE = {
   borderRadius: "8px",
   boxShadow: tokens.shadow16,
@@ -59,6 +94,12 @@ interface EvtxViewNameDialogProps {
   onClose: () => void;
   /** Applies the name. Returns why it was refused, or null once it is done. */
   onSave: (name: string, includeLayout: boolean) => EvtxViewFailure | null;
+  /**
+   * Offers "Import views..." in the footer: picks a file and imports it. The dialog closes once it
+   * imported, stays open and says why when it failed, and stays open when the picker was cancelled.
+   * Left out where importing makes no sense.
+   */
+  onImport?: () => Promise<EvtxViewImportOutcome>;
 }
 
 /**
@@ -74,11 +115,13 @@ export function EvtxViewNameDialog({
   fontSize,
   onClose,
   onSave,
+  onImport,
 }: EvtxViewNameDialogProps) {
   const { levels } = useEvtxVisualTokens();
   const [name, setName] = useState(initialName);
   const [includeLayout, setIncludeLayout] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
   // Each opening starts from the form's start, with the cursor in the name. Focus is set after the
@@ -99,6 +142,17 @@ export function EvtxViewNameDialog({
     const failure = onSave(name, includeLayout);
     if (failure === null) onClose();
     else setError(viewFailureMessage(failure, name));
+  };
+  const importViews = async () => {
+    if (!onImport) return;
+    setImporting(true);
+    try {
+      const outcome = await onImport();
+      if (outcome.kind === "imported") onClose();
+      else if (outcome.kind === "failed") setError(outcome.message);
+    } finally {
+      setImporting(false);
+    }
   };
 
   return (
@@ -146,7 +200,14 @@ export function EvtxViewNameDialog({
               />
             )}
           </DialogContent>
-          <DialogActions>
+          {onImport && (
+            <DialogActions position="start">
+              <Button appearance="secondary" size="small" disabled={importing} onClick={() => void importViews()}>
+                Import views...
+              </Button>
+            </DialogActions>
+          )}
+          <DialogActions position="end">
             <Button appearance="secondary" size="small" onClick={onClose}>
               Cancel
             </Button>

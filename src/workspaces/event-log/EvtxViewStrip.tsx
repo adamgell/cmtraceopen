@@ -32,15 +32,22 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { Add16Regular } from "@fluentui/react-icons";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { contrastRatio, readableOn } from "../../lib/color-contrast";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { getThemeById } from "../../lib/themes";
 import type { CMTraceTheme } from "../../lib/themes/types";
 import { useUiStore } from "../../stores/ui-store";
 import { applyView } from "./evtx-criteria-actions";
-import { EvtxDeleteViewDialog, EvtxViewNameDialog, viewFailureMessage } from "./EvtxViewDialogs";
+import {
+  EvtxDeleteViewDialog,
+  EvtxViewNameDialog,
+  viewFailureMessage,
+  viewImportFailureMessage,
+  viewImportSummary,
+  type EvtxViewImportOutcome,
+} from "./EvtxViewDialogs";
 import { useFilterChips } from "./EvtxFilterChips";
 import { useEvtxLayoutStore } from "./evtx-layout-store";
 import { captureCriteria } from "./evtx-saved-filters";
@@ -51,6 +58,7 @@ import {
   captureLayout,
   listViews,
   missingViewChannels,
+  parseViewExport,
   viewDescription,
   viewMatchesCriteria,
   viewSubtitle,
@@ -211,7 +219,16 @@ export function EvtxViewStrip() {
     [],
   );
 
+  // A failure is shown in full under the strip until the next thing is done; so is what an import did.
+  const [problem, setProblem] = useState<string | null>(null);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
+  const clearMessages = () => {
+    setProblem(null);
+    setImportNotice(null);
+  };
+
   const applyAndAnnounce = (view: EvtxView) => {
+    clearMessages();
     const missing = missingViewChannels(view, heldChannels).length;
     applyView(view);
     announce(
@@ -259,8 +276,6 @@ export function EvtxViewStrip() {
   type Dialog = { kind: "new" } | { kind: "rename" | "delete"; id: string } | null;
   const [dialog, setDialog] = useState<Dialog>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  // A failure is shown in full under the strip until the next thing is done.
-  const [problem, setProblem] = useState<string | null>(null);
   const focusSoon = (id: string) => setTimeout(() => focusItem(id), 0);
   const closeDialog = (returnTo: string) => {
     setDialog(null);
@@ -278,14 +293,14 @@ export function EvtxViewStrip() {
         includeLayout ? captureLayout(useEvtxLayoutStore.getState()) : null,
       );
     if (!result.ok) return result.reason;
-    setProblem(null);
+    clearMessages();
     announce(`Saved view ${result.view.name}.`);
     return null;
   };
   const renameView = (id: string, name: string): EvtxViewFailure | null => {
     const result = useEvtxViewStore.getState().rename(id, name);
     if (!result.ok) return result.reason;
-    setProblem(null);
+    clearMessages();
     announce(`Renamed to ${result.view.name}.`);
     return null;
   };
@@ -294,7 +309,7 @@ export function EvtxViewStrip() {
       .getState()
       .update(view.id, captureCriteria(useEvtxStore.getState()), captureLayout(useEvtxLayoutStore.getState()));
     if (result.ok) {
-      setProblem(null);
+      clearMessages();
       announce(`Updated ${view.name} from the current filters.`);
     } else {
       setProblem(`${view.name} was not updated. ${viewFailureMessage(result.reason, view.name)}`);
@@ -303,7 +318,7 @@ export function EvtxViewStrip() {
   const duplicateView = (view: EvtxView) => {
     const result = useEvtxViewStore.getState().duplicate(view);
     if (result.ok) {
-      setProblem(null);
+      clearMessages();
       announce(`Duplicated ${view.name} as ${result.view.name}.`);
       focusSoon(result.view.id);
     } else {
@@ -316,7 +331,7 @@ export function EvtxViewStrip() {
     const neighbour = itemIds[index + 1] ?? itemIds[index - 1];
     const name = custom.find((view) => view.id === id)?.name ?? "view";
     useEvtxViewStore.getState().remove(id);
-    setProblem(null);
+    clearMessages();
     announce(`Deleted ${name}.`);
     closeDialog(neighbour ?? NEW_VIEW_ID);
   };
@@ -325,7 +340,7 @@ export function EvtxViewStrip() {
   const exportView = async (view: EvtxView) => {
     if (exporting.current) return;
     exporting.current = true;
-    setProblem(null);
+    clearMessages();
     try {
       const destination = await save({
         defaultPath: `${exportFileStem(view.name)}.json`,
@@ -338,6 +353,27 @@ export function EvtxViewStrip() {
       setProblem(`${view.name} was not exported. ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       exporting.current = false;
+    }
+  };
+
+  // Picks a file, reads it as strictly as the library reads anything, and says what it did. The
+  // dialog guards against a second pick while one is open.
+  const importFromFile = async (): Promise<EvtxViewImportOutcome> => {
+    try {
+      const chosen = await open({
+        multiple: false,
+        filters: [{ name: "CMTrace Open view", extensions: ["json"] }],
+      });
+      if (typeof chosen !== "string") return { kind: "cancelled" };
+      const parsed = parseViewExport(await readTextFile(chosen));
+      if (!parsed.ok) return { kind: "failed", message: viewImportFailureMessage(parsed.reason) };
+      const merged = useEvtxViewStore.getState().importViews(parsed.views);
+      setProblem(null);
+      setImportNotice(viewImportSummary({ ...merged, skipped: merged.skipped + parsed.skipped }));
+      return { kind: "imported" };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return { kind: "failed", message: `That file could not be read. ${reason}` };
     }
   };
 
@@ -480,6 +516,11 @@ export function EvtxViewStrip() {
       <span role="status" aria-live="polite" className={styles.visuallyHidden}>
         {announcement.text && <span key={announcement.id}>{announcement.text}</span>}
       </span>
+      {importNotice && (
+        <div role="status" style={{ flexBasis: "100%", color: mutedText }}>
+          {importNotice}
+        </div>
+      )}
       {problem && (
         <div role="alert" style={{ flexBasis: "100%", color: levels.Error.textColor, overflowWrap: "anywhere" }}>
           {problem}
@@ -494,6 +535,7 @@ export function EvtxViewStrip() {
         fontSize={dialogFontSize}
         onClose={() => closeDialog(NEW_VIEW_ID)}
         onSave={saveNew}
+        onImport={importFromFile}
       />
       <EvtxViewNameDialog
         open={dialog?.kind === "rename" && dialogView !== undefined}
