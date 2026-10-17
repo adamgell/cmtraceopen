@@ -424,7 +424,7 @@ describe("items (the Correlation view and the Chains tab)", () => {
     await waitFor(() => expect(result.current.stage).toBe("scanning"));
     expect(result.current.model?.counts.exact).toBe(1);
     expect(result.current.hasItems).toBe(false);
-    expect(result.current.scan.state).toBe("running");
+    expect(result.current.nextScan?.state).toBe("running");
     expect(result.current.model?.chains[0]?.title).toBeNull();
     act(() => session.timelineGate?.open());
     await waitFor(() => expect(result.current.stage).toBe("ready"));
@@ -480,6 +480,118 @@ describe("items (the Correlation view and the Chains tab)", () => {
     expect(result.current.model).toBe(full);
     expect(session.edgeCalls).toHaveLength(1);
     expect(session.timelineCalls).toHaveLength(2);
+  });
+
+  it("scans again for the whole edge set after a retry loaded more edges, and the scan state is true to that scan (G3)", async () => {
+    // 50 pairs; each one's second endpoint is on the third timeline page, so a scan has to read it.
+    const pairs: [number, number][] = Array.from({ length: 50 }, (_, i) => [i, 1_500 + i]);
+    const session = new FakeSession({ itemCount: 2_500, pairs, previewEdges: 10 });
+    session.failEdgePages.remaining = 3;
+    const props = session.props({ needItems: true });
+    const { result } = renderHook(() => useEvtxCorrelation(props));
+    await waitFor(() => expect(result.current.stage).toBe("ready"));
+    // The edge paging failed: 10 of 50 edges, and a scan that completed for those 20 endpoints.
+    expect(result.current.edges).toMatchObject({ loaded: 10, totalEdges: 50, complete: false, error: "edges down" });
+    expect(result.current.scan.state).toBe("complete");
+    expect(result.current.itemsById.size).toBe(20);
+    const scansBefore = session.timelineCalls.length;
+
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.edges.complete).toBe(true));
+    await waitFor(() => expect(result.current.itemsById.size).toBe(100));
+    expect(session.timelineCalls.length).toBeGreaterThan(scansBefore);
+    expect(result.current.scan.state).toBe("complete");
+    expect(result.current.model?.counts.exact).toBe(50);
+    // Every member of every chain was searched for: none is left unresolved.
+    expect(result.current.model?.chains.every((chain) => chain.unresolvedMemberIds.length === 0)).toBe(true);
+    expect(result.current.model?.chains.every((chain) => chain.title !== null)).toBe(true);
+  });
+
+  it("keeps the previous FULL model, marked updating, while a new revision's scan runs, and offers the newest counts apart (G6)", async () => {
+    const one = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200]], revision: 1 });
+    const two = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200], [7, 1_300], [9, 1_400]], revision: 2 });
+    const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+      initialProps: one.props({ needItems: true }),
+    });
+    await waitFor(() => expect(result.current.stage).toBe("ready"));
+    const fullOne = result.current.model;
+    expect(fullOne?.chains[0]?.title).not.toBeNull();
+
+    two.timelineGate = gate();
+    rerender(two.props({ needItems: true }));
+    await waitFor(() => expect(result.current.nextScan?.state).toBe("running"));
+    // The view still has revision 1's full model: titles, spans and positions are not dropped.
+    expect(result.current.model).toBe(fullOne);
+    expect(result.current.hasItems).toBe(true);
+    expect(result.current.builtFor).toBe(`${one.id}:1`);
+    expect(result.current.updating).toBe(true);
+    expect(result.current.stage).toBe("scanning");
+    // A counts-only consumer has revision 2's counts at once.
+    expect(result.current.counts).toMatchObject({ builtFor: `${two.id}:2`, updating: false });
+    expect(result.current.counts?.model.counts.exact).toBe(3);
+
+    act(() => two.timelineGate?.open());
+    await waitFor(() => expect(result.current.builtFor).toBe(`${two.id}:2`));
+    expect(result.current.updating).toBe(false);
+    expect(result.current.hasItems).toBe(true);
+    expect(result.current.model?.counts.exact).toBe(3);
+    expect(result.current.nextScan).toBeNull();
+  });
+
+  it("never replaces a full model with a counts-only one, even when no scan finishes", async () => {
+    const one = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200]], revision: 1 });
+    const two = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200], [7, 1_300]], revision: 2 });
+    two.failTimelinePages.remaining = 0;
+    two.timelineGate = gate();
+    const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+      initialProps: one.props({ needItems: true }),
+    });
+    await waitFor(() => expect(result.current.stage).toBe("ready"));
+    rerender(two.props({ needItems: true }));
+    await waitFor(() => expect(result.current.counts?.builtFor).toBe(`${two.id}:2`));
+    for (let tick = 0; tick < 3; tick += 1) {
+      await act(async () => undefined);
+      expect(result.current.hasItems).toBe(true);
+      expect(result.current.builtFor).toBe(`${one.id}:1`);
+    }
+  });
+
+  it("keeps the unplaced evidence of the model on show when a newer status arrives (G5)", async () => {
+    const one = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200]], revision: 1, unplacedCount: 2 });
+    const two = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200]], revision: 2, unplacedCount: 5 });
+    const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+      initialProps: one.props({ needItems: true }),
+    });
+    await waitFor(() => expect(result.current.stage).toBe("ready"));
+    const shown = result.current.unplaced;
+    expect(shown).toMatchObject({ scanComplete: true, unplacedListComplete: true });
+    expect(shown.unplacedIds.size).toBe(2);
+
+    two.timelineGate = gate();
+    rerender(two.props({ needItems: true }));
+    await waitFor(() => expect(result.current.nextScan?.state).toBe("running"));
+    expect(result.current.updating).toBe(true);
+    // Revision 2's list has 5 unplaced origins; revision 1's model must not be read against it.
+    expect(result.current.unplaced).toBe(shown);
+    expect(result.current.unplaced.unplacedIds.size).toBe(2);
+    expect(result.current.origins.size).toBeGreaterThan(0);
+    expect([...result.current.origins.keys()].filter((id) => id.startsWith("item-1000"))).toHaveLength(2);
+
+    act(() => two.timelineGate?.open());
+    await waitFor(() => expect(result.current.builtFor).toBe(`${two.id}:2`));
+    expect(result.current.unplaced.unplacedIds.size).toBe(5);
+  });
+
+  it("gives the join the unplaced origins of the model's own page", async () => {
+    const session = new FakeSession({ itemCount: 50, pairs: [[1, 2]], unplacedCount: 3 });
+    const props = session.props({ needItems: true });
+    const { result } = renderHook(() => useEvtxCorrelation(props));
+    await waitFor(() => expect(result.current.stage).toBe("ready"));
+    const unplacedIds = [...result.current.unplaced.unplacedIds];
+    expect(unplacedIds).toHaveLength(3);
+    for (const id of unplacedIds) expect(result.current.origins.has(id)).toBe(true);
+    // And the placed items' origins, for the members that were read.
+    expect(result.current.origins.has("item-1")).toBe(true);
   });
 
   it("proves an unplaced list complete only when the preview holds every unplaced item", async () => {

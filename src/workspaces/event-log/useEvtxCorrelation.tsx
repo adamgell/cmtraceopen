@@ -9,7 +9,8 @@
  * Two stages, so that a count never waits on a scan:
  * - EDGES: from the first reply's preview, or paged when that reply says it is short. The model
  *   built from edges alone gives correct counts and the row count, but no titles, spans or
- *   positions, so `hasItems` is false and a consumer must not show those.
+ *   positions, so `hasItems` is false and a consumer must not show those. It is kept apart as
+ *   `counts`, for a consumer that needs counts only (the Insights card).
  * - ITEMS, only when `needItems` is true: the timeline pages are scanned for the items the edges
  *   name (`loadLinkedItems`), and the model is built again with them.
  *
@@ -19,8 +20,13 @@
  * - Anything IPC waits for `settleMs` first, so a live tail that rebuilds the session every few
  *   hundred milliseconds does not start a scan per batch. A run is thrown away, not merged, when
  *   the session changes under it.
- * - While a session is being rebuilt the previous model stays and `updating` is true. It is never
- *   paired with the new session's counts.
+ * - While a session is being rebuilt the previous FULL model stays in `model`, with `updating`
+ *   true, until the new scan completes: a counts-only model never replaces a full one. The newest
+ *   counts are in `counts`.
+ * - Everything a model is read with (`itemsById`, `origins`, `edges`, `scan`, `unplaced`) is stored
+ *   with it and comes from the run that built it, never from a newer status.
+ * - What a scan found answers for the exact edge set it was scanned for. A different edge set (a
+ *   retry that loaded more edges) is scanned again.
  * - The model is built after the first paint (the build is not free at 25,000 edges).
  * - `findings` is empty (decision B on #838): chain titles are the derived `{eventId} · message`.
  */
@@ -56,8 +62,13 @@ import {
   type LoadedLinkedItems,
   type LinkedItemsProgress,
 } from "./evtx-correlation-load";
-import type { UnplacedEvidence } from "./evtx-correlation-copy";
-import { itemsByOriginId, linkPartnerCounts } from "./evtx-correlation-origin-index";
+import {
+  itemsByOriginId,
+  linkPartnerCounts,
+  originLookup,
+  type OriginLookup,
+} from "./evtx-correlation-origin-index";
+import type { UnplacedEvidence } from "./evtx-correlation-view-model";
 import { timelineOriginId, type TimelineItem } from "./unified-timeline";
 
 /** Wait before any IPC, so a session that is replaced inside it costs nothing. */
@@ -69,13 +80,13 @@ export const NO_FINDINGS: readonly ChainFindingCoverage[] = [];
 export type CorrelationStage =
   /** No session. Nothing is known. */
   | "unavailable"
-  /** A session is being built. A previous model, if any, is still shown and `updating` is true. */
+  /** A session is being built or loaded. A previous model, if any, is still shown and `updating` is true. */
   | "pending"
-  /** Edges are in and the model has counts only. */
+  /** Edges are in and the newest session has a counts-only model. */
   | "edgesOnly"
-  /** The timeline is being scanned for the items the edges name. */
+  /** The timeline is being scanned for the items the newest session's edges name. */
   | "scanning"
-  /** The model was built with the items that were read. See `scan` for whether that was all. */
+  /** The newest session's model was built with the items that were read. See `scan`. */
   | "ready";
 
 export interface CorrelationScanState {
@@ -93,21 +104,50 @@ export interface CorrelationEdgeState {
   error: string | null;
 }
 
+/** The counts-only model of the newest session, for a consumer that needs no items. */
+export interface CorrelationCounts {
+  /** Built from edges alone: correct counts and row count, no titles, spans or positions. */
+  model: CorrelationChainModel;
+  builtFor: string;
+  edges: CorrelationEdgeState;
+  linkPartners: ReadonlyMap<string, number>;
+  /** An earlier session's counts, shown while the newest is loaded. */
+  updating: boolean;
+}
+
 export interface EvtxCorrelationData {
+  /** How far the NEWEST session has got. The fields below describe `model`, which may be older. */
   stage: CorrelationStage;
-  /** The `sessionId:revision` the model was built for, or null. */
+  /** The `sessionId:revision` `model` was built for, or null. */
   builtFor: string | null;
+  /**
+   * The model for a consumer that needs items. It is the newest FULL model there is: while a newer
+   * session is scanned the previous full model stays here, with `updating` true, and only a
+   * completed scan replaces it. Before any scan finished it is the counts-only model
+   * (`hasItems` false). Counts-only consumers read `counts`.
+   */
   model: CorrelationChainModel | null;
   /** True once items were read: only then are titles, spans and positions meaningful. */
   hasItems: boolean;
-  /** The items read, by origin id. Empty until `hasItems`. */
+  /** The items `model` was built with, by origin id. Empty until `hasItems`. */
   itemsById: ReadonlyMap<string, TimelineItem>;
+  /** The placed items' origins and the unplaced origins `model` was built from: the join's input. */
+  origins: OriginLookup;
+  /** The edges `model` was built from. */
   edges: CorrelationEdgeState;
+  /** The scan `model` was built from. */
   scan: CorrelationScanState;
-  /** What is known about members with no item. */
+  /** The scan in flight for a newer session, with its progress, or null. */
+  nextScan: CorrelationScanState | null;
+  /**
+   * What is known about members with no item, from the SAME session, page and scan `model` was
+   * built from, never from a newer status that has not replaced it.
+   */
   unplaced: UnplacedEvidence;
-  /** Distinct exact and candidate partners per origin id, from the uncapped pairs. */
+  /** Distinct exact and candidate partners per origin id, from the uncapped pairs of `model`. */
   linkPartners: ReadonlyMap<string, number>;
+  /** The newest session's counts-only model, or null. */
+  counts: CorrelationCounts | null;
   /** `model` belongs to an earlier session than the current one and is being rebuilt. */
   updating: boolean;
   /** A failure that is not a load result (those are in `edges` and `scan`), or null. */
@@ -134,6 +174,7 @@ const NO_EDGES: CorrelationEdgeState = {
   error: null,
 };
 const NO_ITEMS: ReadonlyMap<string, TimelineItem> = new Map();
+const NO_ORIGINS: OriginLookup = new Map();
 const NO_PARTNERS: ReadonlyMap<string, number> = new Map();
 
 export const UNAVAILABLE_CORRELATION: EvtxCorrelationData = {
@@ -142,37 +183,47 @@ export const UNAVAILABLE_CORRELATION: EvtxCorrelationData = {
   model: null,
   hasItems: false,
   itemsById: NO_ITEMS,
+  origins: NO_ORIGINS,
   edges: NO_EDGES,
   scan: IDLE_SCAN,
+  nextScan: null,
   unplaced: NO_UNPLACED,
   linkPartners: NO_PARTNERS,
+  counts: null,
   updating: false,
   error: null,
   retry: () => undefined,
 };
 
-/** What a run has built so far; the hook turns it into `EvtxCorrelationData`. */
-interface RunState {
-  stage: CorrelationStage;
-  builtFor: string | null;
-  model: CorrelationChainModel | null;
+/** One model with everything that was true when it was built, so nothing is paired across runs. */
+interface ModelState {
+  builtFor: string;
+  model: CorrelationChainModel;
   hasItems: boolean;
   itemsById: ReadonlyMap<string, TimelineItem>;
+  origins: OriginLookup;
   edges: CorrelationEdgeState;
   scan: CorrelationScanState;
+  unplaced: UnplacedEvidence;
   linkPartners: ReadonlyMap<string, number>;
+}
+
+/** What the runs have built so far; the hook turns it into `EvtxCorrelationData`. */
+interface RunState {
+  phase: CorrelationStage;
+  /** The newest full model. Kept across sessions until a newer one is built. */
+  detail: ModelState | null;
+  /** The newest counts-only model. */
+  counts: ModelState | null;
+  nextScan: CorrelationScanState | null;
   error: string | null;
 }
 
 const EMPTY_RUN: RunState = {
-  stage: "unavailable",
-  builtFor: null,
-  model: null,
-  hasItems: false,
-  itemsById: NO_ITEMS,
-  edges: NO_EDGES,
-  scan: IDLE_SCAN,
-  linkPartners: NO_PARTNERS,
+  phase: "unavailable",
+  detail: null,
+  counts: null,
+  nextScan: null,
   error: null,
 };
 
@@ -180,16 +231,20 @@ const EMPTY_RUN: RunState = {
 interface SessionCache {
   page: EventLogAnalysisTimelinePage;
   edges?: LoadedEdges;
-  edgesOnly?: CorrelationChainModel;
+  counts?: ModelState;
   items?: LoadedLinkedItems;
-  /** The newest state this session produced, republished without rebuilding when it still serves. */
-  published?: RunState;
+  /** The edge load `items` was scanned for: the scan answers for exactly those endpoints. */
+  itemsFor?: LoadedEdges;
+  detail?: ModelState;
 }
 
 export interface UseEvtxCorrelationOptions {
   /** The published session, or null while none is. */
   status: EventLogAnalysisSessionStatus | null;
-  /** The reply for offset 0: its edge preview and its own `totalEdges` travel together. */
+  /**
+   * The reply for offset 0: its edge preview and its own `totalEdges` travel together. Pass the
+   * same object for the life of a session: the hook keys what it has loaded on it.
+   */
   initialPage: EventLogAnalysisTimelinePage | null;
   /** A session is being built, so a null `status` is a gap and not an end. */
   pending: boolean;
@@ -226,18 +281,19 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
     const generation = (generationRef.current += 1);
     const cancelled = () => generationRef.current !== generation;
     const deps = { ...DEFAULT_CORRELATION_LOAD_DEPS, ...depsRef.current };
+    const stop = () => {
+      generationRef.current += 1;
+    };
 
     if (status === null || initialPage === null) {
-      // A gap while the session is rebuilt keeps the last model; the end of data clears it.
+      // A gap while the session is rebuilt keeps the last models; the end of data clears them.
       cacheRef.current = null;
       setRun((previous) =>
-        pending && previous.model !== null
-          ? { ...previous, stage: "pending" }
-          : { ...EMPTY_RUN, stage: pending ? "pending" : "unavailable" },
+        pending && (previous.detail !== null || previous.counts !== null)
+          ? { ...previous, phase: "pending", nextScan: null }
+          : { ...EMPTY_RUN, phase: pending ? "pending" : "unavailable" },
       );
-      return () => {
-        generationRef.current += 1;
-      };
+      return stop;
     }
 
     if (cacheRef.current?.page !== initialPage) cacheRef.current = { page: initialPage };
@@ -245,18 +301,21 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
     if (retryRef.current) {
       retryRef.current = false;
       if (cache.edges !== undefined && !cache.edges.complete) {
+        // Every model built from the short edge set is stale, whatever its scan said.
         cache.edges = undefined;
-        cache.edgesOnly = undefined;
+        cache.counts = undefined;
+        cache.items = undefined;
+        cache.itemsFor = undefined;
+        cache.detail = undefined;
       }
-      if (cache.items !== undefined && !cache.items.complete) cache.items = undefined;
-      cache.published = undefined;
+      if (cache.items !== undefined && !cache.items.complete) {
+        cache.items = undefined;
+        cache.itemsFor = undefined;
+        cache.detail = undefined;
+      }
     }
     const sessionKey = sessionKeyOf(status) as string;
 
-    const commit = (next: RunState) => {
-      cache.published = next;
-      if (!cancelled()) setRun(next);
-    };
     const update = (patch: Partial<RunState>) => {
       if (!cancelled()) setRun((previous) => ({ ...previous, ...patch }));
     };
@@ -273,19 +332,36 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
         totalTimelineEdges: modelEdgeTotal(edges.totalEdges),
         findings: NO_FINDINGS,
       });
+    // From this run's own page and status, so the evidence belongs to the model it is stored with.
+    const unplacedEvidence = (scanComplete: boolean): UnplacedEvidence => ({
+      scanComplete,
+      unplacedListComplete: initialPage.unplacedPreview.length === status.totalUnplaced,
+      unplacedIds: new Set(initialPage.unplacedPreview.map((entry) => timelineOriginId(entry.origin))),
+    });
 
-    // A model with items serves every consumer, and a model without them serves one that does not
-    // need items: neither is rebuilt for a toggle of `needItems`.
-    const published = cache.published;
-    if (published !== undefined && (published.hasItems || !needItems)) {
-      setRun(published);
-      return () => {
-        generationRef.current += 1;
-      };
+    // A finished full model serves every consumer; a counts-only one serves a consumer that needs
+    // no items. Neither is rebuilt for a toggle of `needItems`.
+    if (cache.detail !== undefined) {
+      const detail = cache.detail;
+      setRun((previous) => ({
+        ...previous,
+        phase: "ready",
+        detail,
+        counts: cache.counts ?? previous.counts,
+        nextScan: null,
+      }));
+      return stop;
     }
-    // Until this session's own model is in, the previous one stays and is marked by `updating`.
+    if (!needItems && cache.counts !== undefined) {
+      const counts = cache.counts;
+      setRun((previous) => ({ ...previous, phase: "edgesOnly", counts, nextScan: null }));
+      return stop;
+    }
+    // Until this session's own model is in, the previous ones stay and `updating` says so.
     setRun((previous) =>
-      previous.builtFor === sessionKey ? previous : { ...previous, stage: "pending" },
+      previous.counts?.builtFor === sessionKey
+        ? { ...previous, phase: needItems ? "scanning" : "edgesOnly" }
+        : { ...previous, phase: "pending" },
     );
 
     void (async () => {
@@ -303,35 +379,31 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
         }
         const loadedEdges = edges;
 
-        let edgesOnly = cache.edgesOnly;
-        if (edgesOnly === undefined) {
+        let counts = cache.counts;
+        if (counts === undefined) {
           await deps.sleep(0);
           if (cancelled()) return;
-          edgesOnly = build(loadedEdges, []);
-          cache.edgesOnly = edgesOnly;
+          const model = build(loadedEdges, []);
+          counts = {
+            builtFor: sessionKey,
+            model,
+            hasItems: false,
+            itemsById: NO_ITEMS,
+            origins: originLookup([], initialPage.unplacedPreview),
+            edges: edgeState(loadedEdges),
+            scan: IDLE_SCAN,
+            unplaced: unplacedEvidence(false),
+            linkPartners: linkPartnerCounts(model.linkedPairs),
+          };
+          cache.counts = counts;
         }
-        const counts = edgesOnly;
-        const edgesOnlyState: RunState = {
-          stage: "edgesOnly",
-          builtFor: sessionKey,
-          model: counts,
-          hasItems: false,
-          itemsById: NO_ITEMS,
-          edges: edgeState(loadedEdges),
-          scan: IDLE_SCAN,
-          linkPartners: linkPartnerCounts(counts.linkedPairs),
-          error: null,
-        };
-        commit(edgesOnlyState);
+        update({ counts, phase: needItems ? "scanning" : "edgesOnly" });
         if (!needItems) return;
 
         let items = cache.items;
-        if (items === undefined) {
+        if (items === undefined || cache.itemsFor !== loadedEdges) {
           const wantedIds = edgeEndpointIds(loadedEdges.edges);
-          update({
-            stage: "scanning",
-            scan: { state: "running", progress: null, stoppedBy: null, error: null },
-          });
+          update({ nextScan: { state: "running", progress: null, stoppedBy: null, error: null } });
           if (initialPage.nextOffset !== null && wantedIds.size > 0) {
             await deps.sleep(settleMs);
             if (cancelled()) return;
@@ -342,22 +414,25 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
             wantedIds,
             isCancelled: cancelled,
             onProgress: (progress) =>
-              update({ scan: { state: "running", progress, stoppedBy: null, error: null } }),
+              update({
+                nextScan: { state: "running", progress, stoppedBy: null, error: null },
+              }),
             deps,
           });
           cache.items = items;
+          cache.itemsFor = loadedEdges;
         }
 
         await deps.sleep(0);
         if (cancelled()) return;
         const scanned = items;
         const full = build(loadedEdges, scanned.items);
-        commit({
-          stage: "ready",
+        const detail: ModelState = {
           builtFor: sessionKey,
           model: full,
           hasItems: true,
           itemsById: itemsByOriginId(scanned.items),
+          origins: originLookup(scanned.items, initialPage.unplacedPreview),
           edges: edgeState(loadedEdges),
           scan: {
             state: scanned.complete ? "complete" : "incomplete",
@@ -369,19 +444,19 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
             stoppedBy: scanned.stoppedBy,
             error: scanned.error,
           },
+          unplaced: unplacedEvidence(scanned.complete),
           linkPartners: linkPartnerCounts(full.linkedPairs),
-          error: null,
-        });
+        };
+        cache.detail = detail;
+        update({ detail, phase: "ready", nextScan: null, error: null });
       } catch (error) {
         // Cancellation is the only expected throw; anything else is shown, not swallowed.
         if (cancelled() || error instanceof CorrelationLoadCancelled) return;
-        update({ error: error instanceof Error ? error.message : String(error) });
+        update({ nextScan: null, error: error instanceof Error ? error.message : String(error) });
       }
     })();
 
-    return () => {
-      generationRef.current += 1;
-    };
+    return stop;
     // `status` and `initialPage` are read through their identifiers: a new object for the same
     // session and revision is the same session. `initialPage` is listed because the first page
     // belongs to the session it was fetched for.
@@ -393,32 +468,35 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
     setRetryNonce((nonce) => nonce + 1);
   }, []);
 
-  const unplaced = useMemo<UnplacedEvidence>(() => {
-    if (status === null || initialPage === null) return NO_UNPLACED;
+  return useMemo<EvtxCorrelationData>(() => {
+    const primary = run.detail ?? run.counts;
     return {
-      scanComplete: run.scan.state === "complete",
-      unplacedListComplete: initialPage.unplacedPreview.length === status.totalUnplaced,
-      unplacedIds: new Set(initialPage.unplacedPreview.map((entry) => timelineOriginId(entry.origin))),
-    };
-  }, [status, initialPage, run.scan.state]);
-
-  return useMemo<EvtxCorrelationData>(
-    () => ({
-      stage: run.stage,
-      builtFor: run.builtFor,
-      model: run.model,
-      hasItems: run.hasItems,
-      itemsById: run.itemsById,
-      edges: run.edges,
-      scan: run.scan,
-      unplaced,
-      linkPartners: run.linkPartners,
-      updating: run.model !== null && run.builtFor !== key,
+      stage: run.phase,
+      builtFor: primary?.builtFor ?? null,
+      model: primary?.model ?? null,
+      hasItems: primary?.hasItems ?? false,
+      itemsById: primary?.itemsById ?? NO_ITEMS,
+      origins: primary?.origins ?? NO_ORIGINS,
+      edges: primary?.edges ?? NO_EDGES,
+      scan: primary?.scan ?? IDLE_SCAN,
+      nextScan: run.nextScan,
+      unplaced: primary?.unplaced ?? NO_UNPLACED,
+      linkPartners: primary?.linkPartners ?? NO_PARTNERS,
+      counts:
+        run.counts === null
+          ? null
+          : {
+              model: run.counts.model,
+              builtFor: run.counts.builtFor,
+              edges: run.counts.edges,
+              linkPartners: run.counts.linkPartners,
+              updating: run.counts.builtFor !== key,
+            },
+      updating: primary !== null && primary.builtFor !== key,
       error: run.error,
       retry,
-    }),
-    [run, unplaced, key, retry],
-  );
+    };
+  }, [run, key, retry]);
 }
 
 const EvtxCorrelationContext = createContext<EvtxCorrelationData>(UNAVAILABLE_CORRELATION);
