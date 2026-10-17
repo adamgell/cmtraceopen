@@ -225,6 +225,9 @@ export function bucketEdges(
   });
   // A wall time the zone skips resolves forward, which can pass the first record by an interval.
   while (edge > minMs) edge -= intervalMs;
+  // A wall time the zone repeats (a DST fall-back) resolves to its FIRST occurrence, up to a whole
+  // shift before the first record. Leading buckets that end before it hold nothing that was read.
+  while (edge + intervalMs <= minMs) edge += intervalMs;
   edges.push(edge);
   while (edge <= maxMs) {
     edge += intervalMs;

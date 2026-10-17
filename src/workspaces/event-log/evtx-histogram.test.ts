@@ -418,6 +418,20 @@ describe("zones", () => {
     expect(edges[0]).toBe(Date.UTC(2026, 2, 7, 11));
   });
 
+  it("starts at the first record, not an hour before it, when its wall time is the repeated hour of a fall-back", () => {
+    // 1 Nov 2026 01:30 EST (06:30Z) is the second 01:30 that night. The wall time floors to 01:30,
+    // which a clock resolves to the FIRST one (EDT, 05:30Z), an hour earlier.
+    const first = Date.UTC(2026, 10, 1, 6, 30);
+    const edges = bucketEdges(first, first + 59 * MINUTE, MINUTE, NEW_YORK);
+    expect(edges[0]).toBe(first);
+    const histogram = buildHistogram([rec(first), rec(first + 59 * MINUTE, "Warning", 2)], "utc", NEW_YORK);
+    expect(histogram.intervalMs).toBe(MINUTE);
+    expect(histogram.edges[0]).toBe(first);
+    expect(histogram.buckets[0].total).toBe(1);
+    expect(histogram.buckets).toHaveLength(60);
+    expect(histogram.buckets.filter((bucket) => bucket.total === 0).length).toBe(58);
+  });
+
   it("aligns hour buckets to a zone that sits at +5:30 and 20 minute buckets to one at +5:45", () => {
     const hours = bucketEdges(utc(10, 1, 10, 10), utc(10, 1, 14, 0), HOUR, KOLKATA);
     expect(hours[0]).toBe(Date.UTC(2026, 9, 1, 9, 30));
