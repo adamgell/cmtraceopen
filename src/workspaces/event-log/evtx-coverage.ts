@@ -191,6 +191,10 @@ export function mergeStructuredCoverageGaps(
 }
 
 const MAX_DIAGNOSIS_COVERAGE_GAPS = 256;
+/** The source a legacy gap string without a "source: " prefix is filed under. */
+const LEGACY_GAP_SOURCE = "event-log";
+/** The source a live-tail gap string without a "source: " prefix is filed under. */
+const TAIL_GAP_SOURCE = "live-tail";
 
 function legacyGapKind(reason: string): EvtxCoverageGapKind {
   const lower = reason.toLowerCase();
@@ -251,10 +255,10 @@ export function mergeDiagnosisCoverageGaps(
   );
   const legacyGaps = legacyCoverageGaps
     .filter((gap) => !formattedCoverageGaps.has(gap.trim()))
-    .map((gap) => legacyCoverageGap(gap, "event-log"));
+    .map((gap) => legacyCoverageGap(gap, LEGACY_GAP_SOURCE));
   const tailGaps = tailCoverageGaps
     .filter((gap) => !formattedCoverageGaps.has(gap.trim()))
-    .map((gap) => legacyCoverageGap(gap, "live-tail"));
+    .map((gap) => legacyCoverageGap(gap, TAIL_GAP_SOURCE));
   const merged = mergeStructuredCoverageGaps(
     [],
     [...coverageDetails, ...typedManifestGaps, ...legacyGaps, ...tailGaps]
@@ -272,6 +276,29 @@ export function mergeDiagnosisCoverageGaps(
         "backend diagnosis also enforces an input cap",
     },
   ];
+}
+
+/**
+ * The one key a coverage gap is known by on every surface that shows it: its formatted line.
+ *
+ * A legacy or live-tail gap string is keyed the way `mergeDiagnosisCoverageGaps` reads it (trimmed,
+ * and filed under `event-log` or `live-tail` when it names no source), so a gap in the store and
+ * the diagnosis input it became share one key. The grid banner keys its lines with these, and a
+ * surface showing a summary claims the keys of that summary's input (`coverageDisclosureKeys`).
+ */
+export function legacyCoverageDisclosureKey(message: string, origin: "legacy" | "tail"): string {
+  return formatCoverageGap(
+    legacyCoverageGap(message, origin === "tail" ? TAIL_GAP_SOURCE : LEGACY_GAP_SOURCE),
+  );
+}
+
+/**
+ * The keys of a diagnosis input (`mergeDiagnosisCoverageGaps` output): the store gaps a summary
+ * built from it covers. Gaps beyond the frontend bound are not in the input, so they are not here;
+ * the synthetic bound gap's own key matches no store gap.
+ */
+export function coverageDisclosureKeys(diagnosisInput: readonly EvtxCoverageGap[]): Set<string> {
+  return new Set(diagnosisInput.map(formatCoverageGap));
 }
 
 /**

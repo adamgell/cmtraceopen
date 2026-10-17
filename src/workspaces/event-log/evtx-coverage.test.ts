@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   assertParseResultShape,
+  coverageDisclosureKeys,
   formatCoverageGap,
+  legacyCoverageDisclosureKey,
   mergeCoverageGaps,
   mergeDiagnosisCoverageGaps,
   mergeStructuredCoverageGaps,
@@ -542,5 +544,55 @@ describe("diagnosis coverage gaps", () => {
         "frontend coverage bound omitted 2 additional gaps; " +
         "backend diagnosis also enforces an input cap",
     });
+  });
+});
+
+describe("the shared coverage key", () => {
+  // The grid banner keys its lines with these and the rail claims a summary's input keys, so a gap
+  // and the diagnosis input it became must share one key or it shows twice or nowhere.
+  const keysOf = (...args: Parameters<typeof mergeDiagnosisCoverageGaps>) =>
+    coverageDisclosureKeys(mergeDiagnosisCoverageGaps(...args));
+
+  it("keys a legacy line with no source the way diagnosis files it", () => {
+    expect(legacyCoverageDisclosureKey("  reader stalled  ", "legacy")).toBe(
+      "event-log: reader stalled",
+    );
+    expect(legacyCoverageDisclosureKey("batch 4 was not received", "tail")).toBe(
+      "live-tail: batch 4 was not received",
+    );
+    expect(keysOf([], [], ["  reader stalled  "], ["batch 4 was not received"])).toEqual(
+      new Set(["event-log: reader stalled", "live-tail: batch 4 was not received"]),
+    );
+  });
+
+  it("keys a manifest row and its mirrored legacy line as one", () => {
+    const path = "C:\\Fixture\\EventLogs\\Security.evtx";
+    const reason = "source metadata access was denied";
+    const legacyKey = legacyCoverageDisclosureKey(`${path}: ${reason}`, "legacy");
+    expect(legacyKey).toBe(`${path}: ${reason}`);
+    expect(
+      keysOf([], [{ kind: "accessDenied", path, reason }], [`${path}: ${reason}`], []),
+    ).toEqual(new Set([legacyKey]));
+  });
+
+  it("keys a located gap by its formatted line, legacy copy included", () => {
+    const gap = { source: "C:\\x.evtx", kind: "chunk" as const, reason: "chunk rejected", chunkId: 3 };
+    const line = formatCoverageGap(gap);
+    expect(line).toBe("C:\\x.evtx chunk 3: chunk rejected");
+    expect(legacyCoverageDisclosureKey(line, "legacy")).toBe(line);
+    expect(keysOf([gap], [], [line], [])).toEqual(new Set([line]));
+  });
+
+  it("leaves gaps beyond the frontend bound out of the input keys", () => {
+    const gaps = Array.from({ length: 258 }, (_, index) => ({
+      source: `source-${index}`,
+      kind: "record" as const,
+      reason: `gap ${index}`,
+    }));
+    const keys = keysOf(gaps, [], [], []);
+    expect(keys.has("source-0: gap 0")).toBe(true);
+    expect(keys.has("source-254: gap 254")).toBe(true);
+    expect(keys.has("source-255: gap 255")).toBe(false);
+    expect(keys.has("source-257: gap 257")).toBe(false);
   });
 });
