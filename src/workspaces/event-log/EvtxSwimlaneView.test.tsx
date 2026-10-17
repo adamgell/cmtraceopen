@@ -500,31 +500,49 @@ describe("EvtxSwimlaneView", () => {
   });
 
   describe("under forced colors", () => {
-    /** A live media query list for forced colors: `set` flips it, as the operating system would. */
+    /**
+     * Live media query lists for forced colors and the colour scheme, and a CanvasText probe whose
+     * colour can change: what the operating system does when forced colors turn on, or when the
+     * contrast theme changes with them still on.
+     */
     function forcedColors(initial: boolean) {
-      const state = { matches: initial };
-      const listeners: (() => void)[] = [];
+      const state = { forced: initial, dark: false, probe: "rgb(255, 255, 0)" };
+      const listeners: Record<"forced" | "scheme", (() => void)[]> = { forced: [], scheme: [] };
+      const kindOf = (query: string) =>
+        query === "(forced-colors: active)" ? "forced" : query === "(prefers-color-scheme: dark)" ? "scheme" : null;
       window.matchMedia = vi.fn((query: string) => ({
         get matches() {
-          return query === "(forced-colors: active)" && state.matches;
+          const kind = kindOf(query);
+          return kind === "forced" ? state.forced : kind === "scheme" ? state.dark : false;
         },
         media: query,
         addEventListener: (_: string, listener: () => void) => {
-          if (query === "(forced-colors: active)") listeners.push(listener);
+          const kind = kindOf(query);
+          if (kind !== null) listeners[kind].push(listener);
         },
         removeEventListener: () => undefined,
       })) as unknown as typeof window.matchMedia;
       const real = window.getComputedStyle.bind(window);
       vi.spyOn(window, "getComputedStyle").mockImplementation((element: Element, pseudo?: string | null) => {
         if ((element as HTMLElement).dataset?.evtxProbe === "canvas-text") {
-          return { color: "rgb(255, 255, 0)" } as CSSStyleDeclaration;
+          return { color: state.probe } as CSSStyleDeclaration;
         }
         return real(element, pseudo);
       });
       return {
         set: (matches: boolean) => {
-          state.matches = matches;
-          listeners.forEach((listener) => listener());
+          state.forced = matches;
+          listeners.forced.forEach((listener) => listener());
+        },
+        /** The contrast theme changes: the system colours and the colour scheme flip, forced colors stay on. */
+        switchContrastTheme: (probe: string, dark: boolean) => {
+          state.probe = probe;
+          state.dark = dark;
+          listeners.scheme.forEach((listener) => listener());
+        },
+        /** The system colour changes with no query firing. */
+        setProbe: (probe: string) => {
+          state.probe = probe;
         },
       };
     }
@@ -560,6 +578,48 @@ describe("EvtxSwimlaneView", () => {
       act(() => media.set(false));
       expect(ringed()).toBe(false);
       expect(contextOf(container).clears).toHaveLength(1);
+    });
+
+    const YELLOW = "rgb(255, 255, 0)";
+    const BLUE = "rgb(0, 0, 255)";
+    const ringColors = (context: RecordingContext) =>
+      new Set(markCalls(context).filter((call) => call.lineWidth === 1 && call.action === "stroke").map((call) => call.color));
+
+    it("reads the system text colour again on every paint while forced colors stay on", () => {
+      const media = forcedColors(true);
+      const { container } = render(<EvtxSwimlaneView records={sample()} loading={false} />);
+      const context = contextOf(container);
+      expect(ringColors(context)).toEqual(new Set([YELLOW]));
+      // The contrast theme changed with forced colors still on; the next paint, whatever causes it,
+      // takes the new colour and not the one resolved before.
+      media.setProbe(BLUE);
+      context.reset();
+      act(() => useUiStore.setState({ themeId: "dark" }));
+      expect(context.clears).toHaveLength(1);
+      expect(ringColors(context)).toEqual(new Set([BLUE]));
+    });
+
+    it("paints again when the colour scheme flips under forced colors, in the new ring colour", () => {
+      const media = forcedColors(true);
+      const { container } = render(<EvtxSwimlaneView records={sample()} loading={false} />);
+      const context = contextOf(container);
+      context.reset();
+      act(() => media.switchContrastTheme(BLUE, true));
+      expect(context.clears).toHaveLength(1);
+      expect(ringColors(context)).toEqual(new Set([BLUE]));
+      context.reset();
+      act(() => media.switchContrastTheme(YELLOW, false));
+      expect(context.clears).toHaveLength(1);
+      expect(ringColors(context)).toEqual(new Set([YELLOW]));
+    });
+
+    it("does not paint again for a colour scheme flip when forced colors are off", () => {
+      const media = forcedColors(false);
+      const { container } = render(<EvtxSwimlaneView records={sample()} loading={false} />);
+      const context = contextOf(container);
+      context.reset();
+      act(() => media.switchContrastTheme(BLUE, true));
+      expect(context.clears).toHaveLength(0);
     });
   });
 

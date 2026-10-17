@@ -99,6 +99,7 @@ const LEGEND_ORDER: readonly EvtxLevel[] = [...HISTOGRAM_STACK_ORDER].reverse();
 
 const FORCED_COLORS = "@media (forced-colors: active)";
 const FORCED_COLORS_QUERY = "(forced-colors: active)";
+const COLOR_SCHEME_QUERY = "(prefers-color-scheme: dark)";
 
 /** The help text of spec 8.9, with "drag to zoom" corrected: the lanes do not rescale, the drag selects a range. */
 export const SWIMLANE_HELP_TEXT =
@@ -458,7 +459,11 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
   const [plotWidth, setPlotWidth] = useState(0);
   const dpr = useDevicePixelRatio();
   const forced = useMediaMatch(FORCED_COLORS_QUERY);
-  const [forcedRing, setForcedRing] = useState<string | null>(null);
+  // Switching from one contrast theme to another keeps forced colors on and flips the system colours
+  // (Canvas, CanvasText) with the colour scheme, and nothing else this view reads changes. The scheme
+  // query says so, so the marks are painted again, with the new ring colour. Unused otherwise.
+  const prefersDark = useMediaMatch(COLOR_SCHEME_QUERY);
+  const schemeWhileForced = forced ? prefersDark : null;
 
   useLayoutEffect(() => {
     const plot = plotRef.current;
@@ -471,10 +476,6 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
     return () => observer.disconnect();
   }, []);
 
-  useLayoutEffect(() => {
-    setForcedRing(forced && plotRef.current !== null ? resolveCanvasText(plotRef.current) : null);
-  }, [forced, themeId]);
-
   const plan = useMemo(
     () => (ready && plotWidth > 0 ? planPaint(view, { plotWidth, laneHeight, dpr }) : null),
     [ready, view, plotWidth, laneHeight, dpr],
@@ -486,8 +487,12 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
     canvas.height = Math.round(plan.height * plan.dpr);
     const context = canvas.getContext("2d");
     if (context === null) return;
-    paintSwimlanes(context, plan, colors, forcedRing);
-  }, [plan, colors, forcedRing]);
+    // Read from the probe on every paint while forced colors are active (it is one element and one
+    // computed style): a canvas is not recoloured with the page, so a ring colour kept from an earlier
+    // paint would outlive a change of contrast theme.
+    const ring = forced ? resolveCanvasText(canvas.parentElement ?? canvas) : null;
+    paintSwimlanes(context, plan, colors, ring);
+  }, [plan, colors, forced, schemeWhileForced]);
 
   const setTimeRange = useEvtxStore((s) => s.setTimeRange);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
