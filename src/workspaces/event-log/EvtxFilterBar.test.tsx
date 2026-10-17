@@ -17,10 +17,11 @@ import {
   EvtxFilterBar,
   eventLogTimeWindowSnapshotLabel,
 } from "./EvtxFilterBar";
-import { buildFilterChips, type EvtxFilterChipInput } from "./EvtxFilterChips";
+import { buildFilterChips, EvtxFilterChips, type EvtxFilterChipInput } from "./EvtxFilterChips";
 import { moreFiltersActiveCount } from "./EvtxMoreFilters";
 import { EVTX_LEVELS } from "./evtx-filter";
 import { useSavedFilterStore } from "./evtx-filter-store";
+import { QUERY_ERROR_SETTLE_MS } from "./evtx-query-error";
 import {
   LEVEL_TOGGLE_BACKGROUNDS,
   LEVEL_TOGGLE_STATES,
@@ -164,17 +165,23 @@ describe("EvtxFilterBar row", () => {
 describe("the search box's field grammar (issue #833)", () => {
   const search = () => screen.getByRole("textbox", { name: "Search events" });
   const status = () => document.getElementById(EVTX_SEARCH_ERROR_ID)!;
+  const type = (value: string) => fireEvent.change(search(), { target: { value } });
+  const wait = (ms: number) => act(() => vi.advanceTimersByTime(ms));
   const warningOf = () =>
     buildEvtxVisualTokens(
       getAllThemes().find((theme) => theme.id === useUiStore.getState().themeId)!,
     ).levels.Warning.textColor;
-  const LEVEL_MESSAGE =
-    'level: takes critical, error, warning, info, information or verbose, not "erro".';
+  const notApplied = (value: string) =>
+    `Not applied: level: takes critical, error, warning, info, information or verbose, not "${value}".`;
 
-  it("keeps an empty polite status region under the row while the search parses", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("keeps an empty polite status region under the row while the search is applied", () => {
     seed({ filterSearch: "id:76  level:error  provider:AAD" });
     render(<EvtxFilterBar nowEpoch={0} />);
 
+    expect(search()).toHaveValue("id:76  level:error  provider:AAD");
     expect(status()).toHaveAttribute("role", "status");
     expect(status()).toBeEmptyDOMElement();
     // No margin while empty, so the row is as tall as it was before the grammar.
@@ -184,47 +191,127 @@ describe("the search box's field grammar (issue #833)", () => {
     expect(search().closest("[data-evtx-region='filter-row']")!.lastElementChild).toBe(status());
   });
 
-  it("states why a search does not parse, in the same region, and keeps the operator's text", () => {
+  it("keeps applying the last search that parsed, and the chip names that one, not the text typed", () => {
+    seed();
+    render(
+      <>
+        <EvtxFilterBar nowEpoch={0} />
+        <EvtxFilterChips visibleCount={1} loadedCount={16} />
+      </>,
+    );
+
+    type("level:error");
+    expect(useEvtxStore.getState()).toMatchObject({
+      filterSearch: "level:error",
+      filterSearchDraft: null,
+    });
+
+    type("level:error -id:");
+    // The box keeps the operator's text; the view, its counts and the chip keep the last valid one.
+    expect(search()).toHaveValue("level:error -id:");
+    expect(useEvtxStore.getState()).toMatchObject({
+      filterSearch: "level:error",
+      filterSearchDraft: "level:error -id:",
+    });
+    expect(screen.getByRole("button", { name: "Remove Search: level:error" })).toBeInTheDocument();
+
+    type("level:error -id:76");
+    expect(useEvtxStore.getState()).toMatchObject({
+      filterSearch: "level:error -id:76",
+      filterSearchDraft: null,
+    });
+  });
+
+  it("applies no search when none parsed before", () => {
+    seed();
+    render(<EvtxFilterBar nowEpoch={0} />);
+    type("provider:");
+    expect(useEvtxStore.getState()).toMatchObject({ filterSearch: "", filterSearchDraft: "provider:" });
+  });
+
+  it("says it was not applied only after 400 ms without a keystroke", () => {
     seed();
     render(<EvtxFilterBar nowEpoch={0} />);
     const region = status();
 
-    fireEvent.change(search(), { target: { value: "level:erro" } });
-    expect(useEvtxStore.getState().filterSearch).toBe("level:erro");
-    expect(search()).toHaveValue("level:erro");
-    expect(search()).toHaveAttribute("aria-invalid", "true");
-    expect(search()).toHaveAccessibleDescription(LEVEL_MESSAGE);
+    // A half-typed term does not flash a message: each key restarts the wait.
+    type("level:");
+    wait(QUERY_ERROR_SETTLE_MS - 1);
+    expect(region).toBeEmptyDOMElement();
+    type("level:e");
+    wait(QUERY_ERROR_SETTLE_MS - 1);
+    expect(region).toBeEmptyDOMElement();
+    expect(search()).toHaveAttribute("aria-invalid", "false");
+
+    wait(1);
+    expect(QUERY_ERROR_SETTLE_MS).toBe(400);
+    expect(region).toHaveTextContent(notApplied("e"));
     // The node that was mounted empty now holds the message, so it is announced, politely.
     expect(status()).toBe(region);
-    expect(region).toHaveTextContent(LEVEL_MESSAGE);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(region.style.marginTop).toBe("2px");
+    expect(search()).toHaveAttribute("aria-invalid", "true");
+    expect(search()).toHaveAccessibleDescription(notApplied("e"));
+  });
 
-    fireEvent.change(search(), { target: { value: "level:error" } });
-    expect(region).toBeEmptyDOMElement();
+  it("clears the message at once when the text parses again", () => {
+    seed();
+    render(<EvtxFilterBar nowEpoch={0} />);
+    type("level:e");
+    wait(QUERY_ERROR_SETTLE_MS);
+    expect(status()).toHaveTextContent(notApplied("e"));
+
+    type("level:error");
+    expect(status()).toBeEmptyDOMElement();
+    expect(status().style.marginTop).toBe("0px");
     expect(search()).toHaveAttribute("aria-invalid", "false");
     expect(search()).not.toHaveAccessibleDescription();
   });
 
-  it("colors the message and the search border with the Warning text color from the token map", () => {
-    seed({ filterSearch: 'boot "failed' });
+  it("keeps the shown message while a different problem settles, then replaces it", () => {
+    seed();
     render(<EvtxFilterBar nowEpoch={0} />);
-    expect(status()).toHaveTextContent("The quote at character 6 is not closed.");
-    expect(status().style.color).toBe(hexToRgb(warningOf()));
-    const root = search().parentElement!;
-    expect(root.style.borderColor).toBe(hexToRgb(warningOf()));
+    type("level:e");
+    wait(QUERY_ERROR_SETTLE_MS);
+
+    type('level:e "x');
+    wait(QUERY_ERROR_SETTLE_MS - 1);
+    // Not blanked while typing, so the row does not jump.
+    expect(status()).toHaveTextContent(notApplied("e"));
+    wait(1);
+    expect(status()).toHaveTextContent("Not applied: The quote at character 9 is not closed.");
   });
 
-  it("leaves the search border to the row's styles while the search parses", () => {
-    seed({ filterSearch: "level:error" });
+  it("announces a message once: the same problem settling again does not rewrite the region", () => {
+    seed();
+    render(<EvtxFilterBar nowEpoch={0} />);
+    type("level:e");
+    wait(QUERY_ERROR_SETTLE_MS);
+
+    const observer = new MutationObserver(() => undefined);
+    observer.observe(status(), { childList: true, characterData: true, subtree: true });
+    type("level:e ");
+    wait(QUERY_ERROR_SETTLE_MS);
+    expect(status()).toHaveTextContent(notApplied("e"));
+    expect(observer.takeRecords()).toEqual([]);
+    observer.disconnect();
+  });
+
+  it("colors the message and the search border with the Warning text color from the token map", () => {
+    seed({ filterSearchDraft: 'boot "failed' });
     render(<EvtxFilterBar nowEpoch={0} />);
     expect(search().parentElement!.style.borderColor).toBe("");
+    wait(QUERY_ERROR_SETTLE_MS);
+    expect(status()).toHaveTextContent("Not applied: The quote at character 6 is not closed.");
+    expect(status().style.color).toBe(hexToRgb(warningOf()));
+    expect(search().parentElement!.style.borderColor).toBe(hexToRgb(warningOf()));
   });
 
   it("sizes the message at f - 2 from the list font", () => {
-    seed({ filterSearch: "level:" });
+    seed({ filterSearchDraft: "level:" });
     act(() => useUiStore.getState().setLogListFontSize(20));
     render(<EvtxFilterBar nowEpoch={0} />);
+    wait(QUERY_ERROR_SETTLE_MS);
     expect(status().style.fontSize).toBe("18px");
     expect(status().style.lineHeight).toBe("26px");
   });
@@ -239,14 +326,14 @@ describe("the search box's field grammar (issue #833)", () => {
     const recordsBefore = before.records;
     render(<EvtxFilterBar nowEpoch={0} />);
 
-    fireEvent.change(search(), { target: { value: "id:76 level:error -provider:AAD" } });
-    act(() =>
-      useEvtxStore.getState().setQuickFilter({
-        ...useEvtxStore.getState().quickFilter,
-        mode: "fieldQuery",
-        query: "id:1098,1014 OR level:critical",
-      }),
-    );
+    type("id:76 level:error -provider:AAD");
+    type("id:76 level:");
+    act(() => {
+      const store = useEvtxStore.getState();
+      store.setQuickFilter({ ...store.quickFilter, mode: "fieldQuery", query: "id:1098 OR level:critical" });
+      store.setQuickFilter({ ...store.quickFilter, mode: "fieldQuery", query: "id:1098 OR" });
+      store.setOnLoadCriteria({ search: "provider:", quickFilter: store.quickFilter });
+    });
     await act(async () => {
       for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
     });
@@ -262,6 +349,75 @@ describe("the search box's field grammar (issue #833)", () => {
   });
 });
 
+describe("the store's applied and typed on-load criteria", () => {
+  const fieldQuick = (query: string) => ({
+    ...useEvtxStore.getState().quickFilter,
+    mode: "fieldQuery" as const,
+    query,
+    action: "hide" as const,
+  });
+
+  it("keeps the last field quick filter that parsed applied, and the edited one as the draft", () => {
+    const store = useEvtxStore.getState();
+    store.setQuickFilter(fieldQuick("level:error"));
+    expect(useEvtxStore.getState().quickFilter).toEqual(fieldQuick("level:error"));
+    expect(useEvtxStore.getState().quickFilterDraft).toBeNull();
+
+    store.setQuickFilter({ ...fieldQuick("level:error -id:"), action: "show" });
+    // Not applied at all: neither the new query nor the new action.
+    expect(useEvtxStore.getState().quickFilter).toEqual(fieldQuick("level:error"));
+    expect(useEvtxStore.getState().quickFilterDraft).toEqual({
+      ...fieldQuick("level:error -id:"),
+      action: "show",
+    });
+  });
+
+  it("applies an invalid Event IDs quick filter as before: that mode keeps its own rule", () => {
+    const store = useEvtxStore.getState();
+    const ids = { ...store.quickFilter, mode: "eventIds" as const, query: "4624,abc" };
+    store.setQuickFilter(ids);
+    expect(useEvtxStore.getState().quickFilter).toEqual(ids);
+    expect(useEvtxStore.getState().quickFilterDraft).toBeNull();
+  });
+
+  it("loads criteria that parse as applied, with no drafts", () => {
+    useEvtxStore.getState().setFilterSearch("level:");
+    useEvtxStore.getState().setOnLoadCriteria({
+      search: "level:error",
+      quickFilter: fieldQuick("id:76"),
+    });
+    expect(useEvtxStore.getState()).toMatchObject({
+      filterSearch: "level:error",
+      filterSearchDraft: null,
+      quickFilter: fieldQuick("id:76"),
+      quickFilterDraft: null,
+    });
+  });
+
+  it("loads criteria that do not parse as drafts, and applies none rather than the ones before", () => {
+    const store = useEvtxStore.getState();
+    store.setFilterSearch("token");
+    store.setQuickFilter(fieldQuick("level:error"));
+
+    store.setOnLoadCriteria({ search: "Event ID: 7036", quickFilter: fieldQuick("level:erro") });
+    expect(useEvtxStore.getState()).toMatchObject({
+      filterSearch: "",
+      filterSearchDraft: "Event ID: 7036",
+      quickFilter: fieldQuick(""),
+      quickFilterDraft: fieldQuick("level:erro"),
+    });
+  });
+
+  it("drops both drafts on reset", () => {
+    const store = useEvtxStore.getState();
+    store.setFilterSearch("level:");
+    store.setQuickFilter(fieldQuick("level:"));
+    store.reset();
+    expect(useEvtxStore.getState().filterSearchDraft).toBeNull();
+    expect(useEvtxStore.getState().quickFilterDraft).toBeNull();
+  });
+});
+
 describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
   "the search error in the %s theme",
   (_id, theme) => {
@@ -272,14 +428,20 @@ describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
     });
 
     it("paints the measured color", () => {
-      useUiStore.setState({ themeId: theme.id });
-      seed({ filterSearch: "id:abc" });
-      render(<EvtxFilterBar nowEpoch={0} />);
-      const region = document.getElementById(EVTX_SEARCH_ERROR_ID)!;
-      expect(region).toHaveTextContent(/^id: takes Event IDs/);
-      expect(region.style.color).toBe(
-        hexToRgb(buildEvtxVisualTokens(theme).levels.Warning.textColor),
-      );
+      vi.useFakeTimers();
+      try {
+        useUiStore.setState({ themeId: theme.id });
+        seed({ filterSearchDraft: "id:abc" });
+        render(<EvtxFilterBar nowEpoch={0} />);
+        act(() => vi.advanceTimersByTime(QUERY_ERROR_SETTLE_MS));
+        const region = document.getElementById(EVTX_SEARCH_ERROR_ID)!;
+        expect(region).toHaveTextContent(/^Not applied: id: takes Event IDs/);
+        expect(region.style.color).toBe(
+          hexToRgb(buildEvtxVisualTokens(theme).levels.Warning.textColor),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
     });
   },
 );
@@ -836,7 +998,7 @@ describe("More filters", () => {
     expect(popover.queryByRole("alert")).toBeNull();
   });
 
-  it("offers the Field query grammar and says politely why a field query shows nothing", async () => {
+  it("offers the Field query grammar and says politely, once typing settles, that a query is not applied", async () => {
     seed();
     render(<EvtxFilterBar nowEpoch={0} />);
     const popover = within(await openPopover());
@@ -856,22 +1018,77 @@ describe("More filters", () => {
     expect(query).toHaveAttribute("aria-invalid", "false");
     expect(query).not.toHaveAccessibleDescription();
 
+    fireEvent.change(query, { target: { value: "level:error" } });
+    expect(useEvtxStore.getState().quickFilter.query).toBe("level:error");
+
     fireEvent.change(query, { target: { value: "level:erro" } });
     const message =
-      'level: takes critical, error, warning, info, information or verbose, not "erro".';
-    // The operator's text stays as typed.
-    expect(useEvtxStore.getState().quickFilter.query).toBe("level:erro");
+      'Not applied: level: takes critical, error, warning, info, information or verbose, not "erro".';
+    // The operator's text stays as typed, and the view keeps the last query that parsed.
+    expect(query).toHaveValue("level:erro");
+    expect(useEvtxStore.getState().quickFilterDraft?.query).toBe("level:erro");
+    expect(useEvtxStore.getState().quickFilter.query).toBe("level:error");
+    // Nothing yet: the message waits for the typing to settle.
+    expect(status).toBeEmptyDOMElement();
+
+    await waitFor(() => expect(status).toHaveTextContent(message));
+    expect(popover.getByRole("status")).toBe(status);
     expect(query).toHaveAttribute("aria-invalid", "true");
     expect(query).toHaveAccessibleDescription(message);
-    expect(popover.getByRole("status")).toBe(status);
-    expect(status).toHaveTextContent(message);
     expect(status.style.color).toBe(hexToRgb(warning));
-    // Polite, not an assertive alert that would interrupt on every key.
+    // Polite, not an assertive alert.
     expect(popover.queryByRole("alert")).toBeNull();
 
     fireEvent.change(query, { target: { value: "level:error" } });
     expect(status).toBeEmptyDOMElement();
     expect(query).toHaveAttribute("aria-invalid", "false");
+    expect(useEvtxStore.getState().quickFilterDraft).toBeNull();
+  });
+
+  it("saves the search and quick filter as typed, and loads a query that does not parse as not applied", async () => {
+    seed({ filterSearch: "token" });
+    render(<EvtxFilterBar nowEpoch={0} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Search events" }), {
+      target: { value: "Event ID: 7036" },
+    });
+    act(() =>
+      useEvtxStore.getState().setQuickFilter({
+        ...useEvtxStore.getState().quickFilter,
+        mode: "fieldQuery",
+        query: "level:erro",
+      }),
+    );
+    const popover = within(await openPopover());
+
+    fireEvent.click(popover.getByRole("combobox", { name: "Saved filters" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Save current..." }));
+    const name = popover.getByRole("textbox", { name: "Name this filter" });
+    fireEvent.change(name, { target: { value: "Typed" } });
+    fireEvent.keyDown(name, { key: "Enter" });
+    const [saved] = useSavedFilterStore.getState().savedFilters;
+    expect(saved.criteria.onLoad.search).toBe("Event ID: 7036");
+    expect(saved.criteria.onLoad.quickFilter).toMatchObject({ mode: "fieldQuery", query: "level:erro" });
+
+    act(() => {
+      useEvtxStore.getState().setFilterSearch("token");
+      useEvtxStore.getState().setQuickFilter({ ...saved.criteria.onLoad.quickFilter, query: "id:76" });
+    });
+    fireEvent.click(popover.getByRole("combobox", { name: "Saved filters" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Typed" }));
+
+    // Neither query is applied, and neither is the one from before the load.
+    expect(useEvtxStore.getState()).toMatchObject({
+      filterSearch: "",
+      filterSearchDraft: "Event ID: 7036",
+    });
+    expect(useEvtxStore.getState().quickFilter.query).toBe("");
+    expect(useEvtxStore.getState().quickFilterDraft?.query).toBe("level:erro");
+    expect(screen.getByRole("textbox", { name: "Search events" })).toHaveValue("Event ID: 7036");
+    await waitFor(() =>
+      expect(document.getElementById(EVTX_SEARCH_ERROR_ID)).toHaveTextContent(
+        "Not applied: id: needs a value.",
+      ),
+    );
   });
 });
 

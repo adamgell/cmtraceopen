@@ -7,8 +7,10 @@
  * in the More filters popover (`EvtxMoreFilters`), one open away.
  *
  * The search box reads the field grammar (`evtx-query-grammar.ts`, issue #833). Its text is a local
- * criterion like any search: it never changes the live query, so typing never reloads. A query that
- * does not parse shows no events, and the reason is stated under the row in a polite status region.
+ * criterion like any search: it never changes the live query, so typing never reloads. Text that
+ * does not parse is not applied (spec 8.3): the box keeps it as typed (`filterSearchDraft`), the
+ * view keeps the last search that parsed (`filterSearch`), and once the typing settles a polite
+ * status region under the row says it was not applied and why.
  *
  * Do the level toggles re-query in live mode? Only when they change what the service is asked for
  * (verified in Phase 5, issue #832). In live mode with a loaded channel, a before-load change that
@@ -38,7 +40,6 @@ import { Search16Regular } from "@fluentui/react-icons";
 import {
   countByLevel,
   EVTX_LEVELS,
-  fieldQueryError,
   levelsAfterToggle,
   levelsFilteredAtSource,
 } from "./evtx-filter";
@@ -52,6 +53,7 @@ import {
 import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
 import { EVTX_SEARCH_INPUT_ID } from "./EvtxFilterChips";
 import { EvtxMoreFilters } from "./EvtxMoreFilters";
+import { notAppliedMessage, useSettledQueryError } from "./evtx-query-error";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
@@ -272,7 +274,8 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   const records = useEvtxStore((s) => s.records);
   const filterLevels = useEvtxStore((s) => s.filterLevels);
   const toggleFilterLevel = useEvtxStore((s) => s.toggleFilterLevel);
-  const filterSearch = useEvtxStore((s) => s.filterSearch);
+  // The text as typed: the draft while it is not applied, else the applied search.
+  const searchText = useEvtxStore((s) => s.filterSearchDraft ?? s.filterSearch);
   const setFilterSearch = useEvtxStore((s) => s.setFilterSearch);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
   const setTimeWindow = useEvtxStore((s) => s.setTimeWindow);
@@ -300,10 +303,9 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   const levelCounts = useMemo(() => countByLevel(records), [records]);
 
   const live = sourceMode === "live";
-  // The search text's first problem, if any. The text stays as typed, and selectVisibleRecords shows
-  // no events for it, so the row says why. Secondary-label size (spec 7.1, f - 2), with the chip
-  // row's line height, in the Warning text color spec 8.3 names.
-  const searchError = useMemo(() => fieldQueryError(filterSearch), [filterSearch]);
+  // Why the typed search is not applied, once the typing has settled. Secondary-label size (spec
+  // 7.1, f - 2), with the chip row's line height, in the Warning text color spec 8.3 names.
+  const searchError = useSettledQueryError(searchText);
   const searchErrorColor = visual.levels.Warning.textColor;
   const searchErrorFontPx = Math.max(10, metrics.fontSize - 2);
 
@@ -352,7 +354,7 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
             aria-describedby={searchError ? EVTX_SEARCH_ERROR_ID : undefined}
             contentBefore={<Search16Regular aria-hidden />}
             input={{ style: { fontSize: controlFontSize } }}
-            value={filterSearch}
+            value={searchText}
             onChange={(_, data) => setFilterSearch(data.value)}
             placeholder={EVTX_SEARCH_PLACEHOLDER}
             // Invalid, the whole border takes the error color, as the More filters inputs do. That
@@ -453,8 +455,8 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
         </Badge>
       </div>
       {/*
-        Always mounted and empty while the search parses, so it takes no height and the message is
-        announced politely when it appears. The search box points at it while there is an error.
+        Always mounted and empty while the search is applied, so it takes no height and the message
+        is announced politely when it appears. The search box points at it while it has one.
       */}
       <div
         id={EVTX_SEARCH_ERROR_ID}
@@ -466,7 +468,7 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
           marginTop: searchError ? "2px" : 0,
         }}
       >
-        {searchError?.message ?? ""}
+        {searchError ? notAppliedMessage(searchError) : ""}
       </div>
     </div>
   );

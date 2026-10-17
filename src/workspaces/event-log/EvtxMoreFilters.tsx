@@ -5,6 +5,11 @@
  * view bar or the table header, and the issue requires every capability of the old filter bar to
  * stay reachable, so they sit in a "Display" section here. They are not criteria and do not count
  * toward the button's number.
+ *
+ * The quick-filter controls show and edit the filter as edited. The store applies it as
+ * `quickFilter` whenever it can (`quickFilterApplies`), and otherwise keeps it as
+ * `quickFilterDraft`, so a field query that does not parse stays as typed and is not applied
+ * (spec 8.3).
  */
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -23,13 +28,13 @@ import {
   EVTX_QUICK_FILTER_ACTIONS,
   EVTX_QUICK_FILTER_MODES,
   EVTX_QUICK_FILTER_SCOPES,
-  fieldQueryError,
   parseEventIdSelectors,
   type EvtxQuickFilterAction,
   type EvtxQuickFilterMode,
   type EvtxQuickFilterScope,
 } from "./evtx-filter";
 import { useFilterChips, type EvtxFilterChip } from "./EvtxFilterChips";
+import { notAppliedMessage, useSettledQueryError } from "./evtx-query-error";
 import { useSavedFilterStore } from "./evtx-filter-store";
 import { orderFilters, sanitizeCriteria } from "./evtx-saved-filters";
 import { timeZoneLabel } from "./evtx-time";
@@ -96,7 +101,8 @@ interface EvtxMoreFiltersProps {
 export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProps) {
   const filterEventIds = useEvtxStore((s) => s.filterEventIds);
   const setFilterEventIds = useEvtxStore((s) => s.setFilterEventIds);
-  const quickFilter = useEvtxStore((s) => s.quickFilter);
+  // The quick filter as edited: the draft while it is not applied, else the applied one.
+  const quickFilter = useEvtxStore((s) => s.quickFilterDraft ?? s.quickFilter);
   const setQuickFilter = useEvtxStore((s) => s.setQuickFilter);
   const sortField = useEvtxStore((s) => s.sortField);
   const setSortField = useEvtxStore((s) => s.setSortField);
@@ -106,7 +112,7 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
   const setTimeZoneMode = useEvtxStore((s) => s.setTimeZoneMode);
   const setGroupBy = useEvtxStore((s) => s.setGroupBy);
   const setBeforeLoadCriteria = useEvtxStore((s) => s.setBeforeLoadCriteria);
-  const setFilterSearch = useEvtxStore((s) => s.setFilterSearch);
+  const setOnLoadCriteria = useEvtxStore((s) => s.setOnLoadCriteria);
 
   // Event IDs are a before-load criterion: committing a list refetches the loaded channels in live
   // mode. So the field edits a draft, and the list is committed on Enter or blur, never per
@@ -127,11 +133,11 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
     () => quickFilter.mode === "eventIds" && parseEventIdSelectors(quickFilter.query).invalid,
     [quickFilter.mode, quickFilter.query],
   );
-  // A field query that does not parse shows no events (evtx-filter.ts), so the reason is shown
-  // beside the query, and the query is left as the operator typed it.
-  const quickFieldQueryError = useMemo(
-    () => (quickFilter.mode === "fieldQuery" ? fieldQueryError(quickFilter.query) : null),
-    [quickFilter.mode, quickFilter.query],
+  // A field query that does not parse is not applied, so once the typing settles the reason is
+  // shown beside the query, which is left as the operator typed it.
+  const quickFieldQueryError = useSettledQueryError(
+    quickFilter.query,
+    quickFilter.mode === "fieldQuery",
   );
   const quickQueryInvalid = quickEventIdInputInvalid || quickFieldQueryError !== null;
   const activeCount = moreFiltersActiveCount(useFilterChips().chips);
@@ -161,9 +167,10 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
           timeWindow: state.timeWindow,
           selectedChannels: [...state.selectedChannels],
         },
+        // The operator's text, as typed, whether or not it is applied.
         onLoad: {
-          search: state.filterSearch,
-          quickFilter: state.quickFilter,
+          search: state.filterSearchDraft ?? state.filterSearch,
+          quickFilter: state.quickFilterDraft ?? state.quickFilter,
         },
         afterLoad: { groupBy: state.groupBy },
       }),
@@ -177,8 +184,7 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
     if (!filter) return;
     const { criteria } = filter;
     setBeforeLoadCriteria(criteria.beforeLoad);
-    setFilterSearch(criteria.onLoad.search);
-    setQuickFilter(criteria.onLoad.quickFilter);
+    setOnLoadCriteria(criteria.onLoad);
     setGroupBy(criteria.afterLoad.groupBy);
     markFilterUsed(id);
   };
@@ -295,13 +301,12 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
               </span>
             )}
             {/*
-              Mounted for the whole time the mode is Field query, and empty while the query parses,
-              so the message is announced politely when it appears. Its text changes as the
-              operator types, which an assertive alert would interrupt with on every key.
+              Mounted for the whole time the mode is Field query, and empty while the query is
+              applied, so the message is announced politely when it appears, once per message.
             */}
             {quickFilter.mode === "fieldQuery" && (
               <span id={QUICK_FIELD_QUERY_ERROR_ID} role="status" style={invalidStyle}>
-                {quickFieldQueryError?.message ?? ""}
+                {quickFieldQueryError ? notAppliedMessage(quickFieldQueryError) : ""}
               </span>
             )}
           </span>
