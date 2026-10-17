@@ -14,6 +14,18 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
 }));
 
+const indexBuilds = vi.hoisted(() => vi.fn());
+vi.mock("./evtx-insights-data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./evtx-insights-data")>();
+  return {
+    ...actual,
+    buildEvidenceIndex: (...args: Parameters<typeof actual.buildEvidenceIndex>) => {
+      indexBuilds();
+      return actual.buildEvidenceIndex(...args);
+    },
+  };
+});
+
 import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
@@ -686,6 +698,40 @@ describe("Copy as text", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy as text" }));
     await waitFor(() => expect(alertText()).toHaveTextContent("Copy failed: clipboard denied"));
     expect(status()).toHaveTextContent("");
+  });
+});
+
+describe("the evidence index (P8)", () => {
+  beforeEach(() => indexBuilds.mockClear());
+
+  it("is not built while the view is open, nor when loaded records change under it", () => {
+    seedStore([recordFor(1), recordFor(2)]);
+    show(pairData());
+    expect(indexBuilds).not.toHaveBeenCalled();
+    for (let batch = 3; batch <= 8; batch += 1) {
+      act(() => useEvtxStore.setState({ records: [recordFor(1), recordFor(2), recordFor(batch)] }));
+    }
+    expect(indexBuilds).not.toHaveBeenCalled();
+  });
+
+  it("is built once for a marker click, from the records loaded at that moment", () => {
+    seedStore([recordFor(1)]);
+    show(pairData());
+    act(() => useEvtxStore.setState({ records: [recordFor(1), recordFor(2)] }));
+    expect(indexBuilds).not.toHaveBeenCalled();
+    fireEvent.click(document.querySelector(`[data-marker="${rid(2)}"]`)!);
+    expect(indexBuilds).toHaveBeenCalledTimes(1);
+    // Record 2 arrived after the view was shown, and the click finds it.
+    expect(useEvtxStore.getState().selectedRecordId).toBe(2);
+  });
+
+  it("is built once for Filter table to chain, from the records loaded at that moment", () => {
+    seedStore([recordFor(1)]);
+    show(pairData());
+    act(() => useEvtxStore.setState({ records: [recordFor(1), recordFor(2)] }));
+    fireEvent.click(screen.getByRole("button", { name: "Filter table to chain" }));
+    expect(indexBuilds).toHaveBeenCalledTimes(1);
+    expect([...(useEvtxStore.getState().recordScope?.records ?? [])].map((r) => r.eventRecordId).sort()).toEqual([1, 2]);
   });
 });
 

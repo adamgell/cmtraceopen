@@ -64,7 +64,7 @@ import {
 import { useEvtxCorrelationData } from "./useEvtxCorrelation";
 import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
 import type { EvtxRecordScopeCounts } from "./evtx-filter";
-import { buildEvidenceIndex, describeScopeCounts } from "./evtx-insights-data";
+import { buildEvidenceIndex, describeScopeCounts, type EvidenceIndex } from "./evtx-insights-data";
 import { useRailTextColors } from "./evtx-rail-text";
 import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
@@ -130,6 +130,16 @@ const useStyles = makeStyles({
     ":hover": { filter: "brightness(0.97)" },
   },
 });
+
+/**
+ * The index of the records loaded NOW, built when a click needs it and not before. Loaded records
+ * change with every live-tail batch while this view is open, and nothing reads the index until a
+ * marker is clicked or the table is filtered, so a memo over the records would rebuild it (tens of
+ * milliseconds at 100,000 events) for nothing, on every batch.
+ */
+function loadedEvidenceIndex(): EvidenceIndex {
+  return buildEvidenceIndex(useEvtxStore.getState().records);
+}
 
 /**
  * Why the table was not filtered when `setRecordScope` returned false. It never says "no loaded
@@ -336,7 +346,6 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
   const visuals = useEvtxVisualTokens();
   const railText = useRailTextColors();
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
-  const loadedRecords = useEvtxStore((s) => s.records);
   const selectedChainId = useEvtxCorrelationStore((s) => s.selectedChainId);
   const selectChain = useEvtxCorrelationStore((s) => s.selectChain);
   const listRef = useRef<HTMLDivElement>(null);
@@ -374,7 +383,6 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
   // Not knowing the scope reads as narrowed: "Not linked" is never said without it.
   const narrowed = session === null || scope !== null;
 
-  const evidenceIndex = useMemo(() => buildEvidenceIndex(loadedRecords), [loadedRecords]);
   const plot = useMemo(
     () =>
       chain !== null && model !== null && hasItems
@@ -503,7 +511,7 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
     (marker: PlotMarker) => {
       const item = itemsById.get(marker.id);
       if (item === undefined) return;
-      const resolution = resolveOriginRecords(item.origin, evidenceIndex);
+      const resolution = resolveOriginRecords(item.origin, loadedEvidenceIndex());
       if (resolution.kind === "notEvent") {
         reply("A text-log line is not an event record, so there is no record to select.");
       } else if (resolution.kind === "noUsableIdentity") {
@@ -517,12 +525,12 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
         reply(`${resolution.records.length.toLocaleString()} loaded events match this entry, so none is selected.`);
       }
     },
-    [itemsById, evidenceIndex],
+    [itemsById, reply],
   );
 
   const filterToChain = () => {
     if (chain === null || model === null || !hasItems) return;
-    const chainScope = scopeForChain(chain, origins, evidenceIndex, {
+    const chainScope = scopeForChain(chain, origins, loadedEvidenceIndex(), {
       edgeInputComplete: model.edgeInputComplete,
     });
     const applied = useEvtxStore.getState().setRecordScope({
