@@ -33,8 +33,8 @@ import {
 import { findRecordById, formatCount } from "./evtx-insights-data";
 import { useRailTextColors } from "./evtx-rail-text";
 import { useEvtxStore } from "./evtx-store";
-import type { DiagnosisFinding, DiagnosisSummary, EvtxRecord } from "./types";
 import { DERIVATION_THROTTLE_MS, useThrottledValue } from "./evtx-throttle";
+import type { DiagnosisFinding, DiagnosisSummary, EvtxRecord } from "./types";
 import type { ScopeDisclosureInput } from "./evtx-correlation-copy";
 
 interface EvtxInsightsRailProps {
