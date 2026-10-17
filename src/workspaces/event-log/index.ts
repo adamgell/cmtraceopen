@@ -10,6 +10,10 @@ export const eventLogWorkspace: WorkspaceDefinition = {
   platforms: "all",
   capabilities: {
     sidebar: false,
+    // "Add log source..." loads a text log through the Log workspace's loaders, and opening its
+    // tab (or a multi-file load) asks for the Log view. The log belongs to this workspace's
+    // analysis session, so that load must not move the user out of it.
+    keepsViewOnLogLoad: true,
   },
   component: lazy(() =>
     import("./EventLogWorkspace").then(

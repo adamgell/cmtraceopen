@@ -44,7 +44,7 @@ import {
 import { eventLogWorkspace } from "./event-log";
 import { logWorkspace } from "./log";
 import { sccmWorkspace } from "./sccm";
-import { getAvailableWorkspaces, getWorkspace } from "./registry";
+import { getAvailableWorkspaces, getWorkspace, workspaceRegistry } from "./registry";
 import type { WorkspaceDefinition } from "./types";
 
 const eventMocks = vi.hoisted(() => {
@@ -250,6 +250,16 @@ describe("registry-driven shell chrome", () => {
     expect(shouldRenderWorkspaceSidebar(logWorkspace)).toBe(true);
     expect(eventLogWorkspace.capabilities?.sidebar).toBe(false);
     expect(shouldRenderWorkspaceSidebar(eventLogWorkspace)).toBe(false);
+  });
+
+  it("lets only Event Logs and macOS JAMF keep their view when a log loads", () => {
+    // Every other workspace hands a loaded log to the Log workspace, so widening this set changes
+    // what drag-drop, the toolbar and a file association do for it.
+    const keepers = [...workspaceRegistry.values()]
+      .filter((workspace) => workspace.capabilities?.keepsViewOnLogLoad)
+      .map((workspace) => workspace.id)
+      .sort();
+    expect(keepers).toEqual(["event-log", "macos-jamf"]);
   });
 
   it("renders lazy toolbar and status slots while preserving legacy fallback chrome", async () => {

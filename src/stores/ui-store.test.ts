@@ -254,6 +254,42 @@ describe("ui-store", () => {
       expect(useUiStore.getState().activeWorkspace).toBe("log");
     });
 
+    it.each(["tab-switch", "multi-file-open", "toolbar.open-all-family"])(
+      "keeps the Event Logs workspace active for a text-log load asked for as %s",
+      (trigger) => {
+        useUiStore.getState().setActiveWorkspace("event-log");
+
+        useUiStore.getState().openTab("/var/log/install.log", "install.log");
+        useUiStore.getState().ensureLogViewVisible(trigger);
+
+        const state = useUiStore.getState();
+        expect(state.openTabs[0].filePath).toBe("/var/log/install.log");
+        expect(state.activeWorkspace).toBe("event-log");
+        expect(state.activeView).toBe("event-log");
+      },
+    );
+
+    it.each(["tab-switch", "multi-file-open", "toolbar.open-all-family"])(
+      "still hands a log asked for as %s from another workspace to the Log workspace",
+      (trigger) => {
+        useUiStore.getState().setActiveWorkspace("macos-diag");
+
+        useUiStore.getState().ensureLogViewVisible(trigger);
+
+        expect(useUiStore.getState().activeWorkspace).toBe("log");
+      },
+    );
+
+    it("still leaves the Event Logs workspace on an explicit switch", () => {
+      useUiStore.getState().setActiveWorkspace("event-log");
+
+      useUiStore
+        .getState()
+        .ensureWorkspaceVisible("log", "toolbar.workspace-select");
+
+      expect(useUiStore.getState().activeWorkspace).toBe("log");
+    });
+
     it("still leaves the macOS JAMF workspace on an explicit switch", () => {
       useUiStore.getState().setActiveWorkspace("macos-jamf");
 
