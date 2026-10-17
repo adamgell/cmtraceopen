@@ -234,6 +234,13 @@ export interface EvtxRecordScopeCounts {
   ambiguous: number;
   /** The source may have cited more events than it sent (the engine bounds a finding's evidence). */
   bounded: boolean;
+  /**
+   * References whose record cannot be looked for at all, because the timeline item that would say
+   * which record they name was not read (a chain member whose item was never loaded). Nothing is
+   * known about them: this is NOT "not loaded", which is an absence found by looking. Absent means
+   * none, which is what a finding's evidence always has.
+   */
+  unresolved?: number;
 }
 
 /**
@@ -245,6 +252,7 @@ export function countScopeReferences(
   references: readonly (readonly EvtxRecord[])[],
   noUsableIdentity: number,
   bounded: boolean,
+  unresolved = 0,
 ): EvtxRecordScopeCounts {
   let notLoaded = 0;
   let ambiguous = 0;
@@ -252,7 +260,15 @@ export function countScopeReferences(
     if (candidates.length === 0) notLoaded += 1;
     else if (candidates.length > 1) ambiguous += 1;
   }
-  return { notLoaded, noUsableIdentity, ambiguous, bounded };
+  // Unresolved references are not in `references` (they have no records to prune), so the count is
+  // carried, and it is only present when there is one.
+  return {
+    notLoaded,
+    noUsableIdentity,
+    ambiguous,
+    bounded,
+    ...(unresolved > 0 ? { unresolved } : {}),
+  };
 }
 
 /**
