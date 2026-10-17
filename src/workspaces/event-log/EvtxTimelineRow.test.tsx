@@ -366,4 +366,82 @@ describe("EvtxTimelineRow field-query marks (spec 8.3, #833)", () => {
     });
     expect(marks(container)).toEqual([]);
   });
+
+  it("merges a free-text range and a field range that overlap or contain each other in one cell", () => {
+    // Provider "Microsoft-Windows-AAD": Microsoft [0,9), Windows [10,17), AAD [18,21).
+    const provider = "Microsoft-Windows-AAD";
+    for (const [query, expected] of [
+      // The text range [18,21) lies inside the field range [10,21): one mark, no repeated text.
+      ["AAD provider:Windows-AAD", ["Windows-AAD"]],
+      // The text range comes first from matchRanges but sits after the field range [0,9).
+      ["AAD provider:Microsoft", ["Microsoft", "AAD"]],
+      // The text range [5,9) lies inside the field range [0,17): the mark keeps the longer end.
+      ["soft provider:Microsoft-Windows", ["Microsoft-Windows"]],
+    ] as const) {
+      const { unmount } = renderRow({
+        record: aadRecord(),
+        quickFilter: fieldFilter(query),
+        quickFilterMatch: true,
+      });
+      expect(cell("Provider").textContent, query).toBe(provider);
+      expect(marks(cell("Provider")), query).toEqual(expected);
+      unmount();
+    }
+  });
+
+  it("marks free text with the Case setting in the text modes", () => {
+    renderRow({
+      record: { ...record(), message: "Token broker failed: token expired" },
+      quickFilter: {
+        mode: "oneString",
+        query: "Token",
+        scope: "allColumns",
+        action: "show",
+        caseSensitive: true,
+        highlight: true,
+      },
+      quickFilterMatch: true,
+    });
+    expect(marks(cell("Description"))).toEqual(["Token"]);
+    expect(cell("Description").textContent).toBe("Token broker failed: token expired");
+  });
+
+  it("keeps every character of a highlighted cell, with marks at the start, middle and end", () => {
+    const message = "alpha then mid then omega";
+    const provider = "the mid provider";
+    renderRow({
+      record: { ...record(), message, provider },
+      quickFilter: {
+        mode: "multipleWords",
+        query: "alpha mid omega",
+        scope: "allColumns",
+        action: "show",
+        caseSensitive: false,
+        highlight: true,
+      },
+      quickFilterMatch: true,
+    });
+    expect(marks(cell("Description"))).toEqual(["alpha", "mid", "omega"]);
+    expect(cell("Description").textContent).toBe(message);
+    // Text before and after a single mark in the middle.
+    expect(marks(cell("Provider"))).toEqual(["mid"]);
+    expect(cell("Provider").textContent).toBe(provider);
+  });
+
+  it("renders two adjacent matches as two marks, as one regular expression always did", () => {
+    renderRow({
+      record: { ...record(), message: "baab" },
+      quickFilter: {
+        mode: "oneString",
+        query: "a",
+        scope: "allColumns",
+        action: "show",
+        caseSensitive: false,
+        highlight: true,
+      },
+      quickFilterMatch: true,
+    });
+    expect(marks(cell("Description"))).toEqual(["a", "a"]);
+    expect(cell("Description").textContent).toBe("baab");
+  });
 });
