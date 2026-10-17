@@ -218,6 +218,15 @@ describe("buildFilterChips, the transient criteria", () => {
       expect(chip.label).toBe(`Time: brushed Feb 14 2026 00:00${SEP}Feb 14 2027 00:00`);
     });
 
+    it("compares with the clock it is given, not the real one", () => {
+      const march2026 = [Date.UTC(2026, 2, 3), Date.UTC(2026, 3, 2)] as const;
+      // The file pins the real clock to 2026, so only the given clock can make 2026 a past year.
+      expect(timeChip(...march2026, Date.UTC(2026, 9, 16)).label).toBe(`Time: brushed Mar 3 00:00${SEP}Apr 2 00:00`);
+      expect(timeChip(...march2026, Date.UTC(2030, 0, 1)).label).toBe(
+        `Time: brushed Mar 3 2026 00:00${SEP}Apr 2 2026 00:00`,
+      );
+    });
+
     it("reads the current year from the clock when no time is given", () => {
       const chip = buildFilterChips(
         input({

@@ -311,6 +311,8 @@ describe("EvtxHistogram", () => {
     const slot = container.querySelector<HTMLElement>("figure > figcaption")!;
     const lines = [...slot.children] as HTMLElement[];
     expect(lines).toHaveLength(2);
+    // Block elements, so each is a line of its own whatever the width.
+    expect(lines.map((line) => line.tagName)).toEqual(["DIV", "DIV"]);
     expect(lines[0]).toHaveTextContent(describeCoverage(1));
     expect(lines[1].hasAttribute("data-evtx-cursor-slot")).toBe(true);
     const before = lines.map((line) => line.tagName);

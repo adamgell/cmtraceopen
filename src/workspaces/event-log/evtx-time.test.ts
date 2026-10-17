@@ -219,6 +219,12 @@ describe("timeRangeNeedsYear", () => {
     expect(needs(utc(2026, 1, 1), utc(2026, 12, 31))).toBe(false);
   });
 
+  it("names the year of a range of exactly 365 days inside one leap year, whose ends share the current year", () => {
+    const now2028 = utc(2028, 6, 1);
+    expect(timeRangeNeedsYear(utc(2028, 1, 1), utc(2028, 12, 31), "utc", now2028)).toBe(true);
+    expect(timeRangeNeedsYear(utc(2028, 1, 1), utc(2028, 12, 30), "utc", now2028)).toBe(false);
+  });
+
   it("reads the year on the chosen clock, not the UTC one", () => {
     // Built from the host's own calendar, so it holds in any zone: local New Year's Eve into the new year.
     const eve = new Date(2026, 11, 31, 23, 0).getTime();
