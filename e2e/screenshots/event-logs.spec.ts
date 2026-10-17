@@ -225,7 +225,7 @@ test.describe("event-logs screenshots", () => {
     // instead of letting the waits below time out blind.
     const alert = page.getByRole("alert");
     await expect(
-      page.getByLabel("Operational diagnosis").or(alert).first(),
+      page.getByLabel("Operational diagnosis", { exact: true }).or(alert).first(),
     ).toBeVisible({ timeout: 15_000 });
     if ((await alert.count()) > 0) {
       throw new Error(
@@ -238,7 +238,7 @@ test.describe("event-logs screenshots", () => {
     await expect(page.getByRole("grid", { name: timelineGridName })).toBeVisible({
       timeout: 15_000,
     });
-    await expect(page.getByLabel("Operational diagnosis")).toBeVisible({
+    await expect(page.getByLabel("Operational diagnosis", { exact: true })).toBeVisible({
       timeout: 15_000,
     });
     await expect(page.getByText("Loading timeline row")).toHaveCount(0);
