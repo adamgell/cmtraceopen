@@ -25,7 +25,14 @@ import type {
   CorrelationEvidenceRow,
 } from "./evtx-correlation-chains";
 import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
-import { formatClock, TIME_RANGE_SEPARATOR, type EvtxTimeZoneMode } from "./evtx-time";
+import {
+  eventDateKey,
+  formatClock,
+  formatDayClock,
+  TIME_RANGE_SEPARATOR,
+  timeRangeNeedsYear,
+  type EvtxTimeZoneMode,
+} from "./evtx-time";
 import type { EvtxLevel } from "./types";
 import {
   originContext,
@@ -119,6 +126,42 @@ export function axisTicks(window: TimeWindow, count = CORRELATION_AXIS_TICKS): n
   return Array.from(
     { length: count },
     (_, i) => window.startMs + ((window.endMs - window.startMs) * i) / (count - 1),
+  );
+}
+
+export interface TickLabelOptions {
+  /**
+   * Seconds on every label. By default they are shown when the ticks are less than a minute apart,
+   * so two neighbours never read as the same minute.
+   */
+  withSeconds?: boolean;
+  /** "Now" for the year rule, which compares with the current year. The real clock unless a test gives one. */
+  nowMs?: number;
+}
+
+/**
+ * The labels of an axis, one per tick: the clock alone (`10:20:05`) on a span inside one calendar
+ * day of the current year, and the day with it (`Oct 6 23:59:57`) once the ticks cross midnight, so
+ * a bare clock never names two different days alike. A span outside the current year, or across a
+ * year, names the year too (`Oct 6 2026 10:20:05`). This is the histogram's rule (`buildAxisTicks`
+ * in evtx-histogram.ts) with the same pieces: `eventDateKey`, `timeRangeNeedsYear` and
+ * `formatDayClock`, in the zone the view shows times in. The lane plot and the overview strip share
+ * it, so one window cannot be labelled two ways.
+ */
+export function tickLabels(
+  ticks: readonly number[],
+  mode: EvtxTimeZoneMode,
+  options: TickLabelOptions = {},
+): string[] {
+  const first = ticks[0];
+  const last = ticks[ticks.length - 1];
+  if (first === undefined || last === undefined) return [];
+  const step = ticks.length > 1 ? (last - first) / (ticks.length - 1) : Number.POSITIVE_INFINITY;
+  const withSeconds = options.withSeconds ?? step < 60_000;
+  const withYear = timeRangeNeedsYear(first, last, mode, options.nowMs ?? Date.now());
+  const withDay = eventDateKey(first, mode) !== eventDateKey(last, mode) || withYear;
+  return ticks.map((tick) =>
+    withDay ? formatDayClock(tick, mode, withSeconds, withYear) : formatClock(tick, mode, withSeconds),
   );
 }
 
