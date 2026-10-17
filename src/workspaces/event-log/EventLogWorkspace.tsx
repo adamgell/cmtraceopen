@@ -508,26 +508,39 @@ export function EventLogWorkspace() {
     correlation: { keepAlive: false, render: () => <ViewPlaceholder view="correlation" /> },
   };
 
+  // The one polite live region for newly reported gaps, whichever surface shows them. It is the
+  // first child of every branch below, so it stays mounted through the picker and the spinner and
+  // is already in place when a load's first gaps arrive.
+  const announcer = <EvtxCoverageBanner variant="announcer" />;
+
   if (!hasData && !isLoading) {
-    return <SourcePicker />;
+    return (
+      <>
+        {announcer}
+        <SourcePicker />
+      </>
+    );
   }
 
   if (isLoading && records.length === 0) {
     return (
-      <div
-        style={{
-          flex: 1,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Spinner label="Loading event logs..." />
-      </div>
+      <>
+        {announcer}
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Spinner label="Loading event logs..." />
+        </div>
+      </>
     );
   }
 
-  return (
+  const workspace = (
     <div
       style={{
         flex: 1,
@@ -536,8 +549,6 @@ export function EventLogWorkspace() {
         overflow: "hidden",
       }}
     >
-      {/* The one polite live region for newly reported gaps, whichever surface shows them. */}
-      <EvtxCoverageBanner variant="announcer" />
       {loadError && (
         <div
           role="alert"
@@ -688,5 +699,12 @@ export function EventLogWorkspace() {
         </aside>
       </div>
     </div>
+  );
+
+  return (
+    <>
+      {announcer}
+      {workspace}
+    </>
   );
 }
