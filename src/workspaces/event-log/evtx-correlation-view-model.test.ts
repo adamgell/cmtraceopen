@@ -34,6 +34,7 @@ import {
   spanText,
   whyRows,
   IN_ANOTHER_CHAIN_LABEL,
+  LINK_TO_EVENT_UNKNOWN_LABEL,
   NOT_IN_THIS_CHAIN_LABEL,
   NOT_LINKED_LABEL,
   NO_LOADED_LINK_LABEL,
@@ -870,6 +871,50 @@ describe("buildChainPlot", () => {
       it("is the three words, apart", () => {
         expect(new Set([NOT_LINKED_LABEL, NO_LOADED_LINK_LABEL, IN_ANOTHER_CHAIN_LABEL, NOT_IN_THIS_CHAIN_LABEL]).size).toBe(4);
       });
+    });
+  });
+
+  describe("a selection that is not identified (#842, review A1)", () => {
+    const items = [eventItem(1, T0), eventItem(2, T0 + 6_000)];
+    const chain = () => chainOf(fixtureEdges("exactPair"), items);
+    const stray = eventItem(9, T0 + 3_000, "warning");
+    const plain = eventItem(8, T0 + 2_000);
+    const partners = new Map([[rid(9), 2]]);
+
+    it("calls an entry with a partner 'Link to this event not known', never 'In another chain'", () => {
+      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners, selectionIdentified: false });
+      expect(plot.nearby[0]?.linkLabel).toBe(LINK_TO_EVENT_UNKNOWN_LABEL);
+      expect(plot.nearby[0]?.linkLabel).not.toBe(IN_ANOTHER_CHAIN_LABEL);
+    });
+
+    it("leaves what the entry itself shows alone: Not linked and No loaded link are facts about it", () => {
+      const clear = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [plain], linkPartners: partners, selectionIdentified: false });
+      expect(clear.nearby[0]?.linkLabel).toBe(NOT_LINKED_LABEL);
+      const unknown = buildChainPlot({ ...VIEW, edgeInputComplete: false, chain: chain(), itemsById: mapOf(items), nearby: [plain], linkPartners: partners, selectionIdentified: false });
+      expect(unknown.nearby[0]?.linkLabel).toBe(NO_LOADED_LINK_LABEL);
+    });
+
+    it("says it whatever else is incomplete, as a loaded partner does", () => {
+      const plot = buildChainPlot({ ...VIEW, edgeInputComplete: false, narrowed: true, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners, selectionIdentified: false });
+      expect(plot.nearby[0]?.linkLabel).toBe(LINK_TO_EVENT_UNKNOWN_LABEL);
+    });
+
+    it("gives the legend the same word when any marker has it, ahead of Not in this chain", () => {
+      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain], linkPartners: partners, selectionIdentified: false });
+      expect(plot.notLinkedLabel).toBe(LINK_TO_EVENT_UNKNOWN_LABEL);
+      const identified = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain], linkPartners: partners });
+      expect(identified.notLinkedLabel).toBe(NOT_IN_THIS_CHAIN_LABEL);
+    });
+
+    it("is the identified behavior by default and when true", () => {
+      const byDefault = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners });
+      const explicit = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners, selectionIdentified: true });
+      expect(byDefault.nearby[0]?.linkLabel).toBe(IN_ANOTHER_CHAIN_LABEL);
+      expect(explicit).toEqual(byDefault);
+    });
+
+    it("keeps the four words apart", () => {
+      expect(new Set([NOT_LINKED_LABEL, NO_LOADED_LINK_LABEL, IN_ANOTHER_CHAIN_LABEL, NOT_IN_THIS_CHAIN_LABEL, LINK_TO_EVENT_UNKNOWN_LABEL]).size).toBe(5);
     });
   });
 

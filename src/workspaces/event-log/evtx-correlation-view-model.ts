@@ -325,6 +325,14 @@ export const IN_ANOTHER_CHAIN_LABEL = "In another chain";
  * every such marker has in common is that it is not part of this chain, and nothing more.
  */
 export const NOT_IN_THIS_CHAIN_LABEL = "Not in this chain";
+/**
+ * What a context marker says of an entry that has a loaded partner when the plot's own selection is
+ * NOT IDENTIFIED (`selectionIdentified` false): the entry is linked to something, and whether that
+ * something is the selected event cannot be told, so it is neither "in another chain" nor "not
+ * linked". It is also the legend's word then: with no chain of the selected event drawn, "this
+ * chain" names nothing.
+ */
+export const LINK_TO_EVENT_UNKNOWN_LABEL = "Link to this event not known";
 
 export interface PlotMarker {
   id: string;
@@ -437,6 +445,13 @@ export interface ChainPlotInput {
    * it no entry is known to be linked and the labels are the other two.
    */
   linkPartners?: ReadonlyMap<string, number>;
+  /**
+   * The plot's selected entry was identified. False when it could not be (several entries could be
+   * it, or the read stopped before it): an entry with a loaded partner may then be linked TO IT, so
+   * it is called `LINK_TO_EVENT_UNKNOWN_LABEL`, never "In another chain". "Not linked" and "No
+   * loaded link" are facts about the entry itself and are unchanged. Defaults to true.
+   */
+  selectionIdentified?: boolean;
   markerCap?: number;
   connectorCap?: number;
 }
@@ -463,7 +478,9 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     !memberHasGap;
   const labelFor = (originId: string) => {
     // A loaded partner is a fact, whatever else is incomplete: say it first.
-    if ((input.linkPartners?.get(originId) ?? 0) > 0) return IN_ANOTHER_CHAIN_LABEL;
+    if ((input.linkPartners?.get(originId) ?? 0) > 0) {
+      return input.selectionIdentified === false ? LINK_TO_EVENT_UNKNOWN_LABEL : IN_ANOTHER_CHAIN_LABEL;
+    }
     return chainClear && !input.gaps.originIds.has(originId) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
   };
   const markerCap = input.markerCap ?? CORRELATION_MARKER_CAP;
@@ -594,11 +611,13 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     // One legend entry for the dotted marker: it says "Not linked" only if every marker it stands
     // for may be called that, and it drops to "Not in this chain" when any of them is linked
     // elsewhere, which is all that they then have in common.
-    notLinkedLabel: nearby.some((marker) => marker.linkLabel === IN_ANOTHER_CHAIN_LABEL)
-      ? NOT_IN_THIS_CHAIN_LABEL
-      : chainClear && nearby.every((marker) => marker.linkLabel === NOT_LINKED_LABEL)
-        ? NOT_LINKED_LABEL
-        : NO_LOADED_LINK_LABEL,
+    notLinkedLabel: nearby.some((marker) => marker.linkLabel === LINK_TO_EVENT_UNKNOWN_LABEL)
+      ? LINK_TO_EVENT_UNKNOWN_LABEL
+      : nearby.some((marker) => marker.linkLabel === IN_ANOTHER_CHAIN_LABEL)
+        ? NOT_IN_THIS_CHAIN_LABEL
+        : chainClear && nearby.every((marker) => marker.linkLabel === NOT_LINKED_LABEL)
+          ? NOT_LINKED_LABEL
+          : NO_LOADED_LINK_LABEL,
   };
 }
 
