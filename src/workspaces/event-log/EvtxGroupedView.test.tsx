@@ -895,6 +895,19 @@ describe("a channel the store loaded only up to its bound", () => {
       await reload;
     });
 
+    it("drops a channel's stamp when the channel is cleared", async () => {
+      await loadSecurity(beforeLoad());
+      expect(useEvtxStore.getState().channelReadThrough.has("Security")).toBe(true);
+      vi.mocked(invoke).mockImplementation(async (command: string, args?: unknown) =>
+        command === "evtx_clear_channel"
+          ? { channel: (args as { channel: string }).channel, result: { status: "cleared" } }
+          : undefined,
+      );
+      const outcome = await useEvtxStore.getState().clearChannel("Security", true);
+      expect(outcome.status).toBe("cleared");
+      expect(useEvtxStore.getState().channelReadThrough.has("Security")).toBe(false);
+    });
+
     it("forgets every stamp when the source changes", async () => {
       await loadSecurity(beforeLoad());
       vi.mocked(invoke).mockResolvedValue({
