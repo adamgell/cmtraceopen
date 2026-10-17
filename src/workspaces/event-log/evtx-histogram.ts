@@ -440,9 +440,11 @@ export function describeFigure(histogram: EvtxHistogram, mode: EvtxTimeZoneMode)
 const noun = (amount: number, singular: string, plural: string) =>
   `${formatCount(amount)} ${amount === 1 ? singular : plural}`;
 
-/** The counts of one bucket: the spec's trio always, and Critical and Verbose when there are any. */
+/**
+ * The counts of one bucket: the spec's trio always (an empty bucket reads "0 errors, 0 warnings, 0
+ * info"), and Critical and Verbose when there are any.
+ */
 export function describeCounts(bucket: HistogramBucket): string {
-  if (bucket.total === 0) return "no events";
   const { counts } = bucket;
   const parts: string[] = [];
   if (counts.Critical > 0) parts.push(`${formatCount(counts.Critical)} critical`);

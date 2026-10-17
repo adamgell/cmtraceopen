@@ -512,8 +512,11 @@ describe("text", () => {
     expect(describeCounts(bucket({ Verbose: 9, Information: 1 }))).toBe("0 errors, 0 warnings, 1 info, 9 verbose");
   });
 
-  it("says an empty bucket has no events rather than listing zeros", () => {
-    expect(describeCounts(bucket({}))).toBe("no events");
+  it("lists the spec's trio as zeros for an empty bucket, and never says 'no events'", () => {
+    expect(describeCounts(bucket({}))).toBe("0 errors, 0 warnings, 0 info");
+    expect(describeBucket(bucket({}), "utc")).toBe(
+      `09:00${TIME_RANGE_SEPARATOR}09:20 \u00b7 0 errors, 0 warnings, 0 info (UTC)`,
+    );
   });
 
   it("writes thousands with separators", () => {
