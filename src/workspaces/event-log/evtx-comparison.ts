@@ -250,8 +250,13 @@ export function createAggregator(
  * Records the live tail appended. A tail reads events that have not happened yet, so they belong
  * after the comparison's anchor, but a record's own timestamp does not guarantee it: a subscription
  * can deliver an event late (a collector's ForwardedEvents) or from a machine whose clock runs
- * behind. Whatever its timestamp, a record the tail appended is never part of the current period,
- * which keeps the note that the comparison leaves the tail's events out true by construction.
+ * behind. Whatever its timestamp, a record the tail appended is never part of the current period.
+ *
+ * What holds by construction is that `countCurrentPeriod` sets aside every tail-marked row it is
+ * given and reports how many of the compared channels' it set aside (`tailExcluded`), from the same
+ * records as its counts. The note a comparison carries cannot say how many: the tail keeps
+ * appending after the result is on show, so any number it stated would drift from the rows then on
+ * the grid.
  */
 const tailAppendedRecords = new WeakSet<EvtxRecord>();
 
@@ -270,6 +275,18 @@ export type CurrentPeriodBasis = Pick<
   "prior" | "comparedChannels" | "channelsWithGaps"
 >;
 
+/** The current side's tally, with the tail rows set aside to reach it. */
+export interface CurrentPeriodTally extends ComparisonTally {
+  /**
+   * The rows the live tail appended to the compared channels that this count set aside, under the
+   * criteria the counts use (`selectVisibleRecords` without a time window): a row the view's
+   * channel selection, levels, event IDs, search or quick filter hide is not counted here either,
+   * and neither is a row of a channel that is not compared. Taken from the same records as
+   * `counts`, so the two cannot disagree.
+   */
+  tailExcluded: number;
+}
+
 /**
  * The events of the CURRENT period that the view shows, counted the way the previous period is.
  *
@@ -286,14 +303,20 @@ export function countCurrentPeriod(
   records: readonly EvtxRecord[],
   basis: CurrentPeriodBasis,
   visibility: ComparisonVisibility
-): ComparisonTally {
+): CurrentPeriodTally {
   const { prior } = basis;
   const aggregator = createAggregator(
     { fromMs: prior.anchorEpoch - prior.lengthMs, toMs: prior.anchorEpoch },
     visibility
   );
+  const tailRows = records.filter((candidate) => isTailAppended(candidate));
   aggregator.add(records.filter((candidate) => !isTailAppended(candidate)));
   const tally = aggregator.finish();
+  const compared = new Set(basis.comparedChannels);
+  const tailExcluded = selectVisibleRecords({
+    ...visibility,
+    records: tailRows.filter((candidate) => compared.has(candidate.channel)),
+  }).length;
   const withGaps = new Set(basis.channelsWithGaps);
   const channels = new Map(tally.counts.channels);
   for (const channel of basis.comparedChannels) {
@@ -301,7 +324,7 @@ export function countCurrentPeriod(
       channels.set(channel, 0);
     }
   }
-  return { ...tally, counts: { ...tally.counts, channels } };
+  return { ...tally, counts: { ...tally.counts, channels }, tailExcluded };
 }
 
 export type ComparisonMode = "files" | "live";

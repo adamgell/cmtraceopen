@@ -2988,19 +2988,19 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
   // Tail gaps are not among these: the comparison never counts the tail's events, so what the tail
   // did or did not deliver does not bear on its completeness. The note below covers it.
 
-  // What the tail appended to the compared channels is on the grid and never counted, whatever
-  // its timestamp, so say how much. This reads the records themselves: a later load tears the tail
-  // down, but the rows it appended stay for the channels that load does not refresh.
+  // What the tail appends to the compared channels is on the grid and never counted, whatever its
+  // timestamp. The note says so without a number: the tail keeps appending after the result is on
+  // show, and a count taken here would drift from the rows then on the grid (a consumer states the
+  // number from `countCurrentPeriod`, over the same records as its counts). It is given when a
+  // compared channel already holds the tail's rows, which a later load keeps for the channels it
+  // does not read, or is being tailed now, so the rows that are about to arrive are announced too.
   const comparedChannels = new Set(channels);
-  const tailAppended = state.records.filter(
-    (record) => comparedChannels.has(record.channel) && isTailAppended(record)
-  ).length;
-  const notes =
-    tailAppended > 0
-      ? [
-          `${tailAppended} ${tailAppended === 1 ? "event the live tail appended to the compared channels is" : "events the live tail appended to the compared channels are"} not counted in the current period.`,
-        ]
-      : [];
+  const tailTouchesCompared =
+    state.records.some((record) => comparedChannels.has(record.channel) && isTailAppended(record)) ||
+    (state.tailRequestId !== null && channels.some((channel) => state.tailChannels.has(channel)));
+  const notes = tailTouchesCompared
+    ? ["Events the live tail appends to the compared channels are not counted in the current period."]
+    : [];
   // A collector's forwarded events arrive through subscriptions, in batches, after they were
   // written. The current period was read once; the previous period is read later and includes its
   // own late arrivals, so the current side can be low against it.

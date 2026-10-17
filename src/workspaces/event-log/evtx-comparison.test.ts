@@ -335,6 +335,59 @@ describe("countCurrentPeriod", () => {
     expect(current.counts.total).toBe(1);
   });
 
+  describe("the tail rows it sets aside", () => {
+    const tailRow = (channel: string, overrides: Partial<EvtxRecord> = {}) => {
+      const row = record({ channel, timestampEpoch: ANCHOR - HOUR, ...overrides });
+      markTailAppended([row]);
+      return row;
+    };
+
+    it("counts the compared channels' tail rows that the view's criteria show, and no others", () => {
+      const rows = [
+        tailRow("System", { level: "Error" }),
+        tailRow("System", { level: "Information" }),
+        // Another channel is not compared, whatever the tail appended to it.
+        tailRow("Application", { level: "Error" }),
+        // A row the load read is not the tail's.
+        record({ channel: "System", level: "Error", timestampEpoch: ANCHOR - HOUR }),
+      ];
+      const current = countCurrentPeriod(
+        rows,
+        basisOf(priorFor("24h"), ["System"]),
+        visibility({
+          selectedChannels: new Set(["System", "Application"]),
+          filterLevels: new Set<EvtxLevel>(["Error"]),
+        })
+      );
+
+      // The same criteria the counts use: the Information row is hidden, so it is not counted.
+      expect(current.tailExcluded).toBe(1);
+      // And the counts hold only the row the load read.
+      expect(current.counts.total).toBe(1);
+    });
+
+    it("is zero when the tail appended nothing to the compared channels", () => {
+      const current = countCurrentPeriod(
+        [record({ channel: "System", timestampEpoch: ANCHOR - HOUR })],
+        basisOf(priorFor("24h"), ["System"]),
+        visibility()
+      );
+      expect(current.tailExcluded).toBe(0);
+    });
+
+    it("sets aside a tail row whatever its timestamp, outside the period as well as inside", () => {
+      const rows = [
+        tailRow("System", { timestampEpoch: ANCHOR - HOUR }),
+        tailRow("System", { timestampEpoch: ANCHOR + HOUR }),
+        tailRow("System", { timestampEpoch: 0 }),
+      ];
+      const current = countCurrentPeriod(rows, basisOf(priorFor("24h"), ["System"]), visibility());
+      expect(current.tailExcluded).toBe(3);
+      expect(current.counts.total).toBe(0);
+      expect(current.unplacedRecords).toBe(0);
+    });
+  });
+
   describe("channels with no events", () => {
     const prior = () => priorFor("24h");
     const inCurrent = (channel: string, overrides: Partial<EvtxRecord> = {}) =>

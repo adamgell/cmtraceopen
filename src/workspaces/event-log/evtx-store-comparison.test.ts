@@ -1438,12 +1438,12 @@ describe("the anchor of a live comparison", () => {
     });
   }
 
-  function tailBatch(channel: string, records: EvtxRecord[]): void {
+  function tailBatch(channel: string, records: EvtxRecord[], sequence = 0): void {
     listeners.get("evtx-tail-batch")?.({
       payload: {
         requestId: useEvtxStore.getState().tailRequestId,
         channel,
-        sequence: 0,
+        sequence,
         mode: "subscription",
         records,
         coverageGaps: [],
@@ -1507,11 +1507,9 @@ describe("the anchor of a live comparison", () => {
   });
 
   describe("with a live tail", () => {
-    /** The note for `n` events the tail appended to the compared channels. */
-    const tailNote = (n: number) =>
-      n === 1
-        ? "1 event the live tail appended to the compared channels is not counted in the current period."
-        : `${n} events the live tail appended to the compared channels are not counted in the current period.`;
+    /** The note: it carries no number, which would drift while the tail keeps appending. */
+    const tailNote = () =>
+      "Events the live tail appends to the compared channels are not counted in the current period.";
 
     it("stays at the load when the tail starts after it, and does not claim the span the tail never read", async () => {
       // The tail subscribes to events that have not happened yet. Two hours after the load it
@@ -1531,7 +1529,7 @@ describe("the anchor of a live comparison", () => {
       if (outcome.status !== "complete") return;
       expect(outcome.result.prior.anchorEpoch).toBe(ANCHOR);
       expect(outcome.result.anchorBasis).toBe("load");
-      expect(outcome.result.notes).toEqual([tailNote(1)]);
+      expect(outcome.result.notes).toEqual([tailNote()]);
       // The tail's event is on the grid and in `records`, and outside the period compared.
       expect(useEvtxStore.getState().records).toContain(tailEvent);
       const current = countCurrentPeriod(
@@ -1574,7 +1572,7 @@ describe("the anchor of a live comparison", () => {
         quickFilter: DEFAULT_QUICK_FILTER,
       });
       expect(current.counts.total).toBe(0);
-      expect(outcome.result.notes).toEqual([tailNote(1)]);
+      expect(outcome.result.notes).toEqual([tailNote()]);
     });
 
     it("keeps saying so after the tail is stopped, since its events remain on the grid", async () => {
@@ -1592,7 +1590,7 @@ describe("the anchor of a live comparison", () => {
       const outcome = settled();
       expect(outcome.status).toBe("complete");
       if (outcome.status === "complete") {
-        expect(outcome.result.notes).toEqual([tailNote(1)]);
+        expect(outcome.result.notes).toEqual([tailNote()]);
       }
     });
 
@@ -1617,10 +1615,24 @@ describe("the anchor of a live comparison", () => {
 
       const outcome = settled();
       expect(outcome.status).toBe("complete");
-      if (outcome.status === "complete") expect(outcome.result.notes).toEqual([tailNote(2)]);
+      if (outcome.status === "complete") expect(outcome.result.notes).toEqual([tailNote()]);
     });
 
-    it("counts only what the tail appended to the compared channels", async () => {
+    it("notes a tail that is running on a compared channel before it has appended anything", async () => {
+      // Nothing has been appended yet, but the rows are coming, and the note would otherwise be
+      // missing from the one comparison that was made before the first of them.
+      installTailBridge();
+      await useEvtxStore.getState().startLiveTail();
+      expect(useEvtxStore.getState().records).toEqual([]);
+
+      await runAndSettle(ANCHOR);
+
+      const outcome = settled();
+      expect(outcome.status).toBe("complete");
+      if (outcome.status === "complete") expect(outcome.result.notes).toEqual([tailNote()]);
+    });
+
+    it("notes the tail for a compared channel that holds its rows or is tailed, and for no other", async () => {
       installTailBridge();
       // Rows the load read are not the tail's, however many a channel holds.
       useEvtxStore.setState({
@@ -1628,33 +1640,87 @@ describe("the anchor of a live comparison", () => {
       });
       vi.setSystemTime(ANCHOR + HOUR);
       await useEvtxStore.getState().startLiveTail();
-      tailBatch("System", [record("System"), record("System")]);
       tailBatch("Application", [record("Application")]);
-      useEvtxStore.setState({ selectedChannels: new Set(["System"]) });
+      await useEvtxStore.getState().stopLiveTail();
+      expect(useEvtxStore.getState().tailRequestId).toBeNull();
       vi.setSystemTime(ANCHOR + 2 * HOUR);
 
-      const run = comparePreviousPeriod(ANCHOR + 2 * HOUR);
+      // The tail is stopped and appended only to Application: comparing System alone has no tail
+      // rows and no tail to wait for.
+      useEvtxStore.setState({ selectedChannels: new Set(["System"]) });
+      const alone = comparePreviousPeriod(ANCHOR + 2 * HOUR);
+      await settleComparisonQueries(1);
+      await alone;
+      const systemOnly = settled();
+      expect(systemOnly.status).toBe("complete");
+      if (systemOnly.status === "complete") expect(systemOnly.result.notes).toEqual([]);
+
+      // Comparing Application, which holds the tail's rows, is noted.
+      useEvtxStore.setState({ selectedChannels: new Set(["Application"]) });
+      const held = comparePreviousPeriod(ANCHOR + 2 * HOUR);
+      await settleComparisonQueries(2);
+      await held;
+      const withRows = settled();
+      expect(withRows.status).toBe("complete");
+      if (withRows.status === "complete") expect(withRows.result.notes).toEqual([tailNote()]);
+    });
+
+    it("does not note a tail that runs only on channels that are not compared", async () => {
+      installTailBridge();
+      await useEvtxStore.getState().startLiveTail();
+      // The tail is running, but only on Application; System, which is compared, is not tailed.
+      useEvtxStore.setState({
+        tailChannels: new Set(["Application"]),
+        selectedChannels: new Set(["System"]),
+      });
+      expect(useEvtxStore.getState().tailRequestId).not.toBeNull();
+
+      const run = comparePreviousPeriod(ANCHOR);
       await settleComparisonQueries(1);
       await run;
 
       const outcome = settled();
       expect(outcome.status).toBe("complete");
-      if (outcome.status === "complete") expect(outcome.result.notes).toEqual([tailNote(2)]);
-
-      // With both compared the count is the sum.
-      useEvtxStore.setState({ selectedChannels: new Set(["System", "Application"]) });
-      const both = comparePreviousPeriod(ANCHOR + 2 * HOUR);
-      // The first comparison's query is still in the list, so three have been issued in all.
-      await settleComparisonQueries(3);
-      await both;
-      const together = settled();
-      if (together.status === "complete") expect(together.result.notes).toEqual([tailNote(3)]);
-      else throw new Error(`expected complete, got ${together.status}`);
+      if (outcome.status === "complete") expect(outcome.result.notes).toEqual([]);
     });
 
-    it("adds no note while the tail has appended nothing", async () => {
+    it("counts, from the records it is given, the tail rows it set aside, as the counts do", async () => {
+      // The note carries no number; the consumer states it from the same records as the counts.
+      installTailBridge();
+      vi.setSystemTime(ANCHOR + HOUR);
+      await useEvtxStore.getState().startLiveTail();
+      tailBatch("System", [record("System")]);
+
+      await runAndSettle(ANCHOR + HOUR);
+      const outcome = settled();
+      if (outcome.status !== "complete") throw new Error(`expected complete, got ${outcome.status}`);
+      const visibility = {
+        selectedChannels: useEvtxStore.getState().selectedChannels,
+        filterLevels: useEvtxStore.getState().filterLevels,
+        filterEventIds: "",
+        filterSearch: "",
+        quickFilter: DEFAULT_QUICK_FILTER,
+      };
+      expect(
+        countCurrentPeriod(useEvtxStore.getState().records, outcome.result, visibility).tailExcluded
+      ).toBe(1);
+
+      // The tail keeps appending after the result is on show. The note is unchanged and still true;
+      // a recount over the records now on the grid sets aside every row, from the same snapshot.
+      tailBatch("System", [record("System"), record("System"), record("System")], 1);
+      expect(getComparisonState()).toMatchObject({ phase: "settled" });
+      const after = settled();
+      if (after.status === "complete") expect(after.result.notes).toEqual([tailNote()]);
+      expect(
+        countCurrentPeriod(useEvtxStore.getState().records, outcome.result, visibility).tailExcluded
+      ).toBe(4);
+    });
+
+    it("adds no note once a tail that appended nothing has been stopped", async () => {
       installTailBridge();
       await useEvtxStore.getState().startLiveTail();
+      await useEvtxStore.getState().stopLiveTail();
+      expect(useEvtxStore.getState().tailRequestId).toBeNull();
 
       await runAndSettle(ANCHOR);
 
