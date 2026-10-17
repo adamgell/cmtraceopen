@@ -221,7 +221,13 @@ interface ModelState {
   linkPartners: ReadonlyMap<string, number>;
 }
 
-/** What the runs have built so far; the hook turns it into `EvtxCorrelationData`. */
+/**
+ * What the runs have built so far; the hook turns it into `EvtxCorrelationData`.
+ *
+ * `error` belongs to a run that has ended: every successful publish of a later run (counts, a
+ * reused model, a full model) and the gap that follows a session clears it, so a recovered session
+ * never shows the old message beside its valid models.
+ */
 interface RunState {
   phase: CorrelationStage;
   /** The newest full model. Kept across sessions until a newer one is built. */
@@ -303,7 +309,7 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
       cacheRef.current = null;
       setRun((previous) =>
         pending && (previous.detail !== null || previous.counts !== null)
-          ? { ...previous, phase: "pending", nextScan: null }
+          ? { ...previous, phase: "pending", nextScan: null, error: null }
           : { ...EMPTY_RUN, phase: pending ? "pending" : "unavailable" },
       );
       return stop;
@@ -368,12 +374,13 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
         detail,
         counts: cache.counts ?? previous.counts,
         nextScan: null,
+        error: null,
       }));
       return stop;
     }
     if (!needItems && cache.counts !== undefined) {
       const counts = cache.counts;
-      setRun((previous) => ({ ...previous, phase: "edgesOnly", counts, nextScan: null }));
+      setRun((previous) => ({ ...previous, phase: "edgesOnly", counts, nextScan: null, error: null }));
       return stop;
     }
     // Until this session's own model is in, the previous ones stay and `updating` says so.
@@ -417,7 +424,7 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
           };
           cache.counts = counts;
         }
-        update({ counts, phase: needItems ? "scanning" : "edgesOnly" });
+        update({ counts, phase: needItems ? "scanning" : "edgesOnly", error: null });
         if (!needItems) return;
 
         let items = cache.items;

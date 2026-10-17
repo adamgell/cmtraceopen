@@ -796,18 +796,92 @@ describe("a session that changes", () => {
 });
 
 describe("a failure that is not a load result", () => {
+  /** Deps whose sleep throws on the given 1-based calls and otherwise returns at once. */
+  function throwing(session: FakeSession, ...calls: number[]): Partial<CorrelationLoadDeps> {
+    let count = 0;
+    return {
+      ...session.deps(),
+      sleep: async () => {
+        count += 1;
+        if (calls.includes(count)) throw new Error("boom");
+      },
+    };
+  }
+
   it("is shown, not swallowed", async () => {
     const session = new FakeSession({ itemCount: 50, pairs: [[1, 2]] });
-    const deps = session.deps();
-    const props = session.props({
-      deps: {
-        ...deps,
-        sleep: async () => {
-          throw new Error("boom");
-        },
-      },
-    });
+    const props = session.props({ deps: throwing(session, 1) });
     const { result } = renderHook(() => useEvtxCorrelation(props));
     await waitFor(() => expect(result.current.error).toBe("boom"));
+  });
+
+  it("is gone once a retry with only counts consumers publishes fresh counts (J2)", async () => {
+    const session = new FakeSession({ itemCount: 50, pairs: [[1, 2], [3, 4]] });
+    const props = session.props({ deps: throwing(session, 1), needItems: false });
+    const { result } = renderHook(() => useEvtxCorrelation(props));
+    await waitFor(() => expect(result.current.error).toBe("boom"));
+    expect(result.current.counts).toBeNull();
+
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.counts?.model.counts.exact).toBe(2));
+    expect(result.current.error).toBeNull();
+    expect(result.current.stage).toBe("edgesOnly");
+  });
+
+  it("is gone when a live-tail revision publishes its counts (J2)", async () => {
+    const one = new FakeSession({ itemCount: 50, pairs: [[1, 2]], revision: 1 });
+    const two = new FakeSession({ itemCount: 50, pairs: [[1, 2], [3, 4], [5, 6]], revision: 2 });
+    const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+      initialProps: one.props({ deps: throwing(one, 1) }),
+    });
+    await waitFor(() => expect(result.current.error).toBe("boom"));
+    rerender(two.props());
+    await waitFor(() => expect(result.current.counts?.builtFor).toBe(`${two.id}:2`));
+    expect(result.current.counts?.model.counts.exact).toBe(3);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("is gone when the counts of the session are reused after it (J2)", async () => {
+    const session = new FakeSession({ itemCount: 50, pairs: [[1, 2]] });
+    // Call 1 builds the counts, call 2 is the scan's yield: it throws, so the error is set after
+    // the counts are already cached.
+    const base = session.props({ deps: throwing(session, 2), needItems: false });
+    const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+      initialProps: base,
+    });
+    await waitFor(() => expect(result.current.stage).toBe("edgesOnly"));
+    rerender({ ...base, needItems: true });
+    await waitFor(() => expect(result.current.error).toBe("boom"));
+    expect(result.current.counts).not.toBeNull();
+
+    rerender({ ...base, needItems: false });
+    await waitFor(() => expect(result.current.error).toBeNull());
+    expect(result.current.stage).toBe("edgesOnly");
+  });
+
+  it("is gone when the session ends and the next is being built (J2)", async () => {
+    const session = new FakeSession({ itemCount: 50, pairs: [[1, 2]] });
+    const base = session.props({ deps: throwing(session, 2), needItems: true });
+    const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+      initialProps: base,
+    });
+    await waitFor(() => expect(result.current.error).toBe("boom"));
+    expect(result.current.counts).not.toBeNull();
+    rerender({ ...NONE, pending: true });
+    await waitFor(() => expect(result.current.stage).toBe("pending"));
+    // The models of the old session stay, marked updating; the old run's message does not.
+    expect(result.current.model).not.toBeNull();
+    expect(result.current.updating).toBe(true);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("is replaced by a full model's success too", async () => {
+    const session = new FakeSession({ itemCount: 50, pairs: [[1, 2]] });
+    const props = session.props({ deps: throwing(session, 2), needItems: true });
+    const { result } = renderHook(() => useEvtxCorrelation(props));
+    await waitFor(() => expect(result.current.error).toBe("boom"));
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.stage).toBe("ready"));
+    expect(result.current.error).toBeNull();
   });
 });
