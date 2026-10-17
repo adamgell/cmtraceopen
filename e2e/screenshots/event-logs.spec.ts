@@ -9,8 +9,8 @@
  * ---------
  * The workspace is driven the way the source picker opens several files: `openEventLogSources`
  * calls `evtx_expand_sources`, then the store's `parseManifest` calls `evtx_parse_manifest`, then
- * the analysis pump and the Correlation view call the analysis commands (create, append, finalize,
- * timeline page, edge page, diagnose, close). Each of those is answered by
+ * the UI calls the analysis commands (create, append, finalize, timeline page, edge page,
+ * diagnose, close). Each of those is answered by
  * `window.__e2e_ipc_overrides__`:
  *
  * - `evtx_expand_sources` and `evtx_parse_manifest` are built by `buildSourceManifest()` and
@@ -90,9 +90,10 @@ test.describe("event-logs screenshots", () => {
     await page.addInitScript(
       ({ parseResult, replies, selections, manifest }) => {
         const overrides = window.__e2e_ipc_overrides__;
-        // A guard failure reaches the app as a rejected invoke, which the analysis pump shows as an
-        // alert that no test step need be looking at. So every guard error is also kept here, in the
-        // order it was raised, and the afterEach below fails the test if there is one.
+        // A guard failure reaches the app as a rejected invoke, which the app shows as an alert or
+        // only as a notice, depending on the caller, and which no test step need be looking at. So
+        // every guard error is also kept here, in the order it was raised, and the afterEach below
+        // fails the test if there is one.
         const guardErrors: string[] = [];
         window.__evtxReplayGuardErrors = guardErrors;
         const guardError = (message: string): Error => {
