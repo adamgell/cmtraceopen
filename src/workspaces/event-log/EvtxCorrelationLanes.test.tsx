@@ -230,14 +230,28 @@ describe("the lanes and markers", () => {
     expect(glyph('[data-kind="log"]').style.borderRadius).toBe("3px");
   });
 
-  it("sizes the lane labels and the axis from the log list font size, and labels the lane column at 184 px", () => {
-    const big = correlationSizes(20);
-    draw(exactPlot(), { sizes: big });
-    expect((document.querySelector("[data-lane-label]") as HTMLElement).style.fontSize).toBe(`${big.lane}px`);
+  it("sizes the text by spec 7.1 from the log list font size: literal numbers at the default 13 px, and at both ends", () => {
+    // f - 2 for lane labels, max(10, f - 3) for captions, max(9, f - 4) for axis ticks.
+    expect(correlationSizes(13)).toEqual({ f: 13, lane: 11, label: 10, tick: 9 });
+    expect(correlationSizes(11)).toEqual({ f: 11, lane: 9, label: 10, tick: 9 });
+    expect(correlationSizes(20)).toEqual({ f: 20, lane: 18, label: 17, tick: 16 });
+  });
+
+  it("paints the lane label, marker label and axis tick at those sizes at the default 13 px", () => {
+    draw(exactPlot({ window: { startMs: T0 + 2_000, endMs: T0 + 3_000 } }), { sizes: correlationSizes(13) });
+    expect((document.querySelector("[data-lane-label]") as HTMLElement).style.fontSize).toBe("11px");
+    expect((document.querySelector("[data-marker-label]") as HTMLElement).style.fontSize).toBe("10px");
     expect(((document.querySelector("[data-axis]") as HTMLElement).firstElementChild as HTMLElement).style.fontSize).toBe(
-      `${big.tick}px`,
+      "9px",
     );
-    expect(big.lane).toBeGreaterThan(SIZES.lane);
+  });
+
+  it("follows the font size when it is raised, and labels the lane column at 184 px", () => {
+    draw(exactPlot(), { sizes: correlationSizes(20) });
+    expect((document.querySelector("[data-lane-label]") as HTMLElement).style.fontSize).toBe("18px");
+    expect(((document.querySelector("[data-axis]") as HTMLElement).firstElementChild as HTMLElement).style.fontSize).toBe(
+      "16px",
+    );
     expect(CORRELATION_LANE_LABEL_PX).toBe(184);
   });
 
@@ -329,7 +343,8 @@ describe("a 'Not linked' marker (acceptance 2, decision A on #838)", () => {
     expect(marker).not.toBeNull();
     expect(marker.getAttribute("aria-label")).toBe("109 · System, Warning, Not linked");
     const glyph = marker.firstElementChild as HTMLElement;
-    expect(glyph.style.border).toContain("dotted");
+    // Spec 6.3: a 1 px dotted outline.
+    expect(glyph.style.border).toContain("1px dotted");
     expect(glyph.style.backgroundColor).toBe("transparent");
     expect(glyph.querySelector("[data-marker-fill]")).toBeNull();
     // The chain's own connector is the only line: the context marker has none.
@@ -361,6 +376,15 @@ describe("a 'Not linked' marker (acceptance 2, decision A on #838)", () => {
       expect(within(legend).getByText(word)).toBeInTheDocument();
     }
     expect(legend.querySelectorAll("line")).toHaveLength(2);
+  });
+
+  it("draws the not-linked entry as a 1 px dotted outline, like the marker (spec 6.3)", () => {
+    render(<CorrelationLegend plot={withStray()} sizes={SIZES} />);
+    const swatch = Array.from(screen.getByRole("group", { name: "Legend" }).querySelectorAll<HTMLElement>("span[aria-hidden='true']")).find(
+      (node) => node.style.border.includes("dotted"),
+    );
+    expect(swatch).toBeDefined();
+    expect(swatch!.style.border).toContain("1px dotted");
   });
 });
 
@@ -438,13 +462,22 @@ describe("keyboard", () => {
     expect(c).toHaveFocus();
   });
 
-  it("activates the focused marker on click, Enter and Space", () => {
+  it("activates a marker on click, and lets Enter and Space through to the button's own activation", () => {
     const onActivate = vi.fn();
     draw(three(), { onActivate });
     const [a] = buttons();
+    // A browser turns Enter (on keydown) and Space (on keyup) on a button into this click; jsdom
+    // does not, so the click is what it dispatches.
     fireEvent.click(a!);
     expect(onActivate).toHaveBeenCalledTimes(1);
     expect(onActivate.mock.calls[0]?.[0].id).toBe(rid(1));
+    // The component must not swallow the keys that make the browser dispatch it.
+    expect(fireEvent.keyDown(a!, { key: "Enter" })).toBe(true);
+    expect(fireEvent.keyDown(a!, { key: " " })).toBe(true);
+    expect(fireEvent.keyUp(a!, { key: " " })).toBe(true);
+    expect(fireEvent.keyUp(a!, { key: "Enter" })).toBe(true);
+    expect(a!.tagName).toBe("BUTTON");
+    expect(a!.getAttribute("type")).toBe("button");
   });
 
   it("hands Escape to the view and prevents the default, so the workspace does not clear the time range", () => {
