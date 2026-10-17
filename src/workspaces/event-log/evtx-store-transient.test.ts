@@ -325,6 +325,82 @@ describe("a live-tail merge", () => {
   });
 });
 
+describe("a scope's counts are of references", () => {
+  // loaded: Application has [0] [1] [2], System has [3] [4].
+  const refScope = (references: EvtxRecord[][], counts: Partial<EvtxRecordScopeCounts> = {}) =>
+    scopeOf([...new Set(references.flat())], {
+      references,
+      counts: { ...NO_COUNTS, ...counts },
+    });
+  const held = () => useEvtxStore.getState().recordScope;
+
+  it("when a channel holding every candidate of an ambiguous reference is cleared, that reference is not loaded and is no longer ambiguous", async () => {
+    // A cites one event in System; B cites one that matches two events in Application.
+    useEvtxStore
+      .getState()
+      .setRecordScope(refScope([[loaded[3]], [loaded[0], loaded[1]]], { ambiguous: 1 }));
+    expect(held()?.counts).toMatchObject({ notLoaded: 0, ambiguous: 1 });
+
+    await useEvtxStore.getState().clearChannel("Application", true);
+
+    expect([...(held()?.records ?? [])]).toEqual([loaded[3]]);
+    expect(held()?.counts).toMatchObject({ notLoaded: 1, ambiguous: 0 });
+  });
+
+  it("when only one of two candidates of a reference leaves, the reference still resolves and is no longer ambiguous", () => {
+    const stranger = record(99);
+    useEvtxStore
+      .getState()
+      .setRecordScope(refScope([[loaded[3]], [loaded[0], stranger]], { ambiguous: 1 }));
+    expect(held()?.counts).toMatchObject({ notLoaded: 0, ambiguous: 0 });
+    expect(held()?.references).toEqual([[loaded[3]], [loaded[0]]]);
+  });
+
+  it("keeps a reference that is still ambiguous ambiguous, and one count per reference", async () => {
+    // B matches two events in Application and one more in System.
+    useEvtxStore
+      .getState()
+      .setRecordScope(refScope([[loaded[0]], [loaded[1], loaded[2], loaded[3]]], { ambiguous: 1 }));
+    await useEvtxStore.getState().clearChannel("Application", true);
+    expect(held()?.references).toEqual([[], [loaded[3]]]);
+    expect(held()?.counts).toMatchObject({ notLoaded: 1, ambiguous: 0 });
+  });
+
+  it("counts a reference that was not loaded when the scope was made along with those that stop being loaded", async () => {
+    useEvtxStore
+      .getState()
+      .setRecordScope(refScope([[loaded[0]], [], [loaded[3]]], { notLoaded: 1 }));
+    expect(held()?.counts.notLoaded).toBe(1);
+    await useEvtxStore.getState().clearChannel("Application", true);
+    expect(held()?.counts.notLoaded).toBe(2);
+    expect([...(held()?.records ?? [])]).toEqual([loaded[3]]);
+  });
+
+  it("is the same count however many times the same channel's clear is repeated", async () => {
+    useEvtxStore
+      .getState()
+      .setRecordScope(refScope([[loaded[3]], [loaded[0], loaded[1]]], { ambiguous: 1 }));
+    await useEvtxStore.getState().clearChannel("Application", true);
+    const once = held()?.counts;
+    await useEvtxStore.getState().clearChannel("Application", true);
+    expect(held()?.counts).toEqual(once);
+  });
+
+  it("keeps the no-usable-identity count and the bounded flag through a prune", async () => {
+    useEvtxStore.getState().setRecordScope(
+      refScope([[loaded[3]], [loaded[0]]], { noUsableIdentity: 2, bounded: true }),
+    );
+    await useEvtxStore.getState().clearChannel("Application", true);
+    expect(held()?.counts).toEqual({ notLoaded: 1, noUsableIdentity: 2, ambiguous: 0, bounded: true });
+  });
+
+  it("falls back to one reference per record for a scope that has none", async () => {
+    useEvtxStore.getState().setRecordScope(scopeOf([loaded[0], loaded[1], loaded[3]]));
+    await useEvtxStore.getState().clearChannel("Application", true);
+    expect(held()?.counts.notLoaded).toBe(2);
+  });
+});
+
 describe("clearing a channel", () => {
   it("drops that channel's events from the scope and counts them as not loaded", async () => {
     useEvtxStore.getState().setRecordScope(scopeOf([loaded[0], loaded[1], loaded[3]]));

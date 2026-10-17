@@ -8,6 +8,7 @@ import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
 import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
 import {
   countByLevel,
+  countScopeReferences,
   EVTX_LEVELS,
   hasUsableTimestamp,
   type EvtxRecordScopeCounts,
@@ -330,8 +331,30 @@ function evidenceIdentityText(value: DiagnosisEventEvidence): string | null {
 export interface FindingScope {
   /** The distinct loaded records the finding's event evidence names, in the order it names them. */
   records: EvtxRecord[];
+  /**
+   * For each distinct cited reference with a usable identity, the loaded records it names (none,
+   * one, or several). `counts` is computed from this, and a scope keeps it so it can be pruned.
+   */
+  references: EvtxRecord[][];
   /** Why the scope is not necessarily everything the finding cites. */
   counts: EvtxRecordScopeCounts;
+}
+
+/**
+ * Two references are the same when everything the matcher reads from them is the same: citing one
+ * event twice is one reference, while the same record ID from two sources is two.
+ */
+function referenceKey(value: DiagnosisEventEvidence): string {
+  return JSON.stringify([
+    value.eventId,
+    value.recordIdText ?? null,
+    value.fallbackIdentity ?? null,
+    value.recordId,
+    value.provider,
+    value.channel ?? null,
+    value.machine ?? null,
+    value.source ?? null,
+  ]);
 }
 
 /**
@@ -340,8 +363,9 @@ export interface FindingScope {
  * Every reference is resolved with `evidenceMatchesRecord`, the one matcher (redaction tokens and
  * digest-bounded values included). A reference that names more than one loaded record adds all of
  * them and is counted as ambiguous: the UI does not guess which one the engine meant, and it does
- * not drop any. Evidence that is not an event (text-log lines, Intune, SCCM) is not a grid record
- * and is not counted. `engineBounded` is `summaryIsBounded` for the summary the finding came from.
+ * not drop any. References are counted once each however many times the finding cites them. Evidence
+ * that is not an event (text-log lines, Intune, SCCM) is not a grid record and is not counted.
+ * `engineBounded` is `summaryIsBounded` for the summary the finding came from.
  */
 export function scopeForFinding(
   finding: DiagnosisFinding,
@@ -349,27 +373,31 @@ export function scopeForFinding(
   engineBounded: boolean,
 ): FindingScope {
   const records = new Set<EvtxRecord>();
-  const counts: EvtxRecordScopeCounts = {
-    notLoaded: 0,
-    noUsableIdentity: 0,
-    ambiguous: 0,
-    bounded: engineBounded || finding.evidence.length >= DIAGNOSIS_NESTED_ROW_CAP,
-  };
+  const references: EvtxRecord[][] = [];
+  const seen = new Set<string>();
+  let noUsableIdentity = 0;
   for (const evidence of finding.evidence) {
     if (evidence.kind !== "event") continue;
+    const key = referenceKey(evidence.value);
+    if (seen.has(key)) continue;
+    seen.add(key);
     const identity = evidenceIdentityText(evidence.value);
     if (identity === null) {
-      counts.noUsableIdentity += 1;
+      noUsableIdentity += 1;
       continue;
     }
     const matches = (index.get(identityKey(evidence.value.eventId, identity)) ?? []).filter(
       (record) => evidenceMatchesRecord(evidence.value, record),
     );
-    if (matches.length === 0) counts.notLoaded += 1;
-    else if (matches.length > 1) counts.ambiguous += 1;
+    references.push(matches);
     for (const record of matches) records.add(record);
   }
-  return { records: [...records], counts };
+  const bounded = engineBounded || finding.evidence.length >= DIAGNOSIS_NESTED_ROW_CAP;
+  return {
+    records: [...records],
+    references,
+    counts: countScopeReferences(references, noUsableIdentity, bounded),
+  };
 }
 
 /**

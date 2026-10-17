@@ -33,6 +33,7 @@ import {
 // Re-exported so callers have one import site; the implementation lives in a Tauri-free module.
 export { selectVisibleRecords } from "./evtx-filter";
 import {
+  countScopeReferences,
   DEFAULT_QUICK_FILTER,
   EVTX_LEVELS,
   EVTX_RAW_LEVEL,
@@ -784,8 +785,10 @@ export function sourceKeyOf(source: {
 }
 
 /**
- * `scope` kept to the records still in `remaining`, or null when none are. A record that left is
- * counted as not loaded, so the scope says it no longer holds everything it was made from.
+ * `scope` kept to the records still in `remaining`, or null when none are. The counts are of
+ * references: each reference keeps the candidates that remain, one left with none is not loaded, and
+ * only one left with several is ambiguous, so removing one of two candidates of a reference does not
+ * make an event "not loaded". A scope without references counts each record that left as one.
  */
 function pruneRecordScope(
   scope: EvtxRecordScope | null,
@@ -796,10 +799,21 @@ function pruneRecordScope(
   const kept = [...scope.records].filter((record) => present.has(record));
   if (kept.length === 0) return null;
   if (kept.length === scope.records.size) return scope;
+  if (scope.references === undefined) {
+    return {
+      ...scope,
+      records: new Set(kept),
+      counts: { ...scope.counts, notLoaded: scope.counts.notLoaded + scope.records.size - kept.length },
+    };
+  }
+  const references = scope.references.map((candidates) =>
+    candidates.filter((record) => present.has(record))
+  );
   return {
     ...scope,
     records: new Set(kept),
-    counts: { ...scope.counts, notLoaded: scope.counts.notLoaded + scope.records.size - kept.length },
+    references,
+    counts: countScopeReferences(references, scope.counts.noUsableIdentity, scope.counts.bounded),
   };
 }
 

@@ -221,10 +221,12 @@ export type EvtxRecordScopeKind = "finding" | "chain";
 
 /**
  * What did not make it into a record scope, kept apart so the interface can say each one. A scope
- * never claims to be the whole of what it was built from.
+ * never claims to be the whole of what it was built from. Every number counts REFERENCES (what the
+ * finding or chain cited), never records: two candidates of one reference are one reference, and
+ * the same event cited twice is one.
  */
 export interface EvtxRecordScopeCounts {
-  /** References whose identity is usable but which name no loaded record. */
+  /** References whose identity is usable but which now name no loaded record. */
   notLoaded: number;
   /** References with no usable identity (a fallback hash, or none), which can never match. */
   noUsableIdentity: number;
@@ -232,6 +234,25 @@ export interface EvtxRecordScopeCounts {
   ambiguous: number;
   /** The source may have cited more events than it sent (the engine bounds a finding's evidence). */
   bounded: boolean;
+}
+
+/**
+ * The counts a scope's references give: a reference with no candidate left is not loaded, and one
+ * with more than one is ambiguous. Used where a scope is built and where it is pruned, so the two
+ * cannot count differently.
+ */
+export function countScopeReferences(
+  references: readonly (readonly EvtxRecord[])[],
+  noUsableIdentity: number,
+  bounded: boolean,
+): EvtxRecordScopeCounts {
+  let notLoaded = 0;
+  let ambiguous = 0;
+  for (const candidates of references) {
+    if (candidates.length === 0) notLoaded += 1;
+    else if (candidates.length > 1) ambiguous += 1;
+  }
+  return { notLoaded, noUsableIdentity, ambiguous, bounded };
 }
 
 /**
@@ -246,6 +267,13 @@ export interface EvtxRecordScope {
   /** The finding's or chain's title, captured when the scope was applied: a rebuilt diagnosis may drop it. */
   title: string;
   records: ReadonlySet<EvtxRecord>;
+  /**
+   * For each distinct cited reference with a usable identity, the loaded records it names: none
+   * (not loaded), one (a match) or several (ambiguous, all of them in `records`). Pruned with the
+   * records, and `counts` is recomputed from it, so a count never reads in records. Absent, each
+   * record is a reference of its own and a record that leaves is counted as not loaded.
+   */
+  references?: readonly (readonly EvtxRecord[])[];
   counts: EvtxRecordScopeCounts;
 }
 

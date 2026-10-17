@@ -490,7 +490,55 @@ describe("scopeForFinding", () => {
     const finding = findingWith();
     expect(find(finding, [record(1)])).toEqual({
       records: [],
+      references: [],
       counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+    });
+  });
+
+  describe("counts references, not records", () => {
+    it("counts one event cited twice once, loaded or not", () => {
+      const loaded = [record(1)];
+      const unloadedTwice = find(findingWith(evidence({ recordId: 9999 }), evidence({ recordId: 9999 })), loaded);
+      expect(unloadedTwice.counts.notLoaded).toBe(1);
+      expect(unloadedTwice.references).toEqual([[]]);
+
+      const loadedTwice = find(findingWith(evidence({ recordId: 1001 }), evidence({ recordId: 1001 })), loaded);
+      expect(loadedTwice.references).toEqual([[loaded[0]]]);
+      expect(loadedTwice.records).toEqual(loaded);
+    });
+
+    it("counts a reference with no usable identity once however often it is cited", () => {
+      const hash = { recordId: 0, fallbackIdentity: "abcdef0123456789" };
+      const scope = find(findingWith(evidence(hash), evidence(hash), evidence({ ...hash, fallbackIdentity: "0123456789abcdef" })), [
+        record(1),
+      ]);
+      expect(scope.counts.noUsableIdentity).toBe(2);
+      expect(scope.references).toEqual([]);
+    });
+
+    it("keeps the same record ID from two sources as two references", () => {
+      const a = record(1, { sourceLabel: "a.evtx" });
+      const b = record(2, { sourceLabel: "b.evtx", eventRecordId: 1001 });
+      const scope = find(findingWith(evidence({ source: "a.evtx" }), evidence({ source: "b.evtx" })), [a, b]);
+      expect(scope.references).toEqual([[a], [b]]);
+      expect(scope.counts).toMatchObject({ notLoaded: 0, ambiguous: 0 });
+    });
+
+    it("gives each distinct reference its own candidate set, and derives the counts from them", () => {
+      const a = record(1);
+      const b1 = record(2, { eventRecordId: 1002, sourceLabel: "x1.evtx" });
+      const b2 = record(3, { eventRecordId: 1002, sourceLabel: "x2.evtx" });
+      const scope = find(
+        findingWith(
+          evidence({ recordId: 1001 }),
+          evidence({ recordId: 1002, source: undefined }),
+          evidence({ recordId: 7777 }),
+        ),
+        [a, b1, b2],
+      );
+      expect(scope.references).toEqual([[a], [b1, b2], []]);
+      expect(scope.records).toEqual([a, b1, b2]);
+      expect(scope.counts).toEqual({ notLoaded: 1, noUsableIdentity: 0, ambiguous: 1, bounded: false });
     });
   });
 });
