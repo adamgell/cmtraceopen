@@ -487,6 +487,21 @@ describe("EvtxHistogram", () => {
       expect(forced(bars, "forced-color-adjust")).toEqual(["none"]);
     });
 
+    it("rings the legend swatches in CanvasText, as the level dots in the filter row are, and keeps their colour", () => {
+      brushed();
+      const swatches = within(screen.getByRole("list", { name: "Levels" }))
+        .getAllByRole("listitem")
+        .slice(0, 5)
+        .map((item) => item.querySelector<HTMLElement>("span")!);
+      expect(swatches).toHaveLength(5);
+      for (const swatch of swatches) {
+        expect(forced(swatch, "outline-color")).toEqual(["canvastext"]);
+        expect(forced(swatch, "outline-style")).toEqual(["solid"]);
+        expect(forced(swatch, "forced-color-adjust")).toEqual(["none"]);
+        expect(base(swatch, "outline-style")).toEqual([]);
+      }
+    });
+
     it("drops the wash, so the forced edge borders carry the range", () => {
       const { container } = brushed();
       const wash = container.querySelector<HTMLElement>('[data-evtx-layer="wash"]')!;

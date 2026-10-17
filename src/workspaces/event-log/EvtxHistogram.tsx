@@ -196,7 +196,13 @@ const useStyles = makeStyles({
     height: "8px",
     flexShrink: 0,
     borderRadius: "2px",
-    [FORCED_COLORS]: { forcedColorAdjust: "none" },
+    // The swatch keeps its level colour, in a CanvasText ring, as the filter row's level dots do.
+    [FORCED_COLORS]: {
+      forcedColorAdjust: "none",
+      outlineStyle: "solid",
+      outlineWidth: "1px",
+      outlineColor: "CanvasText",
+    },
   },
   zone: { fontFamily: tokens.fontFamilyNumeric, whiteSpace: "nowrap" },
   notes: { margin: "2px 0 0" },
