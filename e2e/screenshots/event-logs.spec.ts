@@ -335,4 +335,151 @@ test.describe("event-logs screenshots", () => {
       animations: "disabled",
     });
   });
+
+  /**
+   * The Timeline view's lane stack, read in the page: where each lane is, where the one Critical
+   * event's dot is drawn, and the colour the theme gives Critical. The fixture has 14 providers, so
+   * the lanes are the top 12 and "Other (2 lanes)"; the Critical event (Kernel-Power 41) is one of the
+   * three events in Other.
+   */
+  async function readTimeline(page: import("@playwright/test").Page) {
+    return page.evaluate(async () => {
+      const { useEvtxStore } = await import("/src/workspaces/event-log/evtx-store.ts");
+      const { useUiStore } = await import("/src/stores/ui-store.ts");
+      const { getThemeById } = await import("/src/lib/themes/index.ts");
+      const { buildSwimlanes } = await import("/src/workspaces/event-log/evtx-swimlanes.ts");
+      const { swimlaneColors, xOfFraction, PLOT_INSET_PX } = await import(
+        "/src/workspaces/event-log/evtx-swimlane-canvas.ts"
+      );
+      const scene = buildSwimlanes(useEvtxStore.getState().records, "provider", "utc");
+      const laneIndex = scene.lanes.findIndex((lane: { levelCounts: { Critical: number } }) => lane.levelCounts.Critical > 0);
+      const lane = scene.lanes[laneIndex];
+      const dot = Array.from(lane.levels as Uint8Array).findIndex((slot) => slot === 4);
+      const plot = document.querySelector<HTMLElement>('[data-evtx-layer="marks"]')!.parentElement!;
+      const canvas = document.querySelector<HTMLCanvasElement>('[data-evtx-layer="marks"]')!;
+      const laneHeight = document.querySelector<HTMLElement>("[data-evtx-lane]")!.getBoundingClientRect().height;
+      const rect = plot.getBoundingClientRect();
+      const themeId = useUiStore.getState().themeId;
+      const hex = swimlaneColors(getThemeById(themeId)).dots.Critical;
+      return {
+        themeId,
+        laneIndex,
+        laneCount: scene.lanes.length,
+        laneHeight,
+        criticalCss: {
+          // On the canvas, which starts PLOT_INSET_PX left of the plot.
+          canvasX: xOfFraction(lane.fractions[dot], rect.width),
+          canvasY: laneIndex * laneHeight + laneHeight / 2,
+          insetPx: PLOT_INSET_PX,
+        },
+        rgb: [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16)),
+        dpr: window.devicePixelRatio,
+        canvasWidth: canvas.width,
+        canvasCssWidth: canvas.getBoundingClientRect().width,
+      };
+    });
+  }
+
+  /** The canvas pixel (device pixels) at a point given in the canvas's CSS pixels. */
+  async function pixelAt(page: import("@playwright/test").Page, cssX: number, cssY: number) {
+    return page.evaluate(
+      ({ cssX, cssY }) => {
+        const canvas = document.querySelector<HTMLCanvasElement>('[data-evtx-layer="marks"]')!;
+        const scale = canvas.width / canvas.getBoundingClientRect().width;
+        const data = canvas.getContext("2d")!.getImageData(Math.round(cssX * scale), Math.round(cssY * scale), 1, 1).data;
+        return [data[0], data[1], data[2], data[3]];
+      },
+      { cssX, cssY },
+    );
+  }
+
+  test("event-logs timeline", async ({ page }) => {
+    await page.getByRole("tab", { name: "Timeline" }).click();
+    const figure = page.locator('[data-evtx-region="swimlanes"]');
+    await expect(figure).toBeVisible();
+    // Lazy-loaded: wait for the canvas to be painted, not just mounted.
+    await expect(figure.locator('canvas[data-evtx-layer="marks"]')).toBeVisible();
+    await expect(figure).toHaveAccessibleName(/^Events by provider over .+ \(UTC\+00:00\), one lane per provider$/);
+
+    // Twelve lanes by name and one for the rest (spec 8.9), in the fixture's 14 providers.
+    const labels = figure.locator("[data-evtx-lane]");
+    await expect(labels).toHaveCount(13);
+    await expect(labels.last()).toContainText("Other (2 lanes)");
+    // Lane geometry (spec 8.9): 36 px tall at the default size, a 172 px label with 8 px of padding.
+    const first = await labels.first().boundingBox();
+    expect(Math.abs((first?.height ?? 0) - 36)).toBeLessThanOrEqual(2);
+    expect(Math.abs((first?.width ?? 0) - 180)).toBeLessThanOrEqual(2);
+    // The charts share one screen: the histogram above, the lanes in the body.
+    const histogramBox = await page.locator('[data-evtx-region="histogram"]').boundingBox();
+    const figureBox = await figure.boundingBox();
+    expect((histogramBox?.y ?? 0) + (histogramBox?.height ?? 0)).toBeLessThanOrEqual((figureBox?.y ?? 0) + 1);
+
+    // Real pixels (jsdom has none): the Critical event's diamond is painted in the theme's Critical
+    // colour at its centre, and a theme switch repaints it without a reload.
+    const before = await readTimeline(page);
+    expect(before.dpr).toBe(2);
+    expect(before.canvasWidth).toBe(Math.round(before.canvasCssWidth * 2));
+    const centre = before.criticalCss;
+    const lightPixel = await pixelAt(page, centre.canvasX, centre.canvasY);
+    expect(lightPixel.slice(0, 3)).toEqual(before.rgb);
+    expect(lightPixel[3]).toBe(255);
+    await page.evaluate(async () => {
+      const { useUiStore } = await import("/src/stores/ui-store.ts");
+      useUiStore.getState().setThemeId("dark");
+    });
+    await expect.poll(async () => (await readTimeline(page)).themeId).toBe("dark");
+    const after = await readTimeline(page);
+    expect(after.rgb).not.toEqual(before.rgb);
+    await expect
+      .poll(async () => (await pixelAt(page, centre.canvasX, centre.canvasY)).slice(0, 3))
+      .toEqual(after.rgb);
+    await page.evaluate(async () => {
+      const { useUiStore } = await import("/src/stores/ui-store.ts");
+      useUiStore.getState().setThemeId("light");
+    });
+    await expect
+      .poll(async () => (await pixelAt(page, centre.canvasX, centre.canvasY)).slice(0, 3))
+      .toEqual(before.rgb);
+
+    // No brush here: it would hand the analysis pump a subset the captured engine replies cannot
+    // answer (see the stale-capture guard above).
+    await assertNoHostPaths(page);
+    await page.screenshot({
+      path: outPath("event-logs-timeline.png"),
+      animations: "disabled",
+    });
+  });
+
+  test("event-logs timeline dot click", async ({ page }) => {
+    await page.getByRole("tab", { name: "Timeline" }).click();
+    const figure = page.locator('[data-evtx-region="swimlanes"]');
+    await expect(figure.locator('canvas[data-evtx-layer="marks"]')).toBeVisible();
+    // The Critical event's dot is in the last lane, which may be below the fold of the lane stack.
+    const scroller = figure.locator("[data-evtx-swimlane-scroller]");
+    await scroller.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    const dot = await page.evaluate(async () => {
+      const { useEvtxStore } = await import("/src/workspaces/event-log/evtx-store.ts");
+      const { buildSwimlanes } = await import("/src/workspaces/event-log/evtx-swimlanes.ts");
+      const scene = buildSwimlanes(useEvtxStore.getState().records, "provider", "utc");
+      const laneIndex = scene.lanes.findIndex((lane: { levelCounts: { Critical: number } }) => lane.levelCounts.Critical > 0);
+      const lane = scene.lanes[laneIndex];
+      const index = Array.from(lane.levels as Uint8Array).findIndex((slot) => slot === 4);
+      const plot = document.querySelector<HTMLElement>('[data-evtx-layer="marks"]')!.parentElement!;
+      const rect = plot.getBoundingClientRect();
+      const laneHeight = document.querySelector<HTMLElement>("[data-evtx-lane]")!.getBoundingClientRect().height;
+      return {
+        x: rect.left + lane.fractions[index] * rect.width,
+        y: rect.top + laneIndex * laneHeight + laneHeight / 2,
+      };
+    });
+    // A real click, 3 px off the dot's centre: the nearest record within 4 px of its edge is selected,
+    // and no time range is set by it.
+    await page.mouse.click(dot.x + 3, dot.y);
+    const detail = page.getByRole("region", { name: "Event log details" });
+    await expect(detail).toContainText("rebooted without cleanly shutting down");
+    await expect(page.getByText(/^Time: brushed/)).toHaveCount(0);
+    await assertNoHostPaths(page);
+  });
 });
