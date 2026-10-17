@@ -9,6 +9,21 @@
 import type { LogEntry, LogSource, PlatformKind } from "../../types/log";
 import type { SourceOpenMode } from "../../lib/tab-snapshot-cache";
 
+/**
+ * A path as the platform compares it: Windows takes either separator and ignores case, every other
+ * platform takes `/` only and keeps case. This is the one normalisation for deciding whether two
+ * log paths are the same file or one is under the other.
+ */
+export function normalizeLogPath(
+  value: string,
+  platform: Exclude<PlatformKind, "all">,
+): string {
+  const normalized = value
+    .replace(platform === "windows" ? /[\\/]+/g : /\/+/g, "/")
+    .replace(/\/+$/, "");
+  return platform === "windows" ? normalized.toLowerCase() : normalized;
+}
+
 function logEntryBelongsToSource(
   entry: LogEntry,
   source: LogSource | null,
@@ -16,15 +31,9 @@ function logEntryBelongsToSource(
 ): boolean {
   if (source === null) return false;
   const root = source.kind === "known" ? source.defaultPath : source.path;
-  const normalize = (value: string) => {
-    const normalized = value
-      .replace(platform === "windows" ? /[\\/]+/g : /\/+/g, "/")
-      .replace(/\/+$/, "");
-    return platform === "windows" ? normalized.toLowerCase() : normalized;
-  };
-  const normalizedRoot = normalize(root);
+  const normalizedRoot = normalizeLogPath(root, platform);
   if (normalizedRoot === "" || normalizedRoot === "/") return true;
-  const normalizedEntry = normalize(entry.filePath);
+  const normalizedEntry = normalizeLogPath(entry.filePath, platform);
   return (
     normalizedEntry === normalizedRoot ||
     normalizedEntry.startsWith(`${normalizedRoot}/`)

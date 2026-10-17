@@ -4,6 +4,7 @@
  * what Event Logs correlates, so a mocked loader would prove nothing about it.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { deferred } from "../../test-utils/deferred";
 import type { LogEntry, ParseResult } from "../../types/log";
 
 const commands = vi.hoisted(() => ({
@@ -21,12 +22,13 @@ const dialog = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock("../../lib/commands", () => commands);
 vi.mock("@tauri-apps/plugin-dialog", () => dialog);
 
-import { clearAllTabSnapshots } from "../../lib/tab-snapshot-cache";
+import { loadSelectedLogFile } from "../../lib/log-source";
+import { clearAllTabSnapshots, setCachedTabSnapshot } from "../../lib/tab-snapshot-cache";
 import { useFilterStore } from "../../stores/filter-store";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import { logWorkspace } from "../log";
-import { addLogSource } from "./add-log-source";
+import { addLogSource, describeCorrelatedState } from "./add-log-source";
 import { summarizeLogSources } from "./evtx-channel-stats";
 import { scopeLogEntries } from "./unified-timeline";
 
@@ -69,6 +71,16 @@ function parsed(filePath: string, lines = 2): ParseResult {
   };
 }
 
+/** What the parser returns for a registry export: the parser says so, and there are no entries. */
+function registryExport(filePath: string): ParseResult {
+  const result = parsed(filePath, 0);
+  return {
+    ...result,
+    formatDetected: "Plain",
+    parserSelection: { ...result.parserSelection!, parser: "registry" },
+  };
+}
+
 /** The text logs Event Logs would correlate, computed here rather than through the helper. */
 function correlated(platform: "windows" | "macos" | "linux" = "windows") {
   const log = useLogStore.getState();
@@ -96,8 +108,18 @@ beforeEach(() => {
   useFilterStore.getState().clearFilter();
 });
 
+describe("describeCorrelatedState", () => {
+  it.each([
+    [0, "No text log is now correlated."],
+    [1, "1 text log is now correlated."],
+    [2, "2 text logs are now correlated."],
+  ])("says what %i correlated logs are", (count, text) => {
+    expect(describeCorrelatedState(count)).toBe(text);
+  });
+});
+
 describe("the dialogs", () => {
-  it("offers the Log workspace's file filters without the registry viewer's", async () => {
+  it("offers the Log workspace's file filters without the registry viewer's, and keeps All Files", async () => {
     dialog.open.mockResolvedValue(null);
     await addLogSource("file");
 
@@ -107,6 +129,7 @@ describe("the dialogs", () => {
     expect(options.filters.length).toBeGreaterThan(0);
     const extensions = options.filters.flatMap((filter: { extensions: string[] }) => filter.extensions);
     expect(extensions).toContain("log");
+    expect(extensions).toContain("*");
     expect(extensions).not.toContain("reg");
     // Everything else the Log workspace offers is kept.
     const logFilters = logWorkspace.fileFilters ?? [];
@@ -133,7 +156,7 @@ describe("the dialogs", () => {
     const outcome = await addLogSource("file");
     expect(outcome).toEqual({
       status: "failed",
-      message: "Could not open the file dialog: no window. No text log is now correlated.",
+      message: "Could not open the file dialog: no window.",
     });
   });
 });
@@ -151,12 +174,17 @@ describe("a single file", () => {
     expect(correlated()).toEqual([{ path: A, label: "a.log", entries: 2 }]);
   });
 
-  it("clears the Log workspace's filter, as every other open does", async () => {
-    useFilterStore.getState().addQuickFilter("Message", "enrollment", "Contains");
-    expect(useFilterStore.getState().clauses).toHaveLength(1);
+  it("is read as a file even when the path now names a folder", async () => {
+    // fallbackToFolder: false keeps the caller's declared scope. Without it the kind probe would
+    // send this to the folder lane, which lists a directory the user picked as a file.
+    commands.inspectPathKind.mockResolvedValue("folder");
     dialog.open.mockResolvedValue([A]);
-    await addLogSource("file");
-    expect(useFilterStore.getState().clauses).toEqual([]);
+
+    const outcome = await addLogSource("file");
+
+    expect(outcome).toEqual({ status: "added", notice: null });
+    expect(commands.openLogSourceFile).toHaveBeenCalledWith({ kind: "file", path: A });
+    expect(commands.listLogSourceFolder).not.toHaveBeenCalled();
   });
 
   it("replaces the previous source: the earlier log stays a tab but is no longer correlated", async () => {
@@ -175,6 +203,85 @@ describe("a single file", () => {
     dialog.open.mockResolvedValue([A, A, B]);
     await addLogSource("file");
     expect(commands.parseFilesBatch).toHaveBeenCalledWith([A, B], expect.any(Number), 0);
+  });
+
+  it("is reported as cancelled, and writes nothing, when a newer load supersedes it", async () => {
+    const pending = deferred<ParseResult>();
+    commands.openLogSourceFile.mockReturnValueOnce(pending.promise);
+    dialog.open.mockResolvedValue([A]);
+    const add = addLogSource("file");
+    await vi.waitFor(() => expect(commands.openLogSourceFile).toHaveBeenCalled());
+
+    // The sidebar's click on a file that is already parsed takes the generation.
+    setCachedTabSnapshot(B, {
+      entries: [entry(B, 1)],
+      formatDetected: "Ccm",
+      parserSelection: null,
+      totalLines: 1,
+      byteOffset: 0,
+      selectedSourceFilePath: B,
+      sourceOpenMode: "single-file",
+      activeColumns: [],
+    });
+    await loadSelectedLogFile(B, { kind: "file", path: B });
+    pending.resolve(parsed(A));
+
+    await expect(add).resolves.toEqual({ status: "cancelled" });
+    expect(useLogStore.getState().entries.map((e) => e.filePath)).toEqual([B]);
+  });
+});
+
+describe("the Log workspace's filter", () => {
+  const withFilter = () => {
+    useFilterStore.getState().addQuickFilter("Message", "enrollment", "Contains");
+    expect(useFilterStore.getState().clauses).toHaveLength(1);
+  };
+
+  it("is cleared after an add that took, as every other open does", async () => {
+    withFilter();
+    dialog.open.mockResolvedValue([A]);
+    await addLogSource("file");
+    expect(useFilterStore.getState().clauses).toEqual([]);
+  });
+
+  // It only changes the Log view (filteredIds, never the store's entries), so an add that did not
+  // take leaves it alone.
+  it.each([
+    ["a registry file", ["C:\\exports\\Policy.reg"]],
+    ["an event log", ["C:\\Windows\\System32\\winevt\\Logs\\Security.evtx"]],
+  ])("is left alone when %s is refused", async (_name, picked) => {
+    withFilter();
+    dialog.open.mockResolvedValue(picked);
+
+    const outcome = await addLogSource("file");
+
+    expect(outcome.status).toBe("rejected");
+    expect(useFilterStore.getState().clauses).toHaveLength(1);
+  });
+
+  it("is left alone when the load fails", async () => {
+    withFilter();
+    commands.openLogSourceFile.mockRejectedValueOnce(new Error("The file is locked."));
+    dialog.open.mockResolvedValue([A]);
+
+    expect((await addLogSource("file")).status).toBe("failed");
+    expect(useFilterStore.getState().clauses).toHaveLength(1);
+  });
+
+  it("is left alone when the add leaves none of its files correlated", async () => {
+    withFilter();
+    commands.openLogSourceFile.mockResolvedValue(parsed(A, 0));
+    dialog.open.mockResolvedValue([A]);
+
+    expect((await addLogSource("file")).status).toBe("notAdded");
+    expect(useFilterStore.getState().clauses).toHaveLength(1);
+  });
+
+  it("is left alone when the dialog is dismissed", async () => {
+    withFilter();
+    dialog.open.mockResolvedValue(null);
+    await addLogSource("file");
+    expect(useFilterStore.getState().clauses).toHaveLength(1);
   });
 });
 
@@ -220,8 +327,40 @@ describe("several files", () => {
 
     expect(outcome).toEqual({
       status: "failed",
-      message: "Could not add a.log, b.log: no text log could be read. No text log is now correlated.",
+      message: "Could not add a.log, b.log: no text log could be read.",
     });
+  });
+
+  it("is added when one file is correlated, and says the others are not", async () => {
+    commands.parseFilesBatch.mockResolvedValue([parsed(A, 2), parsed(B, 0)]);
+    dialog.open.mockResolvedValue([A, B]);
+
+    const outcome = await addLogSource("file");
+
+    expect(outcome).toEqual({ status: "added", notice: "b.log holds no entries." });
+    expect(correlated().map((source) => source.path)).toEqual([A]);
+  });
+
+  it("compares paths the way the platform does: a POSIX pair that differs only in case is two files", async () => {
+    useUiStore.setState({ currentPlatform: "linux" });
+    // Only a.log came back. On a case-sensitive file system A.log is a different file, so it was
+    // not read, and folding case would count it as read.
+    commands.parseFilesBatch.mockResolvedValue([parsed("/logs/a.log")]);
+    dialog.open.mockResolvedValue(["/logs/A.log", "/logs/a.log"]);
+
+    const outcome = await addLogSource("file");
+
+    expect(outcome).toEqual({ status: "added", notice: "Not read: A.log." });
+  });
+
+  it("compares Windows paths without regard to case or separator", async () => {
+    // The parser hands the path back as it was given, but the platform treats these as one file.
+    commands.parseFilesBatch.mockResolvedValue([parsed("c:/logs/a.log"), parsed(B)]);
+    dialog.open.mockResolvedValue(["C:\\Logs\\A.log", B]);
+
+    const outcome = await addLogSource("file");
+
+    expect(outcome).toEqual({ status: "added", notice: null });
   });
 });
 
@@ -235,31 +374,57 @@ describe("a long selection", () => {
 
     expect(outcome).toEqual({
       status: "failed",
-      message:
-        "Could not add a.log, b.log, c.log and 2 more: The parse service stopped. No text log is now correlated.",
+      message: "Could not add a.log, b.log, c.log and 2 more: The parse service stopped.",
     });
+  });
+
+  it("names a single skipped file with the singular, and a run of them with the plural and a count", async () => {
+    const many = ["a", "b", "c", "d", "e"].map((name) => `C:\\logs\\${name}.log`);
+    commands.parseFilesBatch.mockResolvedValue([parsed(many[0])]);
+    dialog.open.mockResolvedValue(many);
+
+    const outcome = await addLogSource("file");
+
+    expect(outcome).toEqual({ status: "added", notice: "Not read: b.log, c.log, d.log and 1 more." });
   });
 });
 
 describe("a folder", () => {
   const folder = "C:\\logs\\bundle";
   const files = ["one.log", "two.log"].map((name) => `${folder}\\${name}`);
+  const getName = (path: string) => path.split("\\").pop()!;
 
-  function listing(paths: string[]) {
+  function listing(
+    paths: string[],
+    extra: {
+      dirs?: string[];
+      childErrors?: { path: string; reason: string }[];
+      bundle?: boolean;
+    } = {},
+  ) {
     return {
       sourceKind: "folder",
       source: { kind: "folder", path: folder },
-      entries: paths.map((path) => ({
-        name: getName(path),
-        path,
-        isDir: false,
-        sizeBytes: 1,
-        modifiedUnixMs: null,
-      })),
-      bundleMetadata: null,
+      entries: [
+        ...(extra.dirs ?? []).map((name) => ({
+          name,
+          path: `${folder}\\${name}`,
+          isDir: true,
+          sizeBytes: null,
+          modifiedUnixMs: null,
+        })),
+        ...paths.map((path) => ({
+          name: getName(path),
+          path,
+          isDir: false,
+          sizeBytes: 1,
+          modifiedUnixMs: null,
+        })),
+      ],
+      childErrors: extra.childErrors,
+      bundleMetadata: extra.bundle ? ({ bundleId: "CMTRACE-20260822-120000-HOST" } as never) : null,
     };
   }
-  const getName = (path: string) => path.split("\\").pop()!;
 
   it("loads every readable file as one aggregate source", async () => {
     commands.listLogSourceFolder.mockResolvedValue(listing(files));
@@ -290,38 +455,163 @@ describe("a folder", () => {
 
     expect(outcome).toEqual({
       status: "failed",
-      message: "Could not add folder bundle: no readable log file was found. No text log is now correlated.",
+      message: "Could not add folder bundle: no readable log file was found.",
+    });
+  });
+
+  // soul.md rule 4: a folder add never presents partial coverage as complete. The loader reads the
+  // top level only, so what sits below it, and what the listing could not include, is named.
+  describe("coverage", () => {
+    it("names the subfolders it did not read, as a count and up to three names", async () => {
+      commands.listLogSourceFolder.mockResolvedValue(
+        listing(files, { dirs: ["CBS", "DISM", "Panther", "Logs", "winevt"] }),
+      );
+      dialog.open.mockResolvedValue(folder);
+
+      const outcome = await addLogSource("folder");
+
+      expect(outcome).toEqual({
+        status: "added",
+        notice: "5 subfolders not read: CBS, DISM, Panther and 2 more.",
+      });
+    });
+
+    it("uses the singular for one subfolder", async () => {
+      commands.listLogSourceFolder.mockResolvedValue(listing(files, { dirs: ["CBS"] }));
+      dialog.open.mockResolvedValue(folder);
+
+      expect(await addLogSource("folder")).toEqual({
+        status: "added",
+        notice: "1 subfolder not read: CBS.",
+      });
+    });
+
+    it("names what the listing could not include: unreadable entries and its own limits", async () => {
+      commands.listLogSourceFolder.mockResolvedValue(
+        listing(files, {
+          childErrors: [
+            { path: `${folder}\\locked.log`, reason: "entry is not readable" },
+            { path: folder, reason: "folder listing reached the 4096-entry limit" },
+          ],
+        }),
+      );
+      dialog.open.mockResolvedValue(folder);
+
+      const outcome = await addLogSource("folder");
+
+      expect(outcome).toEqual({
+        status: "added",
+        notice:
+          "2 entries could not be listed: locked.log (entry is not readable), bundle (folder listing reached the 4096-entry limit).",
+      });
+    });
+
+    it("keeps a long reason short", async () => {
+      commands.listLogSourceFolder.mockResolvedValue(
+        listing(files, { childErrors: [{ path: `${folder}\\x`, reason: "r".repeat(400) }] }),
+      );
+      dialog.open.mockResolvedValue(folder);
+
+      const outcome = await addLogSource("folder");
+
+      expect(outcome.status === "added" && outcome.notice).toBe(
+        `1 entry could not be listed: x (${"r".repeat(117)}...).`,
+      );
+    });
+
+    it("says what an evidence bundle's collector skips, instead of counting subfolders", async () => {
+      commands.listLogSourceFolder.mockResolvedValue(listing(files, { bundle: true }));
+      dialog.open.mockResolvedValue(folder);
+
+      const outcome = await addLogSource("folder");
+
+      expect(outcome).toEqual({
+        status: "added",
+        notice: "Binary and oversized files in an evidence bundle are not read.",
+      });
+    });
+
+    it("names the coverage with the files that were not read, and in the failure", async () => {
+      commands.listLogSourceFolder.mockResolvedValue(listing(files, { dirs: ["CBS"] }));
+      commands.parseFilesBatch.mockResolvedValue([parsed(files[0])]);
+      dialog.open.mockResolvedValue(folder);
+
+      expect(await addLogSource("folder")).toEqual({
+        status: "added",
+        notice: "Not read: two.log. 1 subfolder not read: CBS.",
+      });
+
+      commands.listLogSourceFolder.mockResolvedValue(listing([], { dirs: ["CBS"] }));
+      expect(await addLogSource("folder")).toEqual({
+        status: "failed",
+        message: "Could not add folder bundle: no readable log file was found. 1 subfolder not read: CBS.",
+      });
     });
   });
 });
 
-describe("registry files", () => {
-  it("are refused before anything is loaded, naming the file", async () => {
+describe("a selection that cannot be a text log", () => {
+  it("refuses a registry file before anything loads, naming it", async () => {
     dialog.open.mockResolvedValue(["C:\\exports\\Policy.REG"]);
     const outcome = await addLogSource("file");
 
     expect(outcome).toEqual({
       status: "rejected",
-      message:
-        "Not added: Policy.REG is a registry file, which opens in the Log workspace. No text log is now correlated.",
+      message: "Not added: Policy.REG is a registry file, which opens in the Log workspace.",
     });
     expect(commands.openLogSourceFile).not.toHaveBeenCalled();
     expect(commands.parseFilesBatch).not.toHaveBeenCalled();
   });
 
-  it("refuse the whole selection, and leave the log that was correlated alone", async () => {
-    dialog.open.mockResolvedValueOnce([A]).mockResolvedValueOnce([B, "C:\\exports\\Policy.reg"]);
+  it.each([
+    "C:\\Windows\\System32\\winevt\\Logs\\Security.evtx",
+    "C:\\Windows\\System32\\winevt\\Logs\\SECURITY.EVTX",
+    "C:\\Backups\\Security.evtx.bak",
+    "C:\\Backups\\Archive-Security-2026.evtx.1",
+    "C:\\Backups\\Security.evtx~",
+  ])("refuses the event log %s, and says where EVTX is opened", async (path) => {
+    dialog.open.mockResolvedValue([path]);
+    const name = path.split("\\").pop();
+
+    const outcome = await addLogSource("file");
+
+    expect(outcome).toEqual({
+      status: "rejected",
+      message: `Not added: ${name} is an event log file; Event Logs opens EVTX files through its source picker.`,
+    });
+    expect(commands.openLogSourceFile).not.toHaveBeenCalled();
+  });
+
+  it("does not mistake a log that merely mentions evtx for an event log", async () => {
+    dialog.open.mockResolvedValue(["C:\\logs\\evtx-export.log", "C:\\logs\\events.evtxlog"]);
+
+    const outcome = await addLogSource("file");
+
+    expect(outcome.status).toBe("added");
+  });
+
+  it("refuses the whole selection, naming each kind, and leaves the log that was correlated alone", async () => {
+    dialog.open.mockResolvedValueOnce([A]).mockResolvedValueOnce([
+      B,
+      "C:\\exports\\Policy.reg",
+      "C:\\exports\\Other.reg",
+      "C:\\Windows\\Security.evtx",
+    ]);
     await addLogSource("file");
     const outcome = await addLogSource("file");
 
-    expect(outcome.status).toBe("rejected");
-    expect(outcome.status === "rejected" && outcome.message).toContain("1 text log is now correlated.");
+    expect(outcome).toEqual({
+      status: "rejected",
+      message:
+        "Not added: Policy.reg, Other.reg are registry files, which open in the Log workspace. " +
+        "Security.evtx is an event log file; Event Logs opens EVTX files through its source picker.",
+    });
     expect(correlated().map((source) => source.path)).toEqual([A]);
   });
 });
 
 describe("a failed load", () => {
-  it("names the file and reads the state the loader left, which is empty after a single-file failure", async () => {
+  it("names the file, and the loader has left nothing correlated after a single-file failure", async () => {
     dialog.open.mockResolvedValueOnce([A]).mockResolvedValueOnce([B]);
     await addLogSource("file");
     commands.openLogSourceFile.mockRejectedValueOnce(new Error("The file is locked."));
@@ -330,14 +620,14 @@ describe("a failed load", () => {
 
     expect(outcome).toEqual({
       status: "failed",
-      message: "Could not add b.log: The file is locked. No text log is now correlated.",
+      message: "Could not add b.log: The file is locked.",
     });
-    // loadLogSource clears the active log when it fails; the message reports that, not a guess.
+    // loadLogSource clears the active log when it fails; the pane's live sentence reports that.
     expect(useLogStore.getState().entries).toEqual([]);
     expect(correlated()).toEqual([]);
   });
 
-  it("reads the state the loader left, which is unchanged after a failed multi-file parse", async () => {
+  it("leaves the earlier log correlated after a failed multi-file parse", async () => {
     dialog.open
       .mockResolvedValueOnce([A])
       .mockResolvedValueOnce(["C:\\logs\\c.log", "C:\\logs\\d.log"]);
@@ -348,20 +638,61 @@ describe("a failed load", () => {
 
     expect(outcome).toEqual({
       status: "failed",
-      message: "Could not add c.log, d.log: The parse service stopped. 1 text log is now correlated.",
+      message: "Could not add c.log, d.log: The parse service stopped.",
     });
     expect(correlated().map((source) => source.path)).toEqual([A]);
   });
 });
 
-describe("a log with nothing to correlate", () => {
-  it("is reported as read but empty, not as one more source", async () => {
-    commands.openLogSourceFile.mockResolvedValue(parsed(A, 0));
-    dialog.open.mockResolvedValue([A]);
+describe("an add that leaves none of its files correlated", () => {
+  it("is not added when the log holds no entries, and the earlier correlation is gone", async () => {
+    dialog.open.mockResolvedValueOnce([A]).mockResolvedValueOnce([B]);
+    await addLogSource("file");
+    commands.openLogSourceFile.mockResolvedValue(parsed(B, 0));
 
     const outcome = await addLogSource("file");
 
-    expect(outcome).toEqual({ status: "added", notice: "Read but holds no entries: a.log." });
+    expect(outcome).toEqual({ status: "notAdded", message: "Not added: b.log holds no entries." });
     expect(correlated()).toEqual([]);
+  });
+
+  it("is not added when the parser classifies the file as a registry export by its content", async () => {
+    commands.openLogSourceFile.mockResolvedValue(registryExport("C:\\exports\\policy-export.txt"));
+    dialog.open.mockResolvedValue(["C:\\exports\\policy-export.txt"]);
+
+    const outcome = await addLogSource("file");
+
+    expect(outcome).toEqual({
+      status: "notAdded",
+      message: "Not added: policy-export.txt is a registry export; registry files are not correlated.",
+    });
+    expect(useLogStore.getState().entries).toEqual([]);
+  });
+
+  it("names a registry export in a multi-file add that still correlated something", async () => {
+    const registry = "C:\\logs\\policy-export.txt";
+    commands.parseFilesBatch.mockResolvedValue([parsed(A), registryExport(registry)]);
+    dialog.open.mockResolvedValue([A, registry]);
+
+    const outcome = await addLogSource("file");
+
+    expect(outcome).toEqual({
+      status: "added",
+      notice: "policy-export.txt is a registry export; registry files are not correlated.",
+    });
+  });
+
+  it("is not added when every file of a multi-file add is empty or a registry export", async () => {
+    const registry = "C:\\logs\\policy-export.txt";
+    commands.parseFilesBatch.mockResolvedValue([parsed(A, 0), registryExport(registry)]);
+    dialog.open.mockResolvedValue([A, registry]);
+
+    const outcome = await addLogSource("file");
+
+    expect(outcome).toEqual({
+      status: "notAdded",
+      message:
+        "Not added: policy-export.txt is a registry export; registry files are not correlated. a.log holds no entries.",
+    });
   });
 });
