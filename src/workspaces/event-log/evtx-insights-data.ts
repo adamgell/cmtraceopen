@@ -497,38 +497,6 @@ export function describeScopeCounts(
   return sentences;
 }
 
-export interface CorrelationBreakdown {
-  exact: number;
-  candidate: number;
-  ambiguous: number;
-  coverageBlocked: number;
-  /** The preview holds every edge the overview counts. */
-  complete: boolean;
-  /** exact + candidate + ambiguous: the only edges that are correlations. */
-  correlations: number;
-}
-
-/**
- * Correlation counts for the summary card. Only exact, candidate and ambiguous edges are
- * correlations; a coverage-blocked relation is a coverage state (soul.md) and is counted apart,
- * never folded into the total.
- */
-export function correlationBreakdown(summary: DiagnosisSummary): CorrelationBreakdown {
-  const count = (status: string) =>
-    summary.correlations.filter((edge) => edge.status === status).length;
-  const exact = count("exact");
-  const candidate = count("candidate");
-  const ambiguous = count("ambiguous");
-  return {
-    exact,
-    candidate,
-    ambiguous,
-    coverageBlocked: count("coverageBlocked"),
-    complete: summary.correlations.length >= summary.overview.correlationCount,
-    correlations: exact + candidate + ambiguous,
-  };
-}
-
 /**
  * The record with `id`. Record ids are assigned as indexes when records are merged, so the index
  * is tried first and a scan is only the fallback; the lookup is O(1) in the common case.

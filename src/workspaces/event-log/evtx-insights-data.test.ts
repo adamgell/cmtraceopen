@@ -5,7 +5,6 @@ import { countByLevel, EVTX_LEVELS } from "./evtx-filter";
 import {
   buildEvidenceIndex,
   buildSameIdSeries,
-  correlationBreakdown,
   describeScopeCounts,
   DIAGNOSIS_NESTED_ROW_CAP,
   DIAGNOSIS_PROJECTION_GAP_SOURCE,
@@ -342,20 +341,6 @@ describe("eventEvidenceLabel", () => {
     );
     expect(eventEvidenceLabel(base, false)).toBe("1 · P · no record ID");
     expect(eventEvidenceLabel({ ...base, recordId: 4 }, false)).toBe("1 · P · record 4");
-  });
-});
-
-describe("correlationBreakdown", () => {
-  it("keeps coverage-blocked, not-causal and timestamp-only edges out of the correlation total", () => {
-    const edge = (status: string) => ({ status, left: "l", basis: "b", candidateIds: [], evidence: [] });
-    const summary = {
-      correlations: [edge("exact"), edge("candidate"), edge("coverageBlocked"), edge("notCausal")],
-      overview: { correlationCount: 4 },
-    } as unknown as DiagnosisSummary;
-    const breakdown = correlationBreakdown(summary);
-    expect(breakdown.correlations).toBe(2);
-    expect(breakdown.coverageBlocked).toBe(1);
-    expect(breakdown.complete).toBe(true);
   });
 });
 

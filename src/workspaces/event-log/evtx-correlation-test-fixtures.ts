@@ -136,6 +136,37 @@ export interface DataOptions {
   edgeState?: Partial<EvtxCorrelationData["edges"]>;
   error?: string | null;
   retry?: () => void;
+  /** Overrides the counts-only model; null is a session whose counts are not in yet. */
+  counts?: EvtxCorrelationData["counts"];
+}
+
+/** The edge total the hook would store: a count, or null when none can be trusted. */
+function knownEdgeTotal(total: number): number | null {
+  return Number.isSafeInteger(total) && total >= 0 ? total : null;
+}
+
+/** The edges-only model of the session, as the hook keeps it beside the full one. */
+export function makeCounts(options: DataOptions): NonNullable<EvtxCorrelationData["counts"]> {
+  const total = options.totalEdges ?? options.edges.length;
+  const model = buildCorrelationChains({
+    items: [],
+    timelineEdges: options.edges,
+    totalTimelineEdges: total,
+    findings: [],
+  });
+  return {
+    model,
+    builtFor: options.builtFor ?? "session:1",
+    edges: {
+      loaded: options.edges.length,
+      totalEdges: knownEdgeTotal(total),
+      complete: model.edgeInputComplete,
+      error: null,
+      ...options.edgeState,
+    },
+    linkPartners: linkPartnerCounts(model.linkedPairs),
+    updating: options.updating ?? false,
+  };
 }
 
 /** Shared data as the hook would store it: the real chain model over these items and edges. */
@@ -158,7 +189,7 @@ export function makeData(options: DataOptions): EvtxCorrelationData {
     origins: originLookup(items, []),
     edges: {
       loaded: options.edges.length,
-      totalEdges: options.totalEdges ?? options.edges.length,
+      totalEdges: knownEdgeTotal(options.totalEdges ?? options.edges.length),
       complete: model.edgeInputComplete,
       error: null,
       ...options.edgeState,
@@ -173,7 +204,7 @@ export function makeData(options: DataOptions): EvtxCorrelationData {
       ...options.unplaced,
     },
     linkPartners: linkPartnerCounts(model.linkedPairs),
-    counts: null,
+    counts: options.counts === undefined ? makeCounts(options) : options.counts,
     updating: options.updating ?? false,
     error: options.error ?? null,
     retry: options.retry ?? (() => undefined),
