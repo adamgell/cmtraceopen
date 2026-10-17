@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { LONDON_2026, LONDON_REPEATED_HOUR_START, NEW_YORK_2026, modelZone } from "./__fixtures__/model-zone";
 import {
   eventDateKey,
   formatClock,
@@ -337,5 +338,61 @@ describe("a range whose two ends read alike across a DST fall-back", () => {
       }
       expect(checked).toBe(365 * 24 * 3 * 2);
     });
+  });
+});
+
+describe("the repeated hour of a modelled fall-back, whatever the host's zone", () => {
+  const SEP = TIME_RANGE_SEPARATOR;
+  const HOUR_MS = 3600_000;
+
+  it("gives each end its OWN offset: 01:00 BST to 01:00 GMT on 25 Oct 2026 in Europe/London", () => {
+    const restore = modelZone(LONDON_2026);
+    try {
+      const start = LONDON_REPEATED_HOUR_START;
+      // The modelled getters really read the repeated wall time at both ends.
+      expect(new Date(start).getHours()).toBe(1);
+      expect(new Date(start + HOUR_MS).getHours()).toBe(1);
+      expect(new Date(start).getTimezoneOffset()).toBe(-60);
+      expect(new Date(start + HOUR_MS).getTimezoneOffset()).toBe(0);
+      expect(formatTimeRange(start, start + HOUR_MS, "local")).toBe(
+        `01:00 UTC+01:00${SEP}01:00 UTC+00:00`,
+      );
+      expect(formatTimeRange(start, start + HOUR_MS, "local", true)).toBe(
+        `Oct 25 2026 01:00 UTC+01:00${SEP}Oct 25 2026 01:00 UTC+00:00`,
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("does the same across America/New_York's fall-back, with negative offsets", () => {
+    const restore = modelZone(NEW_YORK_2026);
+    try {
+      // 1 Nov 2026 05:00Z is 01:00 EDT (UTC-04:00); 06:00Z is 01:00 EST (UTC-05:00).
+      const start = Date.UTC(2026, 10, 1, 5);
+      expect(formatTimeRange(start, start + HOUR_MS, "local")).toBe(`01:00 UTC-04:00${SEP}01:00 UTC-05:00`);
+    } finally {
+      restore();
+    }
+  });
+
+  it("gives a range an hour either side of the repeated hour no offset", () => {
+    const restore = modelZone(LONDON_2026);
+    try {
+      const start = LONDON_REPEATED_HOUR_START - HOUR_MS;
+      // 23:00 BST to 01:00 BST (an hour of the repeated pair): clock texts differ.
+      expect(formatTimeRange(start, start + HOUR_MS, "local")).toBe(`00:00${SEP}01:00`);
+      const after = LONDON_REPEATED_HOUR_START + HOUR_MS;
+      expect(formatTimeRange(after, after + HOUR_MS, "local")).toBe(`01:00${SEP}02:00`);
+    } finally {
+      restore();
+    }
+  });
+
+  it("restores the host's own getters when it is done", () => {
+    const real = new Date(Date.UTC(2026, 9, 25, 0)).getHours();
+    const restore = modelZone(LONDON_2026);
+    restore();
+    expect(new Date(Date.UTC(2026, 9, 25, 0)).getHours()).toBe(real);
   });
 });
