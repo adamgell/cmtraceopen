@@ -109,9 +109,9 @@ const useStyles = makeStyles({
     },
   },
   interactive: { cursor: "crosshair" },
-  // One tooltip for the plot, drawn here rather than with Fluent's Tooltip: that component handles
-  // Escape on the document and marks it handled, which would stop the workspace's Escape from
-  // clearing the time range whenever a tooltip was showing (on hover or at the keyboard cursor).
+  // One tooltip for the plot, for the pointer, drawn here rather than with Fluent's Tooltip: that
+  // component handles Escape on the document and marks it handled, which would stop the workspace's
+  // Escape from clearing the time range whenever a tooltip was showing.
   tooltip: {
     position: "absolute",
     bottom: "calc(100% + 4px)",
@@ -412,7 +412,13 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
     }
   };
 
-  const tipIndex = ready ? (hover ?? (focused && key !== null ? key.cursor : null)) : null;
+  // The floating tooltip is for the pointer only: at the keyboard cursor it would sit over the chip
+  // row for as long as focus stays on the plot, and nothing dismisses it (Escape clears the range).
+  // The cursor bucket's text is shown inline in the caption line instead, which is persistent content,
+  // and the slider's value text carries it for assistive technology.
+  const tipIndex = ready ? hover : null;
+  const cursorBucket =
+    ready && focused && key !== null && cursor < count ? view.buckets[cursor] : null;
   const hovered = tipIndex !== null && tipIndex < count ? view.buckets[tipIndex] : null;
   const zone = histogram.domain === null ? null : timeZoneLabel(timeZoneMode, histogram.domain.startMs);
 
@@ -628,8 +634,17 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
           <li className={mergeClasses(styles.legendItem, styles.zone)}>{ready ? zone : ""}</li>
         </ul>
       </div>
-      {notes.length > 0 && (
+      {(notes.length > 0 || cursorBucket !== null) && (
         <figcaption className={styles.notes} style={{ fontSize: `${smallPx}px`, color: TEXT_COLOR }}>
+          {cursorBucket !== null && (
+            <span
+              data-evtx-cursor-text={cursor}
+              style={{ fontFamily: tokens.fontFamilyNumeric, fontVariantNumeric: "tabular-nums" }}
+            >
+              {describeBucket(cursorBucket, timeZoneMode, view.showYear)}
+            </span>
+          )}
+          {cursorBucket !== null && notes.length > 0 && " "}
           {notes.join(" ")}
         </figcaption>
       )}

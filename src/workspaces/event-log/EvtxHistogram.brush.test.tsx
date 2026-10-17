@@ -103,6 +103,8 @@ const seedRange = (range: { startMs: number; endMs: number } | null) =>
     useEvtxStore.setState({ timeRange: range });
   });
 const tooltip = () => document.querySelector<HTMLElement>("[data-evtx-tooltip]");
+/** The cursor bucket's text shown inline in the caption line while the plot has keyboard focus. */
+const cursorText = () => document.querySelector<HTMLElement>("[data-evtx-cursor-text]");
 const rangeOf = (first: number, last: number) => ({ startMs: edge(first), endMs: edge(last + 1) });
 
 describe("dragging a range", () => {
@@ -303,17 +305,22 @@ describe("the keyboard", () => {
     expect(description.textContent).toMatch(/Escape/);
   });
 
-  it("moves a one-bucket cursor with the arrows, Home and End, and shows its tooltip", () => {
+  it("moves a one-bucket cursor with the arrows, Home and End, and shows its text inline, not in a tooltip", () => {
     const { slider, container } = mount();
     fireEvent.focus(slider);
     expect(container.querySelector('[data-evtx-layer="cursor"]')).not.toBeNull();
-    expect(tooltip()).toHaveTextContent(describeBucket(histogram.buckets[71], "utc"));
+    // The floating tooltip is for the pointer: at the keyboard cursor it would cover the chip row.
+    expect(tooltip()).toBeNull();
+    expect(cursorText()).toHaveTextContent(describeBucket(histogram.buckets[71], "utc"));
+    expect(cursorText()!.textContent).toBe(describeBucket(histogram.buckets[71], "utc"));
     key(slider, "ArrowLeft");
-    expect(tooltip()).toHaveTextContent(describeBucket(histogram.buckets[70], "utc"));
+    expect(tooltip()).toBeNull();
+    expect(cursorText()!.textContent).toBe(describeBucket(histogram.buckets[70], "utc"));
     expect(slider).toHaveAttribute("aria-valuenow", "70");
     expect(slider).toHaveAttribute("aria-valuetext", describeBucket(histogram.buckets[70], "utc"));
     key(slider, "Home");
     expect(slider).toHaveAttribute("aria-valuenow", "0");
+    expect(cursorText()!.textContent).toBe(describeBucket(histogram.buckets[0], "utc"));
     key(slider, "ArrowLeft");
     expect(slider).toHaveAttribute("aria-valuenow", "0");
     key(slider, "End");
@@ -324,6 +331,23 @@ describe("the keyboard", () => {
       (71 / 72) * 100,
       6,
     );
+  });
+
+  it("is a persistent line in the figure, not an overlay, and goes when focus leaves", () => {
+    const { slider } = mount();
+    fireEvent.focus(slider);
+    const line = cursorText()!;
+    expect(line.closest("figcaption")).not.toBeNull();
+    expect(line.closest("[data-evtx-region='histogram']")).not.toBeNull();
+    fireEvent.blur(slider);
+    expect(cursorText()).toBeNull();
+  });
+
+  it("still shows the floating tooltip for the pointer, and not the inline text", () => {
+    const { slider } = mount();
+    fireEvent.pointerMove(slider, { clientX: x(20) });
+    expect(tooltip()).toHaveTextContent(describeBucket(histogram.buckets[20], "utc"));
+    expect(cursorText()).toBeNull();
   });
 
   it("extends a draft with Shift, then Enter applies it", () => {
@@ -383,7 +407,7 @@ describe("the keyboard", () => {
     expect(key(slider, "Escape")).toBe(true);
   });
 
-  it("lets Escape through to clear the range while a tooltip is showing, on hover or at the cursor", () => {
+  it("lets Escape through to clear the range while a tooltip is showing, or the cursor text", () => {
     const { slider } = mount();
     seedRange(rangeOf(10, 14));
     fireEvent.pointerMove(slider, { clientX: x(20) });
@@ -393,7 +417,7 @@ describe("the keyboard", () => {
     expect(key(document.body, "Escape")).toBe(true);
     fireEvent.pointerLeave(slider);
     fireEvent.focus(slider);
-    expect(tooltip()).not.toBeNull();
+    expect(cursorText()).not.toBeNull();
     expect(key(slider, "Escape")).toBe(true);
   });
 
