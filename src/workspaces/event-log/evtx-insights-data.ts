@@ -256,13 +256,8 @@ export function evidenceMatchesRecord(
   // record that merely shares the event ID.
   const own = recordIdentityText(record);
   if (own === null) return false;
-  if (hasRecordIdText(value.recordIdText)) {
-    if (value.recordIdText !== own) return false;
-  } else if (value.fallbackIdentity) {
-    return false;
-  } else if (value.recordId === 0 || String(value.recordId) !== own) {
-    return false;
-  }
+  const named = evidenceIdentityText(value);
+  if (named === null || named !== own) return false;
   if (!redactedValueMatches(value.provider, record.provider)) return false;
   if (value.channel && !redactedValueMatches(value.channel, record.channel)) return false;
   if (value.machine && !redactedValueMatches(value.machine, record.computer)) return false;
@@ -353,11 +348,19 @@ export function recordsForIdentity(
   return index.get(identityKey(eventId, identity)) ?? [];
 }
 
-/** The identity an evidence reference names, in the engine's `stable_id` order, or null when it has none a record can match. */
+/**
+ * The identity an evidence reference names, by the engine's own rule (`EventEvidenceRef::record_identity`,
+ * diagnosis.rs): a usable `recordIdText`, else the `fallbackIdentity`, else the number. Null when
+ * what it names is a hash a record cannot reproduce, or no number at all. Text and number go
+ * through `engineRecordIdentity`, the rule the loaded record and the timeline origin use, so all
+ * three agree: all-zero text is no identity (it falls through to the fallback, then the number), and
+ * padded text is the trimmed text.
+ */
 function evidenceIdentityText(value: DiagnosisEventEvidence): string | null {
-  if (hasRecordIdText(value.recordIdText)) return value.recordIdText;
+  const text = engineRecordIdentity(value.recordIdText, 0);
+  if (text !== null) return text;
   if (value.fallbackIdentity) return null;
-  return value.recordId === 0 ? null : String(value.recordId);
+  return engineRecordIdentity(null, value.recordId);
 }
 
 export interface FindingScope {

@@ -615,6 +615,66 @@ describe("scopeForFinding", () => {
   });
 });
 
+describe("evidence identity follows the engine's rule, as the record and the origin do (J3)", () => {
+  const scopeOf = (evidenceValue: Record<string, unknown>, loaded: EvtxRecord[]) =>
+    scopeForFinding(findingWith(evidence(evidenceValue)), buildEvidenceIndex(loaded), false);
+
+  it("reads evidence with all-zero text and no number as having no usable identity, never as not loaded", () => {
+    const scope = scopeOf({ recordIdText: "000", recordId: 0 }, [record(1)]);
+    expect(scope.counts).toEqual({ notLoaded: 0, noUsableIdentity: 1, ambiguous: 0, bounded: false });
+    expect(scope.references).toEqual([]);
+  });
+
+  it("ignores all-zero evidence text and falls back to the number, as the engine does", () => {
+    const loaded = record(7, { eventRecordId: 7, eventRecordIdText: "7" });
+    const scope = scopeOf({ recordIdText: "000", recordId: 7 }, [loaded]);
+    expect(scope.references).toEqual([[loaded]]);
+    expect(evidenceMatchesRecord(evidence({ recordIdText: "000", recordId: 7 }).value, loaded)).toBe(true);
+  });
+
+  it("falls back to the fallback identity, which a record cannot reproduce, when the text is all zero", () => {
+    const loaded = record(7, { eventRecordId: 7, eventRecordIdText: "7" });
+    const scope = scopeOf({ recordIdText: "000", fallbackIdentity: "abc123", recordId: 7 }, [loaded]);
+    expect(scope.counts).toMatchObject({ noUsableIdentity: 1, notLoaded: 0 });
+    expect(evidenceMatchesRecord(evidence({ fallbackIdentity: "abc123", recordId: 7 }).value, loaded)).toBe(false);
+  });
+
+  it("lets usable text win over a fallback identity and over a different number", () => {
+    const loaded = record(7, { eventRecordId: 42, eventRecordIdText: "42" });
+    const value = evidence({ recordIdText: "42", fallbackIdentity: "abc123", recordId: 7 }).value;
+    expect(evidenceMatchesRecord(value, loaded)).toBe(true);
+  });
+
+  it("reads padded evidence text as the trimmed text, on either side", () => {
+    const plain = record(1, { eventRecordId: 7, eventRecordIdText: "7" });
+    const padded = record(2, { eventRecordId: 7, eventRecordIdText: " 7" });
+    for (const text of [" 7", "7", "  7\t"]) {
+      const scope = scopeOf({ recordIdText: text, recordId: 7 }, [plain, padded]);
+      expect(scope.references, JSON.stringify(text)).toEqual([[plain, padded]]);
+      expect(scope.counts.ambiguous, JSON.stringify(text)).toBe(1);
+    }
+  });
+
+  it("takes padded text as the text, not as a reason to use the number", () => {
+    // The number differs from the text, so only the trimmed text names this record.
+    const loaded = record(5, { eventRecordId: 42, eventRecordIdText: "42" });
+    expect(evidenceMatchesRecord(evidence({ recordIdText: " 42 ", recordId: 7 }).value, loaded)).toBe(true);
+    expect(evidenceMatchesRecord(evidence({ recordIdText: " 43 ", recordId: 42 }).value, loaded)).toBe(false);
+  });
+
+  it("matches a loaded record whose own text is all zero by the number, from either shape of evidence", () => {
+    const zero = record(3, { eventRecordId: 7, eventRecordIdText: "000" });
+    for (const evidenceValue of [{ recordIdText: "7", recordId: 7 }, { recordId: 7 }, { recordIdText: "000", recordId: 7 }]) {
+      expect(scopeOf(evidenceValue, [zero]).references, JSON.stringify(evidenceValue)).toEqual([[zero]]);
+    }
+  });
+
+  it("keeps a number-only reference with no number as no usable identity", () => {
+    const scope = scopeOf({ recordId: 0 }, [record(1)]);
+    expect(scope.counts).toMatchObject({ noUsableIdentity: 1, notLoaded: 0 });
+  });
+});
+
 describe("summaryIsBounded", () => {
   const gap = (source: string) => ({ id: "g", source, state: "capped" as const, detail: "", evidence: [] });
   const summary = (overrides: Partial<DiagnosisSummary>): DiagnosisSummary =>
