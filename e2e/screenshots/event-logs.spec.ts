@@ -188,6 +188,17 @@ test.describe("event-logs screenshots", () => {
       },
     );
 
+    // The workspace reads the page clock once per load (`nowEpoch`, for the relative time windows,
+    // the timeline strip and what an export selects), and the fixture is dated 6 and 7 Oct 2026.
+    // Without a fixed clock a capture would depend on the day it was taken. This is the instant
+    // the histogram captures (#835) pin, with the timers left running (the splash still goes). It
+    // must be set before the page loads and applies to every test here.
+    //
+    // Do not add a LIVE-stream capture to this block. A live query settles through a deadline
+    // compared with Date.now(); under a fixed clock the time left never shrinks and the load
+    // never leaves isLoading. These captures load files, which do not stream.
+    await page.clock.setFixedTime(new Date("2026-10-16T12:00:00.000Z"));
+
     await page.goto("/");
     await dismissSplash(page);
 
@@ -286,9 +297,8 @@ test.describe("event-logs screenshots", () => {
 
   test("event-logs insights lower cards", async ({ page }) => {
     // The finding cards fill the top of the rail; scroll the panel to its end so the coverage
-    // disclosure, level mix and top event IDs are reviewable. The correlation summary card does
-    // not appear here: this fixture yields no correlation edges, so it waits for Phase 10's
-    // fixture edges (#839).
+    // disclosure, level mix and top event IDs are reviewable. The Correlations card sits among
+    // them: the fixture's synthetic ActivityIds give the real engine seven edges to count (#839).
     const panel = page.locator("#evtx-rail-panel-insights");
     await expect(panel).toBeVisible();
     await panel.evaluate((el) => {
@@ -307,5 +317,81 @@ test.describe("event-logs screenshots", () => {
       path: outPath("event-logs-insights.png"),
       animations: "disabled",
     });
+  });
+
+  test("event-logs correlation", async ({ page }) => {
+    // The fixture's synthetic identity (event-log-data.ts, `assignCorrelationIdentity`) gives the
+    // real engine seven edges, which the view reads as five chains: three Exact pairs, one
+    // Ambiguous group of three and one Coverage blocked pair.
+    //
+    // A brushed range is set first, so the Escape check below has something to protect. It covers
+    // every record: a range that hid one would change the events the analysis is built from, and
+    // the replayed engine replies only describe the full set.
+    await page.evaluate(async () => {
+      const { useEvtxStore } = await import("/src/workspaces/event-log/evtx-store.ts");
+      const { records, setTimeRange } = useEvtxStore.getState();
+      const epochs = records.map((record) => record.timestampEpoch);
+      const applied = setTimeRange({
+        startMs: Math.min(...epochs) - 1_000,
+        endMs: Math.max(...epochs) + 1_000,
+      });
+      if (!applied) throw new Error("[event-logs fixture] the time range was not applied");
+    });
+    const brushed = page.getByText(/^Time: brushed /).first();
+    await expect(brushed).toBeVisible();
+
+    await page.getByRole("tab", { name: "Correlation", exact: true }).click();
+    const list = page.getByRole("listbox", { name: "Correlation chains, strongest first" });
+    const chains = list.getByRole("option");
+    const withBadge = (strength: string) =>
+      chains.filter({ has: page.locator(`[data-strength-badge="${strength}"]`) });
+    await expect(chains).toHaveCount(5);
+    await expect(withBadge("exact")).toHaveCount(3);
+    await expect(withBadge("ambiguous")).toHaveCount(1);
+    await expect(withBadge("coverageBlocked")).toHaveCount(1);
+
+    // The strongest chain is selected on open, and its plot draws the one connector of its edge.
+    const plot = page.getByTestId("lane-plot");
+    const markers = plot.locator("button[data-marker]");
+    const exact = withBadge("exact").first();
+    await expect(exact).toHaveAttribute("aria-selected", "true");
+    await expect(markers).toHaveCount(2);
+    await expect(plot.locator('line[data-connector][data-strength="exact"]')).toHaveCount(1);
+
+    // The view has two polite regions: the announcer and the reply to the operator's own action.
+    await expect(page.getByTestId("correlation-view").getByRole("status")).toHaveCount(2);
+    await assertNoHostPaths(page);
+    await page.screenshot({
+      path: outPath("event-logs-correlation.png"),
+      animations: "disabled",
+    });
+
+    // An Ambiguous group labels no link between its entries, so its plot draws no connector.
+    // Wait for the group's three markers first: until they are drawn, zero connectors would only
+    // mean the plot had not been replaced yet.
+    const ambiguous = withBadge("ambiguous");
+    await ambiguous.click();
+    await expect(ambiguous).toHaveAttribute("aria-selected", "true");
+    await expect(markers).toHaveCount(3);
+    await expect(plot.locator("line[data-connector]")).toHaveCount(0);
+
+    // Escape on a plot entry belongs to the plot: it returns focus to the chain list and leaves
+    // the workspace's own Escape (which clears the time range) unspent.
+    await markers.first().focus();
+    await page.keyboard.press("Escape");
+    await expect(list).toBeFocused();
+    await expect(brushed).toBeVisible();
+
+    // "Filter table to chain" scopes the table to the chain's records and switches to it.
+    await exact.click();
+    await expect(exact).toHaveAttribute("aria-selected", "true");
+    const filterTable = page.getByRole("button", { name: "Filter table to chain" });
+    await expect(filterTable).not.toHaveAttribute("aria-disabled", "true");
+    await filterTable.click();
+    await expect(page.getByRole("tab", { name: "Table", exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(page.getByText(/^Chain: /).first()).toBeVisible();
   });
 });
