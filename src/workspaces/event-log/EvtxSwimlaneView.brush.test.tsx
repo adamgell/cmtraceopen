@@ -873,6 +873,89 @@ describe("the lane cursor", () => {
     expect(layer("swimlanes", "cursor")!.style.height).toBe(`${LANE}px`);
   });
 
+  describe("while a live tail re-ranks the lanes", () => {
+    const at = (hours: number, provider: string, level: EvtxLevel = "Information") =>
+      rec(FIRST + hours * HOUR, level, provider);
+    // first 5 events, second 3 (the newest event overall is its), third 2: lanes first, second, third.
+    const start = () => [
+      ...[0, 1, 2, 3, 4].map((h) => at(h, "first")),
+      ...[1, 3, 5].map((h) => at(h, "second", h === 5 ? "Error" : "Information")),
+      ...[0, 2].map((h) => at(h, "third")),
+    ];
+    // third gains four events inside the same span: third 6, first 5, second 3.
+    const grown = (list: EvtxRecord[]) => [...list, ...[0.5, 1.5, 2.5, 3.5].map((h) => at(h, "third"))];
+    const labels = () =>
+      [...region("swimlanes").querySelectorAll<HTMLElement>("[data-evtx-lane]")].map((li) => li.children[0].textContent);
+
+    it("holds the cursor on the lane it was moved to, and selects from that lane's cell", () => {
+      vi.useFakeTimers({ now: PINNED_NOW });
+      const list = start();
+      const { laneSlider, rerender } = mount(list);
+      expect(labels()).toEqual(["first", "second", "third"]);
+      fireEvent.focus(laneSlider);
+      key(laneSlider, "ArrowDown");
+      expect(laneSlider.getAttribute("aria-valuetext")!.startsWith("second, ")).toBe(true);
+
+      rerender(stack(grown(list)));
+      act(() => {
+        vi.advanceTimersByTime(DERIVATION_THROTTLE_MS);
+      });
+      // Second now ranks third, in row 2, and the cursor went with it.
+      expect(labels()).toEqual(["third", "first", "second"]);
+      expect(laneSlider.getAttribute("aria-valuetext")!.startsWith("second, ")).toBe(true);
+      expect(layer("swimlanes", "cursor")!.style.top).toBe(`${2 * LANE}px`);
+      key(laneSlider, " ");
+      // The newest event overall is second's, in the newest bucket the cursor started on.
+      expect(useEvtxStore.getState().selectedRecordId).toBe(list[7].id);
+    });
+
+    it("moves on from where it is after a re-rank, by one lane", () => {
+      vi.useFakeTimers({ now: PINNED_NOW });
+      const list = start();
+      const { laneSlider, rerender } = mount(list);
+      fireEvent.focus(laneSlider);
+      key(laneSlider, "ArrowDown");
+      rerender(stack(grown(list)));
+      act(() => {
+        vi.advanceTimersByTime(DERIVATION_THROTTLE_MS);
+      });
+      key(laneSlider, "ArrowUp");
+      expect(laneSlider.getAttribute("aria-valuetext")!.startsWith("first, ")).toBe(true);
+    });
+
+    it("binds a cursor that was never moved to the lane it started on", () => {
+      vi.useFakeTimers({ now: PINNED_NOW });
+      const list = start();
+      const { laneSlider, rerender } = mount(list);
+      fireEvent.focus(laneSlider);
+      expect(laneSlider.getAttribute("aria-valuetext")!.startsWith("first, ")).toBe(true);
+      rerender(stack(grown(list)));
+      act(() => {
+        vi.advanceTimersByTime(DERIVATION_THROTTLE_MS);
+      });
+      expect(labels()).toEqual(["third", "first", "second"]);
+      expect(laneSlider.getAttribute("aria-valuetext")!.startsWith("first, ")).toBe(true);
+    });
+
+    it("falls back to the clamped row only when the lane is gone", () => {
+      vi.useFakeTimers({ now: PINNED_NOW });
+      const list = start();
+      const { laneSlider, rerender } = mount(list);
+      fireEvent.focus(laneSlider);
+      key(laneSlider, "ArrowDown");
+      key(laneSlider, "ArrowDown");
+      expect(laneSlider.getAttribute("aria-valuetext")!.startsWith("third, ")).toBe(true);
+      rerender(stack(list.filter((record) => record.provider !== "third")));
+      act(() => {
+        vi.advanceTimersByTime(DERIVATION_THROTTLE_MS);
+      });
+      expect(labels()).toEqual(["first", "second"]);
+      // Row 2 no longer exists: the cursor is on the last row, and then follows that lane.
+      expect(laneSlider.getAttribute("aria-valuetext")!.startsWith("second, ")).toBe(true);
+      expect(layer("swimlanes", "cursor")!.style.top).toBe(`${LANE}px`);
+    });
+  });
+
   it("keeps the bucket when it changes lane", () => {
     const { laneSlider } = mount();
     fireEvent.focus(laneSlider);

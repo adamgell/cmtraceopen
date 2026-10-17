@@ -502,7 +502,10 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
   const gestureRef = useRef<{ startX: number } | null>(null);
   const [keys, setKeys] = useState<BrushKeyState | null>(null);
   const [drag, setDrag] = useState<{ anchor: number; current: number } | null>(null);
-  const [cursorLane, setCursorLane] = useState(0);
+  // The lane the keyboard cursor is on, held by its lane id: a live tail re-ranks the top 12, and a
+  // cursor held by position would slide onto whichever lane takes its row. `index` is where it was
+  // last seen, and is used only when its lane is gone.
+  const [cursorLane, setCursorLane] = useState<{ id: string | null; index: number }>({ id: null, index: 0 });
 
   // When a load begins (or the first events of the next set are still arriving), whatever a gesture
   // held belongs to the set that is going away: the scene it froze, the drag, the anchor, the
@@ -520,7 +523,7 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
       setFrozen(null);
       setKeys(null);
       setHover(null);
-      if (field !== seenField) setCursorLane(0);
+      if (field !== seenField) setCursorLane({ id: null, index: 0 });
     }
   }
 
@@ -535,7 +538,17 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
   // twice as opaque as the opacity that was solved.
   const shownRange = draftOnPlot ?? appliedOnPlot;
   const cursor = key?.cursor ?? initialBrushCursor(count, appliedSpan);
-  const laneIndex = Math.min(Math.max(0, laneCount - 1), cursorLane);
+  const laneIndex = (() => {
+    const held = cursorLane.id === null ? -1 : view.lanes.findIndex((candidate) => candidate.id === cursorLane.id);
+    return held >= 0 ? held : Math.min(Math.max(0, laneCount - 1), cursorLane.index);
+  })();
+  // Bind the cursor to the lane it is on (and note where that is), so that from here on a re-rank
+  // moves the cursor with its lane and not onto another one.
+  useEffect(() => {
+    const row = view.lanes[laneIndex];
+    if (row === undefined) return;
+    if (cursorLane.id !== row.id || cursorLane.index !== laneIndex) setCursorLane({ id: row.id, index: laneIndex });
+  }, [view, laneIndex, cursorLane]);
   const selectedAt = useMemo(
     () => (ready ? findRecordInScene(view, selectedRecordId) : null),
     [ready, view, selectedRecordId],
@@ -677,7 +690,7 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
     const hit = hitAt(event);
     if (hit === null) return;
     selectRecordAndShowDetails(hit.record.id);
-    setCursorLane(hit.lane);
+    setCursorLane({ id: view.lanes[hit.lane].id, index: hit.lane });
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -706,7 +719,8 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
     }
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
       event.preventDefault();
-      setCursorLane(Math.min(Math.max(0, laneCount - 1), Math.max(0, laneIndex + (event.key === "ArrowDown" ? 1 : -1))));
+      const next = Math.min(Math.max(0, laneCount - 1), Math.max(0, laneIndex + (event.key === "ArrowDown" ? 1 : -1)));
+      setCursorLane({ id: view.lanes[next]?.id ?? null, index: next });
       return;
     }
     if (event.key === " ") {
