@@ -1,9 +1,21 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.hoisted(() => vi.fn());
+const indexBuilds = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+// The real index builder, counted: how often the rail asks the panel to index the records.
+vi.mock("./evtx-insights-data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./evtx-insights-data")>();
+  return {
+    ...actual,
+    buildEvidenceIndex: (...args: Parameters<typeof actual.buildEvidenceIndex>) => {
+      indexBuilds.count += 1;
+      return actual.buildEvidenceIndex(...args);
+    },
+  };
+});
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
 }));
@@ -487,6 +499,39 @@ describe("EvtxInsightsRail filter actions", () => {
       fireEvent.click(screen.getByRole("button", { name: /Filter to 1 event/ }));
       expect(useEvtxStore.getState().recordScope?.title).toBe("Enrollment failed");
       expect([...(useEvtxStore.getState().recordScope?.records ?? [])]).toEqual([loaded[1]]);
+    });
+  });
+
+  describe("cost", () => {
+    beforeEach(() => {
+      indexBuilds.count = 0;
+    });
+
+    it("indexes the records once for a diagnosis that cites events, not once per rail render", () => {
+      render(<EvtxInsightsRail summary={citing("Enrollment failed", 1, 2)} records={loaded} />);
+      expect(indexBuilds.count).toBe(1);
+
+      // The rail re-renders on a selection, a quick filter and a scope; none of them is new evidence.
+      act(() => useEvtxStore.setState({ selectedRecordId: 2 }));
+      act(() => useEvtxStore.setState({ selectedRecordId: 3 }));
+      act(() => {
+        useEvtxStore.getState().setQuickFilter({ ...DEFAULT_QUICK_FILTER, query: "x" });
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Filter to 2 events/ }));
+      expect(indexBuilds.count).toBe(1);
+    });
+
+    it("indexes again when the records change, after the rail's 75 ms throttle", async () => {
+      const summary = citing("Enrollment failed", 1);
+      const { rerender } = render(<EvtxInsightsRail summary={summary} records={loaded} />);
+      rerender(<EvtxInsightsRail summary={summary} records={[...loaded]} />);
+      await waitFor(() => expect(indexBuilds.count).toBe(2));
+    });
+
+    it("builds no index for a diagnosis whose findings cite no event", () => {
+      render(<EvtxInsightsRail summary={SUMMARY} records={loaded} />);
+      act(() => useEvtxStore.setState({ selectedRecordId: 2 }));
+      expect(indexBuilds.count).toBe(0);
     });
   });
 

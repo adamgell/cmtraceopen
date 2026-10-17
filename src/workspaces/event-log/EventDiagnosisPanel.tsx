@@ -997,11 +997,20 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
     [records],
   );
 
-  // Indexed once per set of records, and only when a card can filter: resolving a finding is then a
-  // lookup per reference and not a pass over every loaded record.
+  // Indexed once per set of records, and only when a card can filter and some finding cites an
+  // event: resolving a finding is then a lookup per reference and not a pass over every loaded
+  // record, and a live tail that changes the records builds nothing while no card has a link.
+  const citesEvents = useMemo(
+    () =>
+      summary !== null &&
+      actionableFindings(summary.findings).some((candidate) =>
+        candidate.evidence.some((evidence) => evidence.kind === "event"),
+      ),
+    [summary],
+  );
   const evidenceIndex = useMemo<EvidenceIndex | null>(
-    () => (onFilterToFinding && records ? buildEvidenceIndex(records) : null),
-    [onFilterToFinding, records],
+    () => (onFilterToFinding && records && citesEvents ? buildEvidenceIndex(records) : null),
+    [onFilterToFinding, records, citesEvents],
   );
   const engineBounded = useMemo(() => (summary ? summaryIsBounded(summary) : false), [summary]);
 

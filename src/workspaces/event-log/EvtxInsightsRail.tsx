@@ -10,6 +10,7 @@
  * callout. The Details body mounts on demand and scrolls itself under its fixed header.
  */
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -199,7 +200,10 @@ export function EvtxInsightsRail({
 
   // "Filter to {n} events": the scope is the loaded events the finding names, its title is kept as
   // written (a rebuilt diagnosis may drop the finding), and Table is shown only if it was applied.
-  const filterToFinding = (finding: DiagnosisFinding, scope: FindingScope) => {
+  //
+  // Both handlers read the stores when called, so they close over nothing and are made once: a new
+  // function on every render would defeat the panel's `memo` and rebuild its evidence index each time.
+  const filterToFinding = useCallback((finding: DiagnosisFinding, scope: FindingScope) => {
     const applied = useEvtxStore.getState().setRecordScope({
       kind: "finding",
       title: finding.title,
@@ -207,14 +211,14 @@ export function EvtxInsightsRail({
       counts: scope.counts,
     });
     if (applied) useEvtxLayoutStore.getState().setActiveView("table");
-  };
+  }, []);
   // A Top event IDs row replaces the quick filter with that ID, an on-load criterion: no re-query.
-  const filterToEventId = (eventId: number) => {
+  const filterToEventId = useCallback((eventId: number) => {
     const state = useEvtxStore.getState();
     state.setQuickFilter(
       quickFilterAfterEventIdClick(state.quickFilter, state.quickFilterDraft ?? state.quickFilter, eventId),
     );
-  };
+  }, []);
 
   const insightsScrollRef = useRef<HTMLDivElement>(null);
   const savedScrollRef = useRef(0);
