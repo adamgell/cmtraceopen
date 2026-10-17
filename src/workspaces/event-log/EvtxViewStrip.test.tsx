@@ -1083,7 +1083,12 @@ describe("EvtxViewStrip Import views...", () => {
       criteria: { ...bodyOf("x").criteria, recordScope: { kind: "finding" }, scopeRecordIds: [1] },
       layout: { activeView: "table", panels: { channels: true, insights: true, dock: true }, timeRange: 1 },
     };
-    await importFile(`{"schema":1,"views":[${JSON.stringify(hostile)},{"name":"Proto","__proto__":{"polluted":1},"criteria":{}}]}`);
+    // The second view is complete, with a __proto__ key written in (JSON.parse makes it an own property).
+    const proto = JSON.stringify({ name: "Proto", criteria: bodyOf("x").criteria, layout: null }).replace(
+      /^\{/,
+      '{"__proto__":{"polluted":1},',
+    );
+    await importFile(`{"schema":1,"views":[${JSON.stringify(hostile)},${proto}]}`);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getByText("Imported 2 views.")).toBeInTheDocument();
     const views = useEvtxViewStore.getState().views;

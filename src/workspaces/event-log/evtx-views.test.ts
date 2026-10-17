@@ -319,10 +319,11 @@ describe("sanitizeViewBody", () => {
     expect(sanitizeViewBody(plain(body({ layout: null })))).toEqual(body({ layout: null }));
   });
 
-  it("reads an absent layout as none", () => {
+  it("reads a layout of null as none, and skips a view that does not write one", () => {
+    expect(sanitizeViewBody(plain(body({ layout: null })))?.layout).toBeNull();
     const input = plain();
     delete input.layout;
-    expect(sanitizeViewBody(input)?.layout).toBeNull();
+    expect(sanitizeViewBody(input)).toBeNull();
   });
 
   it("reads a view with no channel list, leaving the selection alone", () => {
@@ -331,10 +332,12 @@ describe("sanitizeViewBody", () => {
     expect(sanitizeViewBody(input)?.criteria.beforeLoad.selectedChannels).toBeUndefined();
   });
 
-  it("reads a minimal view with defaults only for what is absent", () => {
-    const view = sanitizeViewBody({ name: "Bare", criteria: {} });
-    expect(view?.criteria).toEqual(sanitizeCriteria({}));
-    expect(view?.layout).toBeNull();
+  it("reads nothing from a minimal view: a default for a missing key would not be what the author meant", () => {
+    expect(sanitizeViewBody({ name: "Bare", criteria: {} })).toBeNull();
+    expect(sanitizeViewBody({ name: "Bare", criteria: {}, layout: null })).toBeNull();
+    expect(sanitizeViewBody({ name: "Bare", criteria: sanitizeCriteria({}) })).toBeNull();
+    // Written in full it is a view, and its window is its own, not the 24 hour default.
+    expect(sanitizeViewBody({ name: "Bare", criteria: sanitizeCriteria({}), layout: null })).not.toBeNull();
   });
 
   describe("the transient criteria are never in a view (Q-2)", () => {
@@ -391,12 +394,16 @@ describe("sanitizeViewBody", () => {
   });
 
   it("is not polluted by a __proto__ or constructor key", () => {
-    const text =
-      '{"name":"P","__proto__":{"polluted":1},"constructor":{"prototype":{"polluted":2}},' +
-      '"criteria":{"__proto__":{"polluted":3},"beforeLoad":{"__proto__":{"polluted":4}}},' +
-      '"layout":{"__proto__":{"polluted":5},"activeView":"table","panels":{"channels":true,"insights":true,"dock":false}}}';
+    // A complete view with the dangerous keys written in at every depth. JSON.parse makes them own
+    // properties, which is what a file does.
+    const text = JSON.stringify(plain())
+      .replace(/^\{/, '{"__proto__":{"polluted":1},"constructor":{"prototype":{"polluted":2}},')
+      .replace('"criteria":{', '"criteria":{"__proto__":{"polluted":3},')
+      .replace('"beforeLoad":{', '"beforeLoad":{"__proto__":{"polluted":4},')
+      .replace('"layout":{', '"layout":{"__proto__":{"polluted":5},');
+    expect(text.match(/__proto__/g)).toHaveLength(4);
     const read = sanitizeViewBody(JSON.parse(text));
-    expect(read?.name).toBe("P");
+    expect(read).toEqual(body());
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     expect(Object.prototype).not.toHaveProperty("polluted");
     expect(JSON.stringify(read)).not.toMatch(/polluted/);
@@ -458,6 +465,40 @@ describe("sanitizeViewBody", () => {
       const input = plain();
       corrupt(input);
       expect(sanitizeViewBody(input)).toBeNull();
+    });
+
+    // Every key the view is rebuilt with must be written (R9, T2): only selectedChannels is optional.
+    const requiredKeys: string[][] = [
+      ["layout"],
+      ["criteria", "beforeLoad"],
+      ["criteria", "onLoad"],
+      ["criteria", "afterLoad"],
+      ["criteria", "beforeLoad", "levels"],
+      ["criteria", "beforeLoad", "eventIds"],
+      ["criteria", "beforeLoad", "timeWindow"],
+      ["criteria", "onLoad", "search"],
+      ["criteria", "onLoad", "quickFilter"],
+      ["criteria", "onLoad", "quickFilter", "mode"],
+      ["criteria", "onLoad", "quickFilter", "query"],
+      ["criteria", "onLoad", "quickFilter", "scope"],
+      ["criteria", "onLoad", "quickFilter", "action"],
+      ["criteria", "onLoad", "quickFilter", "caseSensitive"],
+      ["criteria", "onLoad", "quickFilter", "highlight"],
+      ["criteria", "afterLoad", "groupBy"],
+    ];
+
+    it.each(requiredKeys.map((path) => [path.join("."), path] as const))("skips a view that does not write %s", (_label, path) => {
+      const input = plain();
+      let holder: Record<string, any> = input;
+      for (const key of path.slice(0, -1)) holder = holder[key];
+      delete holder[path[path.length - 1]];
+      expect(sanitizeViewBody(input)).toBeNull();
+    });
+
+    it("reads a view that does not write its channel list: the one optional key", () => {
+      const input = plain();
+      delete input.criteria.beforeLoad.selectedChannels;
+      expect(sanitizeViewBody(input)).not.toBeNull();
     });
 
     it("reads nothing from a value that is not an object", () => {

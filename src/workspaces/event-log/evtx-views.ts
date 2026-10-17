@@ -12,8 +12,10 @@
  * AGENTS.md forbids compatibility layers, fallbacks and migrations, so there is none. Schema 1 is
  * the first version; any other schema in a file is refused. And a view that cannot be read exactly
  * as written is skipped and counted, never approximated: `sanitizeCriteria` quietly turns an
- * unknown level list into every level, an unknown window into 24 hours and an unknown quick-filter
- * mode into "One string", and a view that did that would not filter the way its author meant.
+ * unknown level list into every level, a missing or unknown window into 24 hours and an unknown
+ * quick-filter mode into "One string", and a view that did that would not filter the way its author
+ * meant. So a view must carry every key (except the optional channel list), and the only value
+ * coerced is a layout panel this build cannot show yet (`dock: true` reads as `false`).
  */
 import {
   DEFAULT_QUICK_FILTER,
@@ -244,10 +246,15 @@ export function captureLayout(source: EvtxLayoutSource): EvtxViewLayout {
 // Reading untrusted input
 // ---------------------------------------------------------------------------------------------
 
+/** The one key a view may leave out: the model's own optional field, a view with no channel list. */
+const OPTIONAL_KEYS: ReadonlySet<string> = new Set(["selectedChannels"]);
+
 /**
- * True when every key `clean` has that `raw` also wrote is equal, all the way down. Keys only `raw`
- * has are ignored (nothing is copied from them), and keys only `clean` has are defaults for an
- * absent field. So a value that was present and was changed, dropped or coerced is the difference.
+ * True when `raw` wrote every key `clean` has, and each is equal, all the way down. A key only
+ * `raw` has is ignored (nothing is copied from it). A key only `clean` has is a default the reader
+ * made up, and it is a difference unless the key is optional: a missing time window would read as
+ * 24 hours, a missing level list as every level, and the view would not filter the way its author
+ * meant. So a value that was absent, changed, dropped or coerced is the difference.
  */
 function survives(raw: unknown, clean: unknown): boolean {
   if (Array.isArray(clean)) {
@@ -259,13 +266,16 @@ function survives(raw: unknown, clean: unknown): boolean {
   }
   if (isRecord(clean)) {
     if (!isRecord(raw)) return false;
-    return Object.keys(clean).every((key) => !hasOwn(raw, key) || survives(raw[key], clean[key]));
+    return Object.keys(clean).every((key) =>
+      hasOwn(raw, key) ? survives(raw[key], clean[key]) : OPTIONAL_KEYS.has(key),
+    );
   }
   return raw === clean;
 }
 
+/** The layout must be written: null for a view saved without one, else an object. An export always writes it. */
 function readLayout(raw: unknown): { ok: true; layout: EvtxViewLayout | null } | { ok: false } {
-  if (raw === undefined || raw === null) return { ok: true, layout: null };
+  if (raw === null) return { ok: true, layout: null };
   if (!isRecord(raw)) return { ok: false };
   const activeView = EVTX_VIEW_IDS.find((id) => id === raw.activeView);
   if (activeView === undefined || !isRecord(raw.panels)) return { ok: false };
@@ -284,11 +294,13 @@ function readLayout(raw: unknown): { ok: true; layout: EvtxViewLayout | null } |
  * Reads one view from untrusted input, or null when it cannot be read exactly as written.
  *
  * Rebuilt from explicit keys: the name, `sanitizeCriteria` of the criteria, and the layout. The
- * transient criteria, an id, `builtIn` and any other key the input carries are not copied.
+ * transient criteria, an id, `builtIn` and any other key the input carries are not copied. The input
+ * must carry every key it is rebuilt with (only `selectedChannels` may be absent), so nothing in the
+ * result is a default. The one value coerced rather than refused is a panel this build cannot show.
  */
 export function sanitizeViewBody(input: unknown): EvtxViewBody | null {
   if (!isRecord(input)) return null;
-  const name = cleanViewName(typeof input.name === "string" ? input.name.trim() : input.name);
+  const name = cleanViewName(input.name);
   if (name === null || !isRecord(input.criteria)) return null;
 
   const criteria = sanitizeCriteria(input.criteria);
