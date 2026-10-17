@@ -24,11 +24,12 @@ import { makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
-import { formatCoverageGap } from "./evtx-coverage";
+import { countCoverageGapMessages } from "./evtx-coverage";
 import {
   HISTOGRAM_BAR_AREA_PX,
   HISTOGRAM_LEVEL_LABELS,
   HISTOGRAM_STACK_ORDER,
+  RANGE_OUTSIDE_NOTE,
   bucketSegments,
   buildAxisTicks,
   buildHistogram,
@@ -74,9 +75,6 @@ const FORCED_COLORS = "@media (forced-colors: active)";
  * labels, legend text and notes use `colorNeutralForeground2` (at least 5.61:1 in every theme).
  */
 const TEXT_COLOR = tokens.colorNeutralForeground2;
-
-/** The note when the applied range lies wholly off the charted events (a filter shrank them). */
-const RANGE_OUTSIDE_NOTE = "The time range is outside the charted events.";
 
 const BRUSH_KEYS: readonly string[] = ["ArrowLeft", "ArrowRight", "Home", "End"];
 
@@ -278,7 +276,7 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
     [visual],
   );
   const gapCount = useMemo(
-    () => new Set([...legacyGaps, ...tailGaps, ...structuredGaps.map(formatCoverageGap)]).size,
+    () => countCoverageGapMessages(legacyGaps, tailGaps, structuredGaps),
     [legacyGaps, tailGaps, structuredGaps],
   );
 

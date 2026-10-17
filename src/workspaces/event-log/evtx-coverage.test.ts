@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertParseResultShape,
+  countCoverageGapMessages,
   formatCoverageGap,
   mergeCoverageGaps,
   mergeDiagnosisCoverageGaps,
@@ -542,5 +543,33 @@ describe("diagnosis coverage gaps", () => {
         "frontend coverage bound omitted 2 additional gaps; " +
         "backend diagnosis also enforces an input cap",
     });
+  });
+});
+
+describe("countCoverageGapMessages", () => {
+  const structured = {
+    source: "Security.evtx",
+    kind: "accessDenied" as const,
+    reason: "source metadata access was denied",
+  };
+
+  it("counts each distinct gap once across the three sources", () => {
+    expect(
+      countCoverageGapMessages(["Application: 3 records unreadable"], ["System: tail lagged"], [structured]),
+    ).toBe(3);
+  });
+
+  it("counts a structured gap and the same gap worded as a message once", () => {
+    // The banner words a structured gap through formatCoverageGap; a legacy string of that wording is
+    // the same gap, and a count that doubled it would overstate what may be missing.
+    expect(countCoverageGapMessages([formatCoverageGap(structured)], [], [structured])).toBe(1);
+  });
+
+  it("does not multiply a gap a refresh reports again", () => {
+    expect(countCoverageGapMessages(["a", "a"], ["a"], [structured, structured])).toBe(2);
+  });
+
+  it("is zero when nothing is missing", () => {
+    expect(countCoverageGapMessages([], [], [])).toBe(0);
   });
 });
