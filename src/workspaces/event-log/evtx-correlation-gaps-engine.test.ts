@@ -26,8 +26,11 @@
  *   crates finds none today);
  * - a `*_SOURCE` constant declared `&'static str` is not extracted. One used by a construction or
  *   a tuple fails the lookup; one used some other way is not seen;
- * - the gap sets are followed by name. A new receiver is caught only because the sets can be fed
- *   by `insert((` and by the one pinned `extend` below, nothing else.
+ * - the gap sets are followed by name. What the last test checks is that every `insert` into them
+ *   is one of the scanned `insert((` tuples (a tuple built first and inserted whole fails), that
+ *   the only `extend` is the one pinned form, that no other method is called, and that exactly one
+ *   shorthand `{ source, reason }` construction turns the pairs into gaps. It does not see an
+ *   iterator chain built from `into_iter()` into a new set.
  */
 import { describe, expect, it } from "vitest";
 import analysisSessionSource from "../../../src-tauri/src/event_log/analysis_session.rs?raw";
@@ -304,6 +307,18 @@ describe("the engine's coverage-gap sources (drift guard)", () => {
     const extended = methods.filter((method) => method === "extend").length;
     expect([...code.matchAll(PINNED_EXTEND)].length, "the observations' gaps no longer enter gap_set by the pinned extend").toBe(1);
     expect(extended, "gap_set or fanout_gaps is extended some other way").toBe(1);
+    // Every insert is a tuple whose first element was classified above: one built first and
+    // inserted whole (`insert(pair)`) is a source nothing has classified.
+    expect(
+      methods.filter((method) => method === "insert").length,
+      "an insert into a gap set is not a scanned `insert((source, reason))` tuple",
+    ).toBe(tuples.length);
+    // The shorthand `{ source, reason }` turns the set's pairs into gaps. A second one would turn
+    // another stream of pairs into gaps with sources nothing here has seen.
+    expect(
+      constructions.filter((entry) => entry.expression === "source").length,
+      "the pairs of gap_set are no longer turned into gaps by exactly one shorthand construction",
+    ).toBe(1);
   });
 
   it("pins the global and display sets against the engine's constants and its one literal", () => {
