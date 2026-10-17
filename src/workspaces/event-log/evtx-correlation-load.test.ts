@@ -328,16 +328,61 @@ describe("loadAnalysisEdges", () => {
     expect(loaded.complete).toBe(true);
   });
 
-  it("takes each total from the reply it arrived with", async () => {
-    const session = new FakeSession({ itemCount: 10, edgeCount: 50, previewEdges: 10 });
-    session.failEdges.set(0, (page) => ({ ...page, totalEdges: 50 }));
-    const loaded = await loadAnalysisEdges({
-      status: session.status(),
-      initialPage: session.page(0, 1000),
-      isCancelled: never,
-      deps: session.deps(),
+  describe("takes each total from the reply it arrived with (#839 comment 1)", () => {
+    const load = async (total: number) => {
+      const session = new FakeSession({ itemCount: 10, edgeCount: 50, previewEdges: 10 });
+      session.failEdges.set(0, (page) => ({ ...page, totalEdges: total }));
+      const loaded = await loadAnalysisEdges({
+        status: session.status(),
+        initialPage: session.page(0, 1000),
+        isCancelled: never,
+        deps: session.deps(),
+      });
+      return { loaded, session };
+    };
+    const modelOf = (loaded: { edges: TimelineCorrelationEdge[]; totalEdges: number | null }) =>
+      buildCorrelationChains({
+        items: [],
+        timelineEdges: loaded.edges,
+        totalTimelineEdges: modelEdgeTotal(loaded.totalEdges),
+        findings: [],
+      });
+
+    it("replaces the preview's total with a different finite one from a later reply", async () => {
+      const { loaded } = await load(52);
+      expect(loaded.edges).toHaveLength(50);
+      // 52 is the reply's own count, not the preview's 50: two edges are still missing.
+      expect(loaded.totalEdges).toBe(52);
+      expect(loaded.complete).toBe(false);
+      const model = modelOf(loaded);
+      expect(model.edgeInputComplete).toBe(false);
+      expect(model.unloadedEdgeCount).toBe(2);
     });
-    expect(loaded.totalEdges).toBe(50);
+
+    it("takes a total below what was loaded as it is, and is not complete", async () => {
+      const { loaded } = await load(45);
+      expect(loaded.totalEdges).toBe(45);
+      expect(loaded.complete).toBe(false);
+      expect(modelOf(loaded).edgeInputComplete).toBe(false);
+    });
+
+    it.each([Number.NaN, Infinity, -1, 3.5])(
+      "does not keep the preview's total over a reply whose total is %s: it is unknown",
+      async (total) => {
+        const { loaded } = await load(total);
+        expect(loaded.edges).toHaveLength(50);
+        expect(loaded.totalEdges).toBeNull();
+        expect(loaded.complete).toBe(false);
+        const model = modelOf(loaded);
+        expect(model.edgeInputComplete).toBe(false);
+        expect(model.unloadedEdgeCount).toBe(0);
+      },
+    );
+
+    it("is complete when the reply's total equals what was loaded", async () => {
+      const { loaded } = await load(50);
+      expect(loaded).toMatchObject({ totalEdges: 50, complete: true });
+    });
   });
 
   it("stops on a reply for another revision, keeps what it had, and is not complete", async () => {
