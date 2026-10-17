@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { eventDateKey, formatEventTime, timeZoneLabel } from "./evtx-time";
+import {
+  eventDateKey,
+  formatClock,
+  formatEventTime,
+  formatTimeRange,
+  TIME_RANGE_SEPARATOR,
+  timeZoneLabel,
+} from "./evtx-time";
 
 // 2026-02-10T16:36:04.390Z
 const EPOCH = Date.UTC(2026, 1, 10, 16, 36, 4, 390);
@@ -79,5 +86,53 @@ describe("timeZoneLabel", () => {
     // A screenshot or a pasted note has to still say which clock it was.
     const label = timeZoneLabel("local", EPOCH);
     expect(label).toMatch(/^UTC[+-]\d{2}:\d{2}$/);
+  });
+});
+
+describe("formatClock", () => {
+  it("shows HH:mm in UTC, with seconds on request", () => {
+    expect(formatClock(EPOCH, "utc")).toBe("16:36");
+    expect(formatClock(EPOCH, "utc", true)).toBe("16:36:04");
+    expect(formatClock(Date.UTC(2026, 1, 10, 3, 5, 9), "utc", true)).toBe("03:05:09");
+  });
+
+  it("shows the same instant in the platform's local time", () => {
+    const local = new Date(EPOCH);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    expect(formatClock(EPOCH, "local")).toBe(`${pad(local.getHours())}:${pad(local.getMinutes())}`);
+  });
+});
+
+describe("formatTimeRange", () => {
+  const utc = (day: number, hour: number, minute: number, second = 0) =>
+    Date.UTC(2026, 9, day, hour, minute, second);
+  const SEP = "\u2013";
+
+  it("separates the two times with an en dash, written as an escape", () => {
+    expect(TIME_RANGE_SEPARATOR).toBe(SEP);
+    expect(formatTimeRange(utc(16, 9, 0), utc(16, 9, 45), "utc")).toBe(`09:00${SEP}09:45`);
+  });
+
+  it("adds the date to each end when the range crosses a day in the chosen zone", () => {
+    expect(formatTimeRange(utc(16, 22, 0), utc(17, 3, 0), "utc")).toBe(`Oct 16 22:00${SEP}Oct 17 03:00`);
+  });
+
+  it("stays on one day when it ends at midnight, because the end is not inside the range", () => {
+    expect(formatTimeRange(utc(16, 23, 0), utc(17, 0, 0), "utc")).toBe(`23:00${SEP}00:00`);
+    expect(formatTimeRange(utc(16, 23, 0), utc(17, 0, 0, 1), "utc")).toBe(`Oct 16 23:00${SEP}Oct 17 00:00`);
+  });
+
+  it("shows seconds below two minutes and not from two minutes", () => {
+    expect(formatTimeRange(utc(16, 9, 0, 10), utc(16, 9, 1, 5), "utc")).toBe(`09:00:10${SEP}09:01:05`);
+    expect(formatTimeRange(utc(16, 9, 0), utc(16, 9, 2), "utc")).toBe(`09:00${SEP}09:02`);
+    expect(formatTimeRange(utc(16, 9, 0), utc(16, 9, 1, 59), "utc")).toBe(`09:00:00${SEP}09:01:59`);
+  });
+
+  it("reads the same instants on the local clock in local mode", () => {
+    const start = utc(16, 9, 0);
+    const end = utc(16, 9, 45);
+    expect(formatTimeRange(start, end, "local")).toBe(
+      `${formatClock(start, "local")}${SEP}${formatClock(end, "local")}`,
+    );
   });
 });

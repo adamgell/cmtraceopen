@@ -40,7 +40,11 @@ import {
   useEvtxLayoutStore,
   type EvtxViewId,
 } from "./evtx-layout-store";
-import { selectVisibleRecords } from "./evtx-filter";
+import {
+  countHiddenForWantOfTimestamp,
+  selectVisibleRecords,
+  type VisibleRecordsInput,
+} from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
 import type {
@@ -235,26 +239,23 @@ export function EventLogWorkspace() {
       isLoading,
     ],
   );
-  const visibleRecords = useMemo(
-    () =>
-      isLoading
-        ? []
-        : selectVisibleRecords({
-            records,
-            selectedChannels,
-            filterLevels,
-            nowEpoch,
-            filterEventIds,
-            filterSearch,
-            quickFilter,
-            visibleColumns: columnOrder,
-            timeZoneMode,
-            timeWindow,
-            timeRange,
-            scopeRecords: recordScope?.records ?? null,
-          }),
+  // One input for every pass over the records, so the chip row's count cannot read another set.
+  const visibleInput = useMemo<VisibleRecordsInput>(
+    () => ({
+      records,
+      selectedChannels,
+      filterLevels,
+      nowEpoch,
+      filterEventIds,
+      filterSearch,
+      quickFilter,
+      visibleColumns: columnOrder,
+      timeZoneMode,
+      timeWindow,
+      timeRange,
+      scopeRecords: recordScope?.records ?? null,
+    }),
     [
-      isLoading,
       records,
       selectedChannels,
       filterLevels,
@@ -268,6 +269,15 @@ export function EventLogWorkspace() {
       recordScope,
       nowEpoch,
     ],
+  );
+  const visibleRecords = useMemo(
+    () => (isLoading ? [] : selectVisibleRecords(visibleInput)),
+    [isLoading, visibleInput],
+  );
+  // Events a time range hides only because they carry no usable timestamp (spec 8.4 chip tooltip).
+  const untimedHiddenCount = useMemo(
+    () => (isLoading ? 0 : countHiddenForWantOfTimestamp(visibleInput)),
+    [isLoading, visibleInput],
   );
   const analysisRecords = useStableRecordMembership(visibleRecords);
   const channels = useEvtxStore((s) => s.channels);
@@ -584,7 +594,11 @@ export function EventLogWorkspace() {
       {isLoading && <ProgressBar style={{ width: "100%", flexShrink: 0 }} />}
       <EvtxViewBar nowEpoch={nowEpoch} />
       <EvtxFilterBar nowEpoch={nowEpoch} />
-      <EvtxFilterChips visibleCount={visibleRecords.length} loadedCount={records.length} />
+      <EvtxFilterChips
+        visibleCount={visibleRecords.length}
+        loadedCount={records.length}
+        untimedHiddenCount={untimedHiddenCount}
+      />
       <EvtxCoverageBanner />
 
       {timelineError && (

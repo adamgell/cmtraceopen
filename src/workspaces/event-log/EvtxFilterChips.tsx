@@ -2,36 +2,55 @@
  * The active-criteria chip row (spec section 8.4): one chip per active criterion, "Clear all",
  * and the "Showing {visible} of {loaded}" readout.
  *
- * Which chips exist is a pure function of the filter state (`buildFilterChips`), so the next
- * criteria add a descriptor and a removal, not a layout. Phase 6a (#834) adds the transient time
- * range ("Time: brushed 09:00-09:45") and the record scope ("Chain: {title}" / "Finding: {title}"):
- * each adds an id to `EvtxFilterChipId`, a branch in `buildFilterChips`, and a case in `removeChip`,
- * and `clearedByClearAll` says whether Clear all takes it too. The level toggles, the search box and
- * the time window are on the filter row, so only the search text has a chip; levels and the time
- * window never do.
+ * Which chips exist is a pure function of the filter state (`buildFilterChips`), so a new criterion
+ * adds a descriptor and a removal, not a layout. The transient criteria of Phase 6a (#834) are the
+ * last two: the time range ("Time: brushed 09:00-09:45", in the selection colors) and the record
+ * scope ("Finding: {title}" or "Chain: {title}"). The level toggles, the search box and the time
+ * window are on the filter row, so only the search text has a chip; levels and the time window never
+ * do. A chip's `title` is its tooltip when that says more than the chip does.
  */
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   createFocusOutlineStyle,
   Link,
   makeStyles,
+  mergeClasses,
   tokens,
 } from "@fluentui/react-components";
 import { Dismiss12Regular } from "@fluentui/react-icons";
-import type { EvtxQuickFilter } from "./evtx-filter";
+import type { EvtxQuickFilter, EvtxRecordScope, EvtxRecordScopeKind, EvtxTimeRange } from "./evtx-filter";
+import { describeScopeCounts, formatCount } from "./evtx-insights-data";
 import { useEvtxStore } from "./evtx-store";
+import { formatTimeRange, timeZoneLabel, type EvtxTimeZoneMode } from "./evtx-time";
+import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 
 /** The id of the search box on the filter row, where focus goes when no chip is left to take it. */
 export const EVTX_SEARCH_INPUT_ID = "evtx-filter-search";
 
-export type EvtxFilterChipId = "channels" | "eventIds" | "quickFilter" | "search";
+export type EvtxFilterChipId =
+  | "channels"
+  | "eventIds"
+  | "quickFilter"
+  | "search"
+  | "timeRange"
+  | "recordScope";
+
+/** The word before a record scope's title (spec section 8.4). */
+const SCOPE_KIND_LABELS: Record<EvtxRecordScopeKind, string> = {
+  finding: "Finding",
+  chain: "Chain",
+};
 
 export interface EvtxFilterChip {
   id: EvtxFilterChipId;
   /** The criterion in words. It is the chip text, its tooltip and the end of "Remove {label}". */
   label: string;
+  /** The tooltip, when it says more than the label (a zone, or what a scope could not resolve). */
+  title?: string;
+  /** Drawn in the selection colors (Q-1): the active brushed-time chip. */
+  selected?: boolean;
   /**
    * Whether "Clear all" removes this chip. The channel selection is not cleared (spec 9): it is
    * where the events come from, set in the channel pane, and a chip is only the reminder.
@@ -50,6 +69,14 @@ export interface EvtxFilterChipInput {
    * machine cannot read has no records to hide, so neither belongs in "n of m".
    */
   heldChannels: ReadonlySet<string>;
+  /** The transient time range, when one is set. */
+  timeRange?: EvtxTimeRange | null;
+  /** The transient record scope, when one is set. */
+  recordScope?: EvtxRecordScope | null;
+  /** The zone the range's times are written in. */
+  timeZoneMode?: EvtxTimeZoneMode;
+  /** How many events the range hides only because they have no usable timestamp. */
+  untimedHiddenCount?: number;
 }
 
 /** "4624,4625  4634" becomes "4624, 4625, 4634", the way the chip and the removal label read it. */
@@ -99,6 +126,42 @@ export function buildFilterChips(input: EvtxFilterChipInput): EvtxFilterChip[] {
     });
   }
 
+  if (input.timeRange) {
+    const { startMs, endMs } = input.timeRange;
+    const mode = input.timeZoneMode ?? "local";
+    const label = `Time: brushed ${formatTimeRange(startMs, endMs, mode)}`;
+    const untimed = input.untimedHiddenCount ?? 0;
+    const lines = [`${label} (${timeZoneLabel(mode, startMs)})`];
+    if (untimed > 0) {
+      lines.push(
+        `${formatCount(untimed)} ${untimed === 1 ? "event without a timestamp is" : "events without a timestamp are"} hidden by this range.`,
+      );
+    }
+    chips.push({
+      id: "timeRange",
+      label,
+      title: lines.join("\n"),
+      selected: true,
+      clearedByClearAll: true,
+    });
+  }
+
+  const scope = input.recordScope;
+  if (scope) {
+    const label = `${SCOPE_KIND_LABELS[scope.kind]}: ${scope.title}`;
+    const size = scope.records.size;
+    chips.push({
+      id: "recordScope",
+      label,
+      title: [
+        label,
+        `${formatCount(size)} ${size === 1 ? "event" : "events"} in this scope.`,
+        ...describeScopeCounts(scope.counts),
+      ].join("\n"),
+      clearedByClearAll: true,
+    });
+  }
+
   return chips;
 }
 
@@ -106,13 +169,16 @@ export function buildFilterChips(input: EvtxFilterChipInput): EvtxFilterChip[] {
  * The chips for the current filter state, and the channels they were counted against. The filter
  * row reads the same chips for its "More filters" number, so the two cannot disagree.
  */
-export function useFilterChips(): {
+export function useFilterChips(untimedHiddenCount = 0): {
   chips: EvtxFilterChip[];
   heldChannels: ReadonlySet<string>;
 } {
   const filterEventIds = useEvtxStore((s) => s.filterEventIds);
   const filterSearch = useEvtxStore((s) => s.filterSearch);
   const quickFilter = useEvtxStore((s) => s.quickFilter);
+  const timeRange = useEvtxStore((s) => s.timeRange);
+  const recordScope = useEvtxStore((s) => s.recordScope);
+  const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
   const channels = useEvtxStore((s) => s.channels);
   const loadedChannels = useEvtxStore((s) => s.loadedChannels);
@@ -140,8 +206,22 @@ export function useFilterChips(): {
         quickFilter,
         selectedChannels,
         heldChannels,
+        timeRange,
+        recordScope,
+        timeZoneMode,
+        untimedHiddenCount,
       }),
-    [filterEventIds, filterSearch, quickFilter, selectedChannels, heldChannels],
+    [
+      filterEventIds,
+      filterSearch,
+      quickFilter,
+      selectedChannels,
+      heldChannels,
+      timeRange,
+      recordScope,
+      timeZoneMode,
+      untimedHiddenCount,
+    ],
   );
   return { chips, heldChannels };
 }
@@ -218,6 +298,13 @@ const useStyles = makeStyles({
     },
     ...createFocusOutlineStyle({ style: { outlineRadius: tokens.borderRadiusSmall } }),
   },
+  // The remove icon on the selection fill. Foreground2 measures 3.80:1 there in solarized-dark, so
+  // the rest color is the selection foreground (the same token as the chip text, 6.42:1 or better in
+  // every theme). Only the rest color: hover and pressed keep the `remove` pairs, whose surfaces are
+  // the subtle hover and pressed backgrounds and not the selection fill.
+  removeSelected: {
+    color: tokens.colorPaletteBlueForeground2,
+  },
   readout: {
     marginLeft: "auto",
     fontFamily: tokens.fontFamilyNumeric,
@@ -231,13 +318,20 @@ interface EvtxFilterChipsProps {
   visibleCount: number;
   /** How many events are loaded. */
   loadedCount: number;
+  /** How many events the time range hides only because they have no usable timestamp. */
+  untimedHiddenCount?: number;
 }
 
 /** A chip's remove button, or the search box. The search chip has its own id, so the box is not a string. */
 type FocusTarget = { chip: EvtxFilterChipId } | { searchBox: true };
 
-export function EvtxFilterChips({ visibleCount, loadedCount }: EvtxFilterChipsProps) {
+export function EvtxFilterChips({
+  visibleCount,
+  loadedCount,
+  untimedHiddenCount = 0,
+}: EvtxFilterChipsProps) {
   const styles = useStyles();
+  const { selection } = useEvtxVisualTokens();
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
   const fontPx = Math.max(10, metrics.fontSize - 2);
@@ -253,8 +347,10 @@ export function EvtxFilterChips({ visibleCount, loadedCount }: EvtxFilterChipsPr
   const setQuickFilter = useEvtxStore((s) => s.setQuickFilter);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
   const setSelectedChannels = useEvtxStore((s) => s.setSelectedChannels);
+  const setTimeRange = useEvtxStore((s) => s.setTimeRange);
+  const setRecordScope = useEvtxStore((s) => s.setRecordScope);
   const isLoading = useEvtxStore((s) => s.isLoading);
-  const { chips, heldChannels } = useFilterChips();
+  const { chips, heldChannels } = useFilterChips(untimedHiddenCount);
 
   // Removing a chip unmounts the button that had focus, and removing the last one unmounts the
   // whole row. Focus is handed on after the re-render: to the next chip's remove button, else the
@@ -291,6 +387,12 @@ export function EvtxFilterChips({ visibleCount, loadedCount }: EvtxFilterChipsPr
       case "search":
         setFilterSearch("");
         break;
+      case "timeRange":
+        setTimeRange(null);
+        break;
+      case "recordScope":
+        setRecordScope(null);
+        break;
     }
   };
   const removeOne = (id: EvtxFilterChipId) => {
@@ -310,13 +412,26 @@ export function EvtxFilterChips({ visibleCount, loadedCount }: EvtxFilterChipsPr
     >
       <ul aria-label="Active filters" className={styles.list}>
         {chips.map((chip) => (
-          <li key={chip.id} data-evtx-chip={chip.id} className={styles.chip}>
-            <span className={styles.chipText} title={chip.label}>
+          <li
+            key={chip.id}
+            data-evtx-chip={chip.id}
+            className={styles.chip}
+            style={
+              chip.selected
+                ? {
+                    backgroundColor: selection.background,
+                    borderColor: selection.border,
+                    color: selection.foreground,
+                  }
+                : undefined
+            }
+          >
+            <span className={styles.chipText} title={chip.title ?? chip.label}>
               {chip.label}
             </span>
             <button
               type="button"
-              className={styles.remove}
+              className={chip.selected ? mergeClasses(styles.remove, styles.removeSelected) : styles.remove}
               aria-label={`Remove ${chip.label}`}
               onClick={() => removeOne(chip.id)}
             >

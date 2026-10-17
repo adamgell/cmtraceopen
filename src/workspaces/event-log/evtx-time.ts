@@ -85,6 +85,71 @@ export function eventDateKey(epochMs: number, mode: EvtxTimeZoneMode): string {
     : `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
+const MONTH_ABBREVIATIONS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+/** The wall clock of an instant in the chosen zone. */
+function wallClock(epochMs: number, mode: EvtxTimeZoneMode) {
+  const date = new Date(epochMs);
+  return mode === "utc"
+    ? {
+        month: date.getUTCMonth(),
+        day: date.getUTCDate(),
+        hours: date.getUTCHours(),
+        minutes: date.getUTCMinutes(),
+        seconds: date.getUTCSeconds(),
+      }
+    : {
+        month: date.getMonth(),
+        day: date.getDate(),
+        hours: date.getHours(),
+        minutes: date.getMinutes(),
+        seconds: date.getSeconds(),
+      };
+}
+
+/** `HH:mm`, or `HH:mm:ss` with `withSeconds`, in the chosen zone. */
+export function formatClock(epochMs: number, mode: EvtxTimeZoneMode, withSeconds = false): string {
+  const clock = wallClock(epochMs, mode);
+  const hhmm = `${pad(clock.hours)}:${pad(clock.minutes)}`;
+  return withSeconds ? `${hhmm}:${pad(clock.seconds)}` : hhmm;
+}
+
+/** Between the two times of a range label: an en dash, the spec's glyph (section 8.4). */
+export const TIME_RANGE_SEPARATOR = "\u2013";
+
+/** A range shorter than this shows seconds, so its two ends do not read as the same minute. */
+const SECONDS_BELOW_MS = 2 * 60 * 1000;
+
+/**
+ * A half-open time range as a label: `09:00-09:45` on one day, `Oct 16 22:00-Oct 17 03:00` across
+ * days, and with seconds when the range is shorter than two minutes. The days are the zone's own,
+ * and the last instant inside the range decides whether it crosses one, so a range that ends at
+ * midnight stays on its day. The separator is `TIME_RANGE_SEPARATOR`.
+ */
+export function formatTimeRange(startMs: number, endMs: number, mode: EvtxTimeZoneMode): string {
+  const withSeconds = endMs - startMs < SECONDS_BELOW_MS;
+  const crossesDays = eventDateKey(startMs, mode) !== eventDateKey(Math.max(startMs, endMs - 1), mode);
+  const end = (epochMs: number) => {
+    const { month, day } = wallClock(epochMs, mode);
+    const clock = formatClock(epochMs, mode, withSeconds);
+    return crossesDays ? `${MONTH_ABBREVIATIONS[month]} ${day} ${clock}` : clock;
+  };
+  return `${end(startMs)}${TIME_RANGE_SEPARATOR}${end(endMs)}`;
+}
+
 /**
  * How the current zone is labelled in the UI.
  *

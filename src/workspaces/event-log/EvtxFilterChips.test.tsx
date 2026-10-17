@@ -14,9 +14,15 @@ import {
   EvtxFilterChips,
   type EvtxFilterChipInput,
 } from "./EvtxFilterChips";
-import { DEFAULT_QUICK_FILTER } from "./evtx-filter";
+import { moreFiltersActiveCount } from "./EvtxMoreFilters";
+import {
+  DEFAULT_QUICK_FILTER,
+  type EvtxRecordScope,
+  type EvtxRecordScopeKind,
+} from "./evtx-filter";
 import { useEvtxStore } from "./evtx-store";
-import { resolveToken } from "./evtx-visual-tokens";
+import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
+import type { EvtxRecord } from "./types";
 import { useUiStore } from "../../stores/ui-store";
 
 const input = (overrides: Partial<EvtxFilterChipInput> = {}): EvtxFilterChipInput => ({
@@ -110,6 +116,166 @@ describe("buildFilterChips", () => {
     expect(chips.map((chip) => chip.id)).toEqual(["channels", "eventIds", "quickFilter", "search"]);
   });
 });
+
+/** The en dash the spec writes between the two times of the brushed-time chip, as an escape. */
+const SEP = "\u2013";
+const NO_GAPS = { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false };
+
+function recordOf(n: number): EvtxRecord {
+  return {
+    id: n,
+    eventRecordId: n,
+    timestamp: "",
+    timestampEpoch: n,
+    provider: "P",
+    channel: "System",
+    eventId: 1,
+    level: "Error",
+    computer: "PC",
+    message: "m",
+    eventData: [],
+    rawXml: "",
+    sourceLabel: "s",
+  };
+}
+
+function scopeOf(
+  size: number,
+  title = "MDM enrollment failed",
+  kind: EvtxRecordScopeKind = "finding",
+  counts = NO_GAPS,
+): EvtxRecordScope {
+  return { kind, title, records: new Set(Array.from({ length: size }, (_, i) => recordOf(i + 1))), counts };
+}
+
+const RANGE = { startMs: Date.UTC(2026, 9, 16, 9, 0), endMs: Date.UTC(2026, 9, 16, 9, 45) };
+
+describe("buildFilterChips, the transient criteria", () => {
+  it("makes a Time chip, in the selection colors, that Clear all takes", () => {
+    const chips = buildFilterChips(input({ timeRange: RANGE, timeZoneMode: "utc" }));
+    expect(chips).toEqual([
+      {
+        id: "timeRange",
+        label: `Time: brushed 09:00${SEP}09:45`,
+        title: `Time: brushed 09:00${SEP}09:45 (UTC)`,
+        selected: true,
+        clearedByClearAll: true,
+      },
+    ]);
+  });
+
+  it("writes the Time chip's times in the chosen zone and names the zone in the tooltip", () => {
+    const utc = buildFilterChips(input({ timeRange: RANGE, timeZoneMode: "utc" }))[0];
+    const local = buildFilterChips(input({ timeRange: RANGE, timeZoneMode: "local" }))[0];
+    expect(utc.title).toMatch(/\(UTC\)$/);
+    expect(local.title).toMatch(/\(UTC[+-]\d\d:\d\d\)$/);
+  });
+
+  it("adds the date when the range crosses a day, and seconds below two minutes", () => {
+    const across = buildFilterChips(
+      input({
+        timeRange: { startMs: Date.UTC(2026, 9, 16, 22), endMs: Date.UTC(2026, 9, 17, 3) },
+        timeZoneMode: "utc",
+      }),
+    )[0];
+    expect(across.label).toBe(`Time: brushed Oct 16 22:00${SEP}Oct 17 03:00`);
+    const short = buildFilterChips(
+      input({
+        timeRange: { startMs: Date.UTC(2026, 9, 16, 9, 0, 10), endMs: Date.UTC(2026, 9, 16, 9, 1, 5) },
+        timeZoneMode: "utc",
+      }),
+    )[0];
+    expect(short.label).toBe(`Time: brushed 09:00:10${SEP}09:01:05`);
+  });
+
+  it("says in the tooltip how many events the range hides for want of a timestamp, and leaves the line out at zero", () => {
+    const tooltip = (untimedHiddenCount: number) =>
+      buildFilterChips(input({ timeRange: RANGE, timeZoneMode: "utc", untimedHiddenCount }))[0].title;
+    expect(tooltip(0)).not.toMatch(/timestamp/);
+    expect(tooltip(1)).toBe(
+      `Time: brushed 09:00${SEP}09:45 (UTC)\n1 event without a timestamp is hidden by this range.`,
+    );
+    expect(tooltip(1234)).toMatch(/\n1,234 events without a timestamp are hidden by this range\.$/);
+  });
+
+  it("makes a Finding chip and a Chain chip from the scope's kind and title", () => {
+    const finding = buildFilterChips(input({ recordScope: scopeOf(3) }));
+    expect(finding.map((chip) => [chip.id, chip.label, chip.clearedByClearAll])).toEqual([
+      ["recordScope", "Finding: MDM enrollment failed", true],
+    ]);
+    expect(finding[0].selected).toBeUndefined();
+    const chain = buildFilterChips(input({ recordScope: scopeOf(2, "Enrollment 7a", "chain") }));
+    expect(chain[0].label).toBe("Chain: Enrollment 7a");
+  });
+
+  it("states in the Finding chip's tooltip what the scope could not resolve, each class on its own line", () => {
+    const whole = buildFilterChips(input({ recordScope: scopeOf(3) }))[0];
+    expect(whole.title).toBe("Finding: MDM enrollment failed\n3 events in this scope.");
+    const gaps = buildFilterChips(
+      input({
+        recordScope: scopeOf(1, "T", "finding", {
+          notLoaded: 2,
+          noUsableIdentity: 1,
+          ambiguous: 1,
+          bounded: true,
+        }),
+      }),
+    )[0];
+    expect(gaps.title?.split("\n")).toEqual([
+      "Finding: T",
+      "1 event in this scope.",
+      "2 cited events are not loaded.",
+      "1 cited event cannot be matched to a loaded event: no usable record identity.",
+      "1 cited reference matches more than one loaded event. Every match is included.",
+      "The diagnosis response is bounded, so this finding may cite more events than were sent.",
+    ]);
+  });
+
+  it("lists them last, in the spec's order: time range, then record scope", () => {
+    const chips = buildFilterChips(
+      input({
+        selectedChannels: new Set(["System"]),
+        filterEventIds: "1",
+        filterSearch: "s",
+        quickFilter: { ...DEFAULT_QUICK_FILTER, query: "q" },
+        timeRange: RANGE,
+        recordScope: scopeOf(1),
+      }),
+    );
+    expect(chips.map((chip) => chip.id)).toEqual([
+      "channels",
+      "eventIds",
+      "quickFilter",
+      "search",
+      "timeRange",
+      "recordScope",
+    ]);
+  });
+
+  it("counts both in the More filters number, since neither is on the filter row", () => {
+    expect(moreFiltersActiveCount(buildFilterChips(input({ timeRange: RANGE })))).toBe(1);
+    expect(moreFiltersActiveCount(buildFilterChips(input({ recordScope: scopeOf(1) })))).toBe(1);
+    expect(
+      moreFiltersActiveCount(buildFilterChips(input({ timeRange: RANGE, recordScope: scopeOf(1), filterSearch: "x" }))),
+    ).toBe(2);
+  });
+
+  it("makes no chip for a null range or scope", () => {
+    expect(buildFilterChips(input({ timeRange: null, recordScope: null }))).toEqual([]);
+  });
+});
+
+/**
+ * Seeds the store, then the transient criteria in a second step: a source that changes in the same
+ * `setState` clears them, which is the store's rule for a change of source.
+ */
+function seedWithTransient(
+  transient: Partial<Pick<ReturnType<typeof useEvtxStore.getState>, "timeRange" | "recordScope">>,
+  state: Partial<ReturnType<typeof useEvtxStore.getState>> = {},
+) {
+  seed(state);
+  useEvtxStore.setState(transient);
+}
 
 function seed(state: Partial<ReturnType<typeof useEvtxStore.getState>> = {}) {
   useEvtxStore.setState({
@@ -448,6 +614,96 @@ describe("EvtxFilterChips", () => {
   });
 });
 
+describe("EvtxFilterChips with the transient criteria", () => {
+  const arm = () => {
+    seedWithTransient(
+      { timeRange: RANGE, recordScope: scopeOf(3) },
+      { timeZoneMode: "utc", timeWindow: "7d", selectedChannels: new Set(["System"]) },
+    );
+  };
+
+  it("shows the Time chip and the Finding chip after the others, with the remove buttons named for them", () => {
+    arm();
+    render(<EvtxFilterChips visibleCount={3} loadedCount={9} />);
+    const items = within(screen.getByRole("list", { name: "Active filters" })).getAllByRole("listitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      "Channels: 1 of 2",
+      `Time: brushed 09:00${SEP}09:45`,
+      "Finding: MDM enrollment failed",
+    ]);
+    expect(screen.getByRole("button", { name: `Remove Time: brushed 09:00${SEP}09:45` })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove Finding: MDM enrollment failed" })).toBeInTheDocument();
+  });
+
+  it("draws the Time chip in the selection colors and no other chip", () => {
+    arm();
+    render(<EvtxFilterChips visibleCount={3} loadedCount={9} />);
+    const selection = buildEvtxVisualTokens(
+      getAllThemes().find((theme) => theme.id === useUiStore.getState().themeId)!,
+    ).selection;
+    const time = document.querySelector<HTMLElement>("[data-evtx-chip='timeRange']")!;
+    expect(time.style.backgroundColor).toBe(selection.background);
+    expect(time.style.borderColor).toBe(selection.border);
+    expect(time.style.color).toBe(selection.foreground);
+    for (const other of ["channels", "recordScope"]) {
+      const li = document.querySelector<HTMLElement>(`[data-evtx-chip='${other}']`)!;
+      expect(li.style.backgroundColor).toBe("");
+    }
+  });
+
+  it("carries the tooltips: the zone on the Time chip, and the scope's size on the Finding chip", () => {
+    arm();
+    render(<EvtxFilterChips visibleCount={3} loadedCount={9} untimedHiddenCount={2} />);
+    expect(screen.getByText(`Time: brushed 09:00${SEP}09:45`)).toHaveAttribute(
+      "title",
+      `Time: brushed 09:00${SEP}09:45 (UTC)\n2 events without a timestamp are hidden by this range.`,
+    );
+    expect(screen.getByText("Finding: MDM enrollment failed")).toHaveAttribute(
+      "title",
+      "Finding: MDM enrollment failed\n3 events in this scope.",
+    );
+  });
+
+  it("removes the time range alone, and the scope alone", () => {
+    arm();
+    render(<EvtxFilterChips visibleCount={3} loadedCount={9} />);
+    fireEvent.click(screen.getByRole("button", { name: `Remove Time: brushed 09:00${SEP}09:45` }));
+    expect(useEvtxStore.getState().timeRange).toBeNull();
+    expect(useEvtxStore.getState().recordScope).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove Finding: MDM enrollment failed" }));
+    expect(useEvtxStore.getState().recordScope).toBeNull();
+    expect(useEvtxStore.getState().timeRange).toBeNull();
+  });
+
+  it("clears both with Clear all and leaves the channel selection and the time window alone", () => {
+    arm();
+    render(<EvtxFilterChips visibleCount={3} loadedCount={9} />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
+    const state = useEvtxStore.getState();
+    expect(state.timeRange).toBeNull();
+    expect(state.recordScope).toBeNull();
+    expect(state.timeWindow).toBe("7d");
+    expect([...state.selectedChannels]).toEqual(["System"]);
+    expect(screen.getByRole("button", { name: "Remove Channels: 1 of 2" })).toBeInTheDocument();
+  });
+
+  it("is shown on its own, with the readout, when nothing else is active", () => {
+    seedWithTransient({ timeRange: RANGE });
+    render(<EvtxFilterChips visibleCount={4} loadedCount={9} />);
+    expect(screen.getByRole("list", { name: "Active filters" })).toBeInTheDocument();
+    expect(document.querySelector("[data-evtx-filter-count]")?.textContent).toBe("Showing 4 of 9");
+  });
+
+  it("hands focus to the neighbouring chip when the Time chip is removed", () => {
+    arm();
+    render(<EvtxFilterChips visibleCount={3} loadedCount={9} />);
+    const remove = screen.getByRole("button", { name: `Remove Time: brushed 09:00${SEP}09:45` });
+    remove.focus();
+    fireEvent.click(remove);
+    expect(screen.getByRole("button", { name: "Remove Finding: MDM enrollment failed" })).toHaveFocus();
+  });
+});
+
 /**
  * Contrast in all seven themes (spec 10: each new component is verified in high contrast).
  * Each pair is measured on resolved theme colors, and the DOM half pins the rendered rule to the
@@ -516,6 +772,77 @@ describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
         tokens.colorNeutralBackground1,
       ]);
       atLeast("readout", tokens.colorNeutralForeground2, tokens.colorNeutralBackground1, 4.5);
+    });
+  },
+);
+
+/**
+ * The Time chip is drawn in the selection colors (spec 6.2, Q-1). Each pair is measured on resolved
+ * theme colors, and the DOM half pins what is painted to the same tokens. The remove icon at rest
+ * uses the selection foreground: Foreground2 on the selection fill measures 3.80:1 in solarized-dark.
+ */
+describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
+  "Time chip contrast in the %s theme",
+  (id, theme) => {
+    const r = (token: string) => resolveToken(token, theme);
+    const atLeast = (label: string, a: string, b: string, minimum: number) => {
+      expect(contrastRatio(r(a), r(b)), `${id}: ${label}`).toBeGreaterThanOrEqual(minimum);
+    };
+    function declared(element: Element, pseudo: "" | ":hover" | ":active", property: string): string[] {
+      const selectors = Array.from(element.classList).map((name) => `.${name}${pseudo}`);
+      const values: string[] = [];
+      for (const sheet of Array.from(document.styleSheets)) {
+        for (const rule of Array.from(sheet.cssRules)) {
+          if (rule instanceof CSSStyleRule && selectors.includes(rule.selectorText)) {
+            const value = rule.style.getPropertyValue(property);
+            if (value) values.push(value);
+          }
+        }
+      }
+      return values;
+    }
+    const selection = buildEvtxVisualTokens(theme).selection;
+    const renderChip = () => {
+      useUiStore.setState({ themeId: theme.id });
+      seedWithTransient({ timeRange: RANGE }, { timeZoneMode: "utc" });
+      render(<EvtxFilterChips visibleCount={1} loadedCount={2} />);
+      return screen.getByRole("button", { name: `Remove Time: brushed 09:00${SEP}09:45` });
+    };
+
+    it("reads the chip text at 4.5:1 on the selection fill", () => {
+      renderChip();
+      const chip = document.querySelector<HTMLElement>("[data-evtx-chip='timeRange']")!;
+      expect(chip.style.color).toBe(tokens.colorPaletteBlueForeground2);
+      expect(chip.style.backgroundColor).toBe(tokens.colorPaletteBlueBackground2);
+      expect(selection).toMatchObject({
+        foreground: tokens.colorPaletteBlueForeground2,
+        background: tokens.colorPaletteBlueBackground2,
+        border: tokens.colorPaletteBlueBorderActive,
+      });
+      atLeast("chip text", selection.foreground, selection.background, 4.5);
+    });
+
+    it("draws the remove icon at rest in the selection foreground, at 4.5:1 on the fill", () => {
+      const remove = renderChip();
+      expect(declared(remove, "", "color")).toEqual([selection.foreground]);
+      atLeast("remove rest", selection.foreground, selection.background, 4.5);
+    });
+
+    it("keeps the hover and pressed pairs of every chip, at 4.5:1 on their own surfaces", () => {
+      const remove = renderChip();
+      expect(declared(remove, ":hover", "color")).toEqual([tokens.colorNeutralForeground2Hover]);
+      expect(declared(remove, ":hover", "background-color")).toEqual([tokens.colorSubtleBackgroundHover]);
+      expect(declared(remove, ":active", "color")).toEqual([tokens.colorNeutralForeground2Pressed]);
+      expect(declared(remove, ":active", "background-color")).toEqual([tokens.colorSubtleBackgroundPressed]);
+      atLeast("remove hover", tokens.colorNeutralForeground2Hover, tokens.colorSubtleBackgroundHover, 4.5);
+      atLeast("remove pressed", tokens.colorNeutralForeground2Pressed, tokens.colorSubtleBackgroundPressed, 4.5);
+    });
+
+    it("bounds the chip with a border at 3:1 on the row surface", () => {
+      renderChip();
+      const row = document.querySelector("[data-evtx-region='chip-row']")!;
+      expect(declared(row, "", "background-color")).toEqual([tokens.colorNeutralBackground1]);
+      atLeast("chip border", selection.border, tokens.colorNeutralBackground1, 3);
     });
   },
 );
