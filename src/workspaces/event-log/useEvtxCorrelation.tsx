@@ -118,6 +118,18 @@ export interface CorrelationCounts {
   builtFor: string;
   edges: CorrelationEdgeState;
   linkPartners: ReadonlyMap<string, number>;
+  /**
+   * The engine's correlation coverage gaps of the session `model` was built from: the same run, the
+   * same first reply. A reader that pairs this model with anything else about its session (the
+   * dock pairs it with a window of that session's items) must read the gaps here, never from
+   * `EvtxCorrelationData.gaps`, which belongs to the full model and can be an older session's.
+   */
+  gaps: CorrelationGaps;
+  /**
+   * What the session `model` was built from, from the same run, for the same reason as `gaps`.
+   * Null when the caller did not know it.
+   */
+  scope: ScopeDisclosureInput | null;
   /** An earlier session's counts, shown while the newest is loaded. */
   updating: boolean;
 }
@@ -545,6 +557,8 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
               builtFor: run.counts.builtFor,
               edges: run.counts.edges,
               linkPartners: run.counts.linkPartners,
+              gaps: run.counts.gaps,
+              scope: run.counts.scope,
               updating: run.counts.builtFor !== key,
             },
       updating: primary !== null && primary.builtFor !== key,

@@ -170,6 +170,8 @@ export function makeCounts(options: DataOptions): NonNullable<EvtxCorrelationDat
       ...options.edgeState,
     },
     linkPartners: linkPartnerCounts(model.linkedPairs),
+    gaps: options.gaps ?? CLEAR_GAPS,
+    scope: options.scope === undefined ? UNNARROWED_SCOPE : options.scope,
     updating: options.updating ?? false,
   };
 }

@@ -781,6 +781,96 @@ describe("items (the Correlation view and the Chains tab)", () => {
     });
   });
 
+  describe("the counts carry the gaps and the scope of their own run (#842, F2)", () => {
+    const fanOut = (id: string): TimelineCoverageGap => ({
+      source: id,
+      reason: "exact UserId identity group exceeds the 256-member correlation limit",
+    });
+    const scope = (visibleCount: number) => ({ visibleCount, loadedCount: 10, textLogCount: 2 });
+
+    it("exposes them with no scan, beside the counts-only model", async () => {
+      const session = new FakeSession({
+        itemCount: 50,
+        pairs: [[1, 2]],
+        gaps: [fanOut("item-30")],
+        totalCoverageGaps: 1,
+      });
+      const props = session.props({ scope: scope(4) });
+      const { result } = renderHook(() => useEvtxCorrelation(props));
+      await waitFor(() => expect(result.current.stage).toBe("edgesOnly"));
+      expect(result.current.counts?.gaps).toEqual({
+        originIds: new Set(["item-30"]),
+        global: false,
+        previewCut: false,
+      });
+      expect(result.current.counts?.scope).toEqual(scope(4));
+    });
+
+    it("are the newest session's while the full model on show is an older session's", async () => {
+      const one = new FakeSession({
+        itemCount: 2_500,
+        pairs: [[5, 1_200]],
+        revision: 1,
+        gaps: [fanOut("item-7")],
+        totalCoverageGaps: 1,
+      });
+      const two = new FakeSession({
+        itemCount: 2_500,
+        pairs: [[5, 1_200], [7, 1_300]],
+        revision: 2,
+        gaps: [],
+        totalCoverageGaps: 0,
+      });
+      const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+        initialProps: one.props({ needItems: true, scope: scope(3) }),
+      });
+      await waitFor(() => expect(result.current.stage).toBe("ready"));
+      two.timelineGate = gate();
+      rerender(two.props({ needItems: true, scope: scope(7) }));
+      await waitFor(() => expect(result.current.nextScan?.state).toBe("running"));
+      // The full model on show, and everything read beside it, is revision 1's.
+      expect(result.current.updating).toBe(true);
+      expect(result.current.gaps.originIds.has("item-7")).toBe(true);
+      expect(result.current.scope).toEqual(scope(3));
+      // The counts are revision 2's, and so are their gaps and their scope.
+      expect(result.current.counts?.builtFor).toBe(`${two.id}:2`);
+      expect(result.current.counts?.updating).toBe(false);
+      expect(result.current.counts?.gaps.originIds.size).toBe(0);
+      expect(result.current.counts?.gaps.previewCut).toBe(false);
+      expect(result.current.counts?.scope).toEqual(scope(7));
+      act(() => two.timelineGate?.open());
+      await waitFor(() => expect(result.current.builtFor).toBe(`${two.id}:2`));
+    });
+
+    it("keep an earlier session's own gaps and scope, marked updating, while the next is loaded", async () => {
+      const one = new FakeSession({ itemCount: 50, pairs: [[1, 2]], revision: 1, gaps: [fanOut("item-30")], totalCoverageGaps: 1 });
+      const two = new FakeSession({ itemCount: 50, pairs: [[1, 2]], revision: 2, previewEdges: 0 });
+      const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+        initialProps: one.props({ scope: scope(4) }),
+      });
+      await waitFor(() => expect(result.current.stage).toBe("edgesOnly"));
+      two.edgeGate = gate();
+      rerender(two.props({ scope: scope(9) }));
+      await waitFor(() => expect(result.current.counts?.updating).toBe(true));
+      expect(result.current.counts?.builtFor).toBe(`${one.id}:1`);
+      expect(result.current.counts?.gaps.originIds.has("item-30")).toBe(true);
+      expect(result.current.counts?.scope).toEqual(scope(4));
+      act(() => two.edgeGate?.open());
+      await waitFor(() => expect(result.current.counts?.builtFor).toBe(`${two.id}:2`));
+      expect(result.current.counts?.scope).toEqual(scope(9));
+      expect(result.current.counts?.gaps.originIds.size).toBe(0);
+    });
+
+    it("say the scope is not known when the caller did not give it, and are null before any session", async () => {
+      const session = new FakeSession({ itemCount: 50, pairs: [[1, 2]] });
+      const props = session.props({ scope: null });
+      const { result } = renderHook(() => useEvtxCorrelation(props));
+      await waitFor(() => expect(result.current.stage).toBe("edgesOnly"));
+      expect(result.current.counts?.scope).toBeNull();
+      expect(renderHook(() => useEvtxCorrelation(NONE)).result.current.counts).toBeNull();
+    });
+  });
+
   it("gives the join the unplaced origins of the model's own page", async () => {
     const session = new FakeSession({ itemCount: 50, pairs: [[1, 2]], unplacedCount: 3 });
     const props = session.props({ needItems: true });
