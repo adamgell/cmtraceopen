@@ -58,6 +58,7 @@ import {
   EventLogAnalysisCancelled,
 } from "./event-analysis-session";
 import type { CorrelationSessionScope } from "./EvtxCorrelationView";
+import type { ScopeDisclosureInput } from "./evtx-correlation-copy";
 import { EvtxCorrelationProvider, useEvtxCorrelation } from "./useEvtxCorrelation";
 
 // The view is lazy (spec 11); the hook and the provider above it are not, because the Insights
@@ -349,6 +350,9 @@ export function EventLogWorkspace() {
     useState<EventLogAnalysisSessionStatus | null>(null);
   const [initialTimelinePage, setInitialTimelinePage] =
     useState<EventLogAnalysisTimelinePage | null>(null);
+  // What the published session was built from, set in the same batch as its status and page so
+  // the correlation hook stores it with the models it builds from them.
+  const [analysisScope, setAnalysisScope] = useState<ScopeDisclosureInput | null>(null);
   const [timelinePending, setTimelinePending] = useState(false);
   const [timelineError, setTimelineError] = useState<string | null>(null);
   // What each published session was built from, by `sessionId:revision`. The Correlation view
@@ -421,6 +425,7 @@ export function EventLogWorkspace() {
     setDiagnosisError(null);
     setAnalysisStatus(null);
     setInitialTimelinePage(null);
+    setAnalysisScope(null);
     setTimelineError(null);
 
     if (isLoading) {
@@ -494,6 +499,11 @@ export function EventLogWorkspace() {
           }
           setAnalysisStatus(result.status);
           setInitialTimelinePage(result.initialPage);
+          setAnalysisScope({
+            visibleCount: snapshot.records.length,
+            loadedCount: snapshot.loadedCount,
+            textLogCount: snapshot.entries.length,
+          });
           setDiagnosis(result.diagnosis);
           setTimelinePending(false);
         })
@@ -537,6 +547,7 @@ export function EventLogWorkspace() {
     status: analysisStatus,
     initialPage: initialTimelinePage,
     pending: timelinePending,
+    scope: analysisScope,
     needItems: activeView === "correlation",
   });
 

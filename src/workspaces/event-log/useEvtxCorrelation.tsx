@@ -74,6 +74,7 @@ import {
   originLookup,
   type OriginLookup,
 } from "./evtx-correlation-origin-index";
+import type { ScopeDisclosureInput } from "./evtx-correlation-copy";
 import type { UnplacedEvidence } from "./evtx-correlation-view-model";
 import { timelineOriginId, type TimelineItem } from "./unified-timeline";
 
@@ -147,6 +148,12 @@ export interface EvtxCorrelationData {
    * no link. The origins they name were read with the items, so `origins` holds them.
    */
   gaps: CorrelationGaps;
+  /**
+   * What the session `model` was built from: the visible, loaded and text-log counts at the time.
+   * It travels with the model, so it is always the scope of the model shown, however many newer
+   * sessions have been published since. Null when the caller did not know it.
+   */
+  scope: ScopeDisclosureInput | null;
   /** The scan `model` was built from. */
   scan: CorrelationScanState;
   /** The scan in flight for a newer session, with its progress, or null. */
@@ -198,6 +205,7 @@ export const UNAVAILABLE_CORRELATION: EvtxCorrelationData = {
   origins: NO_ORIGINS,
   edges: NO_EDGES,
   gaps: UNKNOWN_CORRELATION_GAPS,
+  scope: null,
   scan: IDLE_SCAN,
   nextScan: null,
   unplaced: NO_UNPLACED,
@@ -217,6 +225,7 @@ interface ModelState {
   origins: OriginLookup;
   edges: CorrelationEdgeState;
   gaps: CorrelationGaps;
+  scope: ScopeDisclosureInput | null;
   scan: CorrelationScanState;
   unplaced: UnplacedEvidence;
   linkPartners: ReadonlyMap<string, number>;
@@ -269,6 +278,11 @@ export interface UseEvtxCorrelationOptions {
   /** A session is being built, so a null `status` is a gap and not an end. */
   pending: boolean;
   /**
+   * What THIS session (`status` and `initialPage`) was built from, given together with them so the
+   * hook can store it with the models it builds. Null when there is no session or it is not known.
+   */
+  scope: ScopeDisclosureInput | null;
+  /**
    * Whether a consumer needs titles, spans and positions (the Correlation view, the Chains tab).
    * Counts do not, so the Insights card alone never causes a scan.
    */
@@ -282,7 +296,7 @@ function sessionKeyOf(status: EventLogAnalysisSessionStatus | null): string | nu
 }
 
 export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorrelationData {
-  const { status, initialPage, pending, needItems } = options;
+  const { status, initialPage, pending, needItems, scope } = options;
   const settleMs = options.settleMs ?? CORRELATION_SETTLE_MS;
   const depsRef = useRef(options.deps);
   depsRef.current = options.deps;
@@ -419,6 +433,7 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
             origins: originLookup([], initialPage.unplacedPreview),
             edges: edgeState(loadedEdges),
             gaps,
+            scope,
             scan: IDLE_SCAN,
             unplaced: unplacedEvidence(false),
             linkPartners: linkPartnerCounts(model.linkedPairs),
@@ -471,6 +486,7 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
           origins: originLookup(scanned.items, initialPage.unplacedPreview),
           edges: edgeState(loadedEdges),
           gaps,
+          scope,
           scan: {
             state: scanned.complete ? "complete" : "incomplete",
             progress: {
@@ -516,6 +532,7 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
       origins: primary?.origins ?? NO_ORIGINS,
       edges: primary?.edges ?? NO_EDGES,
       gaps: primary?.gaps ?? UNKNOWN_CORRELATION_GAPS,
+      scope: primary?.scope ?? null,
       scan: primary?.scan ?? IDLE_SCAN,
       nextScan: run.nextScan,
       unplaced: primary?.unplaced ?? NO_UNPLACED,

@@ -138,7 +138,12 @@ export interface DataOptions {
   retry?: () => void;
   /** Overrides the counts-only model; null is a session whose counts are not in yet. */
   counts?: EvtxCorrelationData["counts"];
+  /** What the session was built from; by default nothing was narrowed. Null is not known. */
+  scope?: EvtxCorrelationData["scope"];
 }
+
+/** Nine events loaded and nine visible, no text logs: nothing narrowed. */
+export const UNNARROWED_SCOPE = { visibleCount: 9, loadedCount: 9, textLogCount: 0 } as const;
 
 /** The edge total the hook would store: a count, or null when none can be trusted. */
 function knownEdgeTotal(total: number): number | null {
@@ -195,6 +200,7 @@ export function makeData(options: DataOptions): EvtxCorrelationData {
       ...options.edgeState,
     },
     gaps: options.gaps ?? CLEAR_GAPS,
+    scope: options.scope === undefined ? UNNARROWED_SCOPE : options.scope,
     scan: { state: "complete", progress: null, stoppedBy: null, error: null, ...options.scan },
     nextScan: options.nextScan ?? null,
     unplaced: {

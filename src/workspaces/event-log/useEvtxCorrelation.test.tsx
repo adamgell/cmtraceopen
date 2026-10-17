@@ -196,6 +196,7 @@ class FakeSession {
       status: this.status(),
       initialPage: this.page(),
       pending: false,
+      scope: null,
       needItems: false,
       settleMs: CORRELATION_SETTLE_MS,
       deps: this.deps(),
@@ -208,6 +209,7 @@ const NONE: UseEvtxCorrelationOptions = {
   status: null,
   initialPage: null,
   pending: false,
+  scope: null,
   needItems: false,
 };
 
@@ -540,6 +542,69 @@ describe("items (the Correlation view and the Chains tab)", () => {
     expect(result.current.hasItems).toBe(true);
     expect(result.current.model?.counts.exact).toBe(3);
     expect(result.current.nextScan).toBeNull();
+  });
+
+  describe("the scope a session was built from (P5)", () => {
+    const scope = (visibleCount: number) => ({ visibleCount, loadedCount: 10, textLogCount: 2 });
+
+    it("travels with the model it was given with, for the counts-only model and the full one", async () => {
+      const session = new FakeSession({ itemCount: 50, pairs: [[1, 2]] });
+      // One props object per render: a fresh first page each render would restart the hook forever.
+      const edgesOnly = session.props({ scope: scope(4) });
+      const withEdges = renderHook(() => useEvtxCorrelation(edgesOnly));
+      await waitFor(() => expect(withEdges.result.current.stage).toBe("edgesOnly"));
+      expect(withEdges.result.current.scope).toEqual(scope(4));
+      withEdges.unmount();
+      const withItems = session.props({ needItems: true, scope: scope(4) });
+      const full = renderHook(() => useEvtxCorrelation(withItems));
+      await waitFor(() => expect(full.result.current.stage).toBe("ready"));
+      expect(full.result.current.scope).toEqual(scope(4));
+    });
+
+    it("is null before any session, and when the caller did not know it", async () => {
+      expect(renderHook(() => useEvtxCorrelation(NONE)).result.current.scope).toBeNull();
+      const session = new FakeSession({ itemCount: 50, pairs: [[1, 2]] });
+      const unknownProps = session.props({ scope: null });
+      const unknown = renderHook(() => useEvtxCorrelation(unknownProps));
+      await waitFor(() => expect(unknown.result.current.stage).toBe("edgesOnly"));
+      expect(unknown.result.current.scope).toBeNull();
+    });
+
+    it("stays the scope of the full model on show while five newer sessions are published, none finished", async () => {
+      const first = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200]], revision: 1 });
+      const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+        initialProps: first.props({ needItems: true, scope: scope(3) }),
+      });
+      await waitFor(() => expect(result.current.stage).toBe("ready"));
+      expect(result.current.scope).toEqual(scope(3));
+      // Five more publishes, each with its own scope, none of whose scans finishes: the full model
+      // on show is still the first session's, and so is the scope beside it.
+      for (let revision = 2; revision <= 6; revision += 1) {
+        const next = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200]], revision });
+        next.timelineGate = gate();
+        rerender(next.props({ needItems: true, scope: scope(10 - revision) }));
+        await waitFor(() => expect(result.current.nextScan?.state).toBe("running"));
+      }
+      expect(result.current.builtFor).toBe(`${first.id}:1`);
+      expect(result.current.updating).toBe(true);
+      expect(result.current.scope).toEqual(scope(3));
+    });
+
+    it("moves to the new session's scope when its model replaces the old one", async () => {
+      const one = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200]], revision: 1 });
+      const two = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200]], revision: 2 });
+      const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+        initialProps: one.props({ needItems: true, scope: scope(3) }),
+      });
+      await waitFor(() => expect(result.current.stage).toBe("ready"));
+      two.timelineGate = gate();
+      rerender(two.props({ needItems: true, scope: scope(7) }));
+      await waitFor(() => expect(result.current.nextScan?.state).toBe("running"));
+      expect(result.current.scope).toEqual(scope(3));
+      act(() => two.timelineGate?.open());
+      await waitFor(() => expect(result.current.builtFor).toBe(`${two.id}:2`));
+      expect(result.current.scope).toEqual(scope(7));
+    });
   });
 
   it("never replaces a full model with a counts-only one, even when no scan finishes", async () => {
