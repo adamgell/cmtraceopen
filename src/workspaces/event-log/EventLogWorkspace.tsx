@@ -211,6 +211,10 @@ export function EventLogWorkspace() {
   const logEntries = useLogStore((s) => s.entries);
   const activeLogSource = useLogStore((s) => s.activeSource);
   const logSourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  // A text-log load moves `activeSource` and `entries` in separate steps (a folder load moves the
+  // source before it parses), so scoping the entries mid-load can drop logs that are about to be
+  // replaced. No session is built from that state.
+  const logStoreLoading = useLogStore((s) => s.isLoading);
   const currentPlatform = useUiStore((s) => s.currentPlatform);
   const scopedLogEntries = useMemo(
     () =>
@@ -403,7 +407,7 @@ export function EventLogWorkspace() {
     setInitialTimelinePage(null);
     setTimelineError(null);
 
-    if (isLoading) {
+    if (isLoading || logStoreLoading) {
       setTimelinePending(true);
       return;
     }
@@ -494,6 +498,7 @@ export function EventLogWorkspace() {
     diagnosisCoverageGaps,
     scopedLogEntries,
     isLoading,
+    logStoreLoading,
   ]);
 
   const loadTimelinePage = useCallback(

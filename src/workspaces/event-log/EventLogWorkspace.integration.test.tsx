@@ -33,6 +33,8 @@ vi.mock("./EventDiagnosisPanel", () => ({ EventDiagnosisPanel: () => null }));
 vi.mock("./UnifiedTimelineView", () => ({ UnifiedTimelineView: () => null }));
 
 import { useLogStore } from "../../stores/log-store";
+import { useUiStore } from "../../stores/ui-store";
+import type { LogEntry } from "../../types/log";
 import { useEvtxStore } from "./evtx-store";
 import { EventLogWorkspace } from "./EventLogWorkspace";
 import type { EvtxRecord } from "./types";
@@ -271,5 +273,107 @@ describe("EventLogWorkspace backend-owned analysis wiring", () => {
       await new Promise((resolve) => window.setTimeout(resolve, 150));
     });
     expect(mocks.buildAnalysis).toHaveBeenCalledTimes(2);
+  });
+});
+
+function textLog(filePath: string, line: number): LogEntry {
+  return {
+    id: line,
+    lineNumber: line,
+    message: `line ${line}`,
+    component: null,
+    timestamp: 1_000 + line,
+    timestampDisplay: null,
+    severity: "Info",
+    thread: null,
+    threadDisplay: null,
+    sourceFile: null,
+    format: "Ccm",
+    filePath,
+    timezoneOffset: null,
+  };
+}
+
+const LOG_A = "C:\\logs\\a.log";
+const LOG_B = "C:\\logs\\b.log";
+
+/**
+ * The log store as a text-log open leaves it, in the modes that replace (the other workspace
+ * tests all seed "merged", which never narrows the entries, so none of them can tell a replacing
+ * open from an additive one).
+ */
+function openTextLog(filePath: string, lines: number): void {
+  useLogStore.setState({
+    activeSource: { kind: "file", path: filePath },
+    sourceOpenMode: "single-file",
+    entries: Array.from({ length: lines }, (_, index) => textLog(filePath, index + 1)),
+  });
+}
+
+describe("EventLogWorkspace text-log wiring", () => {
+  beforeEach(() => {
+    useEvtxStore.getState().reset();
+    useUiStore.setState({ currentPlatform: "windows" });
+    useLogStore.setState({
+      entries: [],
+      activeSource: null,
+      sourceOpenMode: null,
+      isLoading: false,
+    });
+    mocks.buildAnalysis.mockReset().mockResolvedValue(analysisResult());
+    mocks.closeAnalysis.mockReset().mockResolvedValue(undefined);
+    mocks.queryTimeline.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("builds a new session with the entries of a text log opened after mount", async () => {
+    seed([RECORD]);
+    openTextLog(LOG_A, 2);
+    render(<EventLogWorkspace />);
+    await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+    expect(mocks.buildAnalysis.mock.calls[0][0].entries.map((e: LogEntry) => e.filePath)).toEqual([
+      LOG_A,
+      LOG_A,
+    ]);
+
+    // The next open replaces the first in the store; the session follows the store.
+    act(() => openTextLog(LOG_B, 3));
+
+    await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(2));
+    const entries: LogEntry[] = mocks.buildAnalysis.mock.calls[1][0].entries;
+    expect(entries).toHaveLength(3);
+    expect(entries.every((entry) => entry.filePath === LOG_B)).toBe(true);
+  });
+
+  it("builds no session while the log store is loading, even after the source has moved", async () => {
+    seed([RECORD]);
+    openTextLog(LOG_A, 2);
+    render(<EventLogWorkspace />);
+    await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+
+    // A folder load moves the source first and keeps the previous entries until the parse ends.
+    // Scoped to the new folder, those entries no longer belong to it.
+    act(() => useLogStore.setState({ isLoading: true }));
+    act(() => useLogStore.setState({ activeSource: { kind: "folder", path: "C:\\other" } }));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+    });
+    expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1);
+
+    act(() =>
+      useLogStore.setState({
+        sourceOpenMode: "aggregate-folder",
+        entries: [textLog("C:\\other\\c.log", 1)],
+        isLoading: false,
+      }),
+    );
+    await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(2));
+    expect(
+      mocks.buildAnalysis.mock.calls[1][0].entries.map((e: LogEntry) => e.filePath),
+    ).toEqual(["C:\\other\\c.log"]);
   });
 });
