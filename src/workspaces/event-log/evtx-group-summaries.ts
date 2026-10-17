@@ -17,6 +17,7 @@
  * Nothing here reads a clock; the caller passes `nowMs` and the read times.
  */
 import { formatCoverageGap } from "./evtx-coverage";
+import type { ChannelReadRecord } from "./evtx-store";
 import { buildGroupedRows, type EvtxGroupField } from "./evtx-filter";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import {
@@ -316,8 +317,8 @@ export interface GroupSummariesInput {
    * kept event, or live with no read time) leaves every empty bin unknown.
    */
   scopeChannels: readonly string[];
-  /** Live: per channel, the instant its current load read through (`channelReadThrough`). */
-  readThrough: ReadonlyMap<string, number>;
+  /** Live: per channel, what its current load read (the store's `channelReadThrough`). */
+  loadReads: ReadonlyMap<string, ChannelReadRecord>;
 }
 
 export interface GroupSummariesResult {
@@ -366,17 +367,26 @@ function union(intervals: Iterable<Interval>): Interval[] {
 
 /**
  * The times each channel was read across, or null where nothing about its empty bins is known.
- * Only what the loaded records and the recorded read times prove is claimed.
  *
- * A read that returned events starts at the channel's oldest kept event, never at the window's
- * start: a log keeps only what its size allows, and a wrapped log answers a whole-window query
- * with no gap although its older events were overwritten.
- *
- * Live: one interval ending where the channel's current load read through (`readThrough`), never
- * at a record, so live-tail records never extend it. A channel with no read time (a cancelled or
- * failed load, a channel never loaded) proves nothing, even when some of its records are on
- * screen: that is the stricter of ending at its newest record or knowing nothing. A complete
- * read that returned no event proves the whole binned range up to its read time (see below).
+ * Live: only from the record the channel's current load left at its commit (`loadReads`), never
+ * from the records in the store, which local filters, live-tail appends and unreadable or skewed
+ * timestamps all change. One interval, ending where the load read through (`readThrough`, the
+ * time its query was sent):
+ * - A load that returned events starts at the oldest placed TimeCreated among them, never at the
+ *   window's start: a log keeps only what its size allows, and a wrapped log answers a whole-window
+ *   query with no gap although its older events were overwritten. If none had a placed time, or
+ *   the oldest is after the read time (a remote clock running ahead), the read proves nothing.
+ * - An empty read proves the whole binned range up to its read time, but only when its query
+ *   asked for every event in its time window (`serverFiltered` false) and no gap marks a loss. A
+ *   log overwrites its oldest events first, so an event in the window could only have been
+ *   overwritten by newer ones, which a time-only query would have returned. With an Event ID or
+ *   level filter the newer events need not match, so a filtered empty read proves nothing.
+ *   Residuals: a log an administrator cleared also returns nothing, the app's own Clear included
+ *   (its event 104 lands in System), and no coverage gap reports a clear. Write order against
+ *   TimeCreated (ForwardedEvents, clock changes) moves only the oldest-placed edge. Remote clock
+ *   skew moves both edges (see the stamps in `evtx-store.ts`).
+ * - A channel with no record (a cancelled or failed load, a channel never loaded) proves
+ *   nothing, even when some of its records are on screen.
  *
  * Files: a file holds a contiguous run of events and nothing either side of it, so each file
  * covers its own oldest to newest event, and a channel read from several files covers the union
@@ -387,24 +397,22 @@ function channelReadSpans(
   span: TrendSpan,
 ): (channel: string) => readonly Interval[] | null {
   const live = input.sourceMode === "live";
-  const oldest = new Map<string, number>();
   const files = new Map<string, Map<string, Interval>>();
-  for (const record of input.loadedRecords) {
-    const at = placedMs(record);
-    if (at === null) continue;
-    const known = oldest.get(record.channel);
-    if (known === undefined || at < known) oldest.set(record.channel, at);
-    if (live) continue;
-    let byFile = files.get(record.channel);
-    if (byFile === undefined) {
-      byFile = new Map();
-      files.set(record.channel, byFile);
-    }
-    const file = byFile.get(record.sourceLabel);
-    if (file === undefined) byFile.set(record.sourceLabel, { startMs: at, endMs: at });
-    else {
-      if (at < file.startMs) file.startMs = at;
-      if (at > file.endMs) file.endMs = at;
+  if (!live) {
+    for (const record of input.loadedRecords) {
+      const at = placedMs(record);
+      if (at === null) continue;
+      let byFile = files.get(record.channel);
+      if (byFile === undefined) {
+        byFile = new Map();
+        files.set(record.channel, byFile);
+      }
+      const file = byFile.get(record.sourceLabel);
+      if (file === undefined) byFile.set(record.sourceLabel, { startMs: at, endMs: at });
+      else {
+        if (at < file.startMs) file.startMs = at;
+        if (at > file.endMs) file.endMs = at;
+      }
     }
   }
   const cache = new Map<string, readonly Interval[] | null>();
@@ -414,19 +422,13 @@ function channelReadSpans(
       const byFile = files.get(channel);
       return byFile === undefined ? null : union(byFile.values());
     }
-    const end = input.readThrough.get(channel);
-    if (end === undefined) return null;
-    const start = oldest.get(channel);
-    if (start === undefined || start > end) {
-      // An empty complete read proves its whole span: the window's start to its read time, or
-      // the whole binned range when the window is All. A log overwrites its oldest events first,
-      // so an event in the window could only have been overwritten by newer ones, which would be
-      // in the window too and would have been returned. (Records newer than the read time are a
-      // later tail's, not this read's.) Residual: a log an administrator cleared also returns
-      // nothing, and no coverage gap reports a clear.
-      return [{ startMs: span.startMs, endMs: end }];
+    const read = input.loadReads.get(channel);
+    if (read === undefined) return null;
+    if (read.returnedCount === 0) {
+      return read.serverFiltered ? null : [{ startMs: span.startMs, endMs: read.readThrough }];
     }
-    return [{ startMs: start, endMs: end }];
+    if (read.oldestPlacedMs === null || read.oldestPlacedMs > read.readThrough) return null;
+    return [{ startMs: read.oldestPlacedMs, endMs: read.readThrough }];
   };
   return (channel) => {
     if (!cache.has(channel)) cache.set(channel, spansOf(channel));

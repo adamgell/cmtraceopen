@@ -1009,7 +1009,7 @@ export function EvtxGroupedView({ records, nowEpoch }: EvtxGroupedViewProps) {
       sourceMode,
       channelReads,
       scopeChannels,
-      readThrough: channelReadThrough,
+      loadReads: channelReadThrough,
     }),
     [
       records,

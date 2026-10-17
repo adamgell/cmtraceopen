@@ -33,7 +33,12 @@ import {
   type GroupSummariesResult,
 } from "./evtx-group-summaries";
 import { useEvtxLayoutStore } from "./evtx-layout-store";
-import { isNewestOnlyGapReason, newestOnlyGapReason, useEvtxStore } from "./evtx-store";
+import {
+  isNewestOnlyGapReason,
+  newestOnlyGapReason,
+  useEvtxStore,
+  type ChannelReadRecord,
+} from "./evtx-store";
 import { selectVisibleRecords } from "./evtx-filter";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
@@ -67,7 +72,26 @@ function rec(partial: Partial<EvtxRecord> & { at?: number } = {}): EvtxRecord {
   };
 }
 
-/** Live, 24 h to NOW; every channel of `records` in scope, read whole and through NOW. */
+/** The record a time-only load leaves for `channel` when it returned these records. */
+function loadReadOf(
+  channel: string,
+  returned: readonly EvtxRecord[],
+  readThrough = NOW,
+  serverFiltered = false,
+): ChannelReadRecord {
+  const placed = returned
+    .filter((record) => record.channel === channel)
+    .map((record) => record.timestampEpoch)
+    .filter((at) => at > 0);
+  return {
+    readThrough,
+    oldestPlacedMs: placed.length > 0 ? Math.min(...placed) : null,
+    returnedCount: returned.filter((record) => record.channel === channel).length,
+    serverFiltered,
+  };
+}
+
+/** Live, 24 h to NOW; every channel of `records` in scope, loaded by a time-only read at NOW. */
 function summaries(records: EvtxRecord[], overrides: Partial<GroupSummariesInput> = {}) {
   const channels = [...new Set(records.map((record) => record.channel))];
   return buildGroupSummaries({
@@ -80,7 +104,7 @@ function summaries(records: EvtxRecord[], overrides: Partial<GroupSummariesInput
     sourceMode: "live",
     channelReads: { kind: () => "complete", unattributedLoss: false },
     scopeChannels: channels,
-    readThrough: new Map(channels.map((channel) => [channel, NOW] as const)),
+    loadReads: new Map(channels.map((channel) => [channel, loadReadOf(channel, records)] as const)),
     ...overrides,
   });
 }
@@ -841,7 +865,7 @@ describe("a channel the store loaded only up to its bound", () => {
      * takes READ_TAKES, so a stamp taken after the reply would be at least that late.
      */
     const expectStampedAtSend = () => {
-      const stamp = useEvtxStore.getState().channelReadThrough.get("Security");
+      const stamp = useEvtxStore.getState().channelReadThrough.get("Security")?.readThrough;
       expect(Date.now()).toBeGreaterThanOrEqual(LOAD_AT + READ_TAKES);
       expect(stamp).toBeGreaterThanOrEqual(LOAD_AT);
       expect(stamp).toBeLessThan(LOAD_AT + 60_000);
@@ -1093,8 +1117,8 @@ describe("the visible scope the view passes to the trend", () => {
       selectedChannels: new Set(["Application", "System"]),
       loadedChannels: new Set(["Application", "System"]),
       channelReadThrough: new Map([
-        ["Application", NOW],
-        ["System", NOW],
+        ["Application", loadReadOf("Application", application())],
+        ["System", loadReadOf("System", system())],
       ]),
     });
     render(<GroupedFromStore />);
@@ -1116,7 +1140,7 @@ describe("the visible scope the view passes to the trend", () => {
       selectedChannels: new Set(["Application", "System"]),
       // System's load was cancelled: its records are on screen, it is not loaded, it has no stamp.
       loadedChannels: new Set(["Application"]),
-      channelReadThrough: new Map([["Application", NOW]]),
+      channelReadThrough: new Map([["Application", loadReadOf("Application", application())]]),
     });
     render(<GroupedFromStore />);
     expect(errorRowMarks().zeros).toEqual([]);
@@ -1210,7 +1234,7 @@ describe("a selected channel whose load did not finish", () => {
       channels: extra.channels.map((name) => ({ name, eventCount: 0, sourceType: "live" as const })),
       selectedChannels: new Set(extra.selected),
       loadedChannels: new Set(["Application"]),
-      channelReadThrough: new Map([["Application", NOW]]),
+      channelReadThrough: new Map([["Application", loadReadOf("Application", applicationRows())]]),
     });
   }
 

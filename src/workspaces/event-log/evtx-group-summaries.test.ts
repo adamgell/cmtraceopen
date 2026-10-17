@@ -11,6 +11,7 @@ import {
   type ChannelReads,
   type GroupSummariesInput,
 } from "./evtx-group-summaries";
+import type { ChannelReadRecord } from "./evtx-store";
 import { formatCoverageGap } from "./evtx-coverage";
 import { buildGroupedRows } from "./evtx-filter";
 import type { EvtxLevel, EvtxRecord } from "./types";
@@ -51,13 +52,43 @@ function reads(
 }
 
 /**
- * Defaults: live, a 24 h window ending NOW, every channel of the loaded records in scope, read
- * whole and read through NOW.
+ * The record a load leaves for `channel` when it returned that channel's records in `returned`,
+ * sent at `readThrough`.
  */
-function input(overrides: Partial<GroupSummariesInput>): GroupSummariesInput {
-  const records = overrides.records ?? [];
-  const loadedRecords = overrides.loadedRecords ?? records;
+function loadRead(
+  channel: string,
+  returned: readonly EvtxRecord[],
+  readThrough = NOW,
+  serverFiltered = false,
+): ChannelReadRecord {
+  const own = returned.filter((record) => record.channel === channel);
+  const placed = own.map((record) => record.timestampEpoch).filter((at) => at > 0);
+  return {
+    readThrough,
+    oldestPlacedMs: placed.length > 0 ? Math.min(...placed) : null,
+    returnedCount: own.length,
+    serverFiltered,
+  };
+}
+
+type InputOverrides = Partial<GroupSummariesInput> & {
+  /**
+   * Shorthand: each listed channel's load returned its loaded records and was sent at the given
+   * time. Ignored when `loadReads` is given.
+   */
+  readThrough?: ReadonlyMap<string, number>;
+};
+
+/**
+ * Defaults: live, a 24 h window ending NOW, every channel of the loaded records in scope, each
+ * loaded by a time-only read that returned its loaded records and was sent at NOW.
+ */
+function input(overrides: InputOverrides): GroupSummariesInput {
+  const { readThrough, ...rest } = overrides;
+  const records = rest.records ?? [];
+  const loadedRecords = rest.loadedRecords ?? records;
   const channels = [...new Set(loadedRecords.map((record) => record.channel))];
+  const sentAt = readThrough ?? new Map(channels.map((channel) => [channel, NOW] as const));
   return {
     records,
     loadedRecords,
@@ -68,8 +99,10 @@ function input(overrides: Partial<GroupSummariesInput>): GroupSummariesInput {
     sourceMode: "live",
     channelReads: reads(),
     scopeChannels: channels,
-    readThrough: new Map(channels.map((channel) => [channel, NOW] as const)),
-    ...overrides,
+    loadReads: new Map(
+      [...sentAt].map(([channel, at]) => [channel, loadRead(channel, loadedRecords, at)] as const),
+    ),
+    ...rest,
   };
 }
 
@@ -418,7 +451,7 @@ describe("buildGroupSummaries: every channel in the visible scope must be read",
       rec({ eventId: 1000, channel: "Application", at: DAY_START + 3 * HOUR }),
       rec({ eventId: 1001, channel: "Application", at: DAY_START + 1 * HOUR }),
     ];
-    const applicationTrend = (overrides: Partial<GroupSummariesInput>) =>
+    const applicationTrend = (overrides: InputOverrides) =>
       buildGroupSummaries(
         input({ records, scopeChannels: ["Application", "Setup"], ...overrides }),
       ).summaries.find((summary) => summary.value === "1000")!.trend;
@@ -471,13 +504,79 @@ describe("buildGroupSummaries: every channel in the visible scope must be read",
     it("tail events after an empty read do not undo its proof", () => {
       const trend = applicationTrend({
         records: [...records, rec({ eventId: 1, channel: "Setup", at: DAY_START + 22 * HOUR })],
-        readThrough: new Map([
-          ["Application", NOW],
-          ["Setup", DAY_START + 21 * HOUR],
+        // The load sent at 21:00 returned nothing; the 22:00 event came from a later tail.
+        loadReads: new Map([
+          ["Application", loadRead("Application", records)],
+          ["Setup", loadRead("Setup", [], DAY_START + 21 * HOUR)],
         ]),
       });
       expect(trend[5]).toBe(0);
       expect(trend[22]).toBeNull();
+    });
+  });
+
+  describe("a live channel's span comes only from what its load read", () => {
+    /** Application holds Errors from 01:00 on and is read through NOW. */
+    const application = [
+      rec({ eventId: 1001, channel: "Application", at: DAY_START + 1 * HOUR }),
+      rec({ eventId: 1000, channel: "Application", at: DAY_START + 3 * HOUR }),
+    ];
+    const trendWith = (taskScheduler: ChannelReadRecord, loaded: EvtxRecord[] = []) =>
+      buildGroupSummaries(
+        input({
+          records: application,
+          loadedRecords: [...application, ...loaded],
+          scopeChannels: ["Application", "TaskScheduler"],
+          loadReads: new Map([
+            ["Application", loadRead("Application", application)],
+            ["TaskScheduler", taskScheduler],
+          ]),
+        }),
+      ).summaries.find((summary) => summary.value === "1000")!.trend;
+    const unknownButCounts = (trend: readonly (number | null)[]) =>
+      trend.filter((bin) => bin === null).length === GROUP_TREND_BINS - 1;
+
+    it("an empty read under a level or Event ID filter proves nothing (overwritten matches)", () => {
+      // TaskScheduler's matching Errors were overwritten by newer Information events the filtered
+      // query did not ask for, so it came back empty with no gap.
+      const filtered = { readThrough: NOW, oldestPlacedMs: null, returnedCount: 0, serverFiltered: true };
+      expect(unknownButCounts(trendWith(filtered))).toBe(true);
+      // The same empty read with time as the only criterion proves its span.
+      expect(trendWith({ ...filtered, serverFiltered: false })[5]).toBe(0);
+    });
+
+    it("a load whose records all have unreadable times proves nothing", () => {
+      const unplaced = [0, 0, 0].map((at) => rec({ channel: "TaskScheduler", at }));
+      const read = { readThrough: NOW, oldestPlacedMs: null, returnedCount: 3, serverFiltered: false };
+      expect(unknownButCounts(trendWith(read, unplaced))).toBe(true);
+    });
+
+    it("a remote clock ahead (oldest placed after the read time) proves nothing", () => {
+      const ahead = [rec({ channel: "TaskScheduler", at: DAY_START + 20 * HOUR + 10 * 60 * 1000 })];
+      const read = {
+        readThrough: DAY_START + 20 * HOUR,
+        oldestPlacedMs: DAY_START + 20 * HOUR + 10 * 60 * 1000,
+        returnedCount: 1,
+        serverFiltered: false,
+      };
+      expect(unknownButCounts(trendWith(read, ahead))).toBe(true);
+    });
+
+    it("a tail record older than the load's oldest event does not move the start", () => {
+      // The load's oldest kept event is at 12:00; a tail later delivered one stamped 05:00.
+      const read = { readThrough: NOW, oldestPlacedMs: DAY_START + 12 * HOUR, returnedCount: 9, serverFiltered: false };
+      const tail = [rec({ channel: "TaskScheduler", at: DAY_START + 5 * HOUR })];
+      const trend = trendWith(read, tail);
+      expect(bins(trend, 4, 11).every((bin) => bin === null)).toBe(true);
+      expect(trend[12]).toBe(0);
+    });
+
+    it("loaded records the view does not show do not change the span", () => {
+      // A local search hides every TaskScheduler event; its load still read from 12:00.
+      const read = { readThrough: NOW, oldestPlacedMs: DAY_START + 12 * HOUR, returnedCount: 9, serverFiltered: false };
+      const trend = trendWith(read);
+      expect(trend[11]).toBeNull();
+      expect(trend[12]).toBe(0);
     });
   });
 
