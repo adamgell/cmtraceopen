@@ -602,7 +602,7 @@ describe("a folder", () => {
       });
     });
 
-    it("counts the entries that could not be listed, and only those", async () => {
+    it("names the items that could not be listed, without counting them as entries", async () => {
       commands.listLogSourceFolder.mockResolvedValue(
         listing(files, {
           childErrors: [
@@ -616,7 +616,51 @@ describe("a folder", () => {
       expect(await addLogSource("folder")).toEqual({
         status: "added",
         notice:
-          "2 entries could not be listed: locked.log (entry is not readable), sub (symbolic link or reparse point is not followed).",
+          "Could not list: locked.log (entry is not readable), sub (symbolic link or reparse point is not followed).",
+      });
+    });
+
+    it("names a bundle subdirectory it could not enter, and claims no count of entries or files", async () => {
+      // collect_files_recursive records a subdirectory it cannot read under the subdirectory's own
+      // path, and the record has no kind: it cannot be told from a file, and what the directory held
+      // is unknown.
+      commands.listLogSourceFolder.mockResolvedValue(
+        listing(files, {
+          bundle: true,
+          childErrors: [{ path: `${folder}\\Intune\\Logs`, reason: "Access is denied." }],
+        }),
+      );
+      dialog.open.mockResolvedValue(folder);
+
+      const outcome = await addLogSource("folder");
+
+      expect(outcome).toEqual({
+        status: "added",
+        notice:
+          "Could not list: Logs (Access is denied). Binary and oversized files in an evidence bundle are not read.",
+      });
+      const notice = outcome.status === "added" ? (outcome.notice ?? "") : "";
+      expect(notice).not.toMatch(/entr/i);
+      expect(notice).not.toMatch(/\d+\s+(files?|entr)/i);
+    });
+
+    it("counts the records beyond the first three only as 'more', not as entries or files", async () => {
+      commands.listLogSourceFolder.mockResolvedValue(
+        listing(files, {
+          childErrors: ["a", "b", "c", "d", "e"].map((name) => ({
+            path: `${folder}\\${name}`,
+            reason: "entry is not readable",
+          })),
+        }),
+      );
+      dialog.open.mockResolvedValue(folder);
+
+      const outcome = await addLogSource("folder");
+
+      expect(outcome).toEqual({
+        status: "added",
+        notice:
+          "Could not list: a (entry is not readable), b (entry is not readable), c (entry is not readable) and 2 more.",
       });
     });
 
@@ -639,7 +683,7 @@ describe("a folder", () => {
       expect(outcome.status === "added" && outcome.notice).not.toMatch(/\b1 entr/);
     });
 
-    it("counts the entries and leaves the limit out of the count when both are reported", async () => {
+    it("names the items and keeps the listing's own limits uncounted when both are reported", async () => {
       commands.listLogSourceFolder.mockResolvedValue(
         listing(files, {
           childErrors: [
@@ -654,7 +698,7 @@ describe("a folder", () => {
       expect(await addLogSource("folder")).toEqual({
         status: "added",
         notice:
-          "1 entry could not be listed: locked.log (entry is not readable). " +
+          "Could not list: locked.log (entry is not readable). " +
           "The folder listing itself reported: folder listing reached the 4096-entry limit, " +
           "folder listing reached the 16384-entry work limit. How many entries that left out is unknown.",
       });
@@ -692,7 +736,7 @@ describe("a folder", () => {
       const outcome = await addLogSource("folder");
 
       expect(outcome.status === "added" && outcome.notice).toBe(
-        "1 entry could not be listed: huge.log (file exceeds the 1048576 byte bundle limit). " +
+        "Could not list: huge.log (file exceeds the 1048576 byte bundle limit). " +
           "The folder listing itself reported: a diagnostic worded some other way. How many entries that left out is unknown.",
       );
     });
@@ -706,7 +750,7 @@ describe("a folder", () => {
       const outcome = await addLogSource("folder");
 
       expect(outcome.status === "added" && outcome.notice).toBe(
-        `1 entry could not be listed: x (${"r".repeat(117)}...).`,
+        `Could not list: x (${"r".repeat(117)}...).`,
       );
     });
 

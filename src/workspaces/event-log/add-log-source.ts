@@ -165,11 +165,13 @@ const shortReason = (reason: string) =>
  * limits, the subfolders a non-bundle folder load never enters, and, for an evidence bundle, the
  * kinds of file its collector skips without counting them anywhere the UI can read.
  *
- * A `childErrors` record carries only a path and a reason. A record whose path is a child names one
- * entry that could not be listed, and those are counted. A record whose path is the listed folder
- * itself describes the listing, not an entry: its limits (entries, work, diagnostics, a bundle's
- * truncation) stand for entries that were never listed, however many, so it is reported without a
- * count. The decision is the record's path, never its message.
+ * A `childErrors` record carries only a path and a reason, and no kind. A record whose path is a
+ * child names an item that could not be listed, but that item may be a file or a directory (a bundle
+ * records a subdirectory it could not enter under the subdirectory's own path, and the files inside
+ * it are then unknown), so the items are named and never counted as entries or files. A record whose
+ * path is the listed folder itself describes the listing: its limits (entries, work, diagnostics, a
+ * bundle's truncation) stand for entries that were never listed, however many, so it is reported
+ * without a count. The decision is the record's path, never its message.
  */
 function folderCoverage(
   result: LoadLogSourceResult,
@@ -184,11 +186,10 @@ function folderCoverage(
   if (entryErrors.length > 0) {
     const described = entryErrors.map(
       (diagnostic) =>
-        `${getBaseName(diagnostic.path) || diagnostic.path} (${shortReason(diagnostic.reason)})`,
+        `${getBaseName(diagnostic.path) || diagnostic.path} (${shortReason(diagnostic.reason.replace(/[.\s]+$/, ""))})`,
     );
-    parts.push(
-      `${entryErrors.length} ${plural(entryErrors.length, "entry", "entries")} could not be listed: ${nameList(described)}.`,
-    );
+    // The remainder is "K more" records, not entries or files: a record does not say which it is.
+    parts.push(`Could not list: ${nameList(described)}.`);
   }
   if (listingErrors.length > 0) {
     const reasons = listingErrors.map((diagnostic) =>
