@@ -273,8 +273,9 @@ test.describe("event-logs screenshots", () => {
 
   // Fails any test in which a replay guard (a stale capture, an uncaptured call, a request that
   // differs from what the engine was given) tripped, wherever in the test that happened: the init
-  // script keeps every guard message on the page. A test that knowingly causes one reads it out
-  // itself and says which message it expects (see the last step of "event-logs correlation").
+  // script keeps every guard message on the page. No message is tolerated. A step that would
+  // narrow the analysis cannot be part of a test here, because the replies describe only the full
+  // set (see the end of "event-logs correlation").
   test.afterEach(async ({ page }) => {
     // A closed page (a timeout or a crash) has nothing to read, and that test has already failed.
     const trips = await page.evaluate(() => window.__evtxReplayGuardErrors ?? []).catch(() => []);
@@ -352,8 +353,8 @@ test.describe("event-logs screenshots", () => {
     //
     // A brushed range is set first, so the Escape check below has something to protect. It covers
     // every record: a range that hid one would change the events the analysis is built from, and
-    // the replayed engine replies only describe the full set. The chain scope applied by the last
-    // step narrows the analysis the same way, so that step ends by restoring the full set.
+    // the replayed engine replies only describe the full set. Nothing in this test narrows the
+    // analysis, and it ends on a check that the full-set session is still the one on show.
     await page.evaluate(async () => {
       const { useEvtxStore } = await import("/src/workspaces/event-log/evtx-store.ts");
       const { records, setTimeRange } = useEvtxStore.getState();
@@ -409,37 +410,19 @@ test.describe("event-logs screenshots", () => {
     await expect(list).toBeFocused();
     await expect(brushed).toBeVisible();
 
-    // "Filter table to chain" scopes the table to the chain's records and switches to it.
-    await exact.click();
-    await expect(exact).toHaveAttribute("aria-selected", "true");
-    const filterTable = page.getByRole("button", { name: "Filter table to chain" });
-    await expect(filterTable).not.toHaveAttribute("aria-disabled", "true");
-    await filterTable.click();
-    await expect(page.getByRole("tab", { name: "Table", exact: true })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-    const chainChip = page.getByText(/^Chain: /).first();
-    await expect(chainChip).toBeVisible();
+    // "Filter table to chain" is not driven here. It applies a chain record scope, which narrows the
+    // analysis to that chain's records, and a narrowed analysis cannot be replayed from the one
+    // session the engine answered: that needs a second captured session (#958). The step is covered
+    // by unit and workspace tests instead: EvtxCorrelationView.test.tsx ("Filter table to chain":
+    // the scope is applied with its title and references, the view switches to Table only when it
+    // was applied, and the Table tab takes focus) and EventLogWorkspace.correlation.test.tsx
+    // ("filters the table to the chain, switches to Table and moves focus to the Table tab", with
+    // the Chain chip).
 
-    // The scope narrows the analysis to the chain's 2 records: the rail, the counts and the
-    // Correlation view are rebuilt from them. The replayed replies describe only the full set, so
-    // that rebuild reaches the replay guard whenever its 75 ms debounce fires before the chip is
-    // cleared below, and not when it does not. The test must not depend on that race, so it takes
-    // the one expected message out of the guard record afterwards and lets anything else fail.
-    // First restore the full set: clear the chip, and wait for the full-set session to publish
-    // (the Correlations card reads its edges; it is absent or "unknown" until then). The rebuilds
-    // run one at a time, so a narrowed attempt has finished, or never began, by the time it does.
-    await page.getByRole("button", { name: /^Remove Chain: / }).click();
-    await expect(chainChip).toHaveCount(0);
+    // Nothing above narrowed the analysis, so the session on show is still the full-set one: its
+    // edges give the same four chains in the rail (coverage blocked is counted apart), and no
+    // alert is up. The afterEach also fails the test if any replay guard tripped on the way.
     await expect(page.getByTestId("correlation-card-headline")).toHaveText(/^4 chains$/);
-    await expect(page.getByLabel("Operational diagnosis")).toBeVisible();
     await expect(page.getByRole("alert")).toHaveCount(0);
-    const narrowedTrips = await page.evaluate(() => window.__evtxReplayGuardErrors?.splice(0) ?? []);
-    for (const trip of narrowedTrips) {
-      expect(trip).toMatch(
-        /^\[event-logs fixture\] evtx_append_analysis_chunk: chunk 0 carried 2 records and 0 entries, the capture saw 1000 and 0\. /,
-      );
-    }
   });
 });
