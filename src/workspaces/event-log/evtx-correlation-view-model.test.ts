@@ -678,6 +678,75 @@ describe("buildChainPlot", () => {
         expect(plot.notLinkedLabel).toBe(NOT_LINKED_LABEL);
       });
 
+      describe("a gap that names a chain member (L2)", () => {
+        // An identity alias conflict is about ONE observation: the engine pushes no ActivityId key
+        // for that member, so the key it would share with a context entry was never computed.
+        const aliasConflict = (id: string) => ({
+          source: id,
+          reason: "conflicting explicit identity aliases for ActivityId",
+        });
+
+        it("withdraws 'Not linked' for a context marker that has no gap of its own, and for the legend", () => {
+          const plot = gapped(classifyCoverageGaps([aliasConflict(rid(1))], 1));
+          expect(plot.nearby.map((m) => [m.id, m.linkLabel])).toEqual([[rid(9), NO_LOADED_LINK_LABEL]]);
+          expect(plot.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
+          expect(plot.showsNotLinkedLegend).toBe(true);
+        });
+
+        it("withdraws it for every context marker, not only the first", () => {
+          const other = eventItem(8, T0 + 2_000);
+          const plot = gapped(classifyCoverageGaps([aliasConflict(rid(2))], 1), [stray, other]);
+          expect(plot.nearby.map((m) => m.linkLabel)).toEqual([NO_LOADED_LINK_LABEL, NO_LOADED_LINK_LABEL]);
+          expect(plot.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
+        });
+
+        it("withdraws it for a member beyond the marker cap: the key is lost whether or not the member is drawn", () => {
+          const plot = buildChainPlot({
+            ...VIEW,
+            chain: chain(),
+            itemsById: mapOf(items),
+            nearby: [stray],
+            markerCap: 1,
+            gaps: classifyCoverageGaps([aliasConflict(rid(2))], 1),
+          });
+          expect(plot.members.map((m) => m.id)).toEqual([rid(1)]);
+          expect(plot.nearby[0]?.linkLabel).toBe(NO_LOADED_LINK_LABEL);
+          expect(plot.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
+        });
+
+        it("withdraws it for a member with no loaded item, which is never drawn", () => {
+          const partial = chainOf(fixtureEdges("exactPair"), [items[0]!]);
+          expect(partial.unresolvedMemberIds).toEqual([rid(2)]);
+          const plot = buildChainPlot({
+            ...VIEW,
+            chain: partial,
+            itemsById: mapOf([items[0]!]),
+            nearby: [stray],
+            gaps: classifyCoverageGaps([aliasConflict(rid(2))], 1),
+          });
+          expect(plot.nearby[0]?.linkLabel).toBe(NO_LOADED_LINK_LABEL);
+          expect(plot.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
+        });
+
+        it("gives the legend the same words when no member can be placed", () => {
+          const bare = chainOf(fixtureEdges("exactPair"), []);
+          const plot = buildChainPlot({
+            ...VIEW,
+            chain: bare,
+            itemsById: new Map(),
+            gaps: classifyCoverageGaps([aliasConflict(rid(1))], 1),
+          });
+          expect(plot.window).toBeNull();
+          expect(plot.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
+        });
+
+        it("leaves 'Not linked' alone when the gap names an origin that is neither a member nor a marker", () => {
+          const plot = gapped(classifyCoverageGaps([aliasConflict(rid(70))], 1));
+          expect(plot.nearby[0]?.linkLabel).toBe(NOT_LINKED_LABEL);
+          expect(plot.notLinkedLabel).toBe(NOT_LINKED_LABEL);
+        });
+      });
+
       it("lets list-view compaction gaps pass", () => {
         const plot = gapped(
           classifyCoverageGaps(

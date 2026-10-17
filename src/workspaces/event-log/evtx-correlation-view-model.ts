@@ -397,9 +397,9 @@ export interface ChainPlotInput {
   narrowed: boolean;
   /**
    * The engine's correlation coverage gaps (`classifyCoverageGaps`). Required: a limit or
-   * truncation gap, a preview that does not show every gap, or a gap naming an entry's own origin
-   * each stop "Not linked" from being said (an uncorrelated entry has no edge because none was
-   * computed).
+   * truncation gap, a preview that does not show every gap, a gap naming an entry's own origin,
+   * or a gap naming a member of the chain each stop "Not linked" from being said (an uncorrelated
+   * entry has no edge because none was computed).
    */
   gaps: CorrelationGaps;
   /** Overrides the default window (the zoom band, a later phase). */
@@ -418,10 +418,20 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
   const { chain, itemsById } = input;
   // "Not linked" is a claim about the whole session; it needs every edge, every event and every
   // origin correlated. A gap that names an entry's own origin withdraws it for that entry alone.
-  const sessionClear =
-    input.edgeInputComplete && !input.narrowed && !gapsClearCompleteness(input.gaps);
+  // A gap that names a CHAIN MEMBER withdraws it for every entry and the legend: some gaps are
+  // specific to one observation (an identity alias conflict, an invalid process start), and for
+  // such a member the key it would share with a context entry was never computed. Every member
+  // counts, not only the drawn ones, because the key was lost whether or not the member is drawn.
+  const memberHasGap = [...chain.memberIds, ...chain.unresolvedMemberIds].some((id) =>
+    input.gaps.originIds.has(id),
+  );
+  const chainClear =
+    input.edgeInputComplete &&
+    !input.narrowed &&
+    !gapsClearCompleteness(input.gaps) &&
+    !memberHasGap;
   const labelFor = (originId: string) =>
-    sessionClear && !input.gaps.originIds.has(originId) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
+    chainClear && !input.gaps.originIds.has(originId) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
   const markerCap = input.markerCap ?? CORRELATION_MARKER_CAP;
   const connectorCap = input.connectorCap ?? CORRELATION_CONNECTOR_CAP;
   const placed = chain.memberIds.flatMap((id) => {
@@ -449,7 +459,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     omittedConnectors: 0,
     membersWithoutItem,
     showsNotLinkedLegend: false,
-    notLinkedLabel: sessionClear ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL,
+    notLinkedLabel: chainClear ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL,
   };
   if (window === null) return empty;
 
@@ -550,7 +560,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     // One legend entry for the dotted marker: it says "Not linked" only if every marker it stands
     // for may be called that.
     notLinkedLabel:
-      sessionClear && nearby.every((marker) => marker.linkLabel === NOT_LINKED_LABEL)
+      chainClear && nearby.every((marker) => marker.linkLabel === NOT_LINKED_LABEL)
         ? NOT_LINKED_LABEL
         : NO_LOADED_LINK_LABEL,
   };
