@@ -6,6 +6,10 @@
  * the view bar in Phase 3. Event IDs, the quick filter, saved filters, sort and the time zone are
  * in the More filters popover (`EvtxMoreFilters`), one open away.
  *
+ * The search box reads the field grammar (`evtx-query-grammar.ts`, issue #833). Its text is a local
+ * criterion like any search: it never changes the live query, so typing never reloads. A query that
+ * does not parse shows no events, and the reason is stated under the row in a polite status region.
+ *
  * Do the level toggles re-query in live mode? Only when they change what the service is asked for
  * (verified in Phase 5, issue #832). In live mode with a loaded channel, a before-load change that
  * alters `serverFilterKey` makes the store refetch every loaded channel: it empties `records` and
@@ -34,6 +38,7 @@ import { Search16Regular } from "@fluentui/react-icons";
 import {
   countByLevel,
   EVTX_LEVELS,
+  fieldQueryError,
   levelsAfterToggle,
   levelsFilteredAtSource,
 } from "./evtx-filter";
@@ -55,6 +60,12 @@ import type { EvtxLevel, EvtxTimeWindow } from "./types";
 import { EVTX_TIME_WINDOW_LABELS } from "./types";
 
 const TIME_WINDOWS: EvtxTimeWindow[] = ["1h", "24h", "7d", "30d", "all"];
+
+/** The `Main` mockup's placeholder, spacing included: free text, then three field terms. */
+export const EVTX_SEARCH_PLACEHOLDER = "Search…   id:76  level:error  provider:AAD";
+
+/** The status region under the row that states why the search text does not parse. */
+export const EVTX_SEARCH_ERROR_ID = "evtx-filter-search-error";
 
 /** Spec 8.3 labels. "Info" is the short form of Information only here; the rest read in full. */
 const LEVEL_TOGGLE_LABELS: Record<EvtxLevel, string> = {
@@ -222,7 +233,6 @@ const useStyles = makeStyles({
   searchSlot: {
     display: "flex",
     flexDirection: "column",
-    gap: "2px",
     flexGrow: 1,
     flexShrink: 1,
     flexBasis: "280px",
@@ -290,6 +300,13 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   const levelCounts = useMemo(() => countByLevel(records), [records]);
 
   const live = sourceMode === "live";
+  // The search text's first problem, if any. The text stays as typed, and selectVisibleRecords shows
+  // no events for it, so the row says why. Secondary-label size (spec 7.1, f - 2), with the chip
+  // row's line height, in the Warning text color spec 8.3 names.
+  const searchError = useMemo(() => fieldQueryError(filterSearch), [filterSearch]);
+  const searchErrorColor = visual.levels.Warning.textColor;
+  const searchErrorFontPx = Math.max(10, metrics.fontSize - 2);
+
   // A level the live query leaves out is not loaded, so its count is unknown rather than zero.
   const leftOutAtSource = live && levelsFilteredAtSource(filterLevels);
   const countIsKnown = (level: EvtxLevel) =>
@@ -312,128 +329,145 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   const showTimeWindow = live || timeWindow !== "all";
 
   return (
+    // The controls are one wrapping row and the search error a line under it, not inside the search
+    // slot: a taller slot would re-center every other control on the row while the error showed.
     <div
       data-evtx-region="filter-row"
       style={{
         display: "flex",
-        alignItems: "center",
-        gap: "8px",
+        flexDirection: "column",
         padding: "6px 12px 4px",
         backgroundColor: tokens.colorNeutralBackground1,
-        flexWrap: "wrap",
         flexShrink: 0,
         fontSize: controlFontSize,
       }}
     >
-      <div className={styles.searchSlot}>
-        <Input
-          id={EVTX_SEARCH_INPUT_ID}
-          className={styles.search}
-          aria-label="Search events"
-          contentBefore={<Search16Regular aria-hidden />}
-          input={{ style: { fontSize: controlFontSize } }}
-          value={filterSearch}
-          onChange={(_, data) => setFilterSearch(data.value)}
-          placeholder="Search…"
-          style={{ minHeight: "28px" }}
-        />
-        {/*
-          Phase 5b (#833) puts the field-query grammar's inline error here, under the input, in
-          visual.levels.Warning.textColor, and its example placeholder above. The slot is a column
-          already, so the error needs no layout change.
-        */}
-      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+        <div className={styles.searchSlot}>
+          <Input
+            id={EVTX_SEARCH_INPUT_ID}
+            className={styles.search}
+            aria-label="Search events"
+            aria-invalid={searchError !== null}
+            aria-describedby={searchError ? EVTX_SEARCH_ERROR_ID : undefined}
+            contentBefore={<Search16Regular aria-hidden />}
+            input={{ style: { fontSize: controlFontSize } }}
+            value={filterSearch}
+            onChange={(_, data) => setFilterSearch(data.value)}
+            placeholder={EVTX_SEARCH_PLACEHOLDER}
+            // Invalid, the whole border takes the error color, as the More filters inputs do. That
+            // also replaces Fluent's own invalid border, a red that is not in the token map.
+            style={{ minHeight: "28px", borderColor: searchError ? searchErrorColor : undefined }}
+          />
+        </div>
 
-      <div
-        role="group"
-        aria-label="Level"
-        aria-busy={isLoading}
-        className={styles.levelGroup}
-        style={toggleVariables}
-      >
-        {EVTX_LEVELS.map((level) => {
-          const pressed = filterLevels.has(level);
-          const known = countIsKnown(level);
-          const descriptionId = `evtx-level-count-${level}`;
-          const countText = known
-            ? `${levelCounts[level].toLocaleString()} ${levelCounts[level] === 1 ? "event" : "events"} loaded`
-            : UNKNOWN_COUNT_TEXT;
-          // Why the count is not available, for a sighted operator's tooltip.
-          const unknownReason = isLoading
-            ? "Events are loading"
-            : `The live query leaves out ${level} events while this level is hidden`;
-          const reloads = reloadsOnToggle(level);
-          return (
-            <button
-              key={level}
-              type="button"
-              className={mergeClasses(styles.toggle, pressed && styles.pressed)}
-              aria-label={`Toggle ${level} events`}
-              aria-pressed={pressed}
-              aria-describedby={descriptionId}
-              title={reloads ? `Toggle ${level} events. ${RELOAD_NOTE}` : `Toggle ${level} events`}
-              onClick={() => toggleFilterLevel(level)}
-              style={{ fontSize: toggleFontSize }}
-            >
-              <span
-                aria-hidden
-                className={mergeClasses(DOT_CLASS, styles.dot)}
-                style={{ backgroundColor: visual.levels[level].dotColor }}
-              />
-              <span>{LEVEL_TOGGLE_LABELS[level]}</span>
-              <span
-                aria-hidden
-                className={mergeClasses(COUNT_CLASS, styles.count)}
-                title={known ? undefined : unknownReason}
-              >
-                {known ? levelCounts[level].toLocaleString() : UNKNOWN_COUNT}
-              </span>
-              <span id={descriptionId} className={styles.visuallyHidden}>
-                {reloads ? `${countText}. ${RELOAD_NOTE}` : countText}
-              </span>
-            </button>
-          );
-        })}
-        {isLoading && <Spinner size="extra-tiny" label="Reloading events" labelPosition="after" />}
-      </div>
-
-      {showTimeWindow && (
-        <Dropdown
-          aria-label="Time window"
-          // 28 px (spec 8.3): the small dropdown is 24 px and the button, not the root, sets it.
-          button={{ style: { fontSize: controlFontSize, minHeight: "28px" } }}
-          size="small"
-          value={timeWindowSnapshotLabel}
-          selectedOptions={[timeWindow]}
-          style={{ minWidth: timeWindow === "all" ? "132px" : "260px" }}
-          title={
-            timeWindow === "all"
-              ? "Query the complete available event history."
-              : `${timeWindowSnapshotLabel}. This is a coherent frozen snapshot for the grid, timeline, and diagnosis. Refresh the selected channels to advance it.`
-          }
-          onOptionSelect={(_, data) => {
-            const next = data.optionValue as EvtxTimeWindow;
-            if (!next || next === timeWindow) return;
-            setTimeWindow(next);
-          }}
+        <div
+          role="group"
+          aria-label="Level"
+          aria-busy={isLoading}
+          className={styles.levelGroup}
+          style={toggleVariables}
         >
-          {TIME_WINDOWS.map((window) => (
-            <Option key={window} value={window} style={{ fontSize: controlFontSize }}>
-              {EVTX_TIME_WINDOW_LABELS[window]}
-            </Option>
-          ))}
-        </Dropdown>
-      )}
+          {EVTX_LEVELS.map((level) => {
+            const pressed = filterLevels.has(level);
+            const known = countIsKnown(level);
+            const descriptionId = `evtx-level-count-${level}`;
+            const countText = known
+              ? `${levelCounts[level].toLocaleString()} ${levelCounts[level] === 1 ? "event" : "events"} loaded`
+              : UNKNOWN_COUNT_TEXT;
+            // Why the count is not available, for a sighted operator's tooltip.
+            const unknownReason = isLoading
+              ? "Events are loading"
+              : `The live query leaves out ${level} events while this level is hidden`;
+            const reloads = reloadsOnToggle(level);
+            return (
+              <button
+                key={level}
+                type="button"
+                className={mergeClasses(styles.toggle, pressed && styles.pressed)}
+                aria-label={`Toggle ${level} events`}
+                aria-pressed={pressed}
+                aria-describedby={descriptionId}
+                title={reloads ? `Toggle ${level} events. ${RELOAD_NOTE}` : `Toggle ${level} events`}
+                onClick={() => toggleFilterLevel(level)}
+                style={{ fontSize: toggleFontSize }}
+              >
+                <span
+                  aria-hidden
+                  className={mergeClasses(DOT_CLASS, styles.dot)}
+                  style={{ backgroundColor: visual.levels[level].dotColor }}
+                />
+                <span>{LEVEL_TOGGLE_LABELS[level]}</span>
+                <span
+                  aria-hidden
+                  className={mergeClasses(COUNT_CLASS, styles.count)}
+                  title={known ? undefined : unknownReason}
+                >
+                  {known ? levelCounts[level].toLocaleString() : UNKNOWN_COUNT}
+                </span>
+                <span id={descriptionId} className={styles.visuallyHidden}>
+                  {reloads ? `${countText}. ${RELOAD_NOTE}` : countText}
+                </span>
+              </button>
+            );
+          })}
+          {isLoading && <Spinner size="extra-tiny" label="Reloading events" labelPosition="after" />}
+        </div>
 
-      <EvtxMoreFilters controlFontSize={controlFontSize} visual={visual} />
+        {showTimeWindow && (
+          <Dropdown
+            aria-label="Time window"
+            // 28 px (spec 8.3): the small dropdown is 24 px and the button, not the root, sets it.
+            button={{ style: { fontSize: controlFontSize, minHeight: "28px" } }}
+            size="small"
+            value={timeWindowSnapshotLabel}
+            selectedOptions={[timeWindow]}
+            style={{ minWidth: timeWindow === "all" ? "132px" : "260px" }}
+            title={
+              timeWindow === "all"
+                ? "Query the complete available event history."
+                : `${timeWindowSnapshotLabel}. This is a coherent frozen snapshot for the grid, timeline, and diagnosis. Refresh the selected channels to advance it.`
+            }
+            onOptionSelect={(_, data) => {
+              const next = data.optionValue as EvtxTimeWindow;
+              if (!next || next === timeWindow) return;
+              setTimeWindow(next);
+            }}
+          >
+            {TIME_WINDOWS.map((window) => (
+              <Option key={window} value={window} style={{ fontSize: controlFontSize }}>
+                {EVTX_TIME_WINDOW_LABELS[window]}
+              </Option>
+            ))}
+          </Dropdown>
+        )}
 
+        <EvtxMoreFilters controlFontSize={controlFontSize} visual={visual} />
+
+        {/*
+          The epic's Preview label (#583) is pinned by a workspace test and the spec's filter row does
+          not mention it, so it stays, out of the way at the end of the row.
+        */}
+        <Badge appearance="ghost" size="small" style={{ flexShrink: 0, marginLeft: "auto" }}>
+          Preview
+        </Badge>
+      </div>
       {/*
-        The epic's Preview label (#583) is pinned by a workspace test and the spec's filter row does
-        not mention it, so it stays, out of the way at the end of the row.
+        Always mounted and empty while the search parses, so it takes no height and the message is
+        announced politely when it appears. The search box points at it while there is an error.
       */}
-      <Badge appearance="ghost" size="small" style={{ flexShrink: 0, marginLeft: "auto" }}>
-        Preview
-      </Badge>
+      <div
+        id={EVTX_SEARCH_ERROR_ID}
+        role="status"
+        style={{
+          color: searchErrorColor,
+          fontSize: `${searchErrorFontPx}px`,
+          lineHeight: `${Math.round(searchErrorFontPx * 1.45)}px`,
+          marginTop: searchError ? "2px" : 0,
+        }}
+      >
+        {searchError?.message ?? ""}
+      </div>
     </div>
   );
 }

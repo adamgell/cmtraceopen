@@ -1,6 +1,7 @@
-import { Button } from "@fluentui/react-components";
+import { Button, tokens } from "@fluentui/react-components";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
 import { deferred } from "../../test-utils/deferred";
 
@@ -10,7 +11,12 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
 }));
 
-import { EvtxFilterBar, eventLogTimeWindowSnapshotLabel } from "./EvtxFilterBar";
+import {
+  EVTX_SEARCH_ERROR_ID,
+  EVTX_SEARCH_PLACEHOLDER,
+  EvtxFilterBar,
+  eventLogTimeWindowSnapshotLabel,
+} from "./EvtxFilterBar";
 import { buildFilterChips, type EvtxFilterChipInput } from "./EvtxFilterChips";
 import { moreFiltersActiveCount } from "./EvtxMoreFilters";
 import { EVTX_LEVELS } from "./evtx-filter";
@@ -21,8 +27,8 @@ import {
   levelToggleStates,
   type LevelToggleState,
 } from "./evtx-level-toggle";
-import { useEvtxStore } from "./evtx-store";
-import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
+import { serverFilterKey, useEvtxStore } from "./evtx-store";
+import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import { EVTX_TIME_WINDOW_LABELS } from "./types";
 import type { EvtxLevel, EvtxRecord, EvtxTimeWindow } from "./types";
 import { useUiStore } from "../../stores/ui-store";
@@ -109,9 +115,11 @@ describe("EvtxFilterBar row", () => {
     seed();
     render(<EvtxFilterBar nowEpoch={0} />);
 
+    // The Main mockup's placeholder, its spacing included (spec 8.3).
+    expect(EVTX_SEARCH_PLACEHOLDER).toBe("Search\u2026   id:76  level:error  provider:AAD");
     expect(screen.getByRole("textbox", { name: "Search events" })).toHaveAttribute(
       "placeholder",
-      "Search…",
+      EVTX_SEARCH_PLACEHOLDER,
     );
     const group = screen.getByRole("group", { name: "Level" });
     const buttons = within(group).getAllByRole("button");
@@ -152,6 +160,129 @@ describe("EvtxFilterBar row", () => {
     expect(screen.getByRole("button", { name: "More filters · 0" }).style.fontSize).toBe("19px");
   });
 });
+
+describe("the search box's field grammar (issue #833)", () => {
+  const search = () => screen.getByRole("textbox", { name: "Search events" });
+  const status = () => document.getElementById(EVTX_SEARCH_ERROR_ID)!;
+  const warningOf = () =>
+    buildEvtxVisualTokens(
+      getAllThemes().find((theme) => theme.id === useUiStore.getState().themeId)!,
+    ).levels.Warning.textColor;
+  const LEVEL_MESSAGE =
+    'level: takes critical, error, warning, info, information or verbose, not "erro".';
+
+  it("keeps an empty polite status region under the row while the search parses", () => {
+    seed({ filterSearch: "id:76  level:error  provider:AAD" });
+    render(<EvtxFilterBar nowEpoch={0} />);
+
+    expect(status()).toHaveAttribute("role", "status");
+    expect(status()).toBeEmptyDOMElement();
+    // No margin while empty, so the row is as tall as it was before the grammar.
+    expect(status().style.marginTop).toBe("0px");
+    expect(search()).toHaveAttribute("aria-invalid", "false");
+    expect(search()).not.toHaveAccessibleDescription();
+    expect(search().closest("[data-evtx-region='filter-row']")!.lastElementChild).toBe(status());
+  });
+
+  it("states why a search does not parse, in the same region, and keeps the operator's text", () => {
+    seed();
+    render(<EvtxFilterBar nowEpoch={0} />);
+    const region = status();
+
+    fireEvent.change(search(), { target: { value: "level:erro" } });
+    expect(useEvtxStore.getState().filterSearch).toBe("level:erro");
+    expect(search()).toHaveValue("level:erro");
+    expect(search()).toHaveAttribute("aria-invalid", "true");
+    expect(search()).toHaveAccessibleDescription(LEVEL_MESSAGE);
+    // The node that was mounted empty now holds the message, so it is announced, politely.
+    expect(status()).toBe(region);
+    expect(region).toHaveTextContent(LEVEL_MESSAGE);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(region.style.marginTop).toBe("2px");
+
+    fireEvent.change(search(), { target: { value: "level:error" } });
+    expect(region).toBeEmptyDOMElement();
+    expect(search()).toHaveAttribute("aria-invalid", "false");
+    expect(search()).not.toHaveAccessibleDescription();
+  });
+
+  it("colors the message and the search border with the Warning text color from the token map", () => {
+    seed({ filterSearch: 'boot "failed' });
+    render(<EvtxFilterBar nowEpoch={0} />);
+    expect(status()).toHaveTextContent("The quote at character 6 is not closed.");
+    expect(status().style.color).toBe(hexToRgb(warningOf()));
+    const root = search().parentElement!;
+    expect(root.style.borderColor).toBe(hexToRgb(warningOf()));
+  });
+
+  it("leaves the search border to the row's styles while the search parses", () => {
+    seed({ filterSearch: "level:error" });
+    render(<EvtxFilterBar nowEpoch={0} />);
+    expect(search().parentElement!.style.borderColor).toBe("");
+  });
+
+  it("sizes the message at f - 2 from the list font", () => {
+    seed({ filterSearch: "level:" });
+    act(() => useUiStore.getState().setLogListFontSize(20));
+    render(<EvtxFilterBar nowEpoch={0} />);
+    expect(status().style.fontSize).toBe("18px");
+    expect(status().style.lineHeight).toBe("26px");
+  });
+
+  it("never reloads in live mode: a field query is a local criterion, not a server one", async () => {
+    invoke.mockImplementation(async (name: string) =>
+      name === "evtx_query_channels" ? new Promise(() => undefined) : undefined,
+    );
+    seed({ sourceMode: "live" });
+    const before = useEvtxStore.getState();
+    const keyBefore = serverFilterKey(before.timeWindow, before.filterEventIds, before.filterLevels);
+    const recordsBefore = before.records;
+    render(<EvtxFilterBar nowEpoch={0} />);
+
+    fireEvent.change(search(), { target: { value: "id:76 level:error -provider:AAD" } });
+    act(() =>
+      useEvtxStore.getState().setQuickFilter({
+        ...useEvtxStore.getState().quickFilter,
+        mode: "fieldQuery",
+        query: "id:1098,1014 OR level:critical",
+      }),
+    );
+    await act(async () => {
+      for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+    });
+
+    const after = useEvtxStore.getState();
+    expect(invoke.mock.calls.filter(([name]) => name === "evtx_query_channels")).toHaveLength(0);
+    expect(after.isLoading).toBe(false);
+    expect(after.records).toBe(recordsBefore);
+    expect(serverFilterKey(after.timeWindow, after.filterEventIds, after.filterLevels)).toBe(
+      keyBefore,
+    );
+    expect(screen.getByRole("group", { name: "Level" })).toHaveAttribute("aria-busy", "false");
+  });
+});
+
+describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
+  "the search error in the %s theme",
+  (_id, theme) => {
+    it("reads at 4.5:1 or more on the filter row, which also clears 3:1 for the border", () => {
+      const color = resolveToken(buildEvtxVisualTokens(theme).levels.Warning.textColor, theme);
+      const row = resolveToken(tokens.colorNeutralBackground1, theme);
+      expect(contrastRatio(color, row)).toBeGreaterThanOrEqual(4.5);
+    });
+
+    it("paints the measured color", () => {
+      useUiStore.setState({ themeId: theme.id });
+      seed({ filterSearch: "id:abc" });
+      render(<EvtxFilterBar nowEpoch={0} />);
+      const region = document.getElementById(EVTX_SEARCH_ERROR_ID)!;
+      expect(region).toHaveTextContent(/^id: takes Event IDs/);
+      expect(region.style.color).toBe(
+        hexToRgb(buildEvtxVisualTokens(theme).levels.Warning.textColor),
+      );
+    });
+  },
+);
 
 describe("level toggles", () => {
   it("shows the loaded totals per level, set against what is on screen", () => {
