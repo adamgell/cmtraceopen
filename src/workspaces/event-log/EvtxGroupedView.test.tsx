@@ -378,11 +378,9 @@ describe("EvtxGroupedTable: selecting an expanded event (spec 9)", () => {
 
 describe("EvtxGroupedTable: the trend sparkline", () => {
   it("draws a bar per counted bin, a baseline per read empty bin, and nothing for an unread bin", () => {
-    // The cap kept System from 12:00 on: the 12 earlier bins were not read.
+    // System's oldest kept event is just after 12:00: the 12 earlier bins were not read.
     const records = [rec({ at: DAY_START + 12 * HOUR + 1 }), rec({ at: DAY_START + 20 * HOUR })];
-    const result = summaries(records, {
-      channelReads: { kind: () => "newestOnly", unattributedLoss: false },
-    });
+    const result = summaries(records);
     renderTable({ result });
     const trend = result.summaries[0].trend;
     const bars = document.querySelectorAll("[data-trend-bar]");
@@ -733,12 +731,16 @@ describe("a channel the store loaded only up to its bound", () => {
     });
   }
 
-  /** The backend answers every channel query with `rows` as one batch, and lists Security. */
-  function replyWith(rows: EvtxRecord[]): void {
+  /**
+   * The backend answers every channel query with `rows` as one batch, and lists Security. A query
+   * takes `readTakesMs`: the clock moves on between the query being sent and its reply.
+   */
+  function replyWith(rows: EvtxRecord[], readTakesMs = 0): void {
     vi.mocked(invoke).mockImplementation(async (command: string, args?: unknown) => {
       if (command === "evtx_enumerate_channels") {
         return [{ name: "Security", eventCount: 0, sourceType: "live", enabledState: "enabled" }];
       }
+      if (readTakesMs > 0) vi.setSystemTime(Date.now() + readTakesMs);
       const { channels, requestId } = (args ?? {}) as { channels?: string[]; requestId?: string };
       const channel = channels?.[0] ?? "";
       listeners.get("evtx-record-batch")?.({
@@ -800,7 +802,7 @@ describe("a channel the store loaded only up to its bound", () => {
     expect(document.querySelector('[data-trend-zero][data-bin="20"]')).not.toBeNull();
   });
 
-  it("treats a channel that came back under the bound as read across the whole window", async () => {
+  it("reads a channel that came back under the bound from its oldest kept event too: its log may have wrapped", async () => {
     await loadSecurity(securityEvents(BOUND - 1));
     const state = useEvtxStore.getState();
     expect(state.records).toHaveLength(BOUND - 1);
@@ -808,24 +810,23 @@ describe("a channel the store loaded only up to its bound", () => {
 
     render(<EvtxGroupedView records={state.records} nowEpoch={NOW} />);
     expect(
-      screen.getByText(/^24 h trend: 6 of 24 intervals had events, busiest \d+$/),
+      screen.getByText(/^24 h trend: 6 of 24 intervals had events, busiest \d+; 17 intervals not read$/),
     ).toBeInTheDocument();
-    expect(document.querySelector('[data-trend-zero][data-bin="0"]')).not.toBeNull();
+    expect(document.querySelector('[data-trend-zero][data-bin="0"]')).toBeNull();
+    expect(document.querySelector('[data-trend-zero][data-bin="20"]')).not.toBeNull();
   });
 
   describe("the time each load read through", () => {
     afterEach(() => vi.useRealTimers());
 
-    /** Ten Security events between 18:00 and 20:42, all before a load at 21:30. */
+    /** Security events in bins 15 and 20 of the window, none between, all before a load at 21:30. */
     const beforeLoad = () =>
-      Array.from({ length: 10 }, (_, i) =>
-        rec({
-          eventId: 4624,
-          channel: "Security",
-          at: NOW - 24 * HOUR + Math.round((18 + i * 0.3) * HOUR),
-        }),
+      [15, 15.2, 15.4, 15.6, 15.8, 20, 20.1, 20.2, 20.3, 20.4].map((hour) =>
+        rec({ eventId: 4624, channel: "Security", at: NOW - 24 * HOUR + Math.round(hour * HOUR) }),
       );
     const LOAD_AT = NOW - 2.5 * HOUR;
+    /** How long each query takes between being sent and its reply. */
+    const READ_TAKES = 10 * 60 * 1000;
 
     /**
      * The clock reads LOAD_AT when the load starts and runs on from there: the store's stream
@@ -835,41 +836,50 @@ describe("a channel the store loaded only up to its bound", () => {
       vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
       vi.setSystemTime(LOAD_AT);
     };
-    const expectStampedAtLoad = () => {
+    /**
+     * The stamp is the time the query was sent, not the time its reply landed: every query here
+     * takes READ_TAKES, so a stamp taken after the reply would be at least that late.
+     */
+    const expectStampedAtSend = () => {
       const stamp = useEvtxStore.getState().channelReadThrough.get("Security");
+      expect(Date.now()).toBeGreaterThanOrEqual(LOAD_AT + READ_TAKES);
       expect(stamp).toBeGreaterThanOrEqual(LOAD_AT);
       expect(stamp).toBeLessThan(LOAD_AT + 60_000);
     };
 
     it("a refresh stamps the channel with the time its query was sent, and the trend ends there", async () => {
       clockAtLoad();
-      await loadSecurity(beforeLoad());
-      const state = useEvtxStore.getState();
-      expectStampedAtLoad();
+      replyWith(beforeLoad(), READ_TAKES);
+      liveSecurity(true);
+      await useEvtxStore.getState().refreshLoadedChannels();
+      expectStampedAtSend();
 
+      const state = useEvtxStore.getState();
       render(<EvtxGroupedView records={state.records} nowEpoch={NOW} />);
-      // Read from the window start to 21:30: bin 21 is read only to its middle, 22 and 23 not.
+      // Read from the oldest kept event (bin 15) to 21:30: bin 21 is read only to its middle, and
+      // bins 22 and 23 not at all.
       expect(
-        screen.getByText(/^24 h trend: 3 of 24 intervals had events, busiest \d+; 3 intervals not read$/),
+        screen.getByText(/^24 h trend: 2 of 24 intervals had events, busiest 5; 18 intervals not read$/),
       ).toBeInTheDocument();
       expect(document.querySelector('[data-trend-zero][data-bin="17"]')).not.toBeNull();
+      expect(document.querySelector('[data-trend-zero][data-bin="21"]')).toBeNull();
     });
 
-    it("the automatic load stamps the channel too", async () => {
+    it("the automatic load stamps the channel with the time its query was sent", async () => {
       clockAtLoad();
-      replyWith(beforeLoad());
+      replyWith(beforeLoad(), READ_TAKES);
       await useEvtxStore.getState().enumerateChannels();
       expect(useEvtxStore.getState().loadedChannels.has("Security")).toBe(true);
-      expectStampedAtLoad();
+      expectStampedAtSend();
     });
 
-    it("an explicit Load stamps the channel too", async () => {
+    it("an explicit Load stamps the channel with the time its query was sent", async () => {
       clockAtLoad();
-      replyWith(beforeLoad());
+      replyWith(beforeLoad(), READ_TAKES);
       liveSecurity(false);
       await useEvtxStore.getState().queryChannels(["Security"]);
       expect(useEvtxStore.getState().loadedChannels.has("Security")).toBe(true);
-      expectStampedAtLoad();
+      expectStampedAtSend();
     });
 
     it("drops a channel's stamp when it is reloaded, until that load lands", async () => {

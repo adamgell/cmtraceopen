@@ -78,13 +78,13 @@ function placedMs(record: EvtxRecord): number | null {
 // ── Which channels were read, from the coverage the store holds ─────────────
 
 /**
- * How much of a channel's time the loaded records cover.
- * - `complete`: no gap says an event of the channel is missing.
- * - `newestOnly`: the automatic load stopped at its bound and kept the newest events, so the
- *   channel was read from its oldest loaded event onward and not before it.
+ * Whether a gap says a channel lost events.
+ * - `complete`: no gap says an event of the channel is missing between its oldest and newest
+ *   kept events. Nothing before its oldest kept event is claimed either way (see
+ *   `channelReadSpans`), so a load that kept the newest events only is complete too.
  * - `incomplete`: a gap says events are missing, at times nothing records.
  */
-export type ChannelReadKind = "complete" | "newestOnly" | "incomplete";
+export type ChannelReadKind = "complete" | "incomplete";
 
 export interface ChannelReadInput {
   remoteMachine: string | null;
@@ -99,11 +99,21 @@ export interface ChannelReadInput {
   tailCoverage: readonly string[];
   /**
    * True for the reason a load gives when it stopped at its bound and kept the newest events
-   * (`isNewestOnlyGapReason` in `evtx-store.ts`, beside the code that writes it). Passed in, so
-   * this module stays free of the store and the wording lives in one place.
+   * (`isNewestOnlyGapReason` in `evtx-store.ts`, beside the code that writes it). That note loses
+   * nothing after the oldest kept event, which is where a read starts anyway, so it is not a loss.
+   * Passed in, so this module stays free of the store and the wording lives in one place.
    */
   isNewestOnlyReason: (reason: string) => boolean;
 }
+
+/**
+ * The tail of the reason the parser gives a source-manifest budget gap (kind `limit`) when its
+ * byte or record budget runs out: `parse_evtx_manifest` in `src-tauri/src/event_log/parser.rs`.
+ * The gap names one file but stands for every later file, which it does not name, so no channel
+ * can be charged with it and it is a loss no channel claims. #936 gives these gaps a proper
+ * attribution; until then the wording is matched here, in one place.
+ */
+export const MANIFEST_BUDGET_OMITTED_REASON = "later records/files were omitted";
 
 /** Kinds that leave every event in place: an unformatted message, or a source that holds none. */
 const COMPLETE_DESPITE_KINDS: ReadonlySet<EvtxCoverageGapKind> = new Set(["provider", "empty"]);
@@ -215,18 +225,18 @@ export function classifyChannelReads(input: ChannelReadInput): ChannelReads {
       .map(parseGapString),
   ];
 
-  const kinds = new Map<string, ChannelReadKind>();
+  const incomplete = new Set<string>();
   let unattributedLoss = false;
   for (const gap of gaps) {
-    let kind: ChannelReadKind | null;
-    if (gap.kind !== null) {
-      kind = COMPLETE_DESPITE_KINDS.has(gap.kind) ? null : "incomplete";
-    } else if (input.isNewestOnlyReason(gap.reason)) {
-      kind = "newestOnly";
-    } else {
-      kind = NEUTRAL_REASON.test(gap.reason) ? null : "incomplete";
+    const loss =
+      gap.kind !== null
+        ? !COMPLETE_DESPITE_KINDS.has(gap.kind)
+        : !input.isNewestOnlyReason(gap.reason) && !NEUTRAL_REASON.test(gap.reason);
+    if (!loss) continue;
+    if (gap.kind === "limit" && gap.reason.endsWith(MANIFEST_BUDGET_OMITTED_REASON)) {
+      unattributedLoss = true;
+      continue;
     }
-    if (kind === null) continue;
     const owners = ownersOf(gap.source);
     if (owners.size === 0) {
       const stem = fileStemChannel(gap.source);
@@ -241,15 +251,16 @@ export function classifyChannelReads(input: ChannelReadInput): ChannelReads {
       // channel (export1.evtx holding System events) is treated as outside the scope. The
       // channel pane and the coverage banner still disclose it.
       for (const channel of channelsByLowerName.get(stem.toLowerCase()) ?? []) {
-        kinds.set(channel, "incomplete");
+        incomplete.add(channel);
       }
       continue;
     }
-    for (const channel of owners) {
-      if (kinds.get(channel) !== "incomplete") kinds.set(channel, kind);
-    }
+    for (const channel of owners) incomplete.add(channel);
   }
-  return { kind: (channel) => kinds.get(channel) ?? "complete", unattributedLoss };
+  return {
+    kind: (channel) => (incomplete.has(channel) ? "incomplete" : "complete"),
+    unattributedLoss,
+  };
 }
 
 // ── Summaries ───────────────────────────────────────────────────────────────
@@ -299,9 +310,10 @@ export interface GroupSummariesInput {
   sourceMode: "files" | "live" | null;
   channelReads: ChannelReads;
   /**
-   * The channels the visible records can come from: the selected channels that are loaded (live)
-   * or the selected channels of the file set. An empty bin is 0 only where every one of them was
-   * read across the whole bin, whatever channels the group's own events came from.
+   * The channels the visible records can come from: every selected channel, loaded or not, in
+   * both modes. An empty bin is 0 only where every one of them was read across the whole bin,
+   * whatever channels the group's own events came from. A selected channel that proves no span (no
+   * kept event, or live with no read time) leaves every empty bin unknown.
    */
   scopeChannels: readonly string[];
   /** Live: per channel, the instant its current load read through (`channelReadThrough`). */
@@ -354,12 +366,17 @@ function union(intervals: Iterable<Interval>): Interval[] {
 
 /**
  * The times each channel was read across, or null where nothing about its empty bins is known.
+ * Only what the loaded records and the recorded read times prove is claimed.
  *
- * Live: one interval ending where the channel's current load read through (`readThrough`), never
- * at a record, so live-tail records never extend it. It starts at the window's start for a channel
- * read whole under a time window (the query asked for the whole window), and at the channel's
- * oldest kept event when the load kept the newest only or asked for no window. A channel with no
- * read time was not read by a load this view knows of.
+ * No read starts before the channel's oldest kept event, never at the window's start: a log keeps
+ * only what its size allows, and a wrapped log answers a whole-window query with no gap although
+ * its older events were overwritten. A channel with no kept event proves no span at all.
+ *
+ * Live: one interval, from the oldest kept event to where the channel's current load read through
+ * (`readThrough`), never to a record, so live-tail records never extend it. A channel with no
+ * read time (a cancelled or failed load, a channel never loaded) proves nothing, even when some of
+ * its records are on screen: that is the stricter of ending at its newest record or knowing
+ * nothing.
  *
  * Files: a file holds a contiguous run of events and nothing either side of it, so each file
  * covers its own oldest to newest event, and a channel read from several files covers the union
@@ -367,7 +384,6 @@ function union(intervals: Iterable<Interval>): Interval[] {
  */
 function channelReadSpans(
   input: GroupSummariesInput,
-  span: TrendSpan,
 ): (channel: string) => readonly Interval[] | null {
   const live = input.sourceMode === "live";
   const oldest = new Map<string, number>();
@@ -392,16 +408,14 @@ function channelReadSpans(
   }
   const cache = new Map<string, readonly Interval[] | null>();
   const spansOf = (channel: string): readonly Interval[] | null => {
-    const read = input.channelReads.kind(channel);
-    if (read === "incomplete") return null;
+    if (input.channelReads.kind(channel) === "incomplete") return null;
     if (!live) {
       const byFile = files.get(channel);
       return byFile === undefined ? null : union(byFile.values());
     }
+    const start = oldest.get(channel);
     const end = input.readThrough.get(channel);
-    const start =
-      read === "complete" && input.timeWindow !== "all" ? span.startMs : oldest.get(channel);
-    return end === undefined || start === undefined ? null : [{ startMs: start, endMs: end }];
+    return start === undefined || end === undefined ? null : [{ startMs: start, endMs: end }];
   };
   return (channel) => {
     if (!cache.has(channel)) cache.set(channel, spansOf(channel));
@@ -583,7 +597,7 @@ export function buildGroupSummaries(input: GroupSummariesInput): GroupSummariesR
   const span = trendSpan(input);
   let readBins: ReadBins | null = null;
   if (span !== null) {
-    const spansOf = channelReadSpans(input, span);
+    const spansOf = channelReadSpans(input);
     const scope = new Set(input.scopeChannels);
     const none = input.channelReads.unattributedLoss;
     readBins = {

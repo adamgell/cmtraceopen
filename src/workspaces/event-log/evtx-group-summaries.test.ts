@@ -5,6 +5,7 @@ import {
   GROUP_RECENT_ITEMS,
   GROUP_TREND_BINS,
   groupedViewField,
+  MANIFEST_BUDGET_OMITTED_REASON,
   trendWindowLabel,
   type ChannelReadKind,
   type ChannelReads,
@@ -303,15 +304,13 @@ describe("buildGroupSummaries: the 24-bin trend", () => {
 });
 
 describe("buildGroupSummaries: a trend never draws an unread span as zero (soul.md)", () => {
-  it("leaves bins before a capped channel's oldest loaded event unknown, and later empty bins zero", () => {
-    // The cap kept the newest events only: System was read back to 12:00 and no further.
+  it("leaves bins before a channel's oldest kept event unknown, and later empty bins zero", () => {
+    // Whether the load stopped at its bound or read whole, System proves 12:00 onward only.
     const records = [
       rec({ eventId: 7036, at: DAY_START + 12 * HOUR + 1 }),
       rec({ eventId: 7036, at: DAY_START + 20 * HOUR }),
     ];
-    const { trend } = buildGroupSummaries(
-      input({ records, channelReads: reads({ System: "newestOnly" }) }),
-    ).summaries[0];
+    const { trend } = buildGroupSummaries(input({ records })).summaries[0];
     // Bin 12 is read only from 12:00:00.001, so it is unknown but for the event it holds.
     expect(bins(trend, 0, 11).every((bin) => bin === null)).toBe(true);
     expect(trend[hourBin(DAY_START + 12 * HOUR + 1)]).toBe(1);
@@ -327,6 +326,27 @@ describe("buildGroupSummaries: a trend never draws an unread span as zero (soul.
     ).summaries;
     expect(summary.trend[3]).toBe(1);
     expect(summary.trend.filter((bin) => bin === null)).toHaveLength(GROUP_TREND_BINS - 1);
+  });
+
+  it("a wrapped busy channel loaded unbounded, with no gap, is unknown before its oldest event", () => {
+    // The log kept only its last six hours: the query read the whole window and reported nothing.
+    const records = Array.from({ length: 60 }, (_, i) =>
+      rec({ eventId: 4624, channel: "Security", at: DAY_START + 18 * HOUR + i * 6 * 60 * 1000 }),
+    );
+    const { trend } = buildGroupSummaries(input({ records })).summaries[0];
+    expect(bins(trend, 0, 17).every((bin) => bin === null)).toBe(true);
+    expect(bins(trend, 18, 23).every((bin) => (bin ?? 0) > 0)).toBe(true);
+  });
+
+  it("a quiet channel with one event 3 days into a 30-day window is unknown before it", () => {
+    const windowStart = NOW - 30 * 24 * HOUR;
+    // 30 days in 24 bins of 30 hours: the event at 72 hours falls in bin 2.
+    const records = [rec({ channel: "Setup", at: windowStart + 72 * HOUR })];
+    const { trend } = buildGroupSummaries(input({ records, timeWindow: "30d" })).summaries[0];
+    expect(trend[0]).toBeNull();
+    expect(trend[1]).toBeNull();
+    expect(trend[2]).toBe(1);
+    expect(bins(trend, 3, 23).every((bin) => bin === 0)).toBe(true);
   });
 
   it("leaves every empty bin unknown when a loss names no channel", () => {
@@ -353,9 +373,7 @@ describe("buildGroupSummaries: every channel in the visible scope must be read",
       rec({ eventId: 1000, level: "Error", channel: "Application", at: DAY_START + 9 * HOUR }),
       rec({ eventId: 1001, channel: "Application", at: DAY_START + 23 * HOUR }),
     ];
-    const result = buildGroupSummaries(
-      input({ records, field: "level", channelReads: reads({ System: "newestOnly" }) }),
-    );
+    const result = buildGroupSummaries(input({ records, field: "level" }));
     const errors = result.summaries.find((summary) => summary.value === "Error")!;
     // Any System Error before 12:00 belongs to this group, and System was not read there.
     for (const bin of [0, 1, 2, 4, 5, 6, 7, 8, 10, 11]) expect(errors.trend[bin], `bin ${bin}`).toBeNull();
@@ -369,20 +387,46 @@ describe("buildGroupSummaries: every channel in the visible scope must be read",
       rec({ eventId: 1000, channel: "Application", at: DAY_START + 5 * HOUR }),
     ];
     const records = [...capped(), ...application];
-    const inScope = buildGroupSummaries(
-      input({ records, channelReads: reads({ System: "newestOnly" }) }),
-    ).summaries.find((summary) => summary.value === "1000")!;
+    const inScope = buildGroupSummaries(input({ records })).summaries.find(
+      (summary) => summary.value === "1000",
+    )!;
     expect(inScope.trend[4]).toBeNull();
     expect(inScope.trend[13]).toBe(0);
     // The same events with System not in the visible scope: Application alone decides.
     const outOfScope = buildGroupSummaries(
-      input({
-        records,
-        channelReads: reads({ System: "newestOnly" }),
-        scopeChannels: ["Application"],
-      }),
+      input({ records, scopeChannels: ["Application"] }),
     ).summaries.find((summary) => summary.value === "1000")!;
-    expect(outOfScope.trend[4]).toBe(0);
+    expect(outOfScope.trend[4]).toBeNull();
+    expect(outOfScope.trend[6]).toBe(0);
+  });
+
+  it("leaves every empty bin unknown when a selected channel holds records but has no read time", () => {
+    // A cancelled or failed load: System's records are on screen, but no load finished reading it.
+    const records = [
+      rec({ eventId: 1000, channel: "Application", at: DAY_START + 3 * HOUR }),
+      rec({ eventId: 7036, channel: "System", at: DAY_START + 20 * HOUR }),
+    ];
+    const application = buildGroupSummaries(
+      input({ records, readThrough: new Map([["Application", NOW]]) }),
+    ).summaries.find((summary) => summary.value === "1000")!;
+    expect(application.trend.filter((bin) => bin === null)).toHaveLength(GROUP_TREND_BINS - 1);
+  });
+
+  it("leaves every empty bin unknown when a selected channel holds no records, read or not", () => {
+    // A denied Security in an unelevated load, or a loaded channel with nothing in the window.
+    const records = [rec({ channel: "Application", at: DAY_START + 3 * HOUR })];
+    for (const readThrough of [
+      new Map([["Application", NOW]]),
+      new Map([
+        ["Application", NOW],
+        ["Security", NOW],
+      ]),
+    ]) {
+      const [summary] = buildGroupSummaries(
+        input({ records, scopeChannels: ["Application", "Security"], readThrough }),
+      ).summaries;
+      expect(summary.trend.filter((bin) => bin === null)).toHaveLength(GROUP_TREND_BINS - 1);
+    }
   });
 
   it("leaves every empty bin unknown when a channel in scope has no read time", () => {
@@ -441,14 +485,15 @@ describe("buildGroupSummaries: a live read ends where the load read, not at a re
     expect(tail.trend[14]).toBe(1);
   });
 
-  it("a quiet complete channel draws 0 up to its read time, after its newest event", () => {
+  it("a quiet channel draws 0 from its oldest event up to its read time, after its newest event", () => {
     const records = [rec({ channel: "Application", at: DAY_START + 5 * HOUR })];
     const [summary] = buildGroupSummaries(
       input({ records, readThrough: new Map([["Application", DAY_START + 22.5 * HOUR]]) }),
     ).summaries;
-    expect(bins(summary.trend, 0, 4).every((bin) => bin === 0)).toBe(true);
+    expect(bins(summary.trend, 0, 4).every((bin) => bin === null)).toBe(true);
     expect(summary.trend[5]).toBe(1);
     expect(bins(summary.trend, 6, 21).every((bin) => bin === 0)).toBe(true);
+    expect(summary.trend[22]).toBeNull();
     expect(summary.trend[23]).toBeNull();
   });
 
@@ -482,7 +527,7 @@ describe("buildGroupSummaries: a live read ends where the load read, not at a re
     expect(bins(application.trend, 9, 23).every((bin) => bin === null)).toBe(true);
   });
 
-  it("starts a live channel at its oldest event when there is no window: the query asked for no start", () => {
+  it("starts a live channel at its oldest event with no window too", () => {
     const records = [
       rec({ eventId: 1, channel: "System", at: DAY_START }),
       rec({ eventId: 1, channel: "System", at: DAY_START + 24 * HOUR }),
@@ -599,10 +644,10 @@ describe("classifyChannelReads", () => {
     expect(read.unattributedLoss).toBe(false);
   });
 
-  it("calls a channel newest-only when its gap is the bound the predicate recognizes", () => {
+  it("does not count the bound's note as a loss: a read starts at the oldest kept event anyway", () => {
     const read = classifyChannelReads({ ...base, legacyCoverage: [`Security: ${CAP}`] });
-    expect(read.kind("Security")).toBe("newestOnly");
-    expect(read.kind("System")).toBe("complete");
+    expect(read.kind("Security")).toBe("complete");
+    expect(read.unattributedLoss).toBe(false);
   });
 
   it("matches a remote channel's gap by machine and channel", () => {
@@ -740,6 +785,50 @@ describe("classifyChannelReads", () => {
         ],
       });
       expect(read.kind("Microsoft-Windows-AAD/Operational")).toBe("incomplete");
+    });
+
+    it("a manifest budget gap stands for later files it does not name", () => {
+      // The reviewer's path order: the first two files fit the 512 MiB budget, the TaskScheduler
+      // file would not, so it takes the gap and PC02's System.evtx is never parsed or named.
+      const byteBudget = "source manifest byte budget of 536870912 bytes was exhausted";
+      const file = (name: string, path: string) => ({
+        name,
+        eventCount: 1,
+        sourceType: { file: { path } },
+      });
+      const read = classifyChannelReads({
+        ...base,
+        channels: [
+          file("Security", "/cases/PC01/Security.evtx"),
+          file("System", "/cases/PC01/System.evtx"),
+        ],
+        coverageDetails: [
+          {
+            source: "/cases/PC02/Microsoft-Windows-TaskScheduler%4Operational.evtx",
+            kind: "limit",
+            reason: `${byteBudget}; ${MANIFEST_BUDGET_OMITTED_REASON}`,
+          },
+        ],
+        legacyCoverage: [
+          `/cases/PC02/Microsoft-Windows-TaskScheduler%4Operational.evtx: ${byteBudget}; later files were not parsed`,
+        ],
+      });
+      expect(read.unattributedLoss).toBe(true);
+    });
+
+    it("so does a record budget gap on the last file that was parsed", () => {
+      const read = classifyChannelReads({
+        ...base,
+        channels: [{ name: "System", eventCount: 1, sourceType: { file: { path: "/cases/PC01/System.evtx" } } }],
+        coverageDetails: [
+          {
+            source: "/cases/PC01/System.evtx",
+            kind: "limit",
+            reason: `source manifest record budget of 1000000 records was exhausted; ${MANIFEST_BUDGET_OMITTED_REASON}`,
+          },
+        ],
+      });
+      expect(read.unattributedLoss).toBe(true);
     });
 
     it("treats a failed file whose name is no channel (export1.evtx) as outside the scope", () => {

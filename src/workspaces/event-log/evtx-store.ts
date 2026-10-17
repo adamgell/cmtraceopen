@@ -1211,7 +1211,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
             resetStreamedRecords([ch], requestId);
             try {
-              // The read reaches at least this far; taken before the query is sent.
+              // The read reaches at least this far; taken before the query is sent. Local clock:
+              // a remote service evaluates the window on its own clock, so a skewed remote clock
+              // moves the read's real end by the skew (residual, on the #933 lab list).
               const readAt = Date.now();
               const result = await invokeEventQuery<EvtxParseResult>(
                 requestId,
@@ -1409,7 +1411,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       channels,
       MAX_CONCURRENT_CHANNEL_QUERIES,
       async (ch) => {
-        // The read reaches at least this far; taken before the query is sent.
+        // The read reaches at least this far; taken before the query is sent. Local clock: a
+        // remote service evaluates the window on its own clock, so a skewed remote clock moves
+        // the read's real end by the skew (residual, on the #933 lab list).
         const readAt = Date.now();
         try {
           const result = await invokeEventQuery<EvtxParseResult>(
@@ -1619,7 +1623,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) {
           return { channel, result: null, error: null, stale: true, readAt: 0 };
         }
-        // The read reaches at least this far; taken before the query is sent.
+        // The read reaches at least this far; taken before the query is sent. Local clock: a
+        // remote service evaluates the window on its own clock, so a skewed remote clock moves
+        // the read's real end by the skew (residual, on the #933 lab list).
         const readAt = Date.now();
         try {
           const result = await invokeEventQuery<EvtxParseResult>(
