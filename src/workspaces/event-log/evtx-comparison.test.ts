@@ -1396,7 +1396,7 @@ describe("a live comparison", () => {
   it("carries the caller's notes after the remote one, without calling any of them a gap", () => {
     const session = begin({
       remote: true,
-      notes: ["Events after 2026-08-10T12:00:00.000Z (live tail) are not included."],
+      notes: ["2 events the live tail appended to the compared channels are not counted in the current period."],
     });
     deliver(session, "System", systemEvents(1));
     deliver(session, "Application", []);
@@ -1405,7 +1405,7 @@ describe("a live comparison", () => {
     if (outcome.status === "complete") {
       expect(outcome.result.notes).toEqual([
         "Periods are computed on this computer's clock",
-        "Events after 2026-08-10T12:00:00.000Z (live tail) are not included.",
+        "2 events the live tail appended to the compared channels are not counted in the current period.",
       ]);
       expect(outcome.result.gaps).toEqual([]);
     }

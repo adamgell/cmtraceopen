@@ -54,6 +54,7 @@ import {
   channelStartGap,
   computePriorWindow,
   isComparisonRequestId,
+  isTailAppended,
   markTailAppended,
   messageTextCriterionActive,
   observeComparisonBatch,
@@ -432,17 +433,6 @@ let requestGeneration = 0;
 let activeRequestId = "initial";
 
 /**
- * When the live tail last appended a batch; 0 until one has, and cleared by the next load. It only
- * says whether the grid holds events the comparison leaves out: a tail reads events that have not
- * happened yet, so it never extends the period a load covered.
- *
- * Known limitation: any later load clears it, though the events the tail appended stay in
- * `records` for channels that load does not refresh. They remain on the grid and outside the period
- * compared, but the "(live tail)" note is no longer shown for them. The comparison itself is
- * unaffected.
- */
-let lastTailAppendEpoch = 0;
-/**
  * When each loaded channel's current-period read was issued (taken immediately before its query is
  * invoked) and when it replied (taken as the invoke resolves). The service evaluates the window
  * after the invoke, at a time this side does not observe, so the reply bounds it from above and the
@@ -547,7 +537,6 @@ function beginRequest(): string {
   activeTailSourceRequestId = null;
   activeTailChannels = new Set<string>();
   activeRequestId = `event-log-${++requestGeneration}`;
-  lastTailAppendEpoch = 0;
   // A new request supersedes every stale tail cleanup represented above. Remove its old failure
   // records before clearing the gap-owner index, otherwise a later stop completion can retain
   // request-scoped state that no longer has a visible owner.
@@ -2693,7 +2682,6 @@ listen<EvtxTailBatch>("evtx-tail-batch", (event) => {
     tailSequences.set(key, sequences);
   }
   if (sequences.has(payload.sequence)) return;
-  lastTailAppendEpoch = Date.now();
   markTailAppended(payload.records);
 
   const missing: string[] = [];
@@ -3000,10 +2988,18 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
   // Tail gaps are not among these: the comparison never counts the tail's events, so what the tail
   // did or did not deliver does not bear on its completeness. The note below covers it.
 
-  // The tail's events are on the grid and outside the period compared; say so.
+  // What the tail appended to the compared channels is on the grid and never counted, whatever
+  // its timestamp, so say how much. This reads the records themselves: a later load tears the tail
+  // down, but the rows it appended stay for the channels that load does not refresh.
+  const comparedChannels = new Set(channels);
+  const tailAppended = state.records.filter(
+    (record) => comparedChannels.has(record.channel) && isTailAppended(record)
+  ).length;
   const notes =
-    lastTailAppendEpoch > anchorEpoch
-      ? [`Events after ${new Date(anchorEpoch).toISOString()} (live tail) are not included.`]
+    tailAppended > 0
+      ? [
+          `${tailAppended} ${tailAppended === 1 ? "event the live tail appended to the compared channels is" : "events the live tail appended to the compared channels are"} not counted in the current period.`,
+        ]
       : [];
   // A collector's forwarded events arrive through subscriptions, in batches, after they were
   // written. The current period was read once; the previous period is read later and includes its
