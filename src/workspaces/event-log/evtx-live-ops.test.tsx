@@ -799,7 +799,7 @@ describe("event-log live operations", () => {
       warn.mockRestore();
     });
 
-    it("survives more than 64 later supersessions without landing in another source's view", async () => {
+    it("survives more than 64 later supersessions: never in another source's view, still in its own", async () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       let doomedRequestId = "";
       invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
@@ -845,6 +845,92 @@ describe("event-log live operations", () => {
       expect(useEvtxStore.getState().remoteMachine).toBe("SRV01");
       expect(gapsOf(doomedRequestId)).toEqual([]);
       expect(useEvtxStore.getState().coverageGaps.join("\n")).not.toContain(doomedRequestId);
+
+      // Back on the machine the tail belonged to, once that view is stable, the same doomed stop is
+      // retried by the next load and its failure belongs here: the origin outlived all of that.
+      invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+        if (name === "evtx_stop_tail") {
+          if (args.requestId === doomedRequestId) {
+            throw new Error(stopFailure(args.requestId, args.channel));
+          }
+          return { ...startReply(args), active: false, nextSequence: 1 };
+        }
+        if (name === "evtx_enumerate_channels") {
+          return [{ name: "System", eventCount: 0, sourceType: "live", enabledState: "enabled" }];
+        }
+        if (name === "evtx_query_channels") return emptyRead(args);
+        return undefined;
+      });
+      await useEvtxStore.getState().enumerateLocalChannels();
+      await waitFor(() => {
+        const state = useEvtxStore.getState();
+        expect(state.sourceMode).toBe("live");
+        expect(state.isLoading).toBe(false);
+        expect(state.loadedChannels.has("System")).toBe(true);
+      });
+      expect(useEvtxStore.getState().remoteMachine).toBeNull();
+      await useEvtxStore.getState().queryChannels(["System"]);
+      await waitFor(() => expect(gapsOf(doomedRequestId).length).toBeGreaterThan(0));
+      warn.mockRestore();
+    });
+
+    it("keeps the origin of a stop that is still pending when the tail is no longer active", async () => {
+      // Two loads on one live source: the first supersedes the tail, so by the second prune the tail
+      // is neither active nor starting, and only its pending stop says its origin is still needed.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const stop = deferred<never>();
+      let requestId = "";
+      invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+        if (name === "evtx_start_tail") return startReply(args);
+        if (name === "evtx_stop_tail") {
+          if (args.requestId === requestId) return stop.promise;
+          return { ...startReply(args), active: false, nextSequence: 1 };
+        }
+        if (name === "evtx_query_channels") return emptyRead(args);
+        return undefined;
+      });
+      await useEvtxStore.getState().startLiveTail();
+      requestId = useEvtxStore.getState().tailRequestId!;
+
+      await useEvtxStore.getState().queryChannels(["System"]);
+      await useEvtxStore.getState().queryChannels(["System"]);
+      stop.reject(new Error(stopFailure(requestId, "Application")));
+
+      await waitFor(() => expect(gapsOf(requestId).length).toBeGreaterThan(0));
+      expect(warn).not.toHaveBeenCalledWith(
+        expect.stringContaining(`request ${requestId} was not found`),
+      );
+      warn.mockRestore();
+    });
+
+    it("keeps the origin of a start that is still pending when the tail is no longer active", async () => {
+      // The first load detaches a start that has not answered; the second prune finds it neither
+      // active nor stopping, and only its pending start says its origin is still needed. When the
+      // start answers it is stopped, and that stop fails.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const startGate = deferred<void>();
+      invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+        if (name === "evtx_start_tail") {
+          await startGate.promise;
+          return startReply(args);
+        }
+        if (name === "evtx_stop_tail") throw new Error(stopFailure(args.requestId, args.channel));
+        if (name === "evtx_query_channels") return emptyRead(args);
+        return undefined;
+      });
+      const starting = useEvtxStore.getState().startLiveTail();
+      const startCall = invoke.mock.calls.find(([name]) => name === "evtx_start_tail");
+      const requestId = String((startCall?.[1] as Record<string, unknown>).requestId);
+
+      await useEvtxStore.getState().queryChannels(["System"]);
+      await useEvtxStore.getState().queryChannels(["System"]);
+      startGate.resolve();
+      expect(await starting).toEqual([]);
+
+      await waitFor(() => expect(gapsOf(requestId).length).toBeGreaterThan(0));
+      expect(warn).not.toHaveBeenCalledWith(
+        expect.stringContaining(`request ${requestId} was not found`),
+      );
       warn.mockRestore();
     });
 
