@@ -74,6 +74,8 @@ function seed(overrides: Record<string, unknown> = {}) {
   });
 }
 
+const tooltip = () => document.querySelector<HTMLElement>("[data-evtx-tooltip]");
+
 function stubPlotRect(width = 720) {
   const plot = document.querySelector<HTMLElement>('[data-evtx-region="histogram"] [data-evtx-layer="bars"]')!
     .parentElement!;
@@ -296,21 +298,25 @@ describe("EvtxHistogram", () => {
     // Bucket 10 spans x = 100 + 10 * 10 to 100 + 11 * 10.
     fireEvent.pointerMove(plot, { clientX: 100 + 10 * 10 + 4 });
     const text = describeBucket(histogram.buckets[10], "utc");
-    expect(screen.getByRole("tooltip")).toHaveTextContent(text);
+    expect(tooltip()).toHaveTextContent(text);
     expect(text).toContain(TIME_RANGE_SEPARATOR);
     expect(text.endsWith("(UTC)")).toBe(true);
     fireEvent.pointerMove(plot, { clientX: 100 + 71 * 10 + 9 });
-    expect(screen.getByRole("tooltip")).toHaveTextContent(describeBucket(histogram.buckets[71], "utc"));
+    expect(tooltip()).toHaveTextContent(describeBucket(histogram.buckets[71], "utc"));
     fireEvent.pointerLeave(plot);
-    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(tooltip()).toBeNull();
   });
 
   it("is never the only carrier of a value: the tooltip is hidden from assistive technology", () => {
     render(<EvtxHistogram records={dayOfEvents()} loading={false} />);
     const plot = stubPlotRect(720);
     fireEvent.pointerMove(plot, { clientX: 150 });
-    const tooltip = screen.getByRole("tooltip");
-    expect(tooltip.querySelector("[aria-hidden='true']")).not.toBeNull();
+    expect(tooltip()).toHaveAttribute("aria-hidden", "true");
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    // Its words are in the table and the slider's value text, which assistive technology reaches.
+    expect(within(screen.getByRole("table")).getAllByRole("rowheader").map((cell) => cell.textContent)).toContain(
+      tooltip()!.textContent,
+    );
   });
 
   it("reads the zone from the store: local mode relabels the legend with the offset", () => {

@@ -11,9 +11,18 @@
  * text use `colorNeutralForeground2`, not the spec's Foreground3 (spec 6.1, axis labels), which
  * measures 3.37:1 on the solarized-dark surface and 3.03:1 on dracula; text needs 4.5:1.
  */
-import { memo, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Tooltip, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
+import {
+  memo,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
 import { getLogListMetrics } from "../../lib/log-accessibility";
+import { getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import { INSIGHTS_DEBOUNCE_MS, useThrottledValue } from "./EvtxInsightsRail";
 import { formatCoverageGap } from "./evtx-coverage";
@@ -29,11 +38,28 @@ import {
   describeFigure,
   describeUntimed,
   fitScale,
+  rangeOnPlot,
   type EvtxHistogram as HistogramData,
 } from "./evtx-histogram";
-import { bucketIndexFromFraction } from "./evtx-histogram-brush";
+import {
+  brushPaletteFor,
+  bucketIndexFromFraction,
+  clampBrushState,
+  draftSpan,
+  initialBrushCursor,
+  rangeAfterActivate,
+  rangeOfSpan,
+  reduceBrushKey,
+  solveBrushOpacity,
+  spanOfIndices,
+  spanOfRange,
+  spanToApply,
+  type BrushKey,
+  type BrushKeyState,
+  type BucketSpan,
+} from "./evtx-histogram-brush";
 import { useEvtxStore } from "./evtx-store";
-import { timeZoneLabel } from "./evtx-time";
+import { formatTimeRange, timeZoneLabel } from "./evtx-time";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 import type { EvtxLevel, EvtxRecord } from "./types";
 
@@ -48,6 +74,11 @@ const FORCED_COLORS = "@media (forced-colors: active)";
  * labels, legend text and notes use `colorNeutralForeground2` (at least 5.61:1 in every theme).
  */
 const TEXT_COLOR = tokens.colorNeutralForeground2;
+
+/** The note when the applied range lies wholly off the charted events (a filter shrank them). */
+const RANGE_OUTSIDE_NOTE = "The time range is outside the charted events.";
+
+const BRUSH_KEYS: readonly string[] = ["ArrowLeft", "ArrowRight", "Home", "End"];
 
 /** The figure's name before anything is charted. */
 const EMPTY_HISTOGRAM = buildHistogram([], "utc");
@@ -68,6 +99,37 @@ const useStyles = makeStyles({
     position: "relative",
     height: `${HISTOGRAM_BAR_AREA_PX}px`,
     outlineStyle: "none",
+    touchAction: "none",
+    userSelect: "none",
+    ":focus-visible": {
+      outlineStyle: "solid",
+      outlineWidth: "2px",
+      outlineColor: tokens.colorStrokeFocus2,
+      outlineOffset: "1px",
+    },
+  },
+  interactive: { cursor: "crosshair" },
+  // One tooltip for the plot, drawn here rather than with Fluent's Tooltip: that component handles
+  // Escape on the document and marks it handled, which would stop the workspace's Escape from
+  // clearing the time range whenever a tooltip was showing (on hover or at the keyboard cursor).
+  tooltip: {
+    position: "absolute",
+    bottom: "calc(100% + 4px)",
+    zIndex: 10,
+    pointerEvents: "none",
+    whiteSpace: "nowrap",
+    padding: "4px 8px",
+    borderRadius: tokens.borderRadiusMedium,
+    color: tokens.colorNeutralForeground1,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    boxShadow: tokens.shadow8,
+    fontFamily: tokens.fontFamilyNumeric,
+    fontVariantNumeric: "tabular-nums",
+  },
+  wash: {
+    pointerEvents: "none",
+    [FORCED_COLORS]: { forcedColorAdjust: "none" },
   },
   layer: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 },
   // The level colors carry the meaning, so forced colors must not repaint them.
@@ -188,7 +250,6 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
   // Until the throttled set catches up with an arrival, an empty `shown` is not "no events".
   const catchingUp = shown !== records && shown.length === 0;
   const histogram = useMemo(() => buildHistogram(shown, timeZoneMode), [shown, timeZoneMode]);
-  const scale = useMemo(() => fitScale(histogram), [histogram]);
   const colors = useMemo(
     () =>
       Object.fromEntries(
@@ -202,19 +263,49 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
   );
 
   const plotRef = useRef<HTMLDivElement>(null);
+  const descriptionId = useId();
+  const timeRange = useEvtxStore((s) => s.timeRange);
+  const setTimeRange = useEvtxStore((s) => s.setTimeRange);
+  const themeId = useUiStore((s) => s.themeId);
+  // How opaque the wash over the brushed buckets is: solved from the resolved tokens (see
+  // `solveBrushOpacity`), so every bar keeps 3:1 on it in every theme.
+  const washOpacity = useMemo(
+    () => solveBrushOpacity(brushPaletteFor(getThemeById(themeId))),
+    [themeId],
+  );
   const [hover, setHover] = useState<number | null>(null);
+  const [focused, setFocused] = useState(false);
+  const [keys, setKeys] = useState<BrushKeyState | null>(null);
+  const [drag, setDrag] = useState<{ anchor: number; current: number } | null>(null);
+  // The buckets a gesture started on. A live tail can regrid the chart under a pointer or a pending
+  // keyboard selection; the gesture keeps the buckets it began with and commits their edges.
+  const [frozen, setFrozen] = useState<HistogramData | null>(null);
 
-  const count = histogram.buckets.length;
+  const view = frozen ?? histogram;
+  const count = view.buckets.length;
+  const scale = useMemo(() => fitScale(view), [view]);
   const ready = !loading && !catchingUp && histogram.domain !== null;
   const axisPx = Math.max(9, metrics.fontSize - 4);
   const smallPx = Math.max(10, metrics.fontSize - 3);
   const axisHeight = Math.max(16, Math.round(axisPx * 1.5));
-  const ticks = useMemo(() => buildAxisTicks(histogram, timeZoneMode), [histogram, timeZoneMode]);
+  const ticks = useMemo(() => buildAxisTicks(view, timeZoneMode), [view, timeZoneMode]);
+
+  const appliedSpan = ready && timeRange !== null ? spanOfRange(view, timeRange) : null;
+  const appliedOnPlot = ready && timeRange !== null ? rangeOnPlot(view, timeRange) : null;
+  const key = keys === null ? null : clampBrushState(keys, count);
+  const draft: BucketSpan | null =
+    drag !== null ? spanOfIndices(drag.anchor, drag.current) : key === null ? null : draftSpan(key);
+  const draftOnPlot = ready && draft !== null ? rangeOnPlot(view, rangeOfSpan(view, draft)) : null;
+  // A gesture in progress shows its draft alone: the wash over an applied range as well would be
+  // twice as opaque as the opacity that was solved.
+  const shownRange = draftOnPlot ?? appliedOnPlot;
+  const cursor = key?.cursor ?? initialBrushCursor(count, appliedSpan);
 
   const notes: string[] = [];
   if (!loading && !catchingUp) {
     if (histogram.untimed > 0) notes.push(describeUntimed(histogram.untimed));
     if (gapCount > 0) notes.push(describeCoverage(gapCount));
+    if (ready && timeRange !== null && appliedOnPlot === null) notes.push(RANGE_OUTSIDE_NOTE);
   }
 
   const message = loading || catchingUp
@@ -231,8 +322,119 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
     return bucketIndexFromFraction((event.clientX - rect.left) / rect.width, count);
   };
 
-  const hovered = ready && hover !== null && hover < count ? histogram.buckets[hover] : null;
+  const endGesture = () => {
+    setDrag(null);
+    setFrozen(null);
+  };
+
+  // Sets the range from whole buckets. The store refuses while a load runs; the overlay is drawn
+  // from the store's range, so a refused commit leaves nothing drawn.
+  const commit = (span: BucketSpan) => {
+    setTimeRange(rangeAfterActivate(view, timeRange, span));
+  };
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // Primary button only: a right-click opens the context menu and must not arm a drag.
+    if (!ready || event.button !== 0 || !event.isPrimary) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const index = indexAt(event);
+    setFrozen(histogram);
+    setDrag({ anchor: index, current: index });
+    setKeys({ cursor: index, anchor: null });
+    event.currentTarget.focus({ preventScroll: true });
+  };
+
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!ready) return;
+    const index = indexAt(event);
+    setHover(index);
+    if (drag === null) return;
+    // The button was released outside the page or the capture was lost: stop rather than follow a
+    // pointer that is no longer dragging.
+    if (event.buttons === 0) {
+      endGesture();
+      return;
+    }
+    if (index !== drag.current) setDrag({ ...drag, current: index });
+  };
+
+  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (drag === null) return;
+    const index = indexAt(event);
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    const span = spanOfIndices(drag.anchor, index);
+    endGesture();
+    setKeys({ cursor: index, anchor: null });
+    commit(span);
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!ready || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key === "Escape") {
+      // A pending selection is cancelled and the key is spent, so the workspace's Escape (which
+      // clears the applied range) steps aside. With nothing pending the key passes up to it.
+      if (drag !== null || (key !== null && key.anchor !== null)) {
+        event.preventDefault();
+        endGesture();
+        setKeys(key === null ? null : { cursor: key.cursor, anchor: null });
+      }
+      return;
+    }
+    if (drag !== null) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const state = key ?? { cursor, anchor: null };
+      const span = spanToApply(state);
+      endGesture();
+      setKeys({ cursor: state.cursor, anchor: null });
+      commit(span);
+      return;
+    }
+    if (BRUSH_KEYS.includes(event.key)) {
+      event.preventDefault();
+      const state = key ?? { cursor, anchor: null };
+      const next = reduceBrushKey(state, event.key as BrushKey, event.shiftKey, count, appliedSpan);
+      setKeys(next);
+      if (next.anchor !== null && state.anchor === null) setFrozen(histogram);
+      if (next.anchor === null) setFrozen(null);
+    }
+  };
+
+  const tipIndex = ready ? (hover ?? (focused && key !== null ? key.cursor : null)) : null;
+  const hovered = tipIndex !== null && tipIndex < count ? view.buckets[tipIndex] : null;
   const zone = histogram.domain === null ? null : timeZoneLabel(timeZoneMode, histogram.domain.startMs);
+
+  const valueText = (() => {
+    if (!ready || cursor >= count) return undefined;
+    const bucket = describeBucket(view.buckets[cursor], timeZoneMode);
+    if (draft !== null) {
+      const range = rangeOfSpan(view, draft);
+      return `${bucket}, selecting ${formatTimeRange(range.startMs, range.endMs, timeZoneMode)}`;
+    }
+    if (timeRange !== null) {
+      return `${bucket}, time range ${formatTimeRange(timeRange.startMs, timeRange.endMs, timeZoneMode)} applied`;
+    }
+    return bucket;
+  })();
+
+  const edge = (fraction: number, dashed: boolean, side: string) => (
+    <div
+      key={side}
+      aria-hidden="true"
+      data-evtx-layer="edge"
+      data-evtx-edge={side}
+      style={{
+        position: "absolute",
+        top: 0,
+        bottom: 0,
+        left: `${fraction * 100}%`,
+        marginLeft: "-1px",
+        pointerEvents: "none",
+        borderLeft: `2px ${dashed ? "dashed" : "solid"} ${tokens.colorNeutralStrokeAccessible}`,
+      }}
+    />
+  );
 
   return (
     <figure
@@ -245,18 +447,87 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
         <div className={styles.main}>
           <div
             ref={plotRef}
-            className={styles.plot}
-            onPointerMove={ready ? (event) => setHover(indexAt(event)) : undefined}
+            className={mergeClasses(styles.plot, ready && styles.interactive)}
+            {...(ready
+              ? {
+                  role: "slider",
+                  tabIndex: 0,
+                  "aria-label": "Time range",
+                  "aria-orientation": "horizontal" as const,
+                  "aria-valuemin": 0,
+                  "aria-valuemax": count - 1,
+                  "aria-valuenow": cursor,
+                  "aria-valuetext": valueText,
+                  "aria-describedby": descriptionId,
+                  "aria-keyshortcuts": "ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Home End Enter Escape",
+                }
+              : {})}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={endGesture}
+            onLostPointerCapture={() => {
+              if (drag !== null) endGesture();
+            }}
             onPointerLeave={() => setHover(null)}
+            onKeyDown={onKeyDown}
+            onFocus={() => {
+              setFocused(true);
+              setKeys((held) => held ?? { cursor: initialBrushCursor(count, appliedSpan), anchor: null });
+            }}
+            onBlur={() => {
+              setFocused(false);
+              setKeys(null);
+              if (drag === null) setFrozen(null);
+            }}
           >
+            {ready && shownRange !== null && (
+              <div
+                aria-hidden="true"
+                data-evtx-layer="wash"
+                data-evtx-draft={draftOnPlot !== null}
+                className={mergeClasses(styles.layer, styles.wash)}
+                style={{
+                  left: `${shownRange.left * 100}%`,
+                  right: `${(1 - shownRange.right) * 100}%`,
+                  backgroundColor: tokens.colorNeutralBackground1Selected,
+                  opacity: washOpacity,
+                }}
+              />
+            )}
             {ready && (
               <Bars
-                histogram={histogram}
+                histogram={view}
                 scale={scale}
                 colors={colors}
                 className={mergeClasses(styles.layer, styles.bars)}
                 columnClass={styles.column}
                 segmentClass={styles.segment}
+              />
+            )}
+            {ready &&
+              shownRange !== null &&
+              !shownRange.clippedLeft &&
+              edge(shownRange.left, draftOnPlot !== null, "start")}
+            {ready &&
+              shownRange !== null &&
+              !shownRange.clippedRight &&
+              edge(shownRange.right, draftOnPlot !== null, "end")}
+            {ready && focused && key !== null && cursor < count && (
+              <div
+                aria-hidden="true"
+                data-evtx-layer="cursor"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: `${(cursor / count) * 100}%`,
+                  width: `${100 / count}%`,
+                  boxSizing: "border-box",
+                  pointerEvents: "none",
+                  outline: `2px solid ${tokens.colorNeutralForeground1}`,
+                  outlineOffset: "-2px",
+                }}
               />
             )}
             {message !== null && (
@@ -268,33 +539,34 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
                 {message}
               </div>
             )}
-            {hovered !== null && (
-              <Tooltip
-                visible
-                relationship="description"
-                positioning={{ position: "above", align: "center" }}
-                content={{
-                  children: (
-                    <span aria-hidden="true" style={{ fontFamily: tokens.fontFamilyNumeric }}>
-                      {describeBucket(hovered, timeZoneMode)}
-                    </span>
-                  ),
+            {hovered !== null && tipIndex !== null && (
+              <div
+                aria-hidden="true"
+                data-evtx-tooltip={tipIndex}
+                className={styles.tooltip}
+                style={{
+                  left: `${((tipIndex + 0.5) / count) * 100}%`,
+                  transform:
+                    tipIndex / count < 0.15
+                      ? "translateX(-10px)"
+                      : tipIndex / count > 0.85
+                        ? "translateX(calc(-100% + 10px))"
+                        : "translateX(-50%)",
+                  fontSize: `${Math.max(10, metrics.fontSize - 2)}px`,
                 }}
               >
-                <span
-                  aria-hidden="true"
-                  data-evtx-tooltip-anchor={hover}
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    width: 1,
-                    height: 1,
-                    left: `${(((hover ?? 0) + 0.5) / count) * 100}%`,
-                  }}
-                />
-              </Tooltip>
+                {describeBucket(hovered, timeZoneMode)}
+              </div>
             )}
           </div>
+          {ready && (
+            <span id={descriptionId} className={styles.visuallyHidden}>
+              Left and right arrow keys move between intervals. Hold Shift to select a range, or to move
+              an end of the applied range from the interval at that end. Home and End jump to the first
+              and last interval. Enter applies the selection, or clears the range when it is the one
+              interval already applied. Escape cancels a pending selection, then clears the time range.
+            </span>
+          )}
           <div
             aria-hidden="true"
             className={styles.axis}
