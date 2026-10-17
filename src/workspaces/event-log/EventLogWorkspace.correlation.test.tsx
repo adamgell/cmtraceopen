@@ -233,6 +233,9 @@ describe("the scope of a session published after a hidden event arrived during i
       build.resolve(analysisResult("hidden-append"));
     });
     await waitFor(() => expect(lastHookCall().scope).not.toBeNull());
+    // The session that was published is the one whose build was left pending, built exactly once.
+    expect(lastHookCall().status?.sessionId).toBe("hidden-append");
+    expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1);
   }
 
   it("counts the hidden event as loaded, so the session is narrowed (visible < loaded)", async () => {
