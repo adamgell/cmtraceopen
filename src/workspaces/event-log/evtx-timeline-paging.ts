@@ -2,7 +2,7 @@
  * How the analysis session's timeline is paged, retried and bounded.
  *
  * One definition for everything that pages the timeline: the unified timeline view (its page cache
- * and its retries), the first page the session is created with (`EVENT_LOG_ANALYSIS_PAGE_SIZE`),
+ * and its retries), the first page the session is created with (event-analysis-session.ts),
  * and the correlation load (its member scan and its retries). They used to repeat these values and
  * a test compared the copies; a number that exists once cannot drift.
  *

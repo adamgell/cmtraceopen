@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { deferred } from "../../test-utils/deferred";
 import {
-  EVENT_LOG_TIMELINE_CACHE_RADIUS,
   EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT,
   EVENT_LOG_TIMELINE_PAGE_SIZE,
+} from "./evtx-timeline-paging";
+import {
+  EVENT_LOG_TIMELINE_CACHE_RADIUS,
   retainTimelinePageCache,
   timelinePageCacheByteCount,
   timelinePageCacheRowCount,

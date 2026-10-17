@@ -28,13 +28,6 @@ import {
 
 const UNPLACED_PREVIEW_LIMIT = 100;
 export const EVENT_LOG_TIMELINE_CACHE_RADIUS = 1;
-// Defined once in evtx-timeline-paging.ts, which the correlation load imports too; re-exported so
-// this component's callers and tests keep their import.
-export {
-  EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT,
-  EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT,
-  EVENT_LOG_TIMELINE_PAGE_SIZE,
-};
 
 export interface TimelinePageCacheSegment {
   items: TimelineItem[];
