@@ -30,14 +30,6 @@ export type EvtxSortDirection = "asc" | "desc";
 /** Delimiters accepted by the multi-string quick-filter grammar. */
 export const EVTX_STRING_QUERY_SEPARATOR = /[,;\r\n]+/;
 
-const LEVEL_ORDER: Record<EvtxLevel, number> = {
-  Critical: 0,
-  Error: 1,
-  Warning: 2,
-  Information: 3,
-  Verbose: 4,
-};
-
 /** Every level, most severe first: the order the level toggles and the counts use. */
 export const EVTX_LEVELS: readonly EvtxLevel[] = [
   "Critical",
@@ -46,6 +38,24 @@ export const EVTX_LEVELS: readonly EvtxLevel[] = [
   "Information",
   "Verbose",
 ];
+
+/**
+ * The Windows raw level number of each level, as the Event Log service filters on it. Stated
+ * outright rather than read from a level's position in `EVTX_LEVELS`: a reorder of that list for
+ * display would otherwise change the XPath the service is sent.
+ */
+export const EVTX_RAW_LEVEL: Readonly<Record<EvtxLevel, number>> = {
+  Critical: 1,
+  Error: 2,
+  Warning: 3,
+  Information: 4,
+  Verbose: 5,
+};
+
+/** How far down the severity order a level sits: 0 for Critical, 4 for Verbose. */
+export const EVTX_LEVEL_RANK = Object.fromEntries(
+  EVTX_LEVELS.map((level, index) => [level, index]),
+) as Readonly<Record<EvtxLevel, number>>;
 
 /**
  * How many of `records` sit at each level, in one pass.
@@ -75,10 +85,9 @@ export function countByLevel(records: readonly EvtxRecord[]): Record<EvtxLevel, 
  * expressions, so any selection that includes Information is evaluated locally instead. Only a
  * strict subset without Information is pushed down.
  *
- * `evtx-store.ts` keeps its own copy of this predicate in `buildServerFilter`; it does not call this
- * function. The filter row's unknown counts depend on this one, so `evtx-store-server-filter.test.ts`
- * pins the two together for every level subset. Merging them is a store change that belongs to
- * Phase 6a (#834).
+ * `buildServerFilter` in `evtx-store.ts` calls this function, so the request the store sends and
+ * the filter row's unknown counts read one rule. `evtx-store-server-filter.test.ts` pins the level
+ * numbers it sends for every level subset.
  */
 export function levelsFilteredAtSource(levels: ReadonlySet<EvtxLevel>): boolean {
   return levels.size > 0 && levels.size < EVTX_LEVELS.length && !levels.has("Information");
@@ -113,7 +122,7 @@ export function sortRecords(
         comparison = a.eventId - b.eventId;
         break;
       case "level":
-        comparison = LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level];
+        comparison = EVTX_LEVEL_RANK[a.level] - EVTX_LEVEL_RANK[b.level];
         break;
       case "provider":
         comparison = a.provider.localeCompare(b.provider);

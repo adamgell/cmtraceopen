@@ -34,7 +34,11 @@ import {
 export { selectVisibleRecords } from "./evtx-filter";
 import {
   DEFAULT_QUICK_FILTER,
+  EVTX_LEVELS,
+  EVTX_RAW_LEVEL,
   fieldQueryError,
+  levelsAfterToggle,
+  levelsFilteredAtSource,
   parseEventIdSelectors,
   quickFilterApplies,
   type EvtxBeforeLoadCriteria,
@@ -707,13 +711,10 @@ function buildServerFilter(
 
   // Information includes an unbounded provider-specific raw-level domain (6..254). The parser
   // intentionally caps XPath OR expressions, so leave level selection local whenever Information
-  // is selected rather than issuing an over-budget or incomplete server predicate.
-  if (
-    filterLevels.size > 0 &&
-    filterLevels.size < ALL_LEVELS.length &&
-    !filterLevels.has("Information")
-  ) {
-    filter.levels = [...filterLevels].map((level) => ALL_LEVELS.indexOf(level) + 1);
+  // is selected rather than issuing an over-budget or incomplete server predicate. The filter row
+  // reads the same rule (`levelsFilteredAtSource`) to show an unrequested level as unknown.
+  if (levelsFilteredAtSource(filterLevels)) {
+    filter.levels = [...filterLevels].map((level) => EVTX_RAW_LEVEL[level]);
   }
   return filter;
 }
@@ -747,7 +748,6 @@ function hasInvalidEventIdFilter(raw: string): boolean {
   return trimmed.length > 0 && parseEventIdSelectors(trimmed).invalid;
 }
 
-const ALL_LEVELS: EvtxLevel[] = ["Critical", "Error", "Warning", "Information", "Verbose"];
 type FilterSnapshot = {
   timeWindow: EvtxTimeWindow;
   filterEventIds: string;
@@ -1257,7 +1257,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   selectedChannels: new Set<string>(),
   loadedChannels: new Set<string>(),
   completedSourceKey: null,
-  filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
+  filterLevels: new Set<EvtxLevel>(EVTX_LEVELS),
   filterEventIds: "",
   filterSearch: "",
   filterSearchDraft: null,
@@ -2297,11 +2297,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   },
 
   toggleFilterLevel: (level) => {
-    const current = get().filterLevels;
-    const next = new Set(current);
-    if (next.has(level)) next.delete(level);
-    else next.add(level);
-    if (next.size === 0) ALL_LEVELS.forEach((known) => next.add(known));
+    const next = levelsAfterToggle(get().filterLevels, level);
     const before = currentServerFilterKey();
     set({ filterLevels: next });
     refreshIfServerFilterChanged(before);
@@ -2393,7 +2389,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       loadStartTime: null,
       loadElapsedMs: null,
       loadGeneration,
-      filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
+      filterLevels: new Set<EvtxLevel>(EVTX_LEVELS),
       filterEventIds: "",
       filterSearch: "",
       filterSearchDraft: null,

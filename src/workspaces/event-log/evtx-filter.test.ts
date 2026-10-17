@@ -3,6 +3,8 @@ import {
   compileFieldQuery,
   countByLevel,
   EVTX_LEVELS,
+  EVTX_LEVEL_RANK,
+  EVTX_RAW_LEVEL,
   fieldQueryError,
   isWithinTimeWindow,
   levelsAfterToggle,
@@ -338,6 +340,35 @@ describe("countByLevel", () => {
   it("has a key for every level the filter bar lists, in severity order", () => {
     expect(EVTX_LEVELS).toEqual(["Critical", "Error", "Warning", "Information", "Verbose"]);
     expect(Object.keys(countByLevel([]))).toEqual([...EVTX_LEVELS]);
+  });
+});
+
+describe("the level maps", () => {
+  it("names the Windows raw level of every level, apart from the display order", () => {
+    expect(EVTX_RAW_LEVEL).toEqual({
+      Critical: 1,
+      Error: 2,
+      Warning: 3,
+      Information: 4,
+      Verbose: 5,
+    });
+    expect(Object.keys(EVTX_RAW_LEVEL).sort()).toEqual([...EVTX_LEVELS].sort());
+  });
+
+  it("ranks the levels by their place in EVTX_LEVELS, most severe first", () => {
+    expect(EVTX_LEVEL_RANK).toEqual({
+      Critical: 0,
+      Error: 1,
+      Warning: 2,
+      Information: 3,
+      Verbose: 4,
+    });
+    const sorted = sortRecords(
+      [record({ level: "Verbose" }), record({ level: "Critical" }), record({ level: "Warning" })],
+      "level",
+      "asc",
+    );
+    expect(sorted.map((r) => r.level)).toEqual(["Critical", "Warning", "Verbose"]);
   });
 });
 
