@@ -220,6 +220,10 @@ function generateEvents(): GeneratedEvent[] {
  * conventional `{00000839-0001-4000-...}` would hand six records bogus error tokens, push their
  * nested rows past the diagnosis response bound, and add a "Capped" placeholder finding to a
  * dataset that has none. `series` and `n` are single digits, so each only ever adds a short run.
+ *
+ * That is a workaround. A real ActivityID is a random GUID and can hold such a run, which the scan
+ * should not read as an error code: tracked as #964. When it is fixed, this can become a realistic
+ * GUID.
  */
 const syntheticGuid = (series: number, n: number): string =>
   `{5ee0a1d${series}-a${series}0b-4c${series}d-8e${series}f-c0de0a0b0c0${n}}`;

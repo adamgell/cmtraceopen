@@ -41,6 +41,13 @@ import {
   loadEngineReplies,
 } from "../fixtures/event-log-data";
 
+declare global {
+  interface Window {
+    /** Every replay-guard message the page raised, in order (see the init script below). */
+    __evtxReplayGuardErrors?: string[];
+  }
+}
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.resolve(HERE, "..", "..", "screenshots");
 const outPath = (name: string) => path.join(OUT_DIR, name);
@@ -76,10 +83,19 @@ test.describe("event-logs screenshots", () => {
     await page.addInitScript(
       ({ parseResult, replies, selections, manifest }) => {
         const overrides = window.__e2e_ipc_overrides__;
+        // A guard failure reaches the app as a rejected invoke, which the app shows as an alert
+        // that no test step need be looking at. So every guard error is also kept here, in the
+        // order it was raised, and the afterEach below fails the test if there is one.
+        const guardErrors: string[] = [];
+        window.__evtxReplayGuardErrors = guardErrors;
+        const guardError = (message: string): Error => {
+          guardErrors.push(message);
+          return new Error(message);
+        };
         const same = (a: unknown, b: unknown): boolean =>
           JSON.stringify(a) === JSON.stringify(b);
         const stale = (command: string, detail: string): Error =>
-          new Error(
+          guardError(
             `[event-logs fixture] ${command}: ${detail}. ` +
               "Regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`.",
           );
@@ -90,7 +106,7 @@ test.describe("event-logs screenshots", () => {
         };
 
         const mismatch = (command: string, detail: string): Error =>
-          new Error(
+          guardError(
             `[event-logs fixture] ${command}: ${detail}. ` +
               "Update buildSourceManifest/buildParseResult in e2e/fixtures/event-log-data.ts.",
           );
@@ -255,6 +271,16 @@ test.describe("event-logs screenshots", () => {
     await expect(moreFiltersButton).not.toBeFocused();
   });
 
+  // Fails any test in which a replay guard (a stale capture, an uncaptured call, a request that
+  // differs from what the engine was given) tripped, wherever in the test that happened: the init
+  // script keeps every guard message on the page. A test that knowingly causes one reads it out
+  // itself and says which message it expects (see the last step of "event-logs correlation").
+  test.afterEach(async ({ page }) => {
+    // A closed page (a timeout or a crash) has nothing to read, and that test has already failed.
+    const trips = await page.evaluate(() => window.__evtxReplayGuardErrors ?? []).catch(() => []);
+    expect(trips, `a replay guard tripped:\n${trips.join("\n")}`).toEqual([]);
+  });
+
   test("event-logs table", async ({ page }) => {
     await expect(page.getByRole("region", { name: "Event log details" })).toHaveCount(0);
     await assertNoHostPaths(page);
@@ -326,7 +352,8 @@ test.describe("event-logs screenshots", () => {
     //
     // A brushed range is set first, so the Escape check below has something to protect. It covers
     // every record: a range that hid one would change the events the analysis is built from, and
-    // the replayed engine replies only describe the full set.
+    // the replayed engine replies only describe the full set. The chain scope applied by the last
+    // step narrows the analysis the same way, so that step ends by restoring the full set.
     await page.evaluate(async () => {
       const { useEvtxStore } = await import("/src/workspaces/event-log/evtx-store.ts");
       const { records, setTimeRange } = useEvtxStore.getState();
@@ -392,6 +419,27 @@ test.describe("event-logs screenshots", () => {
       "aria-selected",
       "true",
     );
-    await expect(page.getByText(/^Chain: /).first()).toBeVisible();
+    const chainChip = page.getByText(/^Chain: /).first();
+    await expect(chainChip).toBeVisible();
+
+    // The scope narrows the analysis to the chain's 2 records: the rail, the counts and the
+    // Correlation view are rebuilt from them. The replayed replies describe only the full set, so
+    // that rebuild reaches the replay guard whenever its 75 ms debounce fires before the chip is
+    // cleared below, and not when it does not. The test must not depend on that race, so it takes
+    // the one expected message out of the guard record afterwards and lets anything else fail.
+    // First restore the full set: clear the chip, and wait for the full-set session to publish
+    // (the Correlations card reads its edges; it is absent or "unknown" until then). The rebuilds
+    // run one at a time, so a narrowed attempt has finished, or never began, by the time it does.
+    await page.getByRole("button", { name: /^Remove Chain: / }).click();
+    await expect(chainChip).toHaveCount(0);
+    await expect(page.getByTestId("correlation-card-headline")).toHaveText(/^4 chains$/);
+    await expect(page.getByLabel("Operational diagnosis")).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    const narrowedTrips = await page.evaluate(() => window.__evtxReplayGuardErrors?.splice(0) ?? []);
+    for (const trip of narrowedTrips) {
+      expect(trip).toMatch(
+        /^\[event-logs fixture\] evtx_append_analysis_chunk: chunk 0 carried 2 records and 0 entries, the capture saw 1000 and 0\. /,
+      );
+    }
   });
 });
