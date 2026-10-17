@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { LONDON_2026, LONDON_REPEATED_HOUR_START, NEW_YORK_2026, modelZone } from "./__fixtures__/model-zone";
+import {
+  LONDON_2026,
+  LONDON_2026_2027,
+  LONDON_REPEATED_HOUR_START,
+  NEW_YORK_2025_2026,
+  NEW_YORK_2026,
+  modelZone,
+} from "./__fixtures__/model-zone";
 import {
   eventDateKey,
   formatClock,
@@ -394,5 +401,57 @@ describe("the repeated hour of a modelled fall-back, whatever the host's zone", 
     const restore = modelZone(LONDON_2026);
     restore();
     expect(new Date(Date.UTC(2026, 9, 25, 0)).getHours()).toBe(real);
+  });
+});
+
+describe("the year step of the ladder is reachable in local mode across a DST change", () => {
+  const SEP = TIME_RANGE_SEPARATOR;
+  const YEAR = 365 * 24 * 3600_000;
+
+  // From a wall time in standard time to the same wall time a calendar year later in summer time, a
+  // range lasts 365 days minus the shift: under a year, so the year is not forced, and the day form
+  // reads alike at both ends. Only the year step tells them apart; without it the ends would read as
+  // one hour on one day, named by their two offsets.
+  it("reads Europe/London 28 Mar 2026 12:00 GMT to 28 Mar 2027 12:00 BST with both years", () => {
+    const restore = modelZone(LONDON_2026_2027);
+    try {
+      const start = Date.UTC(2026, 2, 28, 12);
+      const end = Date.UTC(2027, 2, 28, 11);
+      expect(end - start).toBe(YEAR - 3600_000);
+      expect(new Date(start).getHours()).toBe(12);
+      expect(new Date(end).getHours()).toBe(12);
+      expect(new Date(start).getTimezoneOffset()).toBe(0);
+      expect(new Date(end).getTimezoneOffset()).toBe(-60);
+      expect(formatTimeRange(start, end, "local")).toBe(`Mar 28 2026 12:00${SEP}Mar 28 2027 12:00`);
+    } finally {
+      restore();
+    }
+  });
+
+  it("reads America/New_York 8 Mar 2025 12:00 EST to 8 Mar 2026 12:00 EDT with both years", () => {
+    const restore = modelZone(NEW_YORK_2025_2026);
+    try {
+      const start = Date.UTC(2025, 2, 8, 17);
+      const end = Date.UTC(2026, 2, 8, 16);
+      expect(end - start).toBe(YEAR - 3600_000);
+      expect(new Date(start).getHours()).toBe(12);
+      expect(new Date(end).getHours()).toBe(12);
+      expect(new Date(start).getTimezoneOffset()).toBe(300);
+      expect(new Date(end).getTimezoneOffset()).toBe(240);
+      expect(formatTimeRange(start, end, "local")).toBe(`Mar 8 2025 12:00${SEP}Mar 8 2026 12:00`);
+    } finally {
+      restore();
+    }
+  });
+
+  it("leaves the year out of an ordinary one-day range in the same modelled zone", () => {
+    const restore = modelZone(LONDON_2026_2027);
+    try {
+      expect(formatTimeRange(Date.UTC(2026, 3, 1, 9), Date.UTC(2026, 3, 2, 9), "local")).toBe(
+        `Apr 1 10:00${SEP}Apr 2 10:00`,
+      );
+    } finally {
+      restore();
+    }
   });
 });
