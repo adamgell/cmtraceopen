@@ -978,6 +978,21 @@ describe("Filter to {n} events", () => {
     expect(card).not.toHaveTextContent(/cited|bounded/);
   });
 
+  it("claims nothing about bounded evidence for a finding that cites no event, even when the response was bounded", () => {
+    const textOnly = citing("text", {
+      kind: "textLog",
+      value: { source: "s", filePath: "f.log", lineNumber: 3, entryId: 3 },
+    });
+    // Another finding cites an event, so the panel does index the records and could resolve both.
+    const bounded: DiagnosisSummary = {
+      ...summaryOf(citing("events", eventRef(1)), textOnly),
+      coverageGaps: [{ ...coverageGap, source: "diagnosis-response-projection", state: "capped" }],
+    };
+    render(<EventDiagnosisPanel summary={bounded} records={loaded} onFilterToFinding={vi.fn()} />);
+    expect(screen.getByRole("article", { name: "Finding events" })).toHaveTextContent("bounded");
+    expect(screen.getByRole("article", { name: "Finding text" })).not.toHaveTextContent(/bounded|cited/);
+  });
+
   it("offers no link when nothing the finding cites is loaded, and says why", () => {
     const onFilter = vi.fn();
     render(
