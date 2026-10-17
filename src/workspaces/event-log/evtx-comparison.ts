@@ -729,6 +729,8 @@ export type ComparisonState =
       mode: "live";
       requestId: string;
       prior: PriorWindow;
+      /** The channels being compared. */
+      channels: readonly string[];
       /**
        * Events the query has scanned so far, across channels. Progress of the work, not a count of
        * anything: the previous period's totals are published only when it settles.
@@ -748,6 +750,20 @@ export const useComparisonStore = create<{ state: ComparisonState }>(() => ({
 
 export function getComparisonState(): ComparisonState {
   return useComparisonStore.getState().state;
+}
+
+/**
+ * The channels the comparison on show, or in flight, depends on; none when there is none or it
+ * could not be made. The store cancels a comparison when one of these is removed from what is
+ * loaded, and leaves it alone when any other channel is.
+ */
+export function comparedChannelsOfComparison(): readonly string[] {
+  const state = getComparisonState();
+  if (state.phase === "running") return state.channels;
+  if (state.phase === "settled" && state.outcome.status !== "unavailable") {
+    return state.outcome.result.comparedChannels;
+  }
+  return [];
 }
 
 function publish(state: ComparisonState): void {
@@ -1113,7 +1129,7 @@ export function beginLiveComparison(input: LiveComparisonInput): LiveComparisonS
     resolveDone,
   };
   activeSession = session;
-  publish({ phase: "running", mode: "live", requestId, prior, scanned: 0 });
+  publish({ phase: "running", mode: "live", requestId, prior, channels, scanned: 0 });
 
   return {
     requestId,
@@ -1216,6 +1232,7 @@ export function observeComparisonProgress(progress: ComparisonProgress): void {
     mode: "live",
     requestId: session.requestId,
     prior: session.prior,
+    channels: session.channels,
     scanned,
   });
 }

@@ -12,6 +12,7 @@ import {
   getComparisonState,
   isComparisonRequestId,
   markTailAppended,
+  comparedChannelsOfComparison,
   messageTextCriterionActive,
   observeComparisonBatch,
   observeComparisonComplete,
@@ -1647,6 +1648,36 @@ describe("a live comparison", () => {
     }
   });
 
+  it("says which channels a comparison depends on, whatever stage it is at", () => {
+    expect(comparedChannelsOfComparison()).toEqual([]);
+
+    const session = begin({ channels: ["System", "Application"] });
+    expect(comparedChannelsOfComparison()).toEqual(["System", "Application"]);
+
+    deliver(session, "System", systemEvents(1));
+    deliver(session, "Application", []);
+    expect(settled().status).toBe("complete");
+    expect(comparedChannelsOfComparison()).toEqual(["System", "Application"]);
+
+    cancelComparison();
+    expect(comparedChannelsOfComparison()).toEqual([]);
+
+    // A comparison that could not be made depends on no channel.
+    beginLiveComparison({
+      window: "all",
+      anchorEpoch: ANCHOR,
+      remote: false,
+      notes: [],
+      currentPeriodHoleChannels: [],
+      currentPeriodGaps: [],
+      channels: ["System"],
+      visibility: visibility(),
+      cancelQuery,
+    });
+    expect(settled().status).toBe("unavailable");
+    expect(comparedChannelsOfComparison()).toEqual([]);
+  });
+
   describe("progress", () => {
     function progress(session: LiveComparisonSession, channel: string, fetched: number) {
       observeComparisonProgress({ requestId: session.requestId, channel, fetched });
@@ -1666,7 +1697,7 @@ describe("a live comparison", () => {
       progress(session, "System", 700);
       expect(running().scanned).toBe(750);
       expect(Object.keys(running()).sort()).toEqual(
-        ["mode", "phase", "prior", "requestId", "scanned"].sort()
+        ["channels", "mode", "phase", "prior", "requestId", "scanned"].sort()
       );
     });
 

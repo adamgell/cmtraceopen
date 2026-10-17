@@ -1327,7 +1327,22 @@ describe("comparing loaded files with their previous period", () => {
 });
 
 describe("a comparison is invalidated by what it compared", () => {
-  const changes: Array<[string, () => void]> = [
+  /** Lets a test Clear a channel through the real store action. */
+  function answerClear(): void {
+    const base = invoke.getMockImplementation();
+    invoke.mockImplementation((name: string, rawArgs: unknown) =>
+      name === "evtx_clear_channel"
+        ? Promise.resolve({
+            channel: (rawArgs as { channel: string }).channel,
+            result: { status: "cleared" },
+          })
+        : base
+          ? base(name, rawArgs)
+          : Promise.resolve(undefined)
+    );
+  }
+
+  const changes: Array<[string, () => void | Promise<void>]> = [
     ["the source mode", () => useEvtxStore.setState({ sourceMode: "files" })],
     ["the source paths", () => useEvtxStore.setState({ sourcePaths: ["other.evtx"] })],
     ["the remote machine", () => useEvtxStore.setState({ remoteMachine: "SRV02" })],
@@ -1343,6 +1358,18 @@ describe("a comparison is invalidated by what it compared", () => {
       () => useEvtxStore.getState().setQuickFilter({ ...DEFAULT_QUICK_FILTER, query: "x" }),
     ],
     ["a new load superseding the current one", () => void useEvtxStore.getState().supersedePendingLoad()],
+    // The audit of every change that removes, replaces or re-reads a compared channel's records, or
+    // changes which channels are loaded: each of these reaches the store through a different path.
+    [
+      "a Clear of a compared channel",
+      async () => {
+        answerClear();
+        await useEvtxStore.getState().clearChannel("System", true);
+      },
+    ],
+    ["a refresh of the loaded channels", () => void useEvtxStore.getState().refreshLoadedChannels()],
+    ["a Load of another channel", () => void useEvtxStore.getState().queryChannels(["Setup"])],
+    ["a reset", () => useEvtxStore.getState().reset()],
   ];
 
   it.each(changes)("cancels a comparison in flight when %s changes", async (_name, change) => {
@@ -1350,7 +1377,7 @@ describe("a comparison is invalidated by what it compared", () => {
     await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
     const requestId = comparisonQueries()[0].args.requestId;
 
-    change();
+    await change();
 
     expect(getComparisonState()).toEqual({ phase: "idle" });
     expect(cancelCalls()).toContain(requestId);
@@ -1372,11 +1399,33 @@ describe("a comparison is invalidated by what it compared", () => {
     await run;
     expect(getComparisonState().phase).toBe("settled");
 
-    change();
+    await change();
 
     expect(getComparisonState()).toEqual({ phase: "idle" });
     // A finished comparison has no query left to stop.
     expect(cancelCalls()).not.toContain(requestId);
+  });
+
+  it("leaves a comparison alone when a channel it did not compare is cleared", async () => {
+    // Security is neither selected nor loaded here, so no comparison depends on it.
+    const run = startComparison();
+    await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
+    const requestId = comparisonQueries()[0].args.requestId;
+    answerClear();
+
+    await useEvtxStore.getState().clearChannel("Security", true);
+
+    expect(getComparisonState()).toMatchObject({ phase: "running", requestId });
+    expect(cancelCalls()).toEqual([]);
+    complete("System", 0, 0, requestId);
+    complete("Application", 0, 0, requestId);
+    comparisonQueries().forEach((query) => query.resolve(reply(0)));
+    await run;
+    expect(settled().status).toBe("complete");
+
+    // A finished comparison survives it too.
+    await useEvtxStore.getState().clearChannel("Security", true);
+    expect(getComparisonState().phase).toBe("settled");
   });
 
   it("leaves a comparison alone for changes that do not alter what it compared", async () => {

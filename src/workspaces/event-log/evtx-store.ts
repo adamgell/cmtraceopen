@@ -52,6 +52,7 @@ import {
   beginLiveComparison,
   cancelComparison,
   channelStartGap,
+  comparedChannelsOfComparison,
   computePriorWindow,
   isComparisonRequestId,
   isTailAppended,
@@ -2249,6 +2250,13 @@ listen<{ requestId: string; channel: string; fetched: number }>(
  * the criteria the view applies, and the load whose records the current period was counted from. A
  * change to any of them makes the comparison describe something no longer on screen, so it is
  * cancelled and its result cleared. Streaming appends, selection and sorting change none of them.
+ *
+ * Every path that removes, replaces or re-reads a compared channel's records, or changes which
+ * channels are loaded, was audited: a load, a refresh, a source switch and a reset all begin a
+ * request and bump `loadGeneration`; a source or window change sets its own key; a Clear is the one
+ * that changes the records and `loadedChannels` without a load, and is caught by the subscription
+ * below; stopping the tail removes no rows. The tail's own appends change none of the above, and
+ * are left out of the count by identity instead.
  */
 const COMPARISON_INPUTS: ReadonlyArray<keyof EvtxState> = [
   "sourceMode",
@@ -2268,6 +2276,16 @@ useEvtxStore.subscribe((state, previous) => {
   const changed = (keys: ReadonlyArray<keyof EvtxState>) =>
     keys.some((key) => state[key] !== previous[key]);
   if (changed(COMPARISON_INPUTS) || (state.quickFilter.query.trim() !== "" && changed(QUICK_FILTER_INPUTS))) {
+    cancelComparison();
+    return;
+  }
+  // A Clear takes a channel out of what is loaded without a load. The comparison depends on the
+  // channels it compared, so it is cancelled when one of them is no longer loaded, and left alone
+  // when any other channel is cleared or loaded.
+  if (
+    state.loadedChannels !== previous.loadedChannels &&
+    comparedChannelsOfComparison().some((channel) => !state.loadedChannels.has(channel))
+  ) {
     cancelComparison();
   }
 });
