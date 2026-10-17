@@ -19,7 +19,10 @@
  *   none is guessed. Identical duplicates, such as the same archive loaded twice, are therefore
  *   reported as ambiguous.
  * - An origin with no usable identity matches nothing.
- * - A text-log origin is not a grid record and is never counted, as finding evidence is.
+ * - A text-log ORIGIN is not resolved by the event join (`resolveOriginRecords` answers "notEvent")
+ *   and so is not counted by it, as finding evidence is not. An archive text row IS a loaded grid
+ *   record (`originKind` "log") and the engine gives it a log origin; `logOriginNamesRecord` is the
+ *   strict matcher for that pair.
  * - Nothing here holds a record id: `EvtxRecord.id` is renumbered on every merge, so a result is
  *   held by record OBJECT and resolved at use time.
  */
@@ -29,6 +32,7 @@ import type { CorrelationChain } from "./evtx-correlation-chains";
 import { countScopeReferences, type EvtxRecordScopeCounts } from "./evtx-filter";
 import {
   engineRecordIdentity,
+  recordIdentityText,
   recordsForIdentity,
   redactedValueMatches,
   type EvidenceIndex,
@@ -118,17 +122,125 @@ function fieldsAgree(origin: EventOrigin, record: EvtxRecord): boolean {
   if (!redactedValueMatches(origin.provider, record.provider)) return false;
   if (!redactedValueMatches(origin.channel, record.channel)) return false;
   if (!redactedValueMatches(origin.source, record.sourceLabel)) return false;
-  if (origin.machine === null) return normalizedMachine(record.computer) === null;
-  const bounded = boundUtf8WithDigest(
-    record.computer,
-    EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT,
+  return normalizedAgrees(origin.machine, record.computer);
+}
+
+/**
+ * Whether an origin's machine or component, which the engine normalizes (`normalized_provenance`:
+ * trimmed, and nothing for empty or a placeholder word), is what the record's own value gives. The
+ * engine normalizes the value after bounding it to the transport's identity limit, so this does too.
+ */
+function normalizedAgrees(originValue: string | null, recordValue: string): boolean {
+  const seen = normalizedMachine(
+    boundUtf8WithDigest(recordValue, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT),
   );
-  const seen = normalizedMachine(bounded);
-  return seen !== null && seen === origin.machine;
+  return originValue === null ? seen === null : seen !== null && seen === originValue;
+}
+
+/** The largest line number a log origin carries (`u32::MAX`): a larger record id is clamped to it. */
+const LOG_LINE_MAX = 4_294_967_295;
+
+const BUNDLE_PREFIX = "cmtrace-";
+const BUNDLE_NONCE_LENGTH = 32;
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+/**
+ * The collector's generated bundle-directory id: `CMTRACE-{yyyyMMdd}-{HHmmss}-{host}-{32 hex}`, with
+ * a real calendar date from year 1 and a real time of day. A mirror of `is_collector_bundle_id` in
+ * crates/cmtraceopen-parser/src/unified_timeline/mod.rs; the origin's `bundle` is computed from the
+ * source label by that function, so a log origin can only be matched if this agrees with it. Its
+ * test pins the engine's own accepted and rejected examples.
+ */
+function isCollectorBundleId(segment: string): boolean {
+  if (segment.length < BUNDLE_PREFIX.length || segment.slice(0, BUNDLE_PREFIX.length).toLowerCase() !== BUNDLE_PREFIX) {
+    return false;
+  }
+  const rest = segment.slice(BUNDLE_PREFIX.length);
+  const firstDash = rest.indexOf("-");
+  if (firstDash < 0) return false;
+  const secondDash = rest.indexOf("-", firstDash + 1);
+  if (secondDash < 0) return false;
+  const date = rest.slice(0, firstDash);
+  const time = rest.slice(firstDash + 1, secondDash);
+  const hostAndNonce = rest.slice(secondDash + 1);
+  const lastDash = hostAndNonce.lastIndexOf("-");
+  if (lastDash < 0) return false;
+  const hostname = hostAndNonce.slice(0, lastDash);
+  const nonce = hostAndNonce.slice(lastDash + 1);
+  if (!/^\d{8}$/.test(date) || !/^\d{6}$/.test(time)) return false;
+  const year = Number(date.slice(0, 4));
+  const month = Number(date.slice(4, 6));
+  const day = Number(date.slice(6, 8));
+  const validDate = year >= 1 && month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month);
+  const validTime =
+    Number(time.slice(0, 2)) < 24 && Number(time.slice(2, 4)) < 60 && Number(time.slice(4, 6)) < 60;
+  return (
+    validDate &&
+    validTime &&
+    hostname !== "" &&
+    nonce.length === BUNDLE_NONCE_LENGTH &&
+    /^[0-9a-fA-F]+$/.test(nonce)
+  );
+}
+
+/**
+ * The bundle id of a source path laid out as `{bundle id}/evidence/...`, or null: the first pair of
+ * path segments (split on `/` and `\`, empty segments dropped) whose second is "evidence" (any case)
+ * and whose first is a collector bundle id. A mirror of `bundle_from_source` in the parser crate.
+ */
+export function bundleOfSource(source: string): string | null {
+  const segments = source.split(/[/\\]/).filter((segment) => segment !== "");
+  for (let i = 0; i + 1 < segments.length; i += 1) {
+    const bundle = segments[i] as string;
+    if ((segments[i + 1] as string).toLowerCase() === "evidence" && isCollectorBundleId(bundle)) {
+      return bundle;
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether a log origin is the one the engine built from an archive text row (`originKind` "log"):
+ * `origin_of` in src-tauri/src/event_log/timeline.rs sets file and source to the record's source
+ * label, the line to its EventRecordID clamped to a u32, the record id to the EventRecordID, the
+ * machine and component to the normalized computer and provider, and the bundle from the source.
+ * EVERY one of them must agree, each through the matcher that reproduces the engine's bounding or
+ * normalization; a record id that is not a safe non-negative integer matches nothing.
+ */
+export function logOriginNamesRecord(origin: TimelineOrigin, record: EvtxRecord): boolean {
+  if (origin.kind !== "log" || record.originKind !== "log") return false;
+  const id = record.eventRecordId;
+  if (!Number.isSafeInteger(id) || id < 0) return false;
+  if (origin.recordId !== id) return false;
+  if (origin.line !== Math.min(id, LOG_LINE_MAX)) return false;
+  if (!redactedValueMatches(origin.file, record.sourceLabel)) return false;
+  if (!redactedValueMatches(origin.source, record.sourceLabel)) return false;
+  if (!normalizedAgrees(origin.machine, record.computer)) return false;
+  if (!normalizedAgrees(origin.component, record.provider)) return false;
+  const bounded = boundUtf8WithDigest(record.sourceLabel, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
+  return bundleOfSource(bounded) === origin.bundle;
+}
+
+/**
+ * Whether the event join can never name `record`, whatever the timeline holds: an EVENT record with
+ * no usable record identity (the provider never numbered it). The engine still places such a record
+ * and gives it an origin, but the join matches events by identity and an origin with none matches
+ * nothing (`resolveOriginRecords`: "noUsableIdentity"). The same predicate the join uses, so there is
+ * no second definition. A log-kind record is matched by `logOriginNamesRecord`, not by identity.
+ */
+export function isUnmatchableEvent(record: EvtxRecord): boolean {
+  return record.originKind !== "log" && recordIdentityText(record) === null;
 }
 
 export type OriginResolution =
-  /** A text-log origin. It is not a grid record. */
+  /**
+   * A log origin: the EVENT join does not resolve it. (An archive text row is a loaded grid record
+   * with a log origin; `logOriginNamesRecord` is the matcher for that pair.)
+   */
   | { kind: "notEvent" }
   /** The record carried no identity a record can be matched on. */
   | { kind: "noUsableIdentity" }

@@ -245,7 +245,7 @@ export function engineRecordIdentity(
 }
 
 /** The record's identity text in the engine's order, or null when the provider never numbered it. */
-function recordIdentityText(record: EvtxRecord): string | null {
+export function recordIdentityText(record: EvtxRecord): string | null {
   return engineRecordIdentity(record.eventRecordIdText, record.eventRecordId);
 }
 
