@@ -414,7 +414,7 @@ test.describe("event-logs screenshots", () => {
     const figureBox = await figure.boundingBox();
     expect((histogramBox?.y ?? 0) + (histogramBox?.height ?? 0)).toBeLessThanOrEqual((figureBox?.y ?? 0) + 1);
 
-    // Real pixels (jsdom has none): the Critical event's diamond is painted in the theme's Critical
+    // Real pixels (jsdom has none): the Critical event's dot is painted in the theme's Critical
     // colour at its centre, and a theme switch repaints it without a reload.
     const before = await readTimeline(page);
     expect(before.dpr).toBe(2);
@@ -469,15 +469,21 @@ test.describe("event-logs screenshots", () => {
       const plot = document.querySelector<HTMLElement>('[data-evtx-layer="marks"]')!.parentElement!;
       const rect = plot.getBoundingClientRect();
       const laneHeight = document.querySelector<HTMLElement>("[data-evtx-lane]")!.getBoundingClientRect().height;
+      // The canvas is drawn on the rounded width of the plot, and the click is tested on it.
       return {
-        x: rect.left + lane.fractions[index] * rect.width,
+        x: rect.left + lane.fractions[index] * Math.round(rect.width),
         y: rect.top + laneIndex * laneHeight + laneHeight / 2,
       };
     });
-    // A real click, 3 px off the dot's centre: the nearest record within 4 px of its edge is selected,
-    // and no time range is set by it.
-    await page.mouse.click(dot.x + 3, dot.y);
+    // Real clicks on the 45 degree line through the dot, where a round dot and any other shape part
+    // company (a diamond of the same width reaches only 3.5 px along it). The dot is a 10 px circle, so
+    // its rim is 5 px from the centre and the hit reaches 4 px past it: 9.2 px out is a miss and 8.8 px
+    // out is a hit. A hit selects the record and opens Details; neither sets a time range.
+    const along = (distance: number) => distance * Math.SQRT1_2;
     const detail = page.getByRole("region", { name: "Event log details" });
+    await page.mouse.click(dot.x + along(9.2), dot.y + along(9.2));
+    await expect(detail).toHaveCount(0);
+    await page.mouse.click(dot.x + along(8.8), dot.y + along(8.8));
     await expect(detail).toContainText("rebooted without cleanly shutting down");
     await expect(page.getByText(/^Time: brushed/)).toHaveCount(0);
     await assertNoHostPaths(page);
