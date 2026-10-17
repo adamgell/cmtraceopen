@@ -705,6 +705,54 @@ describe("a load that ends a gesture", () => {
     expect(storeRange()).toEqual({ startMs: fresh.edges[last], endMs: fresh.edges[last + 1] });
   });
 
+  it("counts a press during a load as the pointer's: no cursor line once the load ends", () => {
+    vi.useFakeTimers({ now: PINNED_NOW });
+    const { rerender } = render(withChips([], true));
+    const slider = screen.getByRole("slider", { name: "Time range" });
+    // The chart is not ready, so the handler returns early; the browser then focuses the plot itself.
+    down(slider, 10);
+    act(() => {
+      slider.focus();
+    });
+    up(slider, 10);
+    rerender(withChips(records, false));
+    settle();
+    expect(document.activeElement).toBe(slider);
+    expect(slider).toHaveAttribute("aria-valuenow", "71");
+    expect(cursorText()).toBeNull();
+    // The keyboard then brings the line.
+    key(slider, "ArrowLeft");
+    expect(cursorText()!.textContent).toBe(describeBucket(histogram.buckets[70], "utc"));
+  });
+
+  it("does not let a finished press mark a later focus event as the pointer's", () => {
+    const { slider } = mount();
+    down(slider, x(9));
+    up(slider, x(9));
+    expect(cursorText()).toBeNull();
+    // No blur in between: the release alone ends the press, so the next focus is the keyboard's.
+    fireEvent.focus(slider);
+    expect(cursorText()).not.toBeNull();
+  });
+
+  it("does not let a blur leave the press marked: a Tab back in is the keyboard's", () => {
+    vi.useFakeTimers({ now: PINNED_NOW });
+    const { rerender } = render(withChips([], true));
+    const slider = screen.getByRole("slider", { name: "Time range" });
+    // A press during a load whose release never reaches the plot, then focus leaves.
+    down(slider, 10);
+    act(() => {
+      slider.focus();
+    });
+    act(() => {
+      slider.blur();
+    });
+    fireEvent.focus(slider);
+    rerender(withChips(records, false));
+    settle();
+    expect(cursorText()).not.toBeNull();
+  });
+
   it("drops a drag in progress when a load starts, and commits nothing on release", () => {
     vi.useFakeTimers({ now: PINNED_NOW });
     const { container, rerender } = render(withChips(records, false));

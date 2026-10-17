@@ -376,6 +376,11 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // Any press, ready or not: the focus it causes is the pointer's, not the keyboard's, and the
+    // browser focuses the plot itself while it is not ready (a disabled slider still has a tab stop).
+    // onFocus reads `pressRef`; a press, a cancel, leaving the plot or a blur ends it.
+    setKeyboardMode(false);
+    pressRef.current = true;
     // Primary button only: a right-click opens the context menu and must not arm a drag.
     if (!ready || event.button !== 0 || !event.isPrimary) return;
     event.preventDefault();
@@ -386,11 +391,7 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
     setFrozen(view);
     setDrag({ anchor: index, current: index });
     setKeys({ cursor: index, anchor: null });
-    setKeyboardMode(false);
-    // The focus this press causes is the pointer's, not the keyboard's: onFocus reads this.
-    pressRef.current = true;
     event.currentTarget.focus({ preventScroll: true });
-    pressRef.current = false;
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -408,6 +409,7 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
   };
 
   const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    pressRef.current = false;
     if (drag === null) return;
     const index = indexAt(event);
     event.currentTarget.releasePointerCapture?.(event.pointerId);
@@ -535,11 +537,17 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
-              onPointerCancel={endGesture}
+              onPointerCancel={() => {
+                pressRef.current = false;
+                endGesture();
+              }}
               onLostPointerCapture={() => {
                 if (drag !== null) endGesture();
               }}
-              onPointerLeave={() => setHover(null)}
+              onPointerLeave={() => {
+                pressRef.current = false;
+                setHover(null);
+              }}
               onKeyDown={onKeyDown}
               // The cursor is not stored on focus: with no keys held it is derived from the chart, so
               // focus that arrives during a load does not pin it to an empty chart's first bucket.
@@ -548,6 +556,7 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
                 if (!pressRef.current) setKeyboardMode(true);
               }}
               onBlur={() => {
+                pressRef.current = false;
                 setFocused(false);
                 setKeyboardMode(false);
                 setKeys(null);
@@ -701,7 +710,16 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
         )}
         <div
           data-evtx-cursor-slot
-          style={{ minHeight: `${captionLine}px`, lineHeight: `${captionLine}px` }}
+          // A fixed height and one line: a long cursor text (counts, the zone, now years) is cut with an
+          // ellipsis rather than wrapped, so focus and blur never change the figure's height. The
+          // slider's value text carries the whole string.
+          style={{
+            height: `${captionLine}px`,
+            lineHeight: `${captionLine}px`,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
         >
           {cursorBucket !== null && (
             <span

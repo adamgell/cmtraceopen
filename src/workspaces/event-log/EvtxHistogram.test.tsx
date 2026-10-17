@@ -307,14 +307,14 @@ describe("EvtxHistogram", () => {
     const slotOf = (container: HTMLElement) => container.querySelector<HTMLElement>("figure > figcaption");
     const shape = (slot: HTMLElement) => ({
       tags: [...slot.children].map((child) => child.tagName),
-      minHeight: slot.querySelector<HTMLElement>("[data-evtx-cursor-slot]")?.style.minHeight,
+      height: slot.querySelector<HTMLElement>("[data-evtx-cursor-slot]")?.style.height,
     });
     const ready = render(<EvtxHistogram records={dayOfEvents()} loading={false} />);
     const slot = slotOf(ready.container)!;
     expect(slot).not.toBeNull();
     const before = shape(slot);
     expect(before.tags).toEqual(["DIV"]);
-    expect(before.minHeight).toMatch(/^\d+px$/);
+    expect(before.height).toMatch(/^\d+px$/);
     const slider = screen.getByRole("slider", { name: "Time range" });
     fireEvent.focus(slider);
     expect(slotOf(ready.container)).toBe(slot);
@@ -331,6 +331,22 @@ describe("EvtxHistogram", () => {
       expect(slotOf(view.container)).not.toBeNull();
       view.unmount();
     }
+  });
+
+  it("gives the cursor slot a fixed height and one line, so a long cursor text cannot change the figure's height", () => {
+    const { container } = render(<EvtxHistogram records={dayOfEvents()} loading={false} />);
+    const slot = container.querySelector<HTMLElement>("[data-evtx-cursor-slot]")!;
+    // Fixed, not a minimum: text that wraps would otherwise add a line when the plot takes focus.
+    expect(slot.style.height).toMatch(/^\d+px$/);
+    expect(slot.style.minHeight).toBe("");
+    expect(slot.style.whiteSpace).toBe("nowrap");
+    expect(slot.style.overflow).toBe("hidden");
+    expect(slot.style.textOverflow).toBe("ellipsis");
+    expect(slot.style.lineHeight).toBe(slot.style.height);
+    // The whole string is still carried by the slider's value text.
+    fireEvent.focus(screen.getByRole("slider", { name: "Time range" }));
+    const text = container.querySelector("[data-evtx-cursor-text]")!.textContent!;
+    expect(screen.getByRole("slider", { name: "Time range" }).getAttribute("aria-valuetext")).toContain(text);
   });
 
   it("puts the notes on a line of their own above the cursor slot, so a note and the cursor text never share a line", () => {
