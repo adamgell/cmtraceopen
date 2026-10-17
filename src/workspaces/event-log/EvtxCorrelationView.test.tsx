@@ -166,6 +166,31 @@ describe("the chain list (spec 8.11)", () => {
     expect(within(row).getByText(/^10:20:00.10:20:06$/)).toBeInTheDocument();
   });
 
+  it("names each option from its title, strength and entry count, and tells two untitled rows apart (P7)", () => {
+    // Counts-only: no item was read, so both exact pairs are untitled.
+    const edges = [...fixtureEdges("exactPair"), ...fixtureEdges("exactPair", 10)];
+    const data = makeData({ items: [], edges, hasItems: false, stage: "edgesOnly" });
+    show(data);
+    const names = rows().map((row) => row.getAttribute("aria-label"));
+    expect(rows().map((row) => row.textContent)).toEqual([expect.stringContaining("Untitled chain"), expect.stringContaining("Untitled chain")]);
+    expect(new Set(names).size).toBe(2);
+    const [first, second] = data.model!.chains;
+    expect(names).toEqual([
+      `Exact, Untitled chain ${first!.id}, 2 entries, partial`,
+      `Exact, Untitled chain ${second!.id}, 2 entries, partial`,
+    ]);
+    // The accessible name is what a screen reader reads, and what getByRole finds.
+    expect(screen.getByRole("option", { name: names[1]! })).toBe(rows()[1]);
+  });
+
+  it("names a titled option by its title, and a partial one as partial", () => {
+    show(pairData());
+    expect(rows()[0]!.getAttribute("aria-label")).toBe("Exact, 101 · first failed, 2 entries");
+    cleanup();
+    show(makeData({ items: [eventItem(1, T0)], edges: fixtureEdges("exactPair") }));
+    expect(rows()[0]!.getAttribute("aria-label")).toBe("Exact, 101 · message 1, 2 entries, partial");
+  });
+
   it("selects the first chain by default and writes it to the transient store", async () => {
     const data = mixedData();
     show(data);

@@ -219,6 +219,9 @@ function ChainRow({
     <div
       role="option"
       id={id}
+      // Named from the title, or from the id when there is none, so two untitled rows (the
+      // counts-only stage, or members whose items were not read) are still told apart.
+      aria-label={`${STRENGTH_LABELS[chain.strength]}, ${chainAccessibleName(chain)}, ${entriesText(chain.memberCount)}${partial ? ", partial" : ""}`}
       aria-selected={selected}
       data-chain-id={chain.id}
       className={styles.option}
