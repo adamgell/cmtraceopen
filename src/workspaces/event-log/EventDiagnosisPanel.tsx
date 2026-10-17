@@ -13,7 +13,9 @@
  *
  * The Correlations card reads the workspace's shared edges-only correlation model
  * (`useEvtxCorrelationData().counts`), never `summary.correlations`: it needs no timeline scan, and
- * an unknown count reads "unknown", not 0. Its link opens the Correlation view.
+ * an unknown count reads "unknown", not 0. Its link opens the Correlation view. No other part of
+ * the panel shows a correlation row or count either (#838 ruling 1): the diagnosis details list
+ * error-token events only, and evtx-diagnosis-correlation-source.test.ts keeps it so.
  *
  * Deferred, with the phase that owns each (that phase's change must touch this file):
  * - "Review unplaced lines": Phase 10b (unplaced list).
@@ -50,7 +52,6 @@ import {
   type TopEventId,
 } from "./evtx-insights-data";
 import type {
-  DiagnosisCorrelationEdge,
   DiagnosisCoverageGap,
   DiagnosisErrorToken,
   DiagnosisEvidence,
@@ -878,33 +879,6 @@ function CorrelationSummaryCard({ sizes, stale }: { sizes: RailSizes; stale: boo
   );
 }
 
-function CorrelationRow({
-  edge,
-  sizes,
-}: {
-  edge: DiagnosisCorrelationEdge;
-  sizes: RailSizes;
-}) {
-  const { cardSecondary } = useRailTextColors();
-  const target =
-    edge.right ?? (edge.candidateIds.join(", ") || "no direct match");
-  return (
-    <div style={{ display: "grid", gap: "2px", fontSize: `${sizes.small}px` }}>
-      <span>
-        Correlation: {edge.status} ({edge.basis}) {edge.left} {"→"} {target}
-      </span>
-      {edge.evidence.length > 0 && (
-        <span style={{ color: cardSecondary }}>
-          Correlation evidence:{" "}
-          {edge.evidence
-            .map((item) => `${item.originId} ${item.field}=${item.value}`)
-            .join("; ")}
-        </span>
-      )}
-    </div>
-  );
-}
-
 function errorTokenLabel(token: DiagnosisErrorToken): string {
   const details = [
     token.hex && token.hex !== token.raw ? `(${token.hex})` : null,
@@ -1104,15 +1078,11 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
     summary.coverageGaps,
     summary.overview.coverageGapCount,
   );
-  const correlations = capSection(
-    summary.correlations,
-    summary.overview.correlationCount,
-  );
   const events = capSection(
     summary.events.filter((event) => event.errorTokens.length > 0),
     summary.overview.errorTokenEventCount,
   );
-  const hasDetails = correlations.items.length > 0 || events.items.length > 0;
+  const hasDetails = events.items.length > 0;
 
   return (
     <section
@@ -1193,7 +1163,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
 
       <CorrelationSummaryCard sizes={sizes} stale={updating} />
 
-      {(hasDetails || correlations.omitted > 0 || events.omitted > 0) && (
+      {(hasDetails || events.omitted > 0) && (
         <Disclosure
           label="Show diagnosis details"
           open={detailsOpen}
@@ -1201,18 +1171,6 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
           sizes={sizes}
           stale={updating}
         >
-          {correlations.items.map((edge, index) => (
-            <CorrelationRow
-              key={`${edge.left}-${edge.right ?? "none"}-${index}`}
-              edge={edge}
-              sizes={sizes}
-            />
-          ))}
-          <OmittedRows
-            count={correlations.omitted}
-            singular="correlation"
-            sizes={sizes}
-          />
           {events.items.map((event, index) => (
             <EventRow key={`${event.family}-${index}`} event={event} sizes={sizes} />
           ))}

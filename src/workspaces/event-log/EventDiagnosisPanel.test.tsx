@@ -471,12 +471,35 @@ describe("EventDiagnosisPanel", () => {
       expect(screen.queryByText(/ordinary\.evtx/)).toBeNull();
     });
 
-    it("keeps the per-edge correlation rows reachable", () => {
-      render(<EventDiagnosisPanel summary={summary} />);
+    it("lists no correlation row and no correlation count, whatever the summary carries (#838 ruling 1)", () => {
+      // The summary previews one candidate edge and counts 849 relations of every status. Neither
+      // is a correlation count the UI may show: the Correlations card and the Correlation view,
+      // built from the timeline's edges, are the only correlation surfaces.
+      render(
+        <EventDiagnosisPanel
+          summary={{ ...summary, overview: { ...summary.overview, correlationCount: 849 } }}
+        />,
+      );
       expand("Show diagnosis details");
+      const details = disclosure("Show diagnosis details");
+      expect(details).toHaveAttribute("open");
+      expect(details.textContent).not.toMatch(/Correlation:|Correlation evidence|correlations? omitted|848|849/);
+      expect(screen.queryByText(/event-1 activityId=activity-1/)).toBeNull();
+      // And nowhere else in the panel either.
+      expect(document.body.textContent).not.toMatch(/848 correlations|849 correlations|Correlation: candidate/);
+    });
 
-      expect(screen.getByText(/Correlation: candidate \(candidateIdentifier\) event-1/)).toBeTruthy();
-      expect(screen.getByText(/event-1 activityId=activity-1/)).toBeTruthy();
+    it("offers the disclosure only when there is an error-token event to show", () => {
+      render(
+        <EventDiagnosisPanel
+          summary={{
+            ...summary,
+            events: [],
+            overview: { ...summary.overview, correlationCount: 849, errorTokenEventCount: 0 },
+          }}
+        />,
+      );
+      expect(screen.queryByText("Show diagnosis details")).toBeNull();
     });
   });
 
@@ -504,7 +527,7 @@ describe("EventDiagnosisPanel", () => {
     expand("Coverage gaps (4,228)");
     expect(screen.getByText("4,227 coverage gaps omitted.")).toBeTruthy();
     expand("Show diagnosis details");
-    expect(screen.getByText("848 correlations omitted.")).toBeTruthy();
+    expect(screen.queryByText(/correlations omitted/)).toBeNull();
     expect(
       screen.getByText("206 error-token event details omitted."),
     ).toBeTruthy();
@@ -919,7 +942,6 @@ describe("EventDiagnosisPanel", () => {
       for (const text of [
         "2 actionable findings omitted.",
         "3 coverage gaps omitted.",
-        "4 correlations omitted.",
         "2 error-token event details omitted.",
       ]) {
         expect(effectiveOpacity(screen.getByText(text)), text).toBeCloseTo(0.6, 5);
@@ -927,6 +949,8 @@ describe("EventDiagnosisPanel", () => {
       // The rows inside a stale disclosure carry no dimming of their own.
       expect(screen.getByText("3 coverage gaps omitted.").style.opacity).toBe("");
       expect(screen.getByText("2 actionable findings omitted.").style.opacity).toBe("0.6");
+      // The summary also counts 5 relations; the panel does not turn that into an omitted line.
+      expect(screen.queryByText(/correlations? omitted/)).toBeNull();
     });
 
     it("dims 'No actionable findings.'", () => {
