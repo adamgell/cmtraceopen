@@ -367,6 +367,32 @@ describe("countCurrentPeriod", () => {
       expect(current.counts.total).toBe(1);
     });
 
+    it("does not count a tail row the view's search hides", () => {
+      const rows = [
+        tailRow("System", { message: "the disk is full" }),
+        tailRow("System", { message: "all well" }),
+      ];
+      const current = countCurrentPeriod(
+        rows,
+        basisOf(priorFor("24h"), ["System"]),
+        visibility({ filterSearch: "disk" })
+      );
+      expect(current.tailExcluded).toBe(1);
+    });
+
+    it("does not count a tail row the view's quick filter hides", () => {
+      const rows = [
+        tailRow("System", { message: "the disk is full" }),
+        tailRow("System", { message: "all well" }),
+      ];
+      const current = countCurrentPeriod(
+        rows,
+        basisOf(priorFor("24h"), ["System"]),
+        visibility({ quickFilter: { ...DEFAULT_QUICK_FILTER, query: "disk" } })
+      );
+      expect(current.tailExcluded).toBe(1);
+    });
+
     it("is zero when the tail appended nothing to the compared channels", () => {
       const current = countCurrentPeriod(
         [record({ channel: "System", timestampEpoch: ANCHOR - HOUR })],
