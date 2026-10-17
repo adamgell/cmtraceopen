@@ -21,6 +21,10 @@ import {
   scopeForChain,
   soleRecordForOrigin,
 } from "./evtx-correlation-origin-index";
+import {
+  classifyCoverageGaps,
+  type CorrelationGaps,
+} from "./evtx-correlation-gaps";
 import { buildEvidenceIndex } from "./evtx-insights-data";
 import type { EvtxRecord } from "./types";
 import {
@@ -109,6 +113,10 @@ function itemOf(origin: TimelineOrigin, timestampMs = 1_000): TimelineItem {
 }
 
 const indexOf = (records: EvtxRecord[]) => buildEvidenceIndex(records);
+
+/** The engine reported no coverage gap and the preview shows all of them (none). */
+const CLEAR_GAPS = classifyCoverageGaps([], 0);
+const FAN_OUT = "exact UserId identity group exceeds the 256-member correlation limit";
 
 describe("resolveOriginRecords: the strict field join", () => {
   it("names the one record whose event ID, identity, provider, channel, source and machine all agree", () => {
@@ -723,8 +731,13 @@ function syntheticEdge(
 }
 
 describe("linkCountsByRecord", () => {
-  /** Edges and scan complete, so only the origins can make the index incomplete. */
-  const complete = (records: EvtxRecord[]) => ({ records, edgeInputComplete: true, scanComplete: true });
+  /** Edges, scan and the engine's gaps all complete, so only the origins can make the index incomplete. */
+  const complete = (records: EvtxRecord[], gaps: CorrelationGaps = CLEAR_GAPS) => ({
+    records,
+    edgeInputComplete: true,
+    scanComplete: true,
+    gaps,
+  });
 
   it("gives each record the partners of the one origin it names, held by object", () => {
     const a = fixturePair(1);
@@ -826,7 +839,7 @@ describe("linkCountsByRecord", () => {
       linkPartnerCounts([{ left: rid(1), right: rid(2) }]),
       originLookup([a.item, b.item, quiet.item], []),
       indexOf(loaded),
-      { records: loaded, ...flags },
+      { records: loaded, gaps: CLEAR_GAPS, ...flags },
     );
     expect(result.complete).toBe(false);
     expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "unknown" });
@@ -929,6 +942,168 @@ describe("linkCountsByRecord", () => {
     expect(result.unmatchedOrigins).toBe(0);
   });
 
+  describe("the engine's correlation coverage gaps (J1)", () => {
+    /** Two loaded records and a third the engine never correlated: it has no edge, and no edge was computed. */
+    function setup() {
+      const linked = fixturePair(1);
+      const partner = fixturePair(2);
+      const uncorrelated = fixturePair(5);
+      const quiet = fixturePair(6);
+      const loaded = [linked.source, partner.source, uncorrelated.source, quiet.source];
+      const origins = originLookup([linked.item, partner.item, uncorrelated.item, quiet.item], []);
+      const partners = linkPartnerCounts([{ left: rid(1), right: rid(2) }]);
+      return { linked, partner, uncorrelated, quiet, loaded, origins, partners };
+    }
+    const gapOn = (id: string, reason = FAN_OUT) => ({ source: id, reason });
+
+    it("makes the records of an origin a fan-out gap names unknown, though it has no edge at all", () => {
+      const { uncorrelated, quiet, loaded, origins, partners } = setup();
+      const gaps = classifyCoverageGaps([gapOn(rid(5))], 1);
+      const result = linkCountsByRecord(partners, origins, indexOf(loaded), complete(loaded, gaps));
+      expect(recordLinkStatus(result, uncorrelated.source)).toEqual({ kind: "unknown" });
+      // The index is otherwise complete, so a record the engine did correlate and found nothing for is none.
+      expect(result.complete).toBe(true);
+      expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "none" });
+      expect(result.unattributedGapOrigins).toBe(0);
+    });
+
+    it("makes a record that has a count and is named by a gap a floor", () => {
+      const { linked, loaded, origins, partners } = setup();
+      const gaps = classifyCoverageGaps([gapOn(rid(1))], 1);
+      const result = linkCountsByRecord(partners, origins, indexOf(loaded), complete(loaded, gaps));
+      expect(recordLinkStatus(result, linked.source)).toEqual({ kind: "linked", count: 1, atLeast: true });
+    });
+
+    it("makes complete false for a global correlation limit, so every uncounted record is unknown", () => {
+      const { quiet, loaded, origins, partners } = setup();
+      for (const source of ["timeline-correlation-projection", "correlation"]) {
+        const gaps = classifyCoverageGaps([{ source, reason: "limit" }], 1);
+        const result = linkCountsByRecord(partners, origins, indexOf(loaded), complete(loaded, gaps));
+        expect(result.complete, source).toBe(false);
+        expect(recordLinkStatus(result, quiet.source), source).toEqual({ kind: "unknown" });
+      }
+    });
+
+    it("makes complete false when the session counts more gaps than the preview shows", () => {
+      const { quiet, loaded, origins, partners } = setup();
+      const gaps = classifyCoverageGaps([gapOn(rid(5))], 301);
+      const result = linkCountsByRecord(partners, origins, indexOf(loaded), complete(loaded, gaps));
+      expect(result.complete).toBe(false);
+      expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "unknown" });
+    });
+
+    it("makes complete false when the gap count is not known", () => {
+      const { quiet, loaded, origins, partners } = setup();
+      const gaps = classifyCoverageGaps([], null);
+      const result = linkCountsByRecord(partners, origins, indexOf(loaded), complete(loaded, gaps));
+      expect(result.complete).toBe(false);
+      expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "unknown" });
+    });
+
+    it("makes complete false for a gap whose origin was not read, and counts it", () => {
+      const { quiet, loaded, origins, partners } = setup();
+      const gaps = classifyCoverageGaps([gapOn(rid(99))], 1);
+      const result = linkCountsByRecord(partners, origins, indexOf(loaded), complete(loaded, gaps));
+      expect(result.unattributedGapOrigins).toBe(1);
+      expect(result.complete).toBe(false);
+      expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "unknown" });
+    });
+
+    it("lets list-view compaction gaps pass: they say nothing about correlation", () => {
+      const { quiet, loaded, origins, partners } = setup();
+      const gaps = classifyCoverageGaps(
+        [
+          { source: "timeline-item-projection", reason: "compacted" },
+          { source: "timeline-message-projection", reason: "budget" },
+        ],
+        2,
+      );
+      const result = linkCountsByRecord(partners, origins, indexOf(loaded), complete(loaded, gaps));
+      expect(result.complete).toBe(true);
+      expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "none" });
+    });
+
+    it("names both copies of a duplicated record when a gap names their origin", () => {
+      const { uncorrelated, loaded, origins, partners } = setup();
+      const copy = record(5, { eventId: 105 });
+      const gaps = classifyCoverageGaps([gapOn(rid(5))], 1);
+      const result = linkCountsByRecord(partners, origins, indexOf([...loaded, copy]), complete([...loaded, copy], gaps));
+      expect(recordLinkStatus(result, uncorrelated.source)).toEqual({ kind: "unknown" });
+      expect(recordLinkStatus(result, copy)).toEqual({ kind: "unknown" });
+    });
+
+    it("marks the source and channel unknown for a gap on an origin with no usable identity", () => {
+      const { linked, partner, quiet, loaded, partners } = setup();
+      const unnumbered = record(0, { eventRecordIdText: "0", eventId: 150 });
+      const noIdentity = itemOf(originOf(unnumbered, { stableId: "no-id", recordId: 0, recordIdText: null }));
+      const otherChannel = record(40, { eventId: 140, channel: "Application" });
+      const all = [...loaded, unnumbered, otherChannel];
+      const gaps = classifyCoverageGaps([gapOn("no-id", "machine identity unavailable; exact correlation is restricted")], 1);
+      const result = linkCountsByRecord(
+        partners,
+        originLookup([linked.item, partner.item, noIdentity], []),
+        indexOf(all),
+        complete(all, gaps),
+      );
+      // Everything else in System of that source is unknown; another channel is not.
+      expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "unknown" });
+      expect(recordLinkStatus(result, otherChannel)).toEqual({ kind: "none" });
+    });
+
+    it("ignores a gap on a text-log origin: it is not a record", () => {
+      const { quiet, loaded, origins, partners } = setup();
+      const log = itemOf({
+        kind: "log",
+        file: "C:\\Logs\\a.log",
+        component: null,
+        line: 3,
+        source: "a.cpp",
+        machine: null,
+        bundle: null,
+        recordId: 3,
+      });
+      const logId = timelineOriginId(log.origin);
+      const gaps = classifyCoverageGaps([gapOn(logId, "machine identity unavailable")], 1);
+      const result = linkCountsByRecord(
+        partners,
+        originLookup([...origins.values()].map((origin) => itemOf(origin)).concat([log]), []),
+        indexOf(loaded),
+        complete(loaded, gaps),
+      );
+      expect(result.complete).toBe(true);
+      expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "none" });
+    });
+
+    it("finds the origin of a gap among the unplaced origins too", () => {
+      const { linked, partner, loaded, partners } = setup();
+      const untimed = fixturePair(7);
+      const all = [...loaded, untimed.source];
+      const gaps = classifyCoverageGaps([gapOn(rid(7))], 1);
+      const result = linkCountsByRecord(
+        partners,
+        originLookup([linked.item, partner.item], [{ origin: untimed.item.origin, reason: "missingTimestamp" }]),
+        indexOf(all),
+        complete(all, gaps),
+      );
+      expect(result.unattributedGapOrigins).toBe(0);
+      expect(recordLinkStatus(result, untimed.source)).toEqual({ kind: "unknown" });
+    });
+
+    it("does not make a record unknown for a gap whose origin names no loaded record", () => {
+      const { quiet, loaded, origins, partners } = setup();
+      const gone = fixturePair(8);
+      const gaps = classifyCoverageGaps([gapOn(rid(8))], 1);
+      const result = linkCountsByRecord(
+        partners,
+        originLookup([...origins.values()].map((origin) => itemOf(origin)).concat([gone.item]), []),
+        indexOf(loaded),
+        complete(loaded, gaps),
+      );
+      expect(result.complete).toBe(true);
+      expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "none" });
+    });
+  });
+
   it("is complete and empty when nothing is linked and everything is read", () => {
     const loaded = [record(1)];
     const result = linkCountsByRecord(new Map(), new Map(), indexOf(loaded), complete(loaded));
@@ -938,6 +1113,7 @@ describe("linkCountsByRecord", () => {
       unmatchedOrigins: 0,
       ambiguousOrigins: 0,
       unloadedOrigins: 0,
+      unattributedGapOrigins: 0,
       complete: true,
     });
     expect(recordLinkStatus(result, loaded[0]!)).toEqual({ kind: "none" });

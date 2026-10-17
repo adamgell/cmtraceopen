@@ -33,6 +33,7 @@ import {
   redactedValueMatches,
   type EvidenceIndex,
 } from "./evtx-insights-data";
+import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
 import type { EvtxRecord } from "./types";
 import {
   timelineOriginId,
@@ -262,6 +263,13 @@ export interface LinkIndexOptions {
   edgeInputComplete: boolean;
   /** The scan read every timeline page (`LoadedLinkedItems.complete`). */
   scanComplete: boolean;
+  /**
+   * The engine's correlation coverage gaps (`classifyCoverageGaps`). Required: the absence of gaps
+   * must be said, not assumed, because a record the engine never correlated has no edge and would
+   * otherwise read as having no link. The origin each gap names has to be in `origins`, so the
+   * caller reads those items too (their ids are `gaps.originIds`).
+   */
+  gaps: CorrelationGaps;
 }
 
 export interface RecordLinkCounts {
@@ -271,7 +279,9 @@ export interface RecordLinkCounts {
    * Records whose link status is UNKNOWN even where the index is otherwise complete: every
    * candidate of an origin that names several (an origin cannot be told apart from its twin, so
    * which copy carries the link is unknown), and every record of a source and channel in which an
-   * origin had no usable identity (that origin could be any record there).
+   * origin had no usable identity (that origin could be any record there), and every record of an
+   * origin a correlation coverage gap names (the engine never correlated it, so it has no edge
+   * because none was computed, not because none exists).
    */
   unknownRecords: Set<EvtxRecord>;
   /**
@@ -284,8 +294,15 @@ export interface RecordLinkCounts {
   /** Linked origins with a usable identity that name no loaded record. Their records are not here. */
   unloadedOrigins: number;
   /**
-   * The edges are complete, the scan is complete, and no origin was unmatched. Only then may a
-   * record with no count be read as having no link (`recordLinkStatus`).
+   * Origins a correlation coverage gap names that were not among the origins read, so which
+   * records they are cannot be told.
+   */
+  unattributedGapOrigins: number;
+  /**
+   * The edges are complete, the scan is complete, no origin was unmatched, and the engine's gaps
+   * allow it: no limit or truncation left origins uncorrelated, the preview shows every gap, and
+   * every gap's origin was read. Only then may a record with no count be read as having no link
+   * (`recordLinkStatus`).
    */
   complete: boolean;
 }
@@ -341,6 +358,22 @@ export function linkCountsByRecord(
       counts.set(record, Math.max(counts.get(record) ?? 0, partners));
     }
   }
+  // An origin the engine's gaps name was not correlated: its records are unknown, edge or no edge.
+  let unattributedGapOrigins = 0;
+  for (const gapOriginId of options.gaps.originIds) {
+    const origin = origins.get(gapOriginId);
+    if (origin === undefined) {
+      unattributedGapOrigins += 1;
+      continue;
+    }
+    if (origin.kind !== "event") continue;
+    const resolution = resolveOriginRecords(origin, index);
+    if (resolution.kind !== "matches") {
+      unknownLanes.set(`${origin.source}\u0000${origin.channel}`, origin);
+      continue;
+    }
+    for (const record of resolution.records) unknownRecords.add(record);
+  }
   if (unknownLanes.size > 0) {
     for (const record of options.records) {
       for (const origin of unknownLanes.values()) {
@@ -360,7 +393,13 @@ export function linkCountsByRecord(
     unmatchedOrigins,
     ambiguousOrigins,
     unloadedOrigins,
-    complete: options.edgeInputComplete && options.scanComplete && unmatchedOrigins === 0,
+    unattributedGapOrigins,
+    complete:
+      options.edgeInputComplete &&
+      options.scanComplete &&
+      unmatchedOrigins === 0 &&
+      unattributedGapOrigins === 0 &&
+      !gapsClearCompleteness(options.gaps),
   };
 }
 
