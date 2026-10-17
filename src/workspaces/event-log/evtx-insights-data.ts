@@ -6,7 +6,12 @@
  */
 import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
 import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
-import { countByLevel, EVTX_LEVELS, hasUsableTimestamp } from "./evtx-filter";
+import {
+  countByLevel,
+  EVTX_LEVELS,
+  hasUsableTimestamp,
+  type EvtxRecordScopeCounts,
+} from "./evtx-filter";
 import type {
   DiagnosisEventEvidence,
   DiagnosisFinding,
@@ -267,6 +272,130 @@ export function findingForRecord(
     }
   }
   return null;
+}
+
+/**
+ * How many evidence references the engine keeps on a finding: `MAX_DIAGNOSIS_NESTED_ROWS` in
+ * src-tauri/src/event_log/analysis_session.rs (line 47), applied to every finding's evidence by
+ * `compact_finding` (line 1033). A finding with this many references may have been cut short.
+ * Mirrored here; nothing in the TypeScript tests can see the Rust value change.
+ */
+export const DIAGNOSIS_NESTED_ROW_CAP = 4;
+
+/**
+ * The source of the coverage gap the engine adds when it bounded its response
+ * (`DIAGNOSIS_RESPONSE_PROJECTION_SOURCE`, analysis_session.rs line 41, placed at line 1244). It is
+ * the only signal that anything was omitted, and it is not per finding.
+ */
+export const DIAGNOSIS_PROJECTION_GAP_SOURCE = "diagnosis-response-projection";
+
+/** Whether the engine bounded this diagnosis response, so any finding may cite more than it sent. */
+export function summaryIsBounded(summary: DiagnosisSummary): boolean {
+  const isProjection = (gap: { source: string }) => gap.source === DIAGNOSIS_PROJECTION_GAP_SOURCE;
+  return (
+    summary.coverageGaps.some(isProjection) ||
+    summary.findings.some((finding) => finding.coverageGaps.some(isProjection))
+  );
+}
+
+/** Loaded records by the identity an evidence reference names: event ID and record identity. */
+export type EvidenceIndex = ReadonlyMap<string, readonly EvtxRecord[]>;
+
+const identityKey = (eventId: number, identity: string) => `${eventId}\u0000${identity}`;
+
+/**
+ * Indexes `records` once, so resolving a finding costs a lookup per reference and not a pass over
+ * every loaded record. A record the provider never numbered has no identity and is not indexed.
+ */
+export function buildEvidenceIndex(records: readonly EvtxRecord[]): EvidenceIndex {
+  const index = new Map<string, EvtxRecord[]>();
+  for (const record of records) {
+    const identity = recordIdentityText(record);
+    if (identity === null) continue;
+    const key = identityKey(record.eventId, identity);
+    const bucket = index.get(key);
+    if (bucket) bucket.push(record);
+    else index.set(key, [record]);
+  }
+  return index;
+}
+
+/** The identity an evidence reference names, in the engine's `stable_id` order, or null when it has none a record can match. */
+function evidenceIdentityText(value: DiagnosisEventEvidence): string | null {
+  if (hasRecordIdText(value.recordIdText)) return value.recordIdText;
+  if (value.fallbackIdentity) return null;
+  return value.recordId === 0 ? null : String(value.recordId);
+}
+
+export interface FindingScope {
+  /** The distinct loaded records the finding's event evidence names, in the order it names them. */
+  records: EvtxRecord[];
+  /** Why the scope is not necessarily everything the finding cites. */
+  counts: EvtxRecordScopeCounts;
+}
+
+/**
+ * The loaded records a finding's event evidence names, and what could not be resolved.
+ *
+ * Every reference is resolved with `evidenceMatchesRecord`, the one matcher (redaction tokens and
+ * digest-bounded values included). A reference that names more than one loaded record adds all of
+ * them and is counted as ambiguous: the UI does not guess which one the engine meant, and it does
+ * not drop any. Evidence that is not an event (text-log lines, Intune, SCCM) is not a grid record
+ * and is not counted. `engineBounded` is `summaryIsBounded` for the summary the finding came from.
+ */
+export function scopeForFinding(
+  finding: DiagnosisFinding,
+  index: EvidenceIndex,
+  engineBounded: boolean,
+): FindingScope {
+  const records = new Set<EvtxRecord>();
+  const counts: EvtxRecordScopeCounts = {
+    notLoaded: 0,
+    noUsableIdentity: 0,
+    ambiguous: 0,
+    bounded: engineBounded || finding.evidence.length >= DIAGNOSIS_NESTED_ROW_CAP,
+  };
+  for (const evidence of finding.evidence) {
+    if (evidence.kind !== "event") continue;
+    const identity = evidenceIdentityText(evidence.value);
+    if (identity === null) {
+      counts.noUsableIdentity += 1;
+      continue;
+    }
+    const matches = (index.get(identityKey(evidence.value.eventId, identity)) ?? []).filter(
+      (record) => evidenceMatchesRecord(evidence.value, record),
+    );
+    if (matches.length === 0) counts.notLoaded += 1;
+    else if (matches.length > 1) counts.ambiguous += 1;
+    for (const record of matches) records.add(record);
+  }
+  return { records: [...records], counts };
+}
+
+/**
+ * One sentence for each way a record scope falls short of what it was made from, apart from each
+ * other and in a fixed order. Empty when it falls short in none.
+ */
+export function describeScopeCounts(counts: EvtxRecordScopeCounts): string[] {
+  const sentences: string[] = [];
+  const events = (n: number) => `${formatCount(n)} cited ${n === 1 ? "event" : "events"}`;
+  if (counts.notLoaded > 0) {
+    sentences.push(`${events(counts.notLoaded)} ${counts.notLoaded === 1 ? "is" : "are"} not loaded.`);
+  }
+  if (counts.noUsableIdentity > 0) {
+    sentences.push(
+      `${events(counts.noUsableIdentity)} cannot be matched to a loaded event: no usable record identity.`,
+    );
+  }
+  if (counts.ambiguous > 0) {
+    sentences.push(
+      `${formatCount(counts.ambiguous)} cited ${counts.ambiguous === 1 ? "reference matches" : "references match"} more than one loaded event. Every match is included.`,
+    );
+  }
+  if (counts.bounded) {
+    sentences.push("The diagnosis response is bounded, so this finding may cite more events than were sent.");
+  }
+  return sentences;
 }
 
 export interface CorrelationBreakdown {

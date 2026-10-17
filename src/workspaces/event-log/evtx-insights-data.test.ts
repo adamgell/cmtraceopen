@@ -3,15 +3,22 @@ import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
 import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
 import { countByLevel, EVTX_LEVELS } from "./evtx-filter";
 import {
+  buildEvidenceIndex,
   buildSameIdSeries,
   correlationBreakdown,
+  describeScopeCounts,
+  DIAGNOSIS_NESTED_ROW_CAP,
+  DIAGNOSIS_PROJECTION_GAP_SOURCE,
   eventEvidenceLabel,
+  evidenceMatchesRecord,
   findRecordById,
   findingForRecord,
   formatCount,
   redactedValueMatches,
   neighborRecordId,
+  scopeForFinding,
   summarizeRecords,
+  summaryIsBounded,
 } from "./evtx-insights-data";
 import type { DiagnosisFinding, DiagnosisSummary, EvtxRecord } from "./types";
 
@@ -363,5 +370,176 @@ describe("findRecordById", () => {
     expect(findRecordById(records, 7)).toBe(records[2]);
     expect(findRecordById(records, 99)).toBeNull();
     expect(findRecordById(records, null)).toBeNull();
+  });
+});
+
+describe("scopeForFinding", () => {
+  const find = (finding: DiagnosisFinding, loaded: EvtxRecord[], engineBounded = false) =>
+    scopeForFinding(finding, buildEvidenceIndex(loaded), engineBounded);
+  const names = (list: EvtxRecord[]) => list.map((r) => r.id);
+
+  it("resolves the loaded records the finding's event evidence names, once each", () => {
+    const loaded = [record(1), record(2), record(3)];
+    const finding = findingWith(
+      evidence({ recordId: 1001 }),
+      evidence({ recordId: 1003 }),
+      evidence({ recordId: 1001 }),
+    );
+    const scope = find(finding, loaded);
+    expect(names(scope.records)).toEqual([1, 3]);
+    expect(scope.records[0]).toBe(loaded[0]);
+    expect(scope.counts).toEqual({ notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false });
+  });
+
+  it("is the set evidenceMatchesRecord selects, for every shape of reference", () => {
+    const loaded = [
+      record(1, { eventRecordIdText: "88456", eventRecordId: 88456 }),
+      record(2, { provider: "Q" }),
+      record(3, { computer: "LAB-PC-07", sourceLabel: "bundle\\LAB-PC-07\\System.evtx" }),
+      record(4, { eventId: 7 }),
+      record(5, { eventRecordId: 0 }),
+    ];
+    const refs = [
+      evidence({ recordIdText: "88456", recordId: 88456 }),
+      evidence({ recordId: 1002, provider: "Q" }),
+      evidence({ recordId: 1003, machine: HOST, source: `bundle\\${HOST}\\System.evtx` }),
+      evidence({ recordId: 1004, eventId: 7 }),
+      evidence({ recordId: 1004, eventId: 8 }),
+      evidence({ recordId: 1001 }),
+    ];
+    const finding = findingWith(...refs);
+    const brute = loaded.filter((r) =>
+      refs.some((ref) => evidenceMatchesRecord(ref.value, r)),
+    );
+    expect(find(finding, loaded).records).toEqual(brute);
+    expect(brute.length).toBeGreaterThan(3);
+  });
+
+  it("resolves a value that was digest-bounded in transit, and not one with another digest", () => {
+    const longSource = `C:\\${"deep\\".repeat(80)}System.evtx`;
+    const loaded = [record(1, { sourceLabel: longSource })];
+    const bound = boundUtf8WithDigest(longSource, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
+    expect(find(findingWith(evidence({ source: bound })), loaded).records).toEqual(loaded);
+
+    const other = boundUtf8WithDigest(`${longSource}x`, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
+    const wrong = find(findingWith(evidence({ source: other })), loaded);
+    expect(wrong.records).toEqual([]);
+    expect(wrong.counts.notLoaded).toBe(1);
+  });
+
+  it("resolves a record id too large for a number through its text, not its numeric stand-in", () => {
+    const huge = record(1, { eventRecordIdText: "18446744073709551615", eventRecordId: 9007199254740991 });
+    const scope = find(
+      findingWith(evidence({ recordIdText: "18446744073709551615", recordId: 9007199254740991 })),
+      [huge, record(2, { eventRecordId: 9007199254740991 })],
+    );
+    expect(scope.records).toEqual([huge]);
+  });
+
+  it("counts a reference that names no loaded record as not loaded", () => {
+    const scope = find(findingWith(evidence({ recordId: 1001 }), evidence({ recordId: 9999 })), [record(1)]);
+    expect(names(scope.records)).toEqual([1]);
+    expect(scope.counts.notLoaded).toBe(1);
+    expect(scope.counts.noUsableIdentity).toBe(0);
+  });
+
+  it("counts a reference with no usable identity apart from one that is not loaded", () => {
+    const loaded = [record(1)];
+    const scope = find(
+      findingWith(
+        evidence({ recordId: 0, fallbackIdentity: "abcdef0123456789" }),
+        evidence({ recordId: 0 }),
+        evidence({ recordId: 5555 }),
+      ),
+      loaded,
+    );
+    expect(scope.records).toEqual([]);
+    expect(scope.counts).toMatchObject({ noUsableIdentity: 2, notLoaded: 1 });
+  });
+
+  it("includes every candidate of an ambiguous reference and counts it", () => {
+    const first = record(1, { sourceLabel: "bundle\\LAB-PC-07\\System.evtx", computer: "LAB-PC-07" });
+    const twin = record(2, { sourceLabel: "bundle\\LAB-PC-08\\System.evtx", computer: "LAB-PC-08", eventRecordId: 1001 });
+    // The reference names neither source nor machine, so it fits both.
+    const scope = find(findingWith(evidence({ source: undefined, machine: undefined })), [first, twin]);
+    expect(scope.records).toEqual([first, twin]);
+    expect(scope.counts.ambiguous).toBe(1);
+  });
+
+  it("ignores evidence that is not an event and does not count it", () => {
+    const finding = findingWith(evidence({ recordId: 1001 }));
+    finding.evidence = [
+      ...finding.evidence,
+      { kind: "textLog", value: { source: "s", filePath: "f", lineNumber: 1, entryId: 1 } },
+      { kind: "dsregcmdRaw", value: "raw" },
+    ];
+    const scope = find(finding, [record(1)]);
+    expect(names(scope.records)).toEqual([1]);
+    expect(scope.counts).toEqual({ notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false });
+  });
+
+  it("marks the scope bounded at the engine's evidence cap, and when the response was bounded", () => {
+    const refs = (n: number) => Array.from({ length: n }, (_, i) => evidence({ recordId: 1001 + i }));
+    const loaded = [1, 2, 3, 4, 5].map((n) => record(n));
+    expect(find(findingWith(...refs(DIAGNOSIS_NESTED_ROW_CAP - 1)), loaded).counts.bounded).toBe(false);
+    expect(find(findingWith(...refs(DIAGNOSIS_NESTED_ROW_CAP)), loaded).counts.bounded).toBe(true);
+    expect(find(findingWith(...refs(1)), loaded, true).counts.bounded).toBe(true);
+  });
+
+  it("is an empty scope for a finding that cites no event", () => {
+    const finding = findingWith();
+    expect(find(finding, [record(1)])).toEqual({
+      records: [],
+      counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+    });
+  });
+});
+
+describe("summaryIsBounded", () => {
+  const gap = (source: string) => ({ id: "g", source, state: "capped" as const, detail: "", evidence: [] });
+  const summary = (overrides: Partial<DiagnosisSummary>): DiagnosisSummary =>
+    ({ findings: [], coverageGaps: [], evidence: [], correlations: [], events: [], ...overrides }) as unknown as DiagnosisSummary;
+
+  it("is true when the engine's projection gap is present, in the summary or on a finding", () => {
+    expect(summaryIsBounded(summary({ coverageGaps: [gap(DIAGNOSIS_PROJECTION_GAP_SOURCE)] }))).toBe(true);
+    const finding = { ...findingWith(), coverageGaps: [gap(DIAGNOSIS_PROJECTION_GAP_SOURCE)] };
+    expect(summaryIsBounded(summary({ findings: [finding] }))).toBe(true);
+  });
+
+  it("is false for any other coverage gap", () => {
+    expect(summaryIsBounded(summary({ coverageGaps: [gap("System.evtx")] }))).toBe(false);
+    expect(summaryIsBounded(summary({}))).toBe(false);
+  });
+});
+
+describe("describeScopeCounts", () => {
+  const counts = (overrides: Partial<Parameters<typeof describeScopeCounts>[0]>) => ({
+    notLoaded: 0,
+    noUsableIdentity: 0,
+    ambiguous: 0,
+    bounded: false,
+    ...overrides,
+  });
+
+  it("says nothing when the scope fell short in no way", () => {
+    expect(describeScopeCounts(counts({}))).toEqual([]);
+  });
+
+  it("names each class on its own line, in a fixed order", () => {
+    expect(
+      describeScopeCounts(counts({ notLoaded: 2, noUsableIdentity: 1, ambiguous: 3, bounded: true })),
+    ).toEqual([
+      "2 cited events are not loaded.",
+      "1 cited event cannot be matched to a loaded event: no usable record identity.",
+      "3 cited references match more than one loaded event. Every match is included.",
+      "The diagnosis response is bounded, so this finding may cite more events than were sent.",
+    ]);
+  });
+
+  it("uses the singular for one", () => {
+    expect(describeScopeCounts(counts({ notLoaded: 1 }))).toEqual(["1 cited event is not loaded."]);
+    expect(describeScopeCounts(counts({ ambiguous: 1 }))).toEqual([
+      "1 cited reference matches more than one loaded event. Every match is included.",
+    ]);
   });
 });
