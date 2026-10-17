@@ -13,6 +13,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("./SourcePicker", () => ({ SourcePicker: () => null }));
 vi.mock("./ChannelPicker", () => ({ ChannelPicker: () => null }));
 vi.mock("./EvtxFilterBar", () => ({ EvtxFilterBar: () => null }));
+vi.mock("./EvtxViewBar", () => ({ EvtxViewBar: () => null }));
 vi.mock("./EvtxCoverageBanner", () => ({ EvtxCoverageBanner: () => null }));
 vi.mock("./EvtxTimeline", () => ({
   EvtxTimeline: () => <div role="grid" aria-label="Loaded event grid" />,
