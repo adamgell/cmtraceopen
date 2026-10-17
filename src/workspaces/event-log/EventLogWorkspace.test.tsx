@@ -310,6 +310,64 @@ describe("event-viewer shared font metrics", () => {
     expect(flatRow.firstElementChild).toBe(flatCells[0]);
   });
 
+  describe("the grid with a transient time range or record scope", () => {
+    const events = [1, 2, 3, 4].map(
+      (n): EvtxRecord => ({
+        ...RECORD,
+        id: n,
+        eventRecordId: 100 + n,
+        timestampEpoch: n * 1000,
+        message: `event number ${n}`,
+      }),
+    );
+    const seedFour = () => {
+      seedEventLog();
+      useEvtxStore.setState({ records: events, selectedRecordId: null });
+    };
+    const shownMessages = (root: HTMLElement) =>
+      recordGridRows(root).map((row) => /event number \d/.exec(row.textContent ?? "")?.[0]);
+
+    it("shows every event without either", () => {
+      seedFour();
+      const grid = render(<EvtxTimeline />);
+      expect(grid.getByRole("grid", { name: "Event log timeline - 4 records" })).toBeInTheDocument();
+      expect(shownMessages(grid.container)).toHaveLength(4);
+    });
+
+    it("shows only the events in the time range", () => {
+      seedFour();
+      act(() => {
+        useEvtxStore.getState().setTimeRange({ startMs: 2000, endMs: 4000 });
+      });
+      const grid = render(<EvtxTimeline />);
+      expect(grid.getByRole("grid", { name: "Event log timeline - 2 records" })).toBeInTheDocument();
+      expect(shownMessages(grid.container)).toEqual(["event number 2", "event number 3"]);
+    });
+
+    it("shows only the scoped events, and follows a change of the scope", () => {
+      seedFour();
+      const scope = (...picked: EvtxRecord[]) => ({
+        kind: "finding" as const,
+        title: "A finding",
+        records: new Set(picked),
+        counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+      });
+      act(() => {
+        useEvtxStore.getState().setRecordScope(scope(events[0], events[3]));
+      });
+      const grid = render(<EvtxTimeline />);
+      expect(shownMessages(grid.container)).toEqual(["event number 1", "event number 4"]);
+      act(() => {
+        useEvtxStore.getState().setRecordScope(scope(events[2]));
+      });
+      expect(shownMessages(grid.container)).toEqual(["event number 3"]);
+      act(() => {
+        useEvtxStore.getState().setRecordScope(null);
+      });
+      expect(shownMessages(grid.container)).toHaveLength(4);
+    });
+  });
+
   it("names channel-folder disclosure and selection controls", () => {
     useEvtxStore.setState({
       channels: [

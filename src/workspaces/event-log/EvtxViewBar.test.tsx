@@ -294,6 +294,61 @@ describe("EvtxViewBar", () => {
       exportMock.stream.mockReset();
     });
 
+    describe("with a transient time range or record scope", () => {
+      const timed = (id: number, timestampEpoch: number): EvtxRecord => ({
+        ...RECORD,
+        id,
+        eventRecordId: 100 + id,
+        timestampEpoch,
+      });
+      const exportedIds = () =>
+        (exportMock.stream.mock.calls[0][0] as { records: EvtxRecord[] }).records.map((r) => r.id);
+      const seedFour = () => {
+        const records = [timed(1, 1000), timed(2, 2000), timed(3, 3000), timed(4, 4000)];
+        useEvtxStore.setState({ records });
+        return records;
+      };
+
+      beforeEach(() => {
+        exportMock.stream.mockResolvedValue({ records: 0, bytes: 0 });
+      });
+
+      it("exports only the events in the time range, which is half open", async () => {
+        seedFour();
+        act(() => {
+          useEvtxStore.getState().setTimeRange({ startMs: 2000, endMs: 4000 });
+        });
+        render(<EvtxViewBar nowEpoch={0} />);
+        await exportJson();
+        await waitFor(() => expect(exportMock.stream).toHaveBeenCalledTimes(1));
+        expect(exportedIds()).toEqual([2, 3]);
+      });
+
+      it("exports only the scoped events", async () => {
+        const records = seedFour();
+        act(() => {
+          useEvtxStore.getState().setRecordScope({
+            kind: "finding",
+            title: "A finding",
+            records: new Set([records[0], records[3]]),
+            counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+          });
+        });
+        render(<EvtxViewBar nowEpoch={0} />);
+        await exportJson();
+        await waitFor(() => expect(exportMock.stream).toHaveBeenCalledTimes(1));
+        expect(exportedIds()).toEqual([1, 4]);
+      });
+
+      it("exports the whole view without either", async () => {
+        seedFour();
+        render(<EvtxViewBar nowEpoch={0} />);
+        await exportJson();
+        await waitFor(() => expect(exportMock.stream).toHaveBeenCalledTimes(1));
+        expect(exportedIds()).toEqual([1, 2, 3, 4]);
+      });
+    });
+
     it("announces only the start and the final result for a multi-chunk export", async () => {
       exportMock.stream.mockImplementation(
         async ({ onProgress }: { onProgress: (received: number, expected: number) => void }) => {

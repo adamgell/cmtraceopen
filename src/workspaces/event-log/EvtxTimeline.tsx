@@ -71,6 +71,8 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
   const collapsedGroups = useEvtxStore((s) => s.collapsedGroups);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
+  const timeRange = useEvtxStore((s) => s.timeRange);
+  const recordScope = useEvtxStore((s) => s.recordScope);
   const toggleGroup = useEvtxStore((s) => s.toggleGroup);
   const columnConfig = useEvtxStore((s) => s.columnConfig);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
@@ -99,6 +101,8 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
         visibleColumns: columnConfig.order,
         timeZoneMode,
         timeWindow,
+        timeRange,
+        scopeRecords: recordScope?.records ?? null,
         nowEpoch: currentNowEpoch,
       }),
     [
@@ -111,6 +115,8 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
       columnConfig.order,
       timeZoneMode,
       timeWindow,
+      timeRange,
+      recordScope,
       currentNowEpoch,
     ]
   );

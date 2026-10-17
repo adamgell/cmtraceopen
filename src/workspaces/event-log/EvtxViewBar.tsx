@@ -265,6 +265,8 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
         filterSearch: state.filterSearch,
         quickFilter: state.quickFilter,
         timeWindow: state.timeWindow,
+        timeRange: state.timeRange,
+        scopeRecords: state.recordScope?.records ?? null,
         visibleColumns,
         timeZoneMode: state.timeZoneMode,
         nowEpoch,
