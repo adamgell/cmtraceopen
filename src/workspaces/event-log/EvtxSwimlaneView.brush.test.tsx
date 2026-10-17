@@ -713,6 +713,21 @@ describe("clicking a dot", () => {
     expect(useEvtxStore.getState().selectedRecordId).toBe(target.record.id);
   });
 
+  it("still selects a dot after the store dropped other records and left the ids as they were", () => {
+    // A channel cleared or re-read removes records without renumbering the rest until the next merge.
+    const { laneSlider } = mount();
+    const dropped = useEvtxStore.getState().records.filter((_, index) => index !== 2);
+    act(() => {
+      useEvtxStore.setState({ records: dropped });
+    });
+    const target = pick(1, 5);
+    expect(target.record.id).toBeGreaterThan(2);
+    expect(dropped[target.record.id]).not.toBe(target.record);
+    down(laneSlider, target.x, target.y);
+    up(laneSlider, target.x, target.y);
+    expect(useEvtxStore.getState().selectedRecordId).toBe(target.record.id);
+  });
+
   it("ignores the secondary button, a non-primary pointer and a release with no press", () => {
     const { laneSlider } = mount();
     const target = pick(0, 3);

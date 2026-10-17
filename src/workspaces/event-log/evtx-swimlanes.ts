@@ -32,7 +32,7 @@ import {
   type LevelCounts,
   type ZoneClock,
 } from "./evtx-histogram";
-import { formatCount } from "./evtx-insights-data";
+import { findRecordById, formatCount } from "./evtx-insights-data";
 import {
   formatEventTime,
   formatTimeRange,
@@ -305,14 +305,16 @@ export function topEventInCell(
 }
 
 /**
- * Whether `record` is, now, the record the store holds under its own id. The store's ids are indexes
- * into its records, rewritten in place by every merge, so a record of the current set sits at
- * `current[record.id]`. A scene is published up to one throttle window late: after a reload that
- * finished inside it, the scene still holds the previous set's objects, whose ids can equal indexes
- * of the new set. Such a record is not current, and selecting by its id would select another event.
+ * Whether `record` is, now, the record the store resolves its own id to (`findRecordById`, the lookup
+ * Details and the rail use). Ids are indexes the store rewrites in place on every merge, but a channel
+ * cleared or re-read drops records without renumbering the rest until the next merge, so the index is
+ * tried first and a scan is the fallback. A scene is published up to one throttle window late: after a
+ * reload that finished inside it, the scene still holds the previous set's objects, whose ids can equal
+ * indexes of the new set. Such a record resolves to another object, and selecting by its id would
+ * select another event.
  */
 export function isCurrentRecord(record: EvtxRecord, current: readonly EvtxRecord[]): boolean {
-  return current[record.id] === record;
+  return findRecordById(current, record.id) === record;
 }
 
 /**

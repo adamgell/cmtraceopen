@@ -452,6 +452,22 @@ describe("finding a record in the scene", () => {
     expect(findRecordInScene(scene, 0, merged)).toEqual({ lane: 1, dot: 1 });
   });
 
+  it("still finds a record the store holds after dropping others without renumbering the rest", () => {
+    // A cleared or re-read channel removes records and leaves the others' ids as they were until the
+    // next merge: the id is no longer the index, and Details finds such a record by a scan.
+    const list = many("a", 5);
+    list.forEach((record, index) => (record.id = index));
+    const scene = build(list);
+    const dropped = list.filter((record) => record !== list[1]);
+    expect(dropped.map((record) => record.id)).toEqual([0, 2, 3, 4]);
+    expect(isCurrentRecord(list[3], dropped)).toBe(true);
+    expect(findRecordInScene(scene, 3, dropped)).toEqual({ lane: 0, dot: 3 });
+    // The dropped record is gone, and a stale copy of a kept one is not the store's.
+    expect(isCurrentRecord(list[1], dropped)).toBe(false);
+    expect(findRecordInScene(scene, 1, dropped)).toBeNull();
+    expect(isCurrentRecord({ ...list[3] }, dropped)).toBe(false);
+  });
+
   it("says a record is current only when it is the store's own under its id", () => {
     const list = many("a", 3);
     list.forEach((record, index) => (record.id = index));
