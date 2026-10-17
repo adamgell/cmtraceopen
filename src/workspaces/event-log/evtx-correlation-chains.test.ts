@@ -889,13 +889,45 @@ describe("D19 titles", () => {
     expect(model.chains[0]?.title).toBe("1 · earlier failure");
   });
 
-  it("uses source and line for a log-line member", () => {
+  it("names a log-line member by the basename of its file and its line", () => {
     const item = logItem("ime", 1000, 42, "critical");
     const model = build({
       items: [item, eventItem("evt", 2000, "info")],
       timelineEdges: [tEdge("e1", timelineOriginId(item.origin), "evt", "exact")],
     });
-    expect(model.chains[0]?.title).toBe("ime · line 42 · log line 42");
+    // logItem's file is "ime.log" and its source is "ime": the title must carry the FILE.
+    expect(model.chains[0]?.title).toBe("ime.log · line 42 · log line 42");
+  });
+
+  it("never names a log line by its source, which for a CCM line is the writing code file", () => {
+    const base = logItem("client", 1000, 7, "critical");
+    if (base.origin.kind !== "log") throw new Error("expected a log origin");
+    const item: TimelineItem = {
+      ...base,
+      origin: {
+        ...base.origin,
+        file: "C:\\Windows\\CCM\\Logs\\AppEnforce.log",
+        source: "ccmutillib.cpp",
+      },
+    };
+    const model = build({
+      items: [item, eventItem("evt", 2000, "info")],
+      timelineEdges: [tEdge("e1", timelineOriginId(item.origin), "evt", "exact")],
+    });
+    const title = model.chains[0]?.title ?? "";
+    expect(title).toBe("AppEnforce.log · line 7 · log line 7");
+    expect(title).not.toContain("ccmutillib");
+  });
+
+  it("falls back to the whole file text when a log path ends in a separator", () => {
+    const base = logItem("odd", 1000, 3, "critical");
+    if (base.origin.kind !== "log") throw new Error("expected a log origin");
+    const item: TimelineItem = { ...base, origin: { ...base.origin, file: "C:\\Logs\\" } };
+    const model = build({
+      items: [item, eventItem("evt", 2000, "info")],
+      timelineEdges: [tEdge("e1", timelineOriginId(item.origin), "evt", "exact")],
+    });
+    expect(model.chains[0]?.title).toBe("C:\\Logs\\ · line 3 · log line 3");
   });
 
   it("uses a finding title only when its evidence covers the whole chain", () => {
@@ -1496,5 +1528,96 @@ describe("properties over every real backend fixture", () => {
           model.counts.coverageBlocked,
       );
     }
+  });
+});
+
+describe("linkedPairs, the uncapped reduced pair list the links index counts from", () => {
+  const pairsOf = (model: CorrelationChainModel) =>
+    model.linkedPairs.map((pair) => `${pair.left}+${pair.right}:${pair.strength}`);
+
+  it("lists every exact and candidate pair once, with the reduced label", () => {
+    const model = build({
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact"),
+        tEdge("e2", "b", "a", "exact"),
+        tEdge("e3", "c", "d", "candidate"),
+        tEdge("e4", "b", "c", "exact"),
+      ],
+    });
+    expect(pairsOf(model)).toEqual(["a+b:exact", "b+c:exact", "c+d:candidate"]);
+  });
+
+  it("is not trimmed by the 100 row render cap, which trims chains only", () => {
+    const pairs = CORRELATION_CHAIN_RENDER_LIMIT + 50;
+    const edges = Array.from({ length: pairs }, (_, i) =>
+      tEdge(`e${i}`, `l${String(i).padStart(4, "0")}`, `r${String(i).padStart(4, "0")}`, "exact"),
+    );
+    const model = build({ timelineEdges: edges });
+    expect(model.chains).toHaveLength(CORRELATION_CHAIN_RENDER_LIMIT);
+    expect(model.linkedPairs).toHaveLength(pairs);
+  });
+
+  it("leaves out a pair that any observation labelled ambiguous or coverage blocked", () => {
+    const model = build({
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact"),
+        tEdge("e2", "a", "b", "ambiguous", {
+          coverage: { state: "gap", gap: gapOf("two candidates") },
+        }),
+        gappedExact("e3", "c", "d"),
+        tEdge("e4", "e", "f", "exact"),
+      ],
+    });
+    expect(pairsOf(model)).toEqual(["e+f:exact"]);
+  });
+
+  it("never lists a pair from an ambiguous group", () => {
+    const model = build({ timelineEdges: ambiguousGroup("g", ["a", "b", "c", "d"]) });
+    expect(model.linkedPairs).toEqual([]);
+    expect(model.counts.ambiguous).toBe(1);
+  });
+
+  it("lists an exact edge on a secondary key as a candidate pair", () => {
+    const model = build({
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact", { key: { kind: "secondary", value: "s" } }),
+      ],
+    });
+    expect(pairsOf(model)).toEqual(["a+b:candidate"]);
+  });
+
+  it("does not list a relation that cannot link two entries", () => {
+    const model = build({
+      timelineEdges: [tEdge("e1", "a", null, "exact"), tEdge("e2", "b", "b", "candidate")],
+    });
+    expect(model.linkedPairs).toEqual([]);
+  });
+
+  it("orders each pair's endpoints and is identical for any input order", () => {
+    const edges = [
+      tEdge("e1", "z", "a", "exact"),
+      tEdge("e2", "m", "n", "candidate"),
+      tEdge("e3", "k", "b", "exact"),
+    ];
+    const forward = build({ timelineEdges: edges });
+    const reversed = build({ timelineEdges: [...edges].reverse() });
+    expect(forward.linkedPairs).toEqual(reversed.linkedPairs);
+    for (const pair of forward.linkedPairs) expect(pair.left < pair.right).toBe(true);
+  });
+
+  it("agrees with the chains that are shown, pair for pair", () => {
+    const model = build({
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact"),
+        tEdge("e2", "b", "c", "candidate"),
+        tEdge("e3", "x", "y", "exact"),
+      ],
+    });
+    const fromChains = model.chains
+      .flatMap((chain) => chain.edges)
+      .filter((edge) => edge.strength === "exact" || edge.strength === "candidate")
+      .map((edge) => `${edge.left}+${edge.right}:${edge.strength}`)
+      .sort();
+    expect(pairsOf(model).sort()).toEqual(fromChains);
   });
 });
