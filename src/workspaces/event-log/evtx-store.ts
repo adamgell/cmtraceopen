@@ -949,12 +949,16 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       refreshScheduled = false;
       const state = get();
       if (state.isLoading) return;
-      if (state.sourceMode === "live" && state.loadedChannels.size > 0) {
-        refreshRequested = false;
-        void state.refreshLoadedChannels();
-      } else if (!state.isLoading) {
-        refreshRequested = false;
-      }
+      refreshRequested = false;
+      // An operator change while idle on a live source reads again the channels that hold records:
+      // the loaded ones, and those a Stop or a failure left only partly read. That is a new request,
+      // not a replay of a stopped one, and it keeps the criteria shown equal to the ones the records
+      // were read with. With no records at all there is nothing to reconcile and nothing is read.
+      if (state.sourceMode !== "live") return;
+      const holders = [
+        ...new Set([...state.loadedChannels, ...state.records.map((record) => record.channel)]),
+      ];
+      if (holders.length > 0) void refreshChannels(holders);
     });
   };
 

@@ -17,6 +17,8 @@
  *   those that ended usable, so a load in which every channel failed still applies it. Only a live
  *   source replays, and nothing retries: the flag is set only by an operator change.
  * - So after every load end, either the criteria equal the read's or exactly one replay runs.
+ * - An operator change while idle on a live source reads again the channels that hold records, loaded
+ *   or partial (a new request, not a replay), and reads nothing when there are no records.
  *
  * The Tauri bridge is mocked because the store imports it at module scope.
  */
@@ -675,6 +677,96 @@ describe("a remote source whose load failed on every channel", () => {
       }
     },
   );
+});
+
+describe("an operator change while idle on a live source", () => {
+  const cutEverything = async () => {
+    installStoppableReads();
+    seedLive(["Application", "System"]);
+    useEvtxStore.getState().toggleFilterLevel("Information");
+    await vi.waitFor(() => expect(queries()).toHaveLength(2));
+    void cancelActiveLoad();
+    await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+    await settle();
+  };
+
+  it("reads the channels that hold partial records once with the new window after a Stop cut every channel", async () => {
+    await cutEverything();
+    // The Stop left records from both channels and nothing loaded: the case that read nothing.
+    expect(useEvtxStore.getState().loadedChannels.size).toBe(0);
+    expect(useEvtxStore.getState().records.length).toBeGreaterThan(0);
+    expect(queries()).toHaveLength(2);
+
+    useEvtxStore.getState().setTimeWindow("7d");
+    await vi.waitFor(() => expect(queries()).toHaveLength(4));
+    await settle();
+
+    const fresh = queries().slice(2);
+    expect(queries()).toHaveLength(4);
+    expect(fresh.map((args) => args.channels[0]).sort()).toEqual(["Application", "System"]);
+    for (const args of fresh) {
+      expect(args.filter.time).toEqual({ kind: "last", milliseconds: WEEK_MS });
+    }
+    expect(useEvtxStore.getState().timeWindow).toBe("7d");
+  });
+
+  it("reads loaded and partial channels together", async () => {
+    const stopped = deferred<void>();
+    invoke.mockImplementation(async (name: string, args: QueryArgs) => {
+      if (name === "evtx_cancel_channel_query") {
+        stopped.resolve();
+        return undefined;
+      }
+      if (name !== "evtx_query_channels") return undefined;
+      // Application finishes before the Stop; System is cut by it.
+      if (args.channels[0] === "Application") return finished(args);
+      const reply = finished(args, { cancelled: true });
+      await stopped.promise;
+      return reply;
+    });
+    seedLive(["Application", "System"]);
+    useEvtxStore.getState().toggleFilterLevel("Information");
+    await vi.waitFor(() => expect(queries()).toHaveLength(2));
+    void cancelActiveLoad();
+    await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+    await settle();
+    expect([...useEvtxStore.getState().loadedChannels]).toEqual(["Application"]);
+
+    useEvtxStore.getState().setTimeWindow("7d");
+    await vi.waitFor(() => expect(queries()).toHaveLength(4));
+    await settle();
+
+    expect(
+      queries()
+        .slice(2)
+        .map((args) => args.channels[0])
+        .sort(),
+    ).toEqual(["Application", "System"]);
+  });
+
+  it("reads nothing when no records are held, and queues nothing for later", async () => {
+    seedLive([]);
+    useEvtxStore.getState().setTimeWindow("7d");
+    await settle();
+    expect(queries()).toHaveLength(0);
+    expect(useEvtxStore.getState().isLoading).toBe(false);
+
+    // Nothing was left queued: a later load that ends normally replays nothing.
+    invoke.mockImplementation(async (name: string, args: QueryArgs) =>
+      name === "evtx_query_channels" ? finished(args) : undefined,
+    );
+    await useEvtxStore.getState().queryChannels(["Application"]);
+    await settle();
+    expect(queries()).toHaveLength(1);
+  });
+
+  it("does nothing for a source that is not live", async () => {
+    seedLive(["Application"]);
+    useEvtxStore.setState({ sourceMode: "files" });
+    useEvtxStore.getState().setTimeWindow("7d");
+    await settle();
+    expect(queries()).toHaveLength(0);
+  });
 });
 
 describe("a change queued for one source does not replay on the next", () => {
