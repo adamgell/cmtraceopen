@@ -906,6 +906,49 @@ describe("a channel the store loaded only up to its bound", () => {
       expectStampedAtSend();
     });
 
+    it("records what the load returned: its count and its oldest placed time", async () => {
+      const unplaced = rec({ eventId: 4624, channel: "Security", at: 0 });
+      replyWith([...beforeLoad(), unplaced]);
+      liveSecurity(true);
+      await useEvtxStore.getState().refreshLoadedChannels();
+      const read = useEvtxStore.getState().channelReadThrough.get("Security");
+      expect(read?.returnedCount).toBe(11);
+      // The unplaced record has no time; the oldest placed one is 15:00.
+      expect(read?.oldestPlacedMs).toBe(NOW - 9 * HOUR);
+      expect(read?.serverFiltered).toBe(false);
+    });
+
+    it("marks a refresh under a level filter as server-filtered", async () => {
+      replyWith(beforeLoad());
+      liveSecurity(true);
+      useEvtxStore.setState({ filterLevels: new Set<EvtxLevel>(["Critical", "Error", "Warning"]) });
+      await useEvtxStore.getState().refreshLoadedChannels();
+      expect(useEvtxStore.getState().channelReadThrough.get("Security")?.serverFiltered).toBe(true);
+    });
+
+    it("marks an explicit Load under an Event ID filter as server-filtered", async () => {
+      replyWith(beforeLoad());
+      liveSecurity(false);
+      useEvtxStore.setState({ filterEventIds: "4624" });
+      await useEvtxStore.getState().queryChannels(["Security"]);
+      expect(useEvtxStore.getState().channelReadThrough.get("Security")?.serverFiltered).toBe(true);
+    });
+
+    it("marks the automatic load as server-filtered only when it carries a criterion", async () => {
+      replyWith([]);
+      await useEvtxStore.getState().enumerateChannels();
+      expect(useEvtxStore.getState().channelReadThrough.get("Security")).toEqual({
+        readThrough: expect.any(Number),
+        oldestPlacedMs: null,
+        returnedCount: 0,
+        serverFiltered: false,
+      });
+      // An invalid Event ID filter asks the service for no events at all.
+      useEvtxStore.setState({ filterEventIds: "not-an-id" });
+      await useEvtxStore.getState().enumerateChannels();
+      expect(useEvtxStore.getState().channelReadThrough.get("Security")?.serverFiltered).toBe(true);
+    });
+
     it("drops a channel's stamp when it is reloaded, until that load lands", async () => {
       await loadSecurity(beforeLoad());
       expect(useEvtxStore.getState().channelReadThrough.has("Security")).toBe(true);
@@ -1350,6 +1393,61 @@ describe("a selected channel whose load did not finish", () => {
     expect(state.channelReadThrough.has("Setup")).toBe(true);
     expect(state.records.some((record) => record.channel === "Setup")).toBe(false);
     expect(errorZeros()).toBeGreaterThan(0);
+  });
+
+  it("an empty Load under a level filter proves nothing; the same empty read by time alone does", async () => {
+    // TaskScheduler's matching Errors were overwritten; the filtered query returns nothing.
+    applicationLoaded({
+      channels: ["Application", "TaskScheduler"],
+      selected: ["Application", "TaskScheduler"],
+    });
+    useEvtxStore.setState({ filterLevels: new Set<EvtxLevel>(["Critical", "Error", "Warning"]) });
+    backend({ TaskScheduler: ok([]) });
+    await useEvtxStore.getState().queryChannels(["TaskScheduler"]);
+    expect(useEvtxStore.getState().loadedChannels.has("TaskScheduler")).toBe(true);
+    expect(useEvtxStore.getState().channelReadThrough.get("TaskScheduler")?.serverFiltered).toBe(true);
+    expect(errorZeros()).toBe(0);
+    cleanup();
+
+    useEvtxStore.setState({ filterLevels: new Set<EvtxLevel>(LEVELS) });
+    await useEvtxStore.getState().queryChannels(["TaskScheduler"]);
+    expect(useEvtxStore.getState().channelReadThrough.get("TaskScheduler")?.serverFiltered).toBe(false);
+    expect(errorZeros()).toBeGreaterThan(0);
+  });
+
+  it("a channel whose records a local search hides keeps the span its load read", async () => {
+    applicationLoaded({
+      channels: ["Application", "TaskScheduler"],
+      selected: ["Application", "TaskScheduler"],
+    });
+    // TaskScheduler kept events from 12:00 on only.
+    const kept = [12, 15, 18].map((hour) =>
+      rec({ eventId: 201, channel: "TaskScheduler", provider: "TaskScheduler", message: "Task completed", at: DAY_START + hour * HOUR }),
+    );
+    backend({ TaskScheduler: ok(kept) });
+    await useEvtxStore.getState().queryChannels(["TaskScheduler"]);
+    // The search matches Application's events and none of TaskScheduler's.
+    useEvtxStore.setState({ filterSearch: "running state" });
+    const state = useEvtxStore.getState();
+    const visible = selectVisibleRecords({
+      records: state.records,
+      selectedChannels: state.selectedChannels,
+      filterLevels: state.filterLevels,
+      filterEventIds: state.filterEventIds,
+      filterSearch: state.filterSearch,
+      quickFilter: state.quickFilter,
+      visibleColumns: state.columnConfig.order,
+      timeZoneMode: state.timeZoneMode,
+      timeWindow: state.timeWindow,
+      nowEpoch: NOW,
+    });
+    expect(visible.some((record) => record.channel === "TaskScheduler")).toBe(false);
+    render(<EvtxGroupedView records={visible} nowEpoch={NOW} />);
+    const row = document.querySelector('[data-evtx-grouped-row="group"][data-group-value="Error"]')!;
+    const zeros = [...row.querySelectorAll("[data-trend-zero]")].map((mark) => Number(mark.getAttribute("data-bin")));
+    // Neither proven over the window nor taken as empty: read from 12:00 on.
+    expect(zeros.length).toBeGreaterThan(0);
+    expect(zeros.every((bin) => bin >= 12)).toBe(true);
   });
 
   it("a denied selected channel with no records: every empty bin is unknown", async () => {
