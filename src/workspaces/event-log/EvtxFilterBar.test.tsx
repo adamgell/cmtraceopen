@@ -330,9 +330,10 @@ describe("time window", () => {
   it("stays enabled while events load: the store queues a change made during a load", () => {
     // Disabling it would drop keyboard focus from the control just used, since the rows now stay
     // mounted through a refetch. A change made during a load is replayed when the load ends
-    // (evtx-store-server-filter.test.ts), with one exception: if the operator stops that load, the
-    // change is not replayed and the criteria go back to those the read used, so the control and
-    // the data never disagree (evtx-store-replay.test.ts).
+    // (evtx-store-server-filter.test.ts), with one exception: a change that will not be replayed (the
+    // operator stopped the load, or the source dropped, or the load failed before reading anything)
+    // is not applied; the criteria go back to those the read used, so the control and the data
+    // never disagree (evtx-store-replay.test.ts).
     seed({ sourceMode: "live", timeWindow: "24h", isLoading: true });
     render(<EvtxFilterBar nowEpoch={0} />);
     expect(screen.getByRole("combobox", { name: "Time window" })).toBeEnabled();

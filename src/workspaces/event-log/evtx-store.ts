@@ -422,7 +422,8 @@ let stoppedRequestId: string | null = null;
 /**
  * The server criteria the active request reads with, remembered by each load next to its own filter
  * snapshot (so a criterion that load itself adjusts, like the first live load's window, is what is
- * kept). A stopped load that had a change queued restores exactly these.
+ * kept). A load that ends with a change queued that will not be replayed (it was stopped, its source
+ * dropped, or it failed before reading) restores exactly these.
  */
 let requestCriteria: { requestId: string; criteria: FilterSnapshot } | null = null;
 let tailGeneration = 0;
@@ -833,7 +834,16 @@ loadGeneration: number;
   enumerateChannels: () => Promise<void>;
   enumerateLocalChannels: () => Promise<void>;
   enumerateRemoteChannels: (machine: string) => Promise<void>;
-  queryChannels: (channels: string[], maxEvents?: number) => Promise<void>;
+  /**
+   * `boundedChannels` are read to the refetch bound (`AUTO_LOAD_MAX_EVENTS`) instead of `maxEvents`:
+   * channels the operator did not ask to load, which a replay reads again only to keep their records
+   * from sitting under criteria they were not read with.
+   */
+  queryChannels: (
+    channels: string[],
+    maxEvents?: number,
+    boundedChannels?: readonly string[]
+  ) => Promise<void>;
   loadSelectedChannels: () => Promise<void>;
   refreshLoadedChannels: () => Promise<void>;
   startLiveTail: () => Promise<EvtxTailStatus[]>;
@@ -1021,7 +1031,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
    * which is exactly when `settleQueuedChange` left the queued change alone. A stopped load never
    * replays. Otherwise the caller replays against the channels its finished load attempted, not only
    * those that ended usable, so a load in which every channel failed still applies the newer
-   * criterion once. Only a live source replays: a remote refetch or first load that failed everywhere
+   * criterion once. An explicit Load also reads again every channel that holds records (to the
+   * refetch bound, since it did not ask for them), so no channel's records are left under a window
+   * they were not read with. Only a live source replays: a remote refetch or first load that failed everywhere
    * has dropped to no source, while an explicit Load never drops the source, so a remote Load that
    * failed everywhere stays live and replays once. Nothing retries: the flag is set only by an
    * operator change.
@@ -1654,7 +1666,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     await get().enumerateChannels();
   },
 
-  queryChannels: async (channels, maxEvents) => {
+  queryChannels: async (channels, maxEvents, boundedChannels) => {
     const generation = get().loadGeneration + 1;
     const requestId = beginRequest();
     captureSelectedRecord(get().records, get().selectedRecordId);
@@ -1699,7 +1711,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             requestId,
             remoteMachine,
             [ch],
-            hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : maxEvents ?? null,
+            hasInvalidEventIdFilter(filterSnapshot.filterEventIds)
+              ? 0
+              : boundedChannels?.includes(ch)
+                ? AUTO_LOAD_MAX_EVENTS
+                : maxEvents ?? null,
             buildServerFilter(
               filterSnapshot.timeWindow,
               filterSnapshot.filterEventIds,
@@ -1739,7 +1755,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         }
         await waitForStreamReconciliation(channel, requestId);
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-        const reconciliation = reconcileStreamedResult(channel, requestId, result, context);
+        const reconciliation = reconcileStreamedResult(
+          channel,
+          requestId,
+          result,
+          context,
+          // A bounded read that fills its bound may have been cut off, and says so.
+          boundedChannels?.includes(channel) ? AUTO_LOAD_MAX_EVENTS : undefined
+        );
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
         const { checked, records } = reconciliation;
         appendRecords(recordsToMerge, records);
@@ -1820,26 +1843,32 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     });
     if (takeQueuedChange(requestId)) {
       const replayChannels = [...new Set([...channels, ...get().loadedChannels])];
+      // Channels that hold records this Load neither queried nor has loaded: partial reads an earlier
+      // Stop or failure left behind. They are read again with the Load's channels, to the refetch
+      // bound and not to the Load's own, so their records are never shown under a window they were
+      // not read with and a read the operator stopped is not restarted unbounded.
+      const extras = [...new Set(get().records.map((record) => record.channel))].filter(
+        (channel) => !replayChannels.includes(channel)
+      );
+      const reread = [...replayChannels, ...extras];
       set((s) => ({
-        records: s.records.filter((record) => !replayChannels.includes(record.channel)),
+        records: s.records.filter((record) => !reread.includes(record.channel)),
         loadedChannels: new Set(
-          [...s.loadedChannels].filter((channel) => !replayChannels.includes(channel))
+          [...s.loadedChannels].filter((channel) => !reread.includes(channel))
         ),
         sourceManifest: null,
         coverageGaps: s.coverageGaps.filter(
           (gap) =>
-            !replayChannels.some((channel) =>
-              coverageBelongsToChannel(gap, channel, s.remoteMachine)
-            )
+            !reread.some((channel) => coverageBelongsToChannel(gap, channel, s.remoteMachine))
         ),
         coverageDetails: s.coverageDetails.filter(
           (detail) =>
-            !replayChannels.some((channel) =>
+            !reread.some((channel) =>
               coverageBelongsToChannel(detail.source, channel, s.remoteMachine)
             )
         ),
       }));
-      void get().queryChannels(replayChannels, maxEvents);
+      void get().queryChannels(reread, maxEvents, extras);
     }
   },
   loadSelectedChannels: async () => {

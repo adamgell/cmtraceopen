@@ -40,6 +40,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 const { cancelActiveLoad, serverFilterKey, useEvtxStore } = await import("./evtx-store");
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+/** The bound the channel refetch asks for, and so the bound for channels the Load did not ask for. */
+const AUTO_LOAD_MAX_EVENTS = 2_000;
 
 interface QueryArgs {
   requestId?: string;
@@ -503,11 +505,15 @@ describe("what a restore puts back", () => {
 describe("the criteria always match the data, whichever way a load ends", () => {
   type End = "normal" | "stopCutsSome" | "stopAfterScans" | "cancelFails" | "superseded";
 
-  /** How many channels the finished load attempted, and so how many reads one replay makes. */
-  const REPLAY_READS: Record<Kind, { own: number; afterSupersede: number }> = {
-    refetch: { own: 2, afterSupersede: 1 },
-    load: { own: 2, afterSupersede: 2 },
-    firstLoad: { own: 2, afterSupersede: 1 },
+  /**
+   * The channels one replay reads. After a normal end: the channels the finished load attempted.
+   * After a superseded one the superseding request (Security) ends normally and replays: its own
+   * channel, the loaded ones, and every channel that holds records, which includes the fragments the
+   * superseded request streamed before it was replaced (Application, System).
+   */
+  const REPLAY_CHANNELS = {
+    own: ["Application", "System"],
+    afterSupersede: ["Application", "Security", "System"],
   };
   const STOPPED: readonly End[] = ["stopCutsSome", "stopAfterScans", "cancelFails"];
 
@@ -585,9 +591,10 @@ describe("the criteria always match the data, whichever way a load ends", () => 
       const matchesTheRead = storeKey === readKey;
       const replayedOnce =
         storeKey === newKey &&
-        replays.length ===
-          (end === "superseded" ? REPLAY_READS[kind].afterSupersede : REPLAY_READS[kind].own) &&
-        new Set(replays.map((args) => args.channels[0])).size === replays.length &&
+        replays
+          .map((args) => args.channels[0])
+          .sort()
+          .join() === (end === "superseded" ? REPLAY_CHANNELS.afterSupersede : REPLAY_CHANNELS.own).join() &&
         replays.every((args) => args.filter.time?.milliseconds === WEEK_MS);
 
       // The class: the criteria shown are the criteria the data was read with, or the change was
@@ -677,6 +684,163 @@ describe("a remote source whose load failed on every channel", () => {
       }
     },
   );
+});
+
+describe("an explicit Load's replay also reads the channels that hold partial records", () => {
+  it("reads a partial deselected channel with the new window, bounded, beside the Load's own channels", async () => {
+    const stopped = deferred<void>();
+    const gate = deferred<void>();
+    let phase: "securityLoad" | "setupLoad" = "securityLoad";
+    invoke.mockImplementation(async (name: string, args: QueryArgs) => {
+      if (name === "evtx_cancel_channel_query") {
+        stopped.resolve();
+        return undefined;
+      }
+      if (name !== "evtx_query_channels") return undefined;
+      const channel = args.channels[0];
+      if (phase === "securityLoad" && channel === "Security") {
+        const reply = finished(args, { cancelled: true });
+        await stopped.promise;
+        return reply;
+      }
+      if (phase === "setupLoad" && channel === "Setup") {
+        const reply = finished(args);
+        await gate.promise;
+        return reply;
+      }
+      return finished(args);
+    });
+    // Local live source, Application and System loaded for the last 24 hours.
+    seedLive(["Application", "System"], ["Application", "System", "Security", "Setup"]);
+
+    // (1, 2) Load Security and stop it: partial 24-hour records, not loaded, with a cancelled gap.
+    const securityLoad = useEvtxStore.getState().queryChannels(["Security"]);
+    await vi.waitFor(() => expect(queries()).toHaveLength(1));
+    void cancelActiveLoad();
+    await securityLoad;
+    expect(useEvtxStore.getState().loadedChannels.has("Security")).toBe(false);
+    expect(useEvtxStore.getState().records.some((r) => r.channel === "Security")).toBe(true);
+    expect(gapsText()).toContain("operator stopped the load");
+
+    // (3) Deselect Security. (4) Load Setup, and (5) pick Last 7 days while it runs.
+    useEvtxStore.getState().setSelectedChannels(new Set(["Application", "System", "Setup"]));
+    phase = "setupLoad";
+    const setupLoad = useEvtxStore.getState().queryChannels(["Setup"]);
+    await vi.waitFor(() => expect(queries()).toHaveLength(2));
+    useEvtxStore.getState().setTimeWindow("7d");
+
+    // (6) The Load ends normally and replays.
+    gate.resolve();
+    await setupLoad;
+    await vi.waitFor(() => expect(queries()).toHaveLength(6));
+    await settle();
+
+    // (7) Security's records were read again with the new window, so reselecting it cannot show
+    // 24-hour records under Last 7 days. Its read is bounded (it was not asked for), the Load's own
+    // channels keep the Load's bound.
+    const replay = queries().slice(2);
+    expect(queries()).toHaveLength(6);
+    expect(replay.map((args) => args.channels[0]).sort()).toEqual([
+      "Application",
+      "Security",
+      "Setup",
+      "System",
+    ]);
+    for (const args of replay) {
+      expect(args.filter.time).toEqual({ kind: "last", milliseconds: WEEK_MS });
+      expect(args.maxEvents).toBe(args.channels[0] === "Security" ? AUTO_LOAD_MAX_EVENTS : null);
+    }
+    expect(gapsText()).not.toContain("operator stopped the load");
+    expect(useEvtxStore.getState().timeWindow).toBe("7d");
+  });
+
+  it("says when a bounded extra channel was cut off by the bound instead of presenting it as whole", async () => {
+    // The extra is read to the refetch bound, so a channel that fills it reports that it may hold more.
+    const gate = deferred<void>();
+    let phase: "partial" | "load" = "partial";
+    const full = (args: QueryArgs) => {
+      const channel = args.channels[0];
+      const rows = Array.from({ length: AUTO_LOAD_MAX_EVENTS }, (_, index) => record(channel, index + 1));
+      listeners.get("evtx-record-batch")?.({
+        payload: { requestId: args.requestId, channel, sequence: 0, records: rows },
+      });
+      listeners.get("evtx-record-stream-complete")?.({
+        payload: {
+          requestId: args.requestId,
+          channel,
+          sequenceCount: 1,
+          totalRecords: AUTO_LOAD_MAX_EVENTS,
+        },
+      });
+      return {
+        records: [],
+        channels: [{ name: channel, eventCount: AUTO_LOAD_MAX_EVENTS, sourceType: "live" as const }],
+        totalRecords: AUTO_LOAD_MAX_EVENTS,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    };
+    invoke.mockImplementation(async (name: string, args: QueryArgs) => {
+      if (name !== "evtx_query_channels") return undefined;
+      if (phase === "load" && args.channels[0] === "Setup") {
+        const reply = finished(args);
+        await gate.promise;
+        return reply;
+      }
+      return args.channels[0] === "Security" && args.maxEvents === AUTO_LOAD_MAX_EVENTS
+        ? full(args)
+        : finished(args);
+    });
+    seedLive(["Application"], ["Application", "Security", "Setup"]);
+    // Security holds partial records from an earlier read that is no longer loaded.
+    useEvtxStore.setState({ records: [record("Security", 100_000)] });
+    phase = "load";
+    const load = useEvtxStore.getState().queryChannels(["Setup"]);
+    await vi.waitFor(() => expect(queries()).toHaveLength(1));
+    useEvtxStore.getState().setTimeWindow("7d");
+    gate.resolve();
+    await load;
+    await vi.waitFor(() => expect(queries()).toHaveLength(4));
+    await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+    await settle();
+
+    expect(
+      useEvtxStore
+        .getState()
+        .coverageGaps.find((gap) => gap.startsWith("Security") && gap.includes("may hold more")),
+    ).toBeDefined();
+    // The fragment read under the old window was dropped before the re-read, not merged into it.
+    const security = useEvtxStore.getState().records.filter((r) => r.channel === "Security");
+    expect(security.some((r) => r.eventRecordId === 100_000)).toBe(false);
+    expect(security).toHaveLength(AUTO_LOAD_MAX_EVENTS);
+  });
+});
+
+describe("an operator change while idle on a source that is not live", () => {
+  it("reads nothing and queues nothing when the source dropped but still holds fragments", async () => {
+    // The state after a remote refetch that failed everywhere: no source, records left behind.
+    invoke.mockImplementation(async (name: string, args: QueryArgs) =>
+      name === "evtx_query_channels" || name === "evtx_query_remote_channels" ? finished(args) : undefined,
+    );
+    seedLive([]);
+    useEvtxStore.setState({
+      sourceMode: null,
+      remoteMachine: "SRV01",
+      records: [record("Application", 1), record("System", 2)],
+    });
+
+    useEvtxStore.getState().setTimeWindow("7d");
+    useEvtxStore.getState().setFilterEventIds("4624");
+    await settle();
+    expect(queries()).toHaveLength(0);
+    expect(remoteReads()).toHaveLength(0);
+
+    // Nothing was left queued: a later load that ends normally replays nothing.
+    useEvtxStore.setState({ sourceMode: "live" });
+    await useEvtxStore.getState().queryChannels(["Application"]);
+    await settle();
+    expect(remoteReads()).toHaveLength(1);
+  });
 });
 
 describe("an operator change while idle on a live source", () => {
