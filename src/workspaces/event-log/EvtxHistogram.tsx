@@ -24,7 +24,6 @@ import { makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
-import { INSIGHTS_DEBOUNCE_MS, useThrottledValue } from "./EvtxInsightsRail";
 import { formatCoverageGap } from "./evtx-coverage";
 import {
   HISTOGRAM_BAR_AREA_PX,
@@ -59,6 +58,7 @@ import {
   type BucketSpan,
 } from "./evtx-histogram-brush";
 import { useEvtxStore } from "./evtx-store";
+import { DERIVATION_THROTTLE_MS, useThrottledValue } from "./evtx-throttle";
 import { formatTimeRange, timeZoneLabel } from "./evtx-time";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 import type { EvtxLevel, EvtxRecord } from "./types";
@@ -246,7 +246,7 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
   const tailGaps = useEvtxStore((s) => s.tailCoverageGaps);
 
   // Published at most once per 75 ms (spec section 11), so a live tail does not rebucket per batch.
-  const shown = useThrottledValue(records, INSIGHTS_DEBOUNCE_MS);
+  const shown = useThrottledValue(records, DERIVATION_THROTTLE_MS);
   // Until the throttled set catches up with an arrival, an empty `shown` is not "no events".
   const catchingUp = shown !== records && shown.length === 0;
   const histogram = useMemo(() => buildHistogram(shown, timeZoneMode), [shown, timeZoneMode]);

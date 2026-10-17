@@ -9,7 +9,6 @@ import { getAllThemes } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import { EvtxHistogram } from "./EvtxHistogram";
 import histogramSource from "./EvtxHistogram.tsx?raw";
-import { INSIGHTS_DEBOUNCE_MS } from "./EvtxInsightsRail";
 import {
   HISTOGRAM_LEVEL_LABELS,
   HISTOGRAM_STACK_ORDER,
@@ -21,6 +20,7 @@ import {
   describeUntimed,
 } from "./evtx-histogram";
 import { useEvtxStore } from "./evtx-store";
+import { DERIVATION_THROTTLE_MS } from "./evtx-throttle";
 import { TIME_RANGE_SEPARATOR, timeZoneLabel } from "./evtx-time";
 import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
 import type { EvtxLevel, EvtxRecord } from "./types";
@@ -266,7 +266,7 @@ describe("EvtxHistogram", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Loading events...");
     expect(container.querySelector("[data-evtx-layer=bars]")).toBeNull();
     act(() => {
-      vi.advanceTimersByTime(INSIGHTS_DEBOUNCE_MS);
+      vi.advanceTimersByTime(DERIVATION_THROTTLE_MS);
     });
     expect(screen.queryByRole("status")).toBeNull();
     expect(container.querySelectorAll("[data-evtx-bucket]")).toHaveLength(72);
@@ -281,7 +281,7 @@ describe("EvtxHistogram", () => {
     rerender(<EvtxHistogram records={more} loading={false} />);
     expect(container.querySelectorAll("[data-evtx-bucket]")).toHaveLength(widthBefore);
     act(() => {
-      vi.advanceTimersByTime(INSIGHTS_DEBOUNCE_MS - 1);
+      vi.advanceTimersByTime(DERIVATION_THROTTLE_MS - 1);
     });
     expect(container.querySelectorAll("[data-evtx-bucket]")).toHaveLength(widthBefore);
     act(() => {

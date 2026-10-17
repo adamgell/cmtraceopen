@@ -8,9 +8,9 @@ vi.mock("@tauri-apps/api/event", () => ({
 import { useUiStore } from "../../stores/ui-store";
 import { EvtxFilterChips } from "./EvtxFilterChips";
 import { EvtxHistogram } from "./EvtxHistogram";
-import { INSIGHTS_DEBOUNCE_MS } from "./EvtxInsightsRail";
 import { buildHistogram, describeBucket } from "./evtx-histogram";
 import { useEvtxStore } from "./evtx-store";
+import { DERIVATION_THROTTLE_MS } from "./evtx-throttle";
 import { formatTimeRange } from "./evtx-time";
 import type { EvtxLevel, EvtxRecord } from "./types";
 
@@ -186,7 +186,7 @@ describe("dragging a range", () => {
       </>,
     );
     act(() => {
-      vi.advanceTimersByTime(INSIGHTS_DEBOUNCE_MS);
+      vi.advanceTimersByTime(DERIVATION_THROTTLE_MS);
     });
     move(slider, x(7));
     up(slider, x(7));
@@ -429,7 +429,7 @@ describe("the keyboard", () => {
       </>,
     );
     act(() => {
-      vi.advanceTimersByTime(INSIGHTS_DEBOUNCE_MS);
+      vi.advanceTimersByTime(DERIVATION_THROTTLE_MS);
     });
     key(slider, "Enter");
     expect(storeRange()).toEqual(rangeOf(70, 71));
