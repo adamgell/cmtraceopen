@@ -268,6 +268,27 @@ describe("the search box's field grammar (issue #833)", () => {
     expect(search()).not.toHaveAccessibleDescription();
   });
 
+  it("waits the full 400 ms again for a new problem once the text has parsed in between", () => {
+    seed();
+    render(<EvtxFilterBar nowEpoch={0} />);
+    type("level:e");
+    wait(QUERY_ERROR_SETTLE_MS);
+    expect(status()).toHaveTextContent(notApplied("e"));
+
+    type("level:error");
+    expect(status()).toBeEmptyDOMElement();
+
+    // The old message must not come back the moment the text breaks again.
+    type('level:error "x');
+    wait(QUERY_ERROR_SETTLE_MS - 1);
+    expect(status()).toBeEmptyDOMElement();
+    expect(search()).toHaveAttribute("aria-invalid", "false");
+    expect(search().parentElement!.style.borderColor).toBe("");
+
+    wait(1);
+    expect(status()).toHaveTextContent("Not applied: The quote at character 13 is not closed.");
+  });
+
   it("keeps the shown message while a different problem settles, then replaces it", () => {
     seed();
     render(<EvtxFilterBar nowEpoch={0} />);
@@ -1043,6 +1064,30 @@ describe("More filters", () => {
     expect(status).toBeEmptyDOMElement();
     expect(query).toHaveAttribute("aria-invalid", "false");
     expect(useEvtxStore.getState().quickFilterDraft).toBeNull();
+  });
+
+  it("never reports a field-grammar problem for a quick filter in another mode", async () => {
+    seed();
+    render(<EvtxFilterBar nowEpoch={0} />);
+    const popover = within(await openPopover());
+    const query = popover.getByRole("textbox", { name: "Quick filter query" });
+    expect(useEvtxStore.getState().quickFilter.mode).toBe("oneString");
+
+    vi.useFakeTimers();
+    try {
+      // Both fail the field grammar; neither means anything to One string, which applies them.
+      for (const text of ['abc"d', "id:"]) {
+        fireEvent.change(query, { target: { value: text } });
+        act(() => vi.advanceTimersByTime(QUERY_ERROR_SETTLE_MS));
+        expect(useEvtxStore.getState().quickFilter).toMatchObject({ mode: "oneString", query: text });
+        expect(query).toHaveAttribute("aria-invalid", "false");
+        expect(query).not.toHaveAccessibleDescription();
+        expect(query.parentElement!.style.borderColor).toBe("");
+        expect(popover.queryByRole("status")).toBeNull();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("saves the search and quick filter as typed, and loads a query that does not parse as not applied", async () => {
