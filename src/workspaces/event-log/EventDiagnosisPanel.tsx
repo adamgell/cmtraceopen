@@ -6,26 +6,41 @@
  * (soul.md: evidence first). The counts come from `overview`, which is authoritative; the arrays
  * are bounded previews, so a preview is never presented as a total.
  *
+ * The two actions that narrow the view are handlers the caller supplies, so the panel itself reads
+ * no store: "Filter to {n} events" on a finding (`onFilterToFinding`, which receives the loaded
+ * records the finding's event evidence names and what could not be resolved), and the Top event IDs
+ * click (`onFilterToEventId`). Without a handler there is no link and no button.
+ *
  * Deferred, with the phase that owns each (that phase's change must touch this file):
- * - "Filter to {n} events" on a finding, and the Top event IDs click: the event-ID chip and the
- *   record-scope chip belong to Phase 5 (chip row) and Phase 6a (record-scope criterion).
  * - "Open correlation view": Phase 10 (Correlation view).
  * - "Review unplaced lines": Phase 10b (unplaced list).
  * - "{n} nearby, not linked": Phase 10c (Chains tab data).
  * - The coverage note with its Elevate action: Phase 4b.
  */
-import { memo, useId, useMemo, useState, type ReactNode } from "react";
-import { tokens } from "@fluentui/react-components";
+import { memo, useId, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  createFocusOutlineStyle,
+  Link,
+  makeStyles,
+  tokens,
+} from "@fluentui/react-components";
+import { ArrowRight12Regular } from "@fluentui/react-icons";
 import { LOG_MONOSPACE_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 import { useRailTextColors } from "./evtx-rail-text";
 import {
+  buildEvidenceIndex,
   correlationBreakdown,
+  describeScopeCounts,
   eventEvidenceLabel,
   evidenceSpansSources,
   formatCount,
+  scopeForFinding,
   summarizeRecords,
+  summaryIsBounded,
+  type EvidenceIndex,
+  type FindingScope,
   type LevelMixEntry,
   type TopEventId,
 } from "./evtx-insights-data";
@@ -89,6 +104,20 @@ interface EventDiagnosisPanelProps {
    * Defaults to `records.length`.
    */
   scopeCount?: number | null;
+  /**
+   * How many text-log entries the diagnosis session was given. Text logs are never narrowed by the
+   * event criteria, so when there are any the scope line says so.
+   */
+  textLogCount?: number;
+  /**
+   * Narrows the view to the loaded events a finding's event evidence names. Called with the finding
+   * and what was resolved; absent, a finding card has no "Filter to" link.
+   */
+  onFilterToFinding?: (finding: DiagnosisFinding, scope: FindingScope) => void;
+  /** Narrows the view to one event ID. Absent, the Top event IDs rows are information only. */
+  onFilterToEventId?: (eventId: number) => void;
+  /** The one event ID the quick filter shows now, for the pressed state of its row. */
+  activeEventId?: number | null;
 }
 
 interface GroupedCoverageGap {
@@ -244,12 +273,17 @@ function FindingCard({
   stale,
   sizes,
   visuals,
+  scope,
+  onFilter,
 }: {
   finding: DiagnosisFinding;
   includeOrigin: boolean;
   stale: boolean;
   sizes: RailSizes;
   visuals: EvtxVisualTokens;
+  /** What the finding's event evidence resolves to; null when the panel has no way to filter. */
+  scope: FindingScope | null;
+  onFilter?: (finding: DiagnosisFinding, scope: FindingScope) => void;
 }) {
   const [checksExpanded, setChecksExpanded] = useState(false);
   const { cardSecondary } = useRailTextColors();
@@ -387,10 +421,58 @@ function FindingCard({
           )}
         </div>
       )}
+      {scope !== null && onFilter && (
+        <ScopeLink finding={finding} scope={scope} stale={stale} sizes={sizes} onFilter={onFilter} />
+      )}
       {finding.coverageGaps.map((gap) => (
         <CoverageGapRow key={gap.id} gap={gap} occurrences={1} sizes={sizes} />
       ))}
     </article>
+  );
+}
+
+/**
+ * "Filter to {n} events" (spec 8.13): the link, and a muted line for each way the filter falls short
+ * of what the finding cites. The link is only offered when at least one cited event is loaded, and
+ * it waits while the card is from a previous build. A finding that cites no event gets nothing.
+ */
+function ScopeLink({
+  finding,
+  scope,
+  stale,
+  sizes,
+  onFilter,
+}: {
+  finding: DiagnosisFinding;
+  scope: FindingScope;
+  stale: boolean;
+  sizes: RailSizes;
+  onFilter: (finding: DiagnosisFinding, scope: FindingScope) => void;
+}) {
+  const { cardSecondary } = useRailTextColors();
+  if (!finding.evidence.some((evidence) => evidence.kind === "event")) return null;
+  const count = scope.records.length;
+  const gaps = describeScopeCounts(scope.counts);
+  return (
+    <div style={{ display: "grid", gap: "2px", fontSize: `${sizes.small}px` }}>
+      {count > 0 && (
+        <Link
+          as="button"
+          type="button"
+          disabled={stale}
+          onClick={() => onFilter(finding, scope)}
+          style={{ justifySelf: "start", fontSize: `${sizes.small}px`, fontWeight: 600 }}
+        >
+          Filter to {formatCount(count)} {count === 1 ? "event" : "events"}{" "}
+          <ArrowRight12Regular aria-hidden="true" style={{ verticalAlign: "middle" }} />
+        </Link>
+      )}
+      {gaps.map((sentence) => (
+        <div key={sentence} style={{ color: cardSecondary }}>
+          {sentence}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -408,11 +490,13 @@ export const OUTCOME_LABELS: Record<DiagnosisOverview["outcome"], string> = {
 function OverviewBlock({
   overview,
   scopeCount,
+  textLogCount,
   updating,
   sizes,
 }: {
   overview: DiagnosisOverview;
   scopeCount: number | null;
+  textLogCount: number;
   updating: boolean;
   sizes: RailSizes;
 }) {
@@ -461,6 +545,13 @@ function OverviewBlock({
             Scoped to <Count value={scopeCount} /> visible {scopeCount === 1 ? "event" : "events"}
           </div>
         )}
+        {scopeCount !== null && textLogCount > 0 && (
+          // The event criteria (levels, search, a time range, a record scope) never narrow the text
+          // logs the session was given, so the diagnosis mixes a scoped set of events with all of them.
+          <div style={{ fontSize: `${sizes.caption}px`, color: railText.secondary }}>
+            Text logs are not scoped.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -470,12 +561,15 @@ function RailCard({
   title,
   sizes,
   stale = false,
+  caption,
   children,
 }: {
   title: string;
   sizes: RailSizes;
   /** Its numbers are from the previous build: dimmed and marked busy. */
   stale?: boolean;
+  /** Said at the right of the title, in the muted card color (spec 8.13: "click to filter"). */
+  caption?: string;
   children: ReactNode;
 }) {
   const { cardSecondary } = useRailTextColors();
@@ -493,17 +587,24 @@ function RailCard({
         border: `1px solid ${tokens.colorNeutralStroke2}`,
       }}
     >
-      <span
-        style={{
-          fontSize: `${sizes.caption}px`,
-          fontWeight: 700,
-          letterSpacing: "0.08em",
-          textTransform: "uppercase",
-          color: cardSecondary,
-        }}
-      >
-        {title}
-      </span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "8px" }}>
+        <span
+          style={{
+            fontSize: `${sizes.caption}px`,
+            fontWeight: 700,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            color: cardSecondary,
+          }}
+        >
+          {title}
+        </span>
+        {caption !== undefined && (
+          <span style={{ fontSize: `${sizes.caption}px`, fontWeight: 400, color: cardSecondary }}>
+            {caption}
+          </span>
+        )}
+      </div>
       {children}
     </section>
   );
@@ -561,61 +662,138 @@ function LevelMixCard({
   );
 }
 
+const useTopEventIdStyles = makeStyles({
+  // A row that filters. The ID and the count take their colors from two variables, so the hover and
+  // pressed states can change them (a class cannot reach the inline-colored children otherwise): the
+  // Hover and Pressed foreground tokens are the ones that read on the subtle hover and pressed
+  // surfaces in every theme, where Foreground1 on the hover surface measures 4.11:1 in solarized-dark
+  // and 1.46:1 in high contrast.
+  row: {
+    "--evtx-top-id-color": tokens.colorNeutralForeground1,
+    "--evtx-top-count-color": tokens.colorNeutralForeground2,
+    display: "grid",
+    gridTemplateColumns: "40px 1fr 30px",
+    alignItems: "center",
+    columnGap: "8px",
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "2px 4px",
+    border: "none",
+    borderRadius: "4px",
+    backgroundColor: "transparent",
+    font: "inherit",
+    textAlign: "left",
+    cursor: "pointer",
+    ":hover": {
+      backgroundColor: tokens.colorSubtleBackgroundHover,
+      "--evtx-top-id-color": tokens.colorNeutralForeground1Hover,
+      "--evtx-top-count-color": tokens.colorNeutralForeground2Hover,
+    },
+    ":active": {
+      backgroundColor: tokens.colorSubtleBackgroundPressed,
+      "--evtx-top-id-color": tokens.colorNeutralForeground1Pressed,
+      "--evtx-top-count-color": tokens.colorNeutralForeground2Pressed,
+    },
+    ...createFocusOutlineStyle({ style: { outlineRadius: "4px" } }),
+  },
+});
+
 function TopEventIdsCard({
   topEventIds,
   sizes,
   visuals,
+  onFilter,
+  activeEventId,
 }: {
   topEventIds: TopEventId[];
   sizes: RailSizes;
   visuals: EvtxVisualTokens;
+  onFilter?: (eventId: number) => void;
+  activeEventId: number | null;
 }) {
+  const styles = useTopEventIdStyles();
   const max = topEventIds[0]?.count ?? 1;
+  const rowContent = (entry: TopEventId, interactive: boolean) => (
+    <>
+      <span
+        style={{
+          fontFamily: tokens.fontFamilyNumeric,
+          fontWeight: 700,
+          color: interactive ? "var(--evtx-top-id-color)" : tokens.colorNeutralForeground1,
+        }}
+      >
+        {entry.eventId}
+      </span>
+      {/* Single-series bars (spec 6.3): only the bar is hidden; the ID and the count are text. */}
+      <span
+        aria-hidden="true"
+        style={{
+          height: "10px",
+          width: `${Math.max((entry.count / max) * 100, 2)}%`,
+          borderRadius: "2px",
+          backgroundColor: visuals.singleSeries,
+        }}
+      />
+      <span
+        style={{
+          fontFamily: tokens.fontFamilyNumeric,
+          textAlign: "right",
+          color: interactive ? "var(--evtx-top-count-color)" : tokens.colorNeutralForeground2,
+        }}
+      >
+        {formatCount(entry.count)}
+      </span>
+    </>
+  );
   return (
-    <RailCard title="Top event IDs" sizes={sizes}>
+    <RailCard title="Top event IDs" sizes={sizes} caption={onFilter ? "click to filter" : undefined}>
       <ul style={{ display: "grid", gap: "4px", margin: 0, padding: 0, listStyle: "none" }}>
-        {topEventIds.map((entry) => (
-          <li
-            key={entry.eventId}
-            data-event-id={entry.eventId}
-            style={{
-              display: "grid",
-              gridTemplateColumns: "40px 1fr 30px",
-              alignItems: "center",
-              gap: "8px",
-              fontSize: `${sizes.small}px`,
-            }}
-          >
-            <span
-              style={{
-                fontFamily: tokens.fontFamilyNumeric,
-                fontWeight: 700,
-                color: tokens.colorNeutralForeground1,
-              }}
+        {topEventIds.map((entry) => {
+          const pressed = onFilter !== undefined && entry.eventId === activeEventId;
+          return (
+            <li
+              key={entry.eventId}
+              data-event-id={entry.eventId}
+              style={
+                onFilter
+                  ? { fontSize: `${sizes.small}px` }
+                  : {
+                      display: "grid",
+                      gridTemplateColumns: "40px 1fr 30px",
+                      alignItems: "center",
+                      gap: "8px",
+                      fontSize: `${sizes.small}px`,
+                    }
+              }
             >
-              {entry.eventId}
-            </span>
-            {/* Single-series bars (spec 6.3): only the bar is hidden; the ID and the count are text. */}
-            <span
-              aria-hidden="true"
-              style={{
-                height: "10px",
-                width: `${Math.max((entry.count / max) * 100, 2)}%`,
-                borderRadius: "2px",
-                backgroundColor: visuals.singleSeries,
-              }}
-            />
-            <span
-              style={{
-                fontFamily: tokens.fontFamilyNumeric,
-                textAlign: "right",
-                color: tokens.colorNeutralForeground2,
-              }}
-            >
-              {formatCount(entry.count)}
-            </span>
-          </li>
-        ))}
+              {onFilter ? (
+                <button
+                  type="button"
+                  className={styles.row}
+                  aria-pressed={pressed}
+                  aria-label={`Event ID ${entry.eventId}, ${formatCount(entry.count)} ${entry.count === 1 ? "event" : "events"}`}
+                  onClick={() => onFilter(entry.eventId)}
+                  // The pressed row is the selection (Q-1): its fill, its inset edge, and the
+                  // selection foreground for the ID and the count. Inline, so hover cannot undo it.
+                  style={
+                    pressed
+                      ? ({
+                          backgroundColor: visuals.selection.background,
+                          boxShadow: `inset 3px 0 0 ${visuals.selection.border}`,
+                          "--evtx-top-id-color": visuals.selection.foreground,
+                          "--evtx-top-count-color": visuals.selection.foreground,
+                        } as CSSProperties)
+                      : undefined
+                  }
+                >
+                  {rowContent(entry, true)}
+                </button>
+              ) : (
+                rowContent(entry, false)
+              )}
+            </li>
+          );
+        })}
       </ul>
     </RailCard>
   );
@@ -804,6 +982,10 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
   updating = false,
   error = null,
   scopeCount,
+  textLogCount = 0,
+  onFilterToFinding,
+  onFilterToEventId,
+  activeEventId = null,
 }: EventDiagnosisPanelProps) {
   const sizes = useRailSizes();
   const railText = useRailTextColors();
@@ -814,6 +996,14 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
     () => (records && records.length > 0 ? summarizeRecords(records) : null),
     [records],
   );
+
+  // Indexed once per set of records, and only when a card can filter: resolving a finding is then a
+  // lookup per reference and not a pass over every loaded record.
+  const evidenceIndex = useMemo<EvidenceIndex | null>(
+    () => (onFilterToFinding && records ? buildEvidenceIndex(records) : null),
+    [onFilterToFinding, records],
+  );
+  const engineBounded = useMemo(() => (summary ? summaryIsBounded(summary) : false), [summary]);
 
   const recordCards = recordSummary && (
     <>
@@ -830,6 +1020,8 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
           topEventIds={recordSummary.topEventIds}
           sizes={sizes}
           visuals={visuals}
+          onFilter={onFilterToEventId}
+          activeEventId={activeEventId}
         />
       )}
     </>
@@ -885,6 +1077,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
       <OverviewBlock
         overview={summary.overview}
         scopeCount={scopeCount !== undefined ? scopeCount : records ? records.length : null}
+        textLogCount={textLogCount}
         updating={updating}
         sizes={sizes}
       />
@@ -910,6 +1103,10 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
               stale={updating}
               sizes={sizes}
               visuals={visuals}
+              scope={
+                evidenceIndex ? scopeForFinding(finding, evidenceIndex, engineBounded) : null
+              }
+              onFilter={onFilterToFinding}
             />
           ))}
           <OmittedRows

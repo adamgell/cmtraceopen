@@ -8,7 +8,12 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
 }));
 
-import { EvtxInsightsRail } from "./EvtxInsightsRail";
+import {
+  EvtxInsightsRail,
+  quickFilterAfterEventIdClick,
+  soleQuickFilterEventId,
+} from "./EvtxInsightsRail";
+import { DEFAULT_QUICK_FILTER, type EvtxQuickFilter } from "./evtx-filter";
 import { evtxRailPanelId, sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
@@ -378,5 +383,224 @@ describe("EvtxInsightsRail", () => {
       act(() => useEvtxLayoutStore.getState().setPanel("insights", true));
       expect(screen.getByRole("region", { name: "Level mix" })).toBeInTheDocument();
     });
+  });
+});
+
+/**
+ * Phase 6a (#834): the rail wires the panel's two actions to the stores. These use the real stores
+ * and the real layout, with only the Tauri bridge mocked.
+ */
+describe("EvtxInsightsRail filter actions", () => {
+  const loaded: EvtxRecord[] = [1, 2, 3, 4].map((n) => ({
+    ...RECORD,
+    id: n,
+    eventRecordId: n,
+    eventId: n <= 3 ? 1000 : 2000,
+    timestampEpoch: n * 1000,
+  }));
+  const eventRef = (recordId: number) => ({
+    kind: "event" as const,
+    value: { source: "sample.evtx", provider: "Example Provider", eventId: 1000, recordId },
+  });
+  const citing = (title: string, ...recordIds: number[]): DiagnosisSummary => ({
+    ...SUMMARY,
+    findings: [{ ...SUMMARY.findings[0], title, evidence: recordIds.map(eventRef) }],
+  });
+  const queries = () => invoke.mock.calls.filter(([name]) => name === "evtx_query_channels");
+
+  beforeEach(() => {
+    invoke.mockReset();
+    invoke.mockResolvedValue(null);
+    localStorage.clear();
+    useEvtxLayoutStore.setState(sanitizeLayout(undefined));
+    useEvtxStore.getState().reset();
+    useEvtxStore.setState({
+      records: loaded,
+      sourceMode: "live",
+      channels: [{ name: "Application", eventCount: 4, sourceType: "live" }],
+      loadedChannels: new Set(["Application"]),
+      selectedChannels: new Set(["Application"]),
+    });
+    useMarkerStore.setState({ markersByFile: new Map(), loadingFiles: new Set(["event-log:sample.evtx"]) });
+  });
+  afterEach(cleanup);
+
+  describe("Filter to {n} events", () => {
+    it("scopes the view to the events the finding names, keeps its title, and shows the Table", () => {
+      useEvtxLayoutStore.getState().setActiveView("grouped");
+      render(<EvtxInsightsRail summary={citing("Enrollment failed", 1, 3)} records={loaded} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /Filter to 2 events/ }));
+
+      const scope = useEvtxStore.getState().recordScope;
+      expect(scope).toMatchObject({ kind: "finding", title: "Enrollment failed" });
+      expect([...(scope?.records ?? [])]).toEqual([loaded[0], loaded[2]]);
+      expect(useEvtxLayoutStore.getState().activeView).toBe("table");
+      expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
+    });
+
+    it("sends no query: a record scope is local to the loaded events", async () => {
+      render(<EvtxInsightsRail summary={citing("Enrollment failed", 1)} records={loaded} />);
+      fireEvent.click(screen.getByRole("button", { name: /Filter to 1 event/ }));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(queries()).toHaveLength(0);
+      expect(useEvtxStore.getState().isLoading).toBe(false);
+    });
+
+    it("keeps the finding's title in the scope when a rebuilt diagnosis drops the finding", () => {
+      const { rerender } = render(
+        <EvtxInsightsRail summary={citing("Enrollment failed", 1, 2)} records={loaded} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Filter to 2 events/ }));
+      // The scoped rebuild finds nothing actionable.
+      rerender(
+        <EvtxInsightsRail
+          summary={{ ...SUMMARY, findings: [], overview: { ...SUMMARY.overview, actionableFindingCount: 0 } }}
+          records={[loaded[0], loaded[1]]}
+        />,
+      );
+      expect(screen.queryByRole("button", { name: /Filter to/ })).toBeNull();
+      expect(useEvtxStore.getState().recordScope?.title).toBe("Enrollment failed");
+    });
+
+    it("does not switch views when the store refuses the scope", () => {
+      useEvtxLayoutStore.getState().setActiveView("grouped");
+      render(<EvtxInsightsRail summary={citing("Enrollment failed", 1)} records={loaded} />);
+      act(() => useEvtxStore.setState({ isLoading: true }));
+      fireEvent.click(screen.getByRole("button", { name: /Filter to 1 event/ }));
+      expect(useEvtxStore.getState().recordScope).toBeNull();
+      expect(useEvtxLayoutStore.getState().activeView).toBe("grouped");
+    });
+
+    it("replaces a scope that was already set", () => {
+      render(<EvtxInsightsRail summary={citing("Enrollment failed", 2)} records={loaded} />);
+      act(() => {
+        useEvtxStore.getState().setRecordScope({
+          kind: "finding",
+          title: "Older",
+          records: new Set([loaded[3]]),
+          counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+        });
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Filter to 1 event/ }));
+      expect(useEvtxStore.getState().recordScope?.title).toBe("Enrollment failed");
+      expect([...(useEvtxStore.getState().recordScope?.records ?? [])]).toEqual([loaded[1]]);
+    });
+  });
+
+  describe("Top event IDs", () => {
+    const row = (name: string) => screen.getByRole("button", { name });
+    const quick = () => useEvtxStore.getState().quickFilter;
+
+    it("applies the ID as an Event IDs quick filter that shows matches, without a query", async () => {
+      render(<EvtxInsightsRail summary={SUMMARY} records={loaded} />);
+      fireEvent.click(row("Event ID 1000, 3 events"));
+
+      expect(quick()).toMatchObject({ mode: "eventIds", action: "show", query: "1000" });
+      expect(useEvtxStore.getState().quickFilterDraft).toBeNull();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(queries()).toHaveLength(0);
+      expect(useEvtxStore.getState().isLoading).toBe(false);
+    });
+
+    it("presses the row of the ID it applied, and clears the filter on a second click", () => {
+      render(<EvtxInsightsRail summary={SUMMARY} records={loaded} />);
+      fireEvent.click(row("Event ID 1000, 3 events"));
+      expect(row("Event ID 1000, 3 events")).toHaveAttribute("aria-pressed", "true");
+      expect(row("Event ID 2000, 1 event")).toHaveAttribute("aria-pressed", "false");
+
+      fireEvent.click(row("Event ID 1000, 3 events"));
+      expect(quick().query).toBe("");
+      expect(quick().mode).toBe("eventIds");
+      expect(row("Event ID 1000, 3 events")).toHaveAttribute("aria-pressed", "false");
+    });
+
+    it("replaces the quick filter that was there, keeping its scope, case and highlight settings", () => {
+      act(() => {
+        useEvtxStore.getState().setQuickFilter({
+          ...DEFAULT_QUICK_FILTER,
+          mode: "allWords",
+          action: "hide",
+          query: "noise words",
+          scope: "visibleColumns",
+          caseSensitive: true,
+          highlight: false,
+        });
+      });
+      render(<EvtxInsightsRail summary={SUMMARY} records={loaded} />);
+      fireEvent.click(row("Event ID 2000, 1 event"));
+      expect(quick()).toEqual({
+        mode: "eventIds",
+        action: "show",
+        query: "2000",
+        scope: "visibleColumns",
+        caseSensitive: true,
+        highlight: false,
+      });
+    });
+
+    it("discards a quick filter that was typed but not applied, and shows the ID instead", () => {
+      act(() => {
+        useEvtxStore.getState().setQuickFilter({ ...DEFAULT_QUICK_FILTER, mode: "fieldQuery", query: "level:erro" });
+      });
+      expect(useEvtxStore.getState().quickFilterDraft?.query).toBe("level:erro");
+      render(<EvtxInsightsRail summary={SUMMARY} records={loaded} />);
+      fireEvent.click(row("Event ID 1000, 3 events"));
+      expect(useEvtxStore.getState().quickFilterDraft).toBeNull();
+      expect(quick()).toMatchObject({ mode: "eventIds", query: "1000" });
+    });
+  });
+
+  describe("text logs", () => {
+    it("states, with the build it came from, that the session held text logs", () => {
+      const { rerender } = render(<EvtxInsightsRail summary={SUMMARY} records={loaded} textLogCount={2} />);
+      expect(screen.getByLabelText("Operational diagnosis")).toHaveTextContent("Text logs are not scoped.");
+      // The count belongs to the build, as the scope count does: a new count with the same summary
+      // does not rewrite what that build was given.
+      rerender(<EvtxInsightsRail summary={SUMMARY} records={loaded} textLogCount={0} />);
+      expect(screen.getByLabelText("Operational diagnosis")).toHaveTextContent("Text logs are not scoped.");
+      rerender(<EvtxInsightsRail summary={{ ...SUMMARY }} records={loaded} textLogCount={0} />);
+      expect(screen.getByLabelText("Operational diagnosis")).not.toHaveTextContent("Text logs are not scoped.");
+    });
+  });
+});
+
+describe("soleQuickFilterEventId and quickFilterAfterEventIdClick", () => {
+  const filter = (overrides: Partial<EvtxQuickFilter>): EvtxQuickFilter => ({
+    ...DEFAULT_QUICK_FILTER,
+    ...overrides,
+  });
+
+  it("names the one ID an Event IDs show filter has, and no other", () => {
+    expect(soleQuickFilterEventId(filter({ mode: "eventIds", query: "4624" }))).toBe(4624);
+    expect(soleQuickFilterEventId(filter({ mode: "eventIds", query: " 4624 " }))).toBe(4624);
+    for (const query of ["4624,4625", "4620-4630", "4624 x", "", "abc"]) {
+      expect(soleQuickFilterEventId(filter({ mode: "eventIds", query })), query).toBeNull();
+    }
+    expect(soleQuickFilterEventId(filter({ mode: "eventIds", query: "4624", action: "hide" }))).toBeNull();
+    expect(soleQuickFilterEventId(filter({ mode: "oneString", query: "4624" }))).toBeNull();
+  });
+
+  it("replaces the filter with the ID, keeping the settings, and clears only the query on a repeat", () => {
+    const shown = filter({ mode: "multipleWords", action: "hide", query: "noise", caseSensitive: true });
+    expect(quickFilterAfterEventIdClick(shown, shown, 7036)).toEqual({
+      ...shown,
+      mode: "eventIds",
+      action: "show",
+      query: "7036",
+    });
+    const applied = filter({ mode: "eventIds", query: "7036", caseSensitive: true });
+    expect(quickFilterAfterEventIdClick(applied, applied, 7036)).toEqual({ ...applied, query: "" });
+    expect(quickFilterAfterEventIdClick(applied, applied, 7040)).toMatchObject({ query: "7040" });
+  });
+
+  it("takes the settings from the filter being edited when it differs from the applied one", () => {
+    const applied = filter({ mode: "eventIds", query: "1", highlight: true });
+    const shown = filter({ mode: "fieldQuery", query: "level:erro", highlight: false });
+    expect(quickFilterAfterEventIdClick(applied, shown, 2)).toMatchObject({ query: "2", highlight: false });
   });
 });

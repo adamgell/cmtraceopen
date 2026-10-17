@@ -21,6 +21,8 @@ import { Tab, TabList, tokens } from "@fluentui/react-components";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { EventDiagnosisPanel, actionableFindings, sortFindings } from "./EventDiagnosisPanel";
+import { parseEventIdSelectors, type EvtxQuickFilter } from "./evtx-filter";
+import type { FindingScope } from "./evtx-insights-data";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import {
   evtxRailPanelId,
@@ -41,6 +43,8 @@ interface EvtxInsightsRailProps {
   pending?: boolean;
   /** Why the last diagnosis build failed. */
   error?: string | null;
+  /** How many text-log entries the diagnosis session was given (the event criteria never narrow them). */
+  textLogCount?: number;
 }
 
 /** Tabs the rail can show today, in order. Phase 10c adds "chains" between the two. */
@@ -48,6 +52,33 @@ const RAIL_TABS: readonly EvtxRailTabId[] = ["insights", "details"];
 
 /** Record summaries publish at most once per this long (spec section 11, the 75 ms precedent). */
 export const INSIGHTS_DEBOUNCE_MS = 75;
+
+/**
+ * The one event ID a quick filter is showing, or null: the applied filter is in Event IDs mode, shows
+ * what matches, and names exactly one ID (a range or a list names more, and an invalid one none).
+ */
+export function soleQuickFilterEventId(filter: EvtxQuickFilter): number | null {
+  if (filter.mode !== "eventIds" || filter.action !== "show") return null;
+  const { selectors, invalid } = parseEventIdSelectors(filter.query);
+  if (invalid || selectors.length !== 1) return null;
+  const [only] = selectors;
+  return only.kind === "single" && only.id !== undefined ? only.id : null;
+}
+
+/**
+ * The quick filter after a click on a Top event IDs row. It REPLACES the quick filter slot: mode,
+ * query and action become "this ID, show" while the operator's scope, case and highlight settings
+ * stay, and the filter that was there is gone (its chip changes to this one). A click on the row
+ * that is the only ID shown clears the query instead, as removing the chip does.
+ */
+export function quickFilterAfterEventIdClick(
+  applied: EvtxQuickFilter,
+  shown: EvtxQuickFilter,
+  eventId: number,
+): EvtxQuickFilter {
+  if (soleQuickFilterEventId(applied) === eventId) return { ...applied, query: "" };
+  return { ...shown, mode: "eventIds", action: "show", query: String(eventId) };
+}
 
 const NO_RECORDS: readonly EvtxRecord[] = [];
 const NO_FINDINGS: readonly DiagnosisFinding[] = [];
@@ -101,6 +132,7 @@ export function EvtxInsightsRail({
   records,
   pending = false,
   error = null,
+  textLogCount = 0,
 }: EvtxInsightsRailProps) {
   const railTab = useEvtxLayoutStore((s) => s.railTab);
   const setRailTab = useEvtxLayoutStore((s) => s.setRailTab);
@@ -111,6 +143,7 @@ export function EvtxInsightsRail({
     () => findRecordById(storeRecords, selectedRecordId)?.eventId ?? null,
     [storeRecords, selectedRecordId],
   );
+  const activeEventId = useEvtxStore((s) => soleQuickFilterEventId(s.quickFilter));
   const railText = useRailTextColors();
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const countSize = useMemo(
@@ -136,9 +169,13 @@ export function EvtxInsightsRail({
   // updating, so the reader's place survives a live-tail batch; drop it on failure or no input.
   // The visible-event count is stored WITH the summary, so the scope line states the scope the
   // shown numbers were built from, never the new count beside old numbers.
-  const lastBuildRef = useRef<{ summary: DiagnosisSummary; scopeCount: number } | null>(null);
+  const lastBuildRef = useRef<{
+    summary: DiagnosisSummary;
+    scopeCount: number;
+    textLogCount: number;
+  } | null>(null);
   if (summary && lastBuildRef.current?.summary !== summary) {
-    lastBuildRef.current = { summary, scopeCount: records.length };
+    lastBuildRef.current = { summary, scopeCount: records.length, textLogCount };
   }
   if (error || (!summary && !pending)) lastBuildRef.current = null;
   const shown = summary || (pending && !error) ? lastBuildRef.current : null;
@@ -159,6 +196,25 @@ export function EvtxInsightsRail({
         : NO_FINDINGS,
     [shownSummary, pending],
   );
+
+  // "Filter to {n} events": the scope is the loaded events the finding names, its title is kept as
+  // written (a rebuilt diagnosis may drop the finding), and Table is shown only if it was applied.
+  const filterToFinding = (finding: DiagnosisFinding, scope: FindingScope) => {
+    const applied = useEvtxStore.getState().setRecordScope({
+      kind: "finding",
+      title: finding.title,
+      records: new Set(scope.records),
+      counts: scope.counts,
+    });
+    if (applied) useEvtxLayoutStore.getState().setActiveView("table");
+  };
+  // A Top event IDs row replaces the quick filter with that ID, an on-load criterion: no re-query.
+  const filterToEventId = (eventId: number) => {
+    const state = useEvtxStore.getState();
+    state.setQuickFilter(
+      quickFilterAfterEventIdClick(state.quickFilter, state.quickFilterDraft ?? state.quickFilter, eventId),
+    );
+  };
 
   const insightsScrollRef = useRef<HTMLDivElement>(null);
   const savedScrollRef = useRef(0);
@@ -237,6 +293,10 @@ export function EvtxInsightsRail({
           updating={pending}
           error={error}
           scopeCount={shown?.scopeCount ?? null}
+          textLogCount={shown?.textLogCount ?? 0}
+          onFilterToFinding={filterToFinding}
+          onFilterToEventId={filterToEventId}
+          activeEventId={activeEventId}
         />
       </div>
       {activeTab === "details" && (

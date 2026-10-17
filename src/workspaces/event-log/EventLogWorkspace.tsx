@@ -752,6 +752,7 @@ export function EventLogWorkspace() {
               records={analysisRecords}
               pending={timelinePending}
               error={diagnosisError}
+              textLogCount={scopedLogEntries.length}
             />
           </div>
         </aside>
