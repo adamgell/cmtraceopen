@@ -41,7 +41,11 @@ import {
 } from "./evtx-layout-store";
 import { selectVisibleRecords } from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
-import { coverageDisclosureKeys, mergeDiagnosisCoverageGaps } from "./evtx-coverage";
+import {
+  coverageDisclosureIndex,
+  mergeDiagnosisCoverageGaps,
+  type CoverageDisclosureIndex,
+} from "./evtx-coverage";
 import { CoverageClaimsProvider } from "./evtx-coverage-claims";
 import type {
   DiagnosisSummary,
@@ -279,10 +283,11 @@ export function EventLogWorkspace() {
   );
 
   const [diagnosis, setDiagnosis] = useState<DiagnosisSummary | null>(null);
-  // The shared keys of the gaps `diagnosis` was built from (its snapshot's input), set and cleared
-  // with it, so the rail claims what that summary covers and never a gap that arrived since.
-  const [diagnosisCoverageKeys, setDiagnosisCoverageKeys] =
-    useState<ReadonlySet<string> | null>(null);
+  // The gaps `diagnosis` was built from (its snapshot's input), indexed by the row the engine
+  // reports for each, set and cleared with it, so the rail claims only gaps of that summary whose
+  // rows it lists, never a gap that arrived since.
+  const [diagnosisCoverageIndex, setDiagnosisCoverageIndex] =
+    useState<CoverageDisclosureIndex | null>(null);
   const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
   const [analysisStatus, setAnalysisStatus] =
     useState<EventLogAnalysisSessionStatus | null>(null);
@@ -349,7 +354,7 @@ export function EventLogWorkspace() {
     }
 
     setDiagnosis(null);
-    setDiagnosisCoverageKeys(null);
+    setDiagnosisCoverageIndex(null);
     setDiagnosisError(null);
     setAnalysisStatus(null);
     setInitialTimelinePage(null);
@@ -415,7 +420,7 @@ export function EventLogWorkspace() {
           setAnalysisStatus(result.status);
           setInitialTimelinePage(result.initialPage);
           setDiagnosis(result.diagnosis);
-          setDiagnosisCoverageKeys(coverageDisclosureKeys(snapshot.coverageGaps));
+          setDiagnosisCoverageIndex(coverageDisclosureIndex(snapshot.coverageGaps));
           setTimelinePending(false);
         })
         .catch((error: unknown) => {
@@ -430,7 +435,7 @@ export function EventLogWorkspace() {
             error instanceof Error ? error.message : String(error);
           setTimelinePending(false);
           setDiagnosis(null);
-          setDiagnosisCoverageKeys(null);
+          setDiagnosisCoverageIndex(null);
           setDiagnosisError(
             `Operational diagnosis could not be built: ${message}`,
           );
@@ -702,7 +707,7 @@ export function EventLogWorkspace() {
               records={analysisRecords}
               pending={timelinePending}
               error={diagnosisError}
-              summaryCoverageKeys={diagnosisCoverageKeys}
+              summaryCoverageIndex={diagnosisCoverageIndex}
             />
           </div>
         </aside>

@@ -724,6 +724,28 @@ describe("EvtxCoverageBanner rail variant (coverage note)", () => {
     expect(screen.getByText("+1 more channel not read")).toBeInTheDocument();
   });
 
+  it("claims only the notes it names: the counted ones are named in the banner, once", async () => {
+    answerElevation(OFFERABLE);
+    useEvtxStore.setState({
+      coverageDetails: ["Security", "System", "Setup", "Sysmon", "LAPS"].map((channel) =>
+        liveDenied(channel),
+      ),
+    });
+    render(
+      withClaims(
+        <>
+          <EvtxCoverageBanner />
+          <EvtxCoverageBanner variant="rail" visible />
+        </>,
+      ),
+    );
+    await settle();
+
+    expect(screen.getByText("+2 more channels not read")).toBeInTheDocument();
+    expect(bannerLines()).toEqual([`Sysmon: ${LIVE_REFUSAL_5}`, `LAPS: ${LIVE_REFUSAL_5}`]);
+    expect(screen.getByText("2 gaps in this view")).toBeInTheDocument();
+  });
+
   it("sizes its text from logListFontSize", async () => {
     answerElevation(OFFERABLE);
     useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] });

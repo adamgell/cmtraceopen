@@ -21,9 +21,10 @@ import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { EvtxInsightsRail } from "./EvtxInsightsRail";
 import { CoverageClaimsProvider } from "./evtx-coverage-claims";
 import {
-  coverageDisclosureKeys,
+  coverageDisclosureIndex,
   formatCoverageGap,
   mergeDiagnosisCoverageGaps,
+  type CoverageDisclosureIndex,
 } from "./evtx-coverage";
 import { sanitizeLayout, useEvtxLayoutStore, type EvtxRailTabId } from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
@@ -83,7 +84,7 @@ function storeGaps(gaps: readonly EvtxCoverageGap[]) {
 /** A summary built from `input`, with the input gaps in its coverage as the engine maps them. */
 function summaryOf(input: readonly EvtxCoverageGap[]): {
   summary: DiagnosisSummary;
-  keys: ReadonlySet<string>;
+  index: CoverageDisclosureIndex;
 } {
   const store = storeGaps(input);
   const diagnosisInput = mergeDiagnosisCoverageGaps(store.coverageDetails, [], store.coverageGaps, []);
@@ -111,19 +112,19 @@ function summaryOf(input: readonly EvtxCoverageGap[]): {
         errorTokenEventCount: 0,
       },
     },
-    keys: coverageDisclosureKeys(diagnosisInput),
+    index: coverageDisclosureIndex(diagnosisInput),
   };
 }
 
 interface RailProps {
   summary: DiagnosisSummary | null;
-  keys: ReadonlySet<string> | null;
+  index: CoverageDisclosureIndex | null;
   pending: boolean;
   error: string | null;
 }
 
 /** The rail and the banner as the workspace mounts them; the aside is hidden with the rail. */
-function Surfaces({ summary, keys, pending, error }: RailProps) {
+function Surfaces({ summary, index, pending, error }: RailProps) {
   const insights = useEvtxLayoutStore((s) => s.panels.insights);
   return (
     <CoverageClaimsProvider>
@@ -134,7 +135,7 @@ function Surfaces({ summary, keys, pending, error }: RailProps) {
           records={[RECORD]}
           pending={pending}
           error={error}
-          summaryCoverageKeys={keys}
+          summaryCoverageIndex={index}
         />
       </aside>
     </CoverageClaimsProvider>
@@ -206,10 +207,27 @@ interface Row {
   finalGaps?: readonly EvtxCoverageGap[];
 }
 
-const built = summaryOf(LOADED);
-const SHOWN: RailProps = { summary: built.summary, keys: built.keys, pending: false, error: null };
-const BUILDING: RailProps = { summary: null, keys: null, pending: true, error: null };
-const FAILED: RailProps = { summary: null, keys: null, pending: false, error: "engine unavailable" };
+function shownFor(gaps: readonly EvtxCoverageGap[]): RailProps {
+  const built = summaryOf(gaps);
+  return { summary: built.summary, index: built.index, pending: false, error: null };
+}
+const SHOWN = shownFor(LOADED);
+const BUILDING: RailProps = { summary: null, index: null, pending: true, error: null };
+const FAILED: RailProps = { summary: null, index: null, pending: false, error: "engine unavailable" };
+
+/** Five local channels refused: the note draws three and counts the other two. */
+const MANY_DENIED = ["Security", "Setup", "Sysmon", "LAPS", "AppLocker"].map(
+  (source): EvtxCoverageGap => ({ ...SECURITY_DENIED, source }),
+);
+/** More gaps than the disclosure lists (DETAIL_RENDER_CAP is 100): it counts the last five. */
+const MANY_RECORDS = Array.from(
+  { length: 105 },
+  (_, index): EvtxCoverageGap => ({
+    source: `Channel-${String(index).padStart(3, "0")}`,
+    kind: "record",
+    reason: `record ${index} could not be rendered`,
+  }),
+);
 
 const ROWS: Row[] = [
   { name: "the rail hidden", insights: false, railTab: "insights", elevation: OFFERABLE, gaps: LOADED, steps: [SHOWN] },
@@ -231,6 +249,23 @@ const ROWS: Row[] = [
   { name: "the note hidden: already elevated", insights: true, railTab: "insights", elevation: ELEVATED, gaps: LOADED, steps: [BUILDING] },
   { name: "the note hidden: not Windows", insights: true, railTab: "insights", elevation: NOT_WINDOWS, gaps: LOADED, steps: [BUILDING] },
   { name: "the note hidden: the probe failed", insights: true, railTab: "insights", elevation: new Error("ipc unavailable"), gaps: LOADED, steps: [BUILDING] },
+  // A surface claims only what it names; a count names nothing, so the banner names those gaps.
+  {
+    name: "more than 3 local denied sources before the first summary",
+    insights: true,
+    railTab: "insights",
+    elevation: OFFERABLE,
+    gaps: [...MANY_DENIED, SYSTEM_LIMIT],
+    steps: [BUILDING],
+  },
+  {
+    name: "more than 100 disclosure rows",
+    insights: true,
+    railTab: "insights",
+    elevation: OFFERABLE,
+    gaps: MANY_RECORDS,
+    steps: [shownFor(MANY_RECORDS)],
+  },
 ];
 
 async function settle(): Promise<void> {

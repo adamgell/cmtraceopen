@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   assertParseResultShape,
-  coverageDisclosureKeys,
+  coverageDisclosureIndex,
+  diagnosisCoverageDetail,
   formatCoverageGap,
   legacyCoverageDisclosureKey,
+  listedCoverageKeys,
   mergeCoverageGaps,
   mergeDiagnosisCoverageGaps,
   mergeStructuredCoverageGaps,
@@ -551,7 +553,7 @@ describe("the shared coverage key", () => {
   // The grid banner keys its lines with these and the rail claims a summary's input keys, so a gap
   // and the diagnosis input it became must share one key or it shows twice or nowhere.
   const keysOf = (...args: Parameters<typeof mergeDiagnosisCoverageGaps>) =>
-    coverageDisclosureKeys(mergeDiagnosisCoverageGaps(...args));
+    new Set([...coverageDisclosureIndex(mergeDiagnosisCoverageGaps(...args)).values()].flat());
 
   it("keys a legacy line with no source the way diagnosis files it", () => {
     expect(legacyCoverageDisclosureKey("  reader stalled  ", "legacy")).toBe(
@@ -594,5 +596,35 @@ describe("the shared coverage key", () => {
     expect(keys.has("source-254: gap 254")).toBe(true);
     expect(keys.has("source-255: gap 255")).toBe(false);
     expect(keys.has("source-257: gap 257")).toBe(false);
+  });
+});
+
+describe("claiming only the coverage rows a surface lists", () => {
+  it("reports a gap's detail the way the engine does (diagnosis_finding_for_gap)", () => {
+    const base = { source: "C:\\x.evtx", kind: "chunk" as const, reason: "rejected" };
+    expect(diagnosisCoverageDetail(base)).toBe("rejected");
+    expect(diagnosisCoverageDetail({ ...base, chunkId: 3 })).toBe("rejected (chunk 3)");
+    expect(diagnosisCoverageDetail({ ...base, eventRecordId: 9 })).toBe("rejected (event record 9)");
+    expect(
+      diagnosisCoverageDetail({ ...base, chunkId: 3, eventRecordId: 9, eventRecordIdText: "9" }),
+    ).toBe("rejected (chunk 3, event record 9)");
+  });
+
+  it("names a gap only through a listed row: a row that is not listed claims nothing", () => {
+    const first = { source: "C:\\x.evtx", kind: "chunk" as const, reason: "rejected", chunkId: 1 };
+    const second = { ...first, chunkId: 2 };
+    const index = coverageDisclosureIndex([first, second]);
+    // Only chunk 1's row is listed; chunk 2's row is past the cap (counted, not named).
+    expect(
+      listedCoverageKeys(index, [{ source: first.source, detail: "rejected (chunk 1)" }]),
+    ).toEqual(new Set([formatCoverageGap(first)]));
+    expect(listedCoverageKeys(index, [])).toEqual(new Set());
+  });
+
+  it("ignores engine rows that stand for no store gap", () => {
+    const index = coverageDisclosureIndex([{ source: "System", kind: "record", reason: "bad" }]);
+    expect(
+      listedCoverageKeys(index, [{ source: "MDM enrollment", detail: "no status" }]),
+    ).toEqual(new Set());
   });
 });

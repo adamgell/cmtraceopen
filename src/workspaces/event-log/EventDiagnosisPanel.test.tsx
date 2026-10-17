@@ -15,6 +15,7 @@ import { useEvtxStore } from "./evtx-store";
 import { useEvtxLayoutStore } from "./evtx-layout-store";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { CoverageClaimsProvider } from "./evtx-coverage-claims";
+import { coverageDisclosureIndex } from "./evtx-coverage";
 import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
 import { DETAIL_RENDER_CAP, OUTCOME_LABELS, EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import type {
@@ -566,7 +567,11 @@ describe("EventDiagnosisPanel", () => {
         return render(
           <CoverageClaimsProvider>
             <EvtxCoverageBanner />
-            <EventDiagnosisPanel summary={deniedSummary} coverageKeys={new Set([KEY])} {...props} />
+            <EventDiagnosisPanel
+              summary={deniedSummary}
+              coverageIndex={coverageDisclosureIndex([deniedSecurity])}
+              {...props}
+            />
           </CoverageClaimsProvider>,
         );
       }

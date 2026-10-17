@@ -18,8 +18,10 @@
  * mount point in both branches keeps it mounted when the first summary lands.
  *
  * Coverage claims (evtx-coverage-claims.tsx): while the panel is on screen and its coverage
- * disclosure renders, it claims the keys of the store gaps the shown summary was built from
- * (`coverageKeys`). A gap that arrived after that summary stays with the grid banner.
+ * disclosure renders, it claims the store gaps whose rows the disclosure lists, looked up in the
+ * shown summary's input (`coverageIndex`). It claims only what it names: a row past the render cap
+ * is counted, not listed, and a gap that arrived after the summary has no row, so the grid banner
+ * names both.
  */
 import { memo, useId, useMemo, useState, type ReactNode } from "react";
 import { tokens } from "@fluentui/react-components";
@@ -27,6 +29,7 @@ import { LOG_MONOSPACE_FONT_FAMILY, getLogListMetrics } from "../../lib/log-acce
 import { useUiStore } from "../../stores/ui-store";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { useCoverageClaim } from "./evtx-coverage-claims";
+import { listedCoverageKeys, type CoverageDisclosureIndex } from "./evtx-coverage";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 import { useRailTextColors } from "./evtx-rail-text";
 import {
@@ -100,8 +103,8 @@ interface EventDiagnosisPanelProps {
   scopeCount?: number | null;
   /** The panel is on screen (the rail is shown on its Insights panel). */
   visible?: boolean;
-  /** Shared keys of the store gaps `summary` was built from: what its disclosure covers. */
-  coverageKeys?: ReadonlySet<string> | null;
+  /** The store gaps `summary` was built from, by the row the engine reports for each. */
+  coverageIndex?: CoverageDisclosureIndex | null;
 }
 
 /** The note's one mount point across the pending and summary branches. */
@@ -821,13 +824,30 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
   error = null,
   scopeCount,
   visible = true,
-  coverageKeys = null,
+  coverageIndex = null,
 }: EventDiagnosisPanelProps) {
+  // The coverage rows the disclosure lists (grouped, capped at DETAIL_RENDER_CAP).
+  const coverageGaps = useMemo(
+    () =>
+      summary
+        ? capCoverageSection(summary.coverageGaps, summary.overview.coverageGapCount)
+        : null,
+    [summary],
+  );
   const disclosesCoverage =
-    visible && summary !== null && summary.overview.coverageGapCount > 0 && coverageKeys !== null;
+    visible && summary !== null && summary.overview.coverageGapCount > 0 && coverageIndex !== null;
   const coverageClaim = useMemo(
-    () => (disclosesCoverage ? { keys: coverageKeys!, archiveProvenance: false } : null),
-    [disclosesCoverage, coverageKeys],
+    () =>
+      disclosesCoverage && coverageGaps
+        ? {
+            keys: listedCoverageKeys(
+              coverageIndex!,
+              coverageGaps.items.map(({ gap }) => gap),
+            ),
+            archiveProvenance: false,
+          }
+        : null,
+    [disclosesCoverage, coverageIndex, coverageGaps],
   );
   useCoverageClaim(coverageClaim);
   const sizes = useRailSizes();
@@ -888,10 +908,6 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
   const actionable = sortFindings(actionableFindings(summary.findings));
   const findings = capSection(actionable, summary.overview.actionableFindingCount);
   const includeOrigin = evidenceSpansSources(findings.items);
-  const coverageGaps = capCoverageSection(
-    summary.coverageGaps,
-    summary.overview.coverageGapCount,
-  );
   const correlations = capSection(
     summary.correlations,
     summary.overview.correlationCount,
@@ -957,7 +973,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
           sizes={sizes}
           stale={updating}
         >
-          {coverageGaps.items.map(({ gap, occurrences }) => (
+          {coverageGaps!.items.map(({ gap, occurrences }) => (
             <CoverageGapRow
               key={`${gap.source}-${gap.state}-${gap.detail}`}
               gap={gap}
@@ -966,7 +982,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
             />
           ))}
           <OmittedRows
-            count={coverageGaps.omitted}
+            count={coverageGaps!.omitted}
             singular="coverage gap"
             sizes={sizes}
           />
