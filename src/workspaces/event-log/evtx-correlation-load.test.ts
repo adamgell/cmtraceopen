@@ -6,7 +6,6 @@
  * records every call, so a test can say what was NOT asked as well as what was.
  */
 import { describe, expect, it, vi } from "vitest";
-import { EVENT_LOG_ANALYSIS_PAGE_SIZE } from "./event-analysis-session";
 import type {
   EventLogAnalysisEdgePage,
   EventLogAnalysisSessionStatus,
@@ -15,9 +14,6 @@ import type {
 import { buildCorrelationChains } from "./evtx-correlation-chains";
 import {
   CORRELATION_EDGE_PAGE_SIZE,
-  CORRELATION_RETAINED_BYTE_LIMIT,
-  CORRELATION_RETRY_LIMIT,
-  CORRELATION_TIMELINE_PAGE_SIZE,
   CorrelationLoadCancelled,
   edgeEndpointIds,
   knownTotal,
@@ -26,26 +22,14 @@ import {
   modelEdgeTotal,
   type CorrelationLoadDeps,
 } from "./evtx-correlation-load";
+import {
+  EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT,
+  EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT,
+  EVENT_LOG_TIMELINE_PAGE_SIZE,
+} from "./evtx-timeline-paging";
 import type { TimelineCorrelationEdge, TimelineItem } from "./unified-timeline";
-import viewSource from "./UnifiedTimelineView.tsx?raw";
 
 const SESSION = "00000000-0000-4000-8000-000000000839";
-
-describe("the constants this module repeats from UnifiedTimelineView", () => {
-  /** The value of `export const NAME = <numeric expression>;` in the component's source text. */
-  const exported = (name: string): number => {
-    const match = new RegExp(`export const ${name} = ([0-9_ *]+);`).exec(viewSource);
-    if (match === null) throw new Error(`${name} is no longer a numeric export of UnifiedTimelineView`);
-    return Function(`return ${match[1]}`)() as number;
-  };
-
-  it("equal the ones the unified timeline pages with, retries with and bounds its cache by", () => {
-    expect(CORRELATION_TIMELINE_PAGE_SIZE).toBe(exported("EVENT_LOG_TIMELINE_PAGE_SIZE"));
-    expect(CORRELATION_RETRY_LIMIT).toBe(exported("EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT"));
-    expect(CORRELATION_RETAINED_BYTE_LIMIT).toBe(exported("EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT"));
-    expect(CORRELATION_TIMELINE_PAGE_SIZE).toBe(EVENT_LOG_ANALYSIS_PAGE_SIZE);
-  });
-});
 
 function itemAt(index: number): TimelineItem {
   return {
@@ -431,7 +415,7 @@ describe("loadAnalysisEdges", () => {
 
   it("gives up after the retry limit, returns what it has, and says why", async () => {
     const session = new FakeSession({ itemCount: 10, edgeCount: 50, previewEdges: 10 });
-    for (let call = 0; call <= CORRELATION_RETRY_LIMIT; call += 1) {
+    for (let call = 0; call <= EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT; call += 1) {
       session.failEdges.set(call, new Error("gone"));
     }
     const loaded = await loadAnalysisEdges({
@@ -440,7 +424,7 @@ describe("loadAnalysisEdges", () => {
       isCancelled: never,
       deps: session.deps(),
     });
-    expect(session.edgeCalls).toHaveLength(CORRELATION_RETRY_LIMIT + 1);
+    expect(session.edgeCalls).toHaveLength(EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT + 1);
     expect(loaded.edges).toHaveLength(10);
     expect(loaded).toMatchObject({ complete: false, error: "gone", totalEdges: 50 });
   });
@@ -539,7 +523,7 @@ describe("a reply that arrives after the load was superseded is never returned",
     await expect(
       loadLinkedItems({
         status: session.status(),
-        initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+        initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
         wantedIds: new Set(["item-1"]),
         isCancelled: () => cancelled,
         deps: {
@@ -562,7 +546,7 @@ describe("loadLinkedItems", () => {
     const session = new FakeSession({ itemCount: 50, edgeCount: 0 });
     const loaded = await loadLinkedItems({
       status: session.status(),
-      initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+      initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
       wantedIds: ids(3, 7, 999),
       isCancelled: never,
       deps: session.deps(),
@@ -576,14 +560,14 @@ describe("loadLinkedItems", () => {
     const session = new FakeSession({ itemCount: 2_500, edgeCount: 0 });
     const loaded = await loadLinkedItems({
       status: session.status(),
-      initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+      initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
       wantedIds: ids(5, 1_200, 2_499),
       isCancelled: never,
       deps: session.deps(),
     });
     expect(session.timelineCalls).toEqual([
-      { offset: 1_000, limit: CORRELATION_TIMELINE_PAGE_SIZE },
-      { offset: 2_000, limit: CORRELATION_TIMELINE_PAGE_SIZE },
+      { offset: 1_000, limit: EVENT_LOG_TIMELINE_PAGE_SIZE },
+      { offset: 2_000, limit: EVENT_LOG_TIMELINE_PAGE_SIZE },
     ]);
     expect(loaded.items.map((item) => item.message)).toEqual([
       "message 5",
@@ -602,7 +586,7 @@ describe("loadLinkedItems", () => {
     session.failTimeline.set(2, new Error("down"));
     const loaded = await loadLinkedItems({
       status: session.status(),
-      initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+      initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
       wantedIds: ids(5, 1_200),
       isCancelled: never,
       deps: session.deps(),
@@ -620,13 +604,13 @@ describe("loadLinkedItems", () => {
     // Every item is wanted; 100 bytes each, so 1,000 items is 100,000 bytes a page.
     const loaded = await loadLinkedItems({
       status: session.status(),
-      initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+      initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
       wantedIds: new Set(session.items.map((item) => (item.origin as { stableId: string }).stableId)),
       byteBudget: 150_000,
       isCancelled: never,
       deps: session.deps(),
     });
-    expect(session.timelineCalls).toEqual([{ offset: 1_000, limit: CORRELATION_TIMELINE_PAGE_SIZE }]);
+    expect(session.timelineCalls).toEqual([{ offset: 1_000, limit: EVENT_LOG_TIMELINE_PAGE_SIZE }]);
     expect(loaded.stoppedBy).toBe("budget");
     expect(loaded.complete).toBe(false);
     expect(loaded.retainedBytes).toBe(200_000);
@@ -637,7 +621,7 @@ describe("loadLinkedItems", () => {
     const session = new FakeSession({ itemCount: 2_000, edgeCount: 0 });
     const loaded = await loadLinkedItems({
       status: session.status(),
-      initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+      initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
       wantedIds: new Set(session.items.map((item) => (item.origin as { stableId: string }).stableId)),
       byteBudget: 10,
       isCancelled: never,
@@ -647,11 +631,36 @@ describe("loadLinkedItems", () => {
     expect(loaded.stoppedBy).toBe("budget");
   });
 
+  it("bounds what it keeps by the shared cache limit when no budget is given", async () => {
+    const session = new FakeSession({ itemCount: 2_000, edgeCount: 0 });
+    // One page whose kept share alone is one byte over the limit every timeline consumer shares.
+    const heavy = { ...session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE), serializedBytes: EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT + 1 };
+    const loaded = await loadLinkedItems({
+      status: session.status(),
+      initialPage: heavy,
+      wantedIds: new Set(session.items.map((item) => (item.origin as { stableId: string }).stableId)),
+      isCancelled: never,
+      deps: session.deps(),
+    });
+    expect(loaded.stoppedBy).toBe("budget");
+    expect(session.timelineCalls).toEqual([]);
+    // And just under the limit it goes on reading.
+    const light = { ...session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE), serializedBytes: EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT / 2 };
+    const more = await loadLinkedItems({
+      status: session.status(),
+      initialPage: light,
+      wantedIds: ids(5),
+      isCancelled: never,
+      deps: session.deps(),
+    });
+    expect(more.stoppedBy).toBeNull();
+  });
+
   it("estimates kept bytes from the share of each page that was kept", async () => {
     const session = new FakeSession({ itemCount: 1_000, edgeCount: 0 });
     const loaded = await loadLinkedItems({
       status: session.status(),
-      initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+      initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
       wantedIds: ids(1, 2, 3, 4),
       isCancelled: never,
       deps: session.deps(),
@@ -663,7 +672,7 @@ describe("loadLinkedItems", () => {
     const session = new FakeSession({ itemCount: 5_000, edgeCount: 0 });
     const loaded = await loadLinkedItems({
       status: session.status(),
-      initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+      initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
       wantedIds: new Set(),
       isCancelled: never,
       deps: session.deps(),
@@ -697,7 +706,7 @@ describe("loadLinkedItems", () => {
     const progress = vi.fn();
     await loadLinkedItems({
       status: session.status(),
-      initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+      initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
       wantedIds: ids(5),
       isCancelled: never,
       onProgress: progress,
@@ -717,7 +726,7 @@ describe("loadLinkedItems", () => {
     const deps = session.deps();
     const run = loadLinkedItems({
       status: session.status(),
-      initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+      initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
       wantedIds: ids(5),
       isCancelled: () => cancelled,
       deps: {
@@ -738,7 +747,7 @@ describe("loadLinkedItems", () => {
     await expect(
       loadLinkedItems({
         status: session.status(),
-        initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+        initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
         wantedIds: ids(5),
         isCancelled: () => true,
         deps: session.deps(),
@@ -756,7 +765,7 @@ describe("loadLinkedItems", () => {
       session.failTimeline.set(0, tamper);
       const loaded = await loadLinkedItems({
         status: session.status(),
-        initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+        initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
         wantedIds: ids(5, 1_200),
         isCancelled: never,
         deps: session.deps(),
@@ -772,7 +781,7 @@ describe("loadLinkedItems", () => {
     session.failTimeline.set(1, (page) => ({ ...page, nextOffset: null, items: page.items.slice(0, 10) }));
     const loaded = await loadLinkedItems({
       status: session.status(),
-      initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+      initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
       wantedIds: ids(5),
       isCancelled: never,
       deps: session.deps(),
@@ -786,7 +795,7 @@ describe("loadLinkedItems", () => {
     session.failTimeline.set(0, (page) => ({ ...page, nextOffset: page.offset }));
     const loaded = await loadLinkedItems({
       status: session.status(),
-      initialPage: session.page(0, CORRELATION_TIMELINE_PAGE_SIZE),
+      initialPage: session.page(0, EVENT_LOG_TIMELINE_PAGE_SIZE),
       wantedIds: ids(5),
       isCancelled: never,
       deps: session.deps(),

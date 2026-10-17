@@ -20,9 +20,9 @@
  * - Each total comes from the reply it arrived with. A reply for another session or revision, or
  *   for another offset, stops the load and is reported; it is never merged.
  * - Cancellation is checked before every call and after every reply.
- * - A failed page is retried as the unified timeline retries (`CORRELATION_RETRY_LIMIT` more tries,
+ * - A failed page is retried as the unified timeline retries (`EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT` more tries,
  *   100 ms doubling), then the load stops with what it has and says it is incomplete.
- * - What was kept is bounded (`CORRELATION_RETAINED_BYTE_LIMIT` by default). Past the bound the
+ * - What was kept is bounded (`EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT` by default). Past the bound the
  *   scan stops and reports `stoppedBy: "budget"`; it never claims to be complete.
  */
 import {
@@ -32,7 +32,11 @@ import {
   type EventLogAnalysisSessionStatus,
   type EventLogAnalysisTimelinePage,
 } from "../../lib/commands";
-import { EVENT_LOG_ANALYSIS_PAGE_SIZE } from "./event-analysis-session";
+import {
+  EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT,
+  EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT,
+  EVENT_LOG_TIMELINE_PAGE_SIZE,
+} from "./evtx-timeline-paging";
 import {
   timelineOriginId,
   type TimelineCorrelationEdge,
@@ -41,16 +45,6 @@ import {
 
 /** The most rows one call can return (`MAX_ANALYSIS_TIMELINE_PAGE_ITEMS` in analysis_session.rs). */
 export const CORRELATION_EDGE_PAGE_SIZE = 1_000;
-/** Items per page of the scan: the page size the first page was requested with. */
-export const CORRELATION_TIMELINE_PAGE_SIZE = EVENT_LOG_ANALYSIS_PAGE_SIZE;
-/**
- * Tries after the first for a failed page, and the byte bound on what a scan keeps. They equal
- * `EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT` and `EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT` in
- * UnifiedTimelineView.tsx, which this module does not import because that component pulls in the
- * store; a test pins the equality.
- */
-export const CORRELATION_RETRY_LIMIT = 2;
-export const CORRELATION_RETAINED_BYTE_LIMIT = 24 * 1024 * 1024;
 
 export interface CorrelationLoadDeps {
   queryTimelinePage: (
@@ -127,7 +121,7 @@ async function withRetry<T>(
     } catch (error) {
       if (error instanceof CorrelationLoadCancelled) throw error;
       if (isCancelled()) throw new CorrelationLoadCancelled();
-      if (attempt >= CORRELATION_RETRY_LIMIT) throw error;
+      if (attempt >= EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT) throw error;
       await sleep(100 * 2 ** attempt);
     }
   }
@@ -288,7 +282,7 @@ export async function loadLinkedItems(
   if (wantedIds.size === 0) return empty(true);
 
   const deps = { ...DEFAULT_CORRELATION_LOAD_DEPS, ...input.deps };
-  const byteBudget = input.byteBudget ?? CORRELATION_RETAINED_BYTE_LIMIT;
+  const byteBudget = input.byteBudget ?? EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT;
   const items: TimelineItem[] = [];
   let scannedItems = 0;
   let retainedBytes = 0;
@@ -328,7 +322,7 @@ export async function loadLinkedItems(
     let page: EventLogAnalysisTimelinePage;
     try {
       page = await withRetry(
-        () => deps.queryTimelinePage(status.sessionId, at, CORRELATION_TIMELINE_PAGE_SIZE),
+        () => deps.queryTimelinePage(status.sessionId, at, EVENT_LOG_TIMELINE_PAGE_SIZE),
         isCancelled,
         deps.sleep,
       );

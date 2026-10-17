@@ -11,6 +11,11 @@ import { useUiStore } from "../../stores/ui-store";
 import { formatEventTime } from "./evtx-time";
 import { useEvtxStore } from "./evtx-store";
 import {
+  EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT,
+  EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT,
+  EVENT_LOG_TIMELINE_PAGE_SIZE,
+} from "./evtx-timeline-paging";
+import {
   isEventOrigin,
   originContext,
   originDetail,
@@ -22,10 +27,14 @@ import {
 } from "./unified-timeline";
 
 const UNPLACED_PREVIEW_LIMIT = 100;
-export const EVENT_LOG_TIMELINE_PAGE_SIZE = 1_000;
 export const EVENT_LOG_TIMELINE_CACHE_RADIUS = 1;
-export const EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT = 24 * 1024 * 1024;
-export const EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT = 2;
+// Defined once in evtx-timeline-paging.ts, which the correlation load imports too; re-exported so
+// this component's callers and tests keep their import.
+export {
+  EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT,
+  EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT,
+  EVENT_LOG_TIMELINE_PAGE_SIZE,
+};
 
 export interface TimelinePageCacheSegment {
   items: TimelineItem[];

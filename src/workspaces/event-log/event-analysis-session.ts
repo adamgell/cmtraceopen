@@ -13,11 +13,13 @@ import {
   type EventLogAnalysisSessionStatus,
   type EventLogAnalysisTimelinePage,
 } from "../../lib/commands";
+import { EVENT_LOG_TIMELINE_PAGE_SIZE } from "./evtx-timeline-paging";
 import type { DiagnosisSummary, EvtxCoverageGap, EvtxRecord } from "./types";
 
 export const EVENT_LOG_ANALYSIS_CHUNK_RECORD_LIMIT = 1_000;
 export const EVENT_LOG_ANALYSIS_CHUNK_BYTE_LIMIT = 8 * 1024 * 1024;
-export const EVENT_LOG_ANALYSIS_PAGE_SIZE = 1_000;
+/** The first page is requested with the page size every later timeline page uses. */
+export const EVENT_LOG_ANALYSIS_PAGE_SIZE = EVENT_LOG_TIMELINE_PAGE_SIZE;
 export const EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT = 256;
 export const EVENT_LOG_ANALYSIS_MESSAGE_BYTE_LIMIT = 8 * 1024;
 
