@@ -38,6 +38,7 @@ import {
   timelineOriginId,
   type TimelineItem,
   type TimelineOrigin,
+  type UnplacedItem,
 } from "./unified-timeline";
 
 type EventOrigin = Extract<TimelineOrigin, { kind: "event" }>;
@@ -51,6 +52,28 @@ export function itemsByOriginId(
     const id = timelineOriginId(item.origin);
     if (!byId.has(id)) byId.set(id, item);
   }
+  return byId;
+}
+
+/** Timeline origins by the origin id the edges name them with. */
+export type OriginLookup = ReadonlyMap<string, TimelineOrigin>;
+
+/**
+ * Every origin the session gave us, by id: the placed items AND the unplaced ones. The engine
+ * correlates unplaced origins too (an event with no parseable timestamp can share an ActivityId
+ * with a timed one), so a member that has no item can still be an unplaced origin whose record is
+ * loaded. A placed item wins over an unplaced one with the same id.
+ */
+export function originLookup(
+  items: readonly TimelineItem[],
+  unplaced: readonly UnplacedItem[],
+): Map<string, TimelineOrigin> {
+  const byId = new Map<string, TimelineOrigin>();
+  for (const entry of unplaced) {
+    const id = timelineOriginId(entry.origin);
+    if (!byId.has(id)) byId.set(id, entry.origin);
+  }
+  for (const item of items) byId.set(timelineOriginId(item.origin), item.origin);
   return byId;
 }
 
@@ -165,27 +188,31 @@ export interface ChainScopeOptions {
 /**
  * The loaded records a chain's event members name, and what could not be resolved.
  *
- * Every member is one reference. A member with no timeline item (it was never placed, or its item
- * was not loaded) has no origin to match, so it is one reference that names no loaded record. A
- * member whose record has no usable identity is counted apart and gets no reference, as in
- * `scopeForFinding`. Text-log members are not grid records and are not counted.
+ * Every member, placed or not, is looked up in `origins` (the placed items and the unplaced
+ * origins). One with an origin is one reference: it names zero, one or several loaded records, or
+ * has no usable identity and is counted apart without a reference, as in `scopeForFinding`. A
+ * member with NO origin at all (its item was not read, and it is not on the unplaced list) is
+ * UNRESOLVED: nothing is known about which record it names, so it is counted in its own class and
+ * is never called "not loaded", which is an absence found by looking. Text-log members are not
+ * grid records and are not counted.
  */
 export function scopeForChain(
   chain: Pick<CorrelationChain, "memberIds" | "unresolvedMemberIds">,
-  itemsById: ReadonlyMap<string, TimelineItem>,
+  origins: OriginLookup,
   index: EvidenceIndex,
   options: ChainScopeOptions,
 ): ChainScope {
   const records = new Set<EvtxRecord>();
   const references: EvtxRecord[][] = [];
   let noUsableIdentity = 0;
-  for (const memberId of chain.memberIds) {
-    const item = itemsById.get(memberId);
-    if (item === undefined) {
-      references.push([]);
+  let unresolved = 0;
+  for (const memberId of new Set([...chain.memberIds, ...chain.unresolvedMemberIds])) {
+    const origin = origins.get(memberId);
+    if (origin === undefined) {
+      unresolved += 1;
       continue;
     }
-    const resolution = resolveOriginRecords(item.origin, index);
+    const resolution = resolveOriginRecords(origin, index);
     if (resolution.kind === "notEvent") continue;
     if (resolution.kind === "noUsableIdentity") {
       noUsableIdentity += 1;
@@ -194,7 +221,6 @@ export function scopeForChain(
     references.push([...resolution.records]);
     for (const record of resolution.records) records.add(record);
   }
-  for (let i = 0; i < chain.unresolvedMemberIds.length; i += 1) references.push([]);
   return {
     records: [...records],
     references,
@@ -202,6 +228,7 @@ export function scopeForChain(
       references,
       noUsableIdentity,
       !options.edgeInputComplete,
+      unresolved,
     ),
   };
 }
@@ -247,7 +274,7 @@ export interface RecordLinkCounts {
  */
 export function linkCountsByRecord(
   partnerCounts: ReadonlyMap<string, number>,
-  itemsById: ReadonlyMap<string, TimelineItem>,
+  origins: OriginLookup,
   index: EvidenceIndex,
 ): RecordLinkCounts {
   const counts = new Map<EvtxRecord, number>();
@@ -255,9 +282,8 @@ export function linkCountsByRecord(
   let ambiguousOrigins = 0;
   for (const [originId, partners] of partnerCounts) {
     if (partners <= 0) continue;
-    const item = itemsById.get(originId);
-    const resolution =
-      item === undefined ? undefined : resolveOriginRecords(item.origin, index);
+    const origin = origins.get(originId);
+    const resolution = origin === undefined ? undefined : resolveOriginRecords(origin, index);
     if (resolution?.kind !== "matches" || resolution.records.length === 0) {
       unmatchedOrigins += 1;
     } else if (resolution.records.length > 1) {

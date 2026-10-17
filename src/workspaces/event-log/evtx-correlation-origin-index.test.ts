@@ -12,7 +12,7 @@ import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session
 import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import { buildCorrelationChains } from "./evtx-correlation-chains";
 import {
-  itemsByOriginId,
+  originLookup,
   linkCountsByRecord,
   linkPartnerCounts,
   originIdentityText,
@@ -358,7 +358,7 @@ describe("scopeForChain", () => {
     expect(chain.strength).toBe("exact");
     const scope = scopeForChain(
       chain,
-      itemsByOriginId(pairs.map((pair) => pair.item)),
+      originLookup(pairs.map((pair) => pair.item), []),
       indexOf(pairs.map((pair) => pair.source)),
       { edgeInputComplete: model.edgeInputComplete },
     );
@@ -372,7 +372,7 @@ describe("scopeForChain", () => {
     const b = fixturePair(2);
     const scope = scopeForChain(
       { memberIds: [rid(1), rid(2)], unresolvedMemberIds: [] },
-      itemsByOriginId([a.item, b.item]),
+      originLookup([a.item, b.item], []),
       indexOf([a.source, b.source]),
       { edgeInputComplete: true },
     );
@@ -383,7 +383,7 @@ describe("scopeForChain", () => {
   it("marks the scope bounded when edges were not all loaded, and not otherwise", () => {
     const a = fixturePair(1);
     const chain = { memberIds: [rid(1)], unresolvedMemberIds: [] };
-    const items = itemsByOriginId([a.item]);
+    const items = originLookup([a.item], []);
     const index = indexOf([a.source]);
     expect(scopeForChain(chain, items, index, { edgeInputComplete: false }).counts.bounded).toBe(true);
     expect(scopeForChain(chain, items, index, { edgeInputComplete: true }).counts.bounded).toBe(false);
@@ -394,7 +394,7 @@ describe("scopeForChain", () => {
     const b = fixturePair(2);
     const scope = scopeForChain(
       { memberIds: [rid(1), rid(2)], unresolvedMemberIds: [] },
-      itemsByOriginId([a.item, b.item]),
+      originLookup([a.item, b.item], []),
       indexOf([a.source]),
       { edgeInputComplete: true },
     );
@@ -408,7 +408,7 @@ describe("scopeForChain", () => {
     const twin = record(1, { eventId: 101 });
     const scope = scopeForChain(
       { memberIds: [rid(1)], unresolvedMemberIds: [] },
-      itemsByOriginId([a.item]),
+      originLookup([a.item], []),
       indexOf([a.source, twin]),
       { edgeInputComplete: true },
     );
@@ -423,7 +423,7 @@ describe("scopeForChain", () => {
     const b = fixturePair(2);
     const scope = scopeForChain(
       { memberIds: ["u", rid(2)], unresolvedMemberIds: [] },
-      itemsByOriginId([itemOf(origin), b.item]),
+      originLookup([itemOf(origin), b.item], []),
       indexOf([unnumbered, b.source]),
       { edgeInputComplete: true },
     );
@@ -432,17 +432,80 @@ describe("scopeForChain", () => {
     expect(scope.counts).toMatchObject({ noUsableIdentity: 1, notLoaded: 0 });
   });
 
-  it("counts each member with no item as a reference that names no loaded record", () => {
+  it("counts a member with no origin as unresolved, never as not loaded, and does not look for its record", () => {
     const a = fixturePair(1);
+    const stranger = fixturePair(8);
     const scope = scopeForChain(
       { memberIds: [rid(1)], unresolvedMemberIds: [rid(8), rid(9)] },
-      itemsByOriginId([a.item]),
-      indexOf([a.source]),
+      originLookup([a.item], []),
+      // Record 8 IS loaded, but nothing says that member 8 names it: its item was not read.
+      indexOf([a.source, stranger.source]),
       { edgeInputComplete: true },
     );
     expect(scope.records).toEqual([a.source]);
-    expect(scope.references).toEqual([[a.source], [], []]);
-    expect(scope.counts.notLoaded).toBe(2);
+    expect(scope.references).toEqual([[a.source]]);
+    expect(scope.counts).toEqual({
+      notLoaded: 0,
+      noUsableIdentity: 0,
+      ambiguous: 0,
+      bounded: false,
+      unresolved: 2,
+    });
+  });
+
+  it("resolves an untimed member through the unplaced origins, so a loaded record is in the scope", () => {
+    const a = fixturePair(1);
+    const untimed = fixturePair(2);
+    const scope = scopeForChain(
+      { memberIds: [rid(1)], unresolvedMemberIds: [rid(2)] },
+      originLookup([a.item], [{ origin: untimed.item.origin, reason: "missingTimestamp" }]),
+      indexOf([a.source, untimed.source]),
+      { edgeInputComplete: true },
+    );
+    expect(scope.records).toEqual([a.source, untimed.source]);
+    expect(scope.references).toEqual([[a.source], [untimed.source]]);
+    expect(scope.counts).toEqual({ notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false });
+  });
+
+  it("still reports an untimed member whose record is not loaded as not loaded: its identity is known", () => {
+    const a = fixturePair(1);
+    const untimed = fixturePair(2);
+    const scope = scopeForChain(
+      { memberIds: [rid(1)], unresolvedMemberIds: [rid(2)] },
+      originLookup([a.item], [{ origin: untimed.item.origin, reason: "missingTimestamp" }]),
+      indexOf([a.source]),
+      { edgeInputComplete: true },
+    );
+    expect(scope.references).toEqual([[a.source], []]);
+    expect(scope.counts).toMatchObject({ notLoaded: 1 });
+    expect(scope.counts.unresolved).toBeUndefined();
+  });
+
+  it("counts every member as unresolved when the scan read nothing, and never as not loaded", () => {
+    const a = fixturePair(1);
+    const b = fixturePair(2);
+    const scope = scopeForChain(
+      // The scan stopped at the byte budget before reading either item.
+      { memberIds: [], unresolvedMemberIds: [rid(1), rid(2)] },
+      originLookup([], []),
+      indexOf([a.source, b.source]),
+      { edgeInputComplete: true },
+    );
+    expect(scope.records).toEqual([]);
+    expect(scope.references).toEqual([]);
+    expect(scope.counts.notLoaded).toBe(0);
+    expect(scope.counts.unresolved).toBe(2);
+  });
+
+  it("counts a placed member whose item is missing from the lookup the same way", () => {
+    const a = fixturePair(1);
+    const scope = scopeForChain(
+      { memberIds: [rid(1), rid(2)], unresolvedMemberIds: [] },
+      originLookup([a.item], []),
+      indexOf([a.source]),
+      { edgeInputComplete: true },
+    );
+    expect(scope.counts).toMatchObject({ notLoaded: 0, unresolved: 1 });
   });
 
   it("does not count a text-log member, which is not a grid record", () => {
@@ -460,7 +523,7 @@ describe("scopeForChain", () => {
     const logId = timelineOriginId(log.origin);
     const scope = scopeForChain(
       { memberIds: [rid(1), logId], unresolvedMemberIds: [] },
-      itemsByOriginId([a.item, log]),
+      originLookup([a.item, log], []),
       indexOf([a.source]),
       { edgeInputComplete: true },
     );
@@ -502,7 +565,7 @@ describe("a chain scope applied to the store keeps its by-reference counts (6a r
     const ghost = record(2, { eventId: 102, sourceLabel: "Live" });
     const scope = scopeForChain(
       { memberIds: [rid(1), rid(2)], unresolvedMemberIds: [] },
-      itemsByOriginId([a.item, b.item]),
+      originLookup([a.item, b.item], []),
       indexOf([a.source, b.source, twin, ghost]),
       { edgeInputComplete: true },
     );
@@ -527,7 +590,7 @@ describe("a chain scope applied to the store keeps its by-reference counts (6a r
     const ghost = record(2, { eventId: 102 });
     const scope = scopeForChain(
       { memberIds: [rid(1), rid(2)], unresolvedMemberIds: [] },
-      itemsByOriginId([a.item, b.item]),
+      originLookup([a.item, b.item], []),
       indexOf([a.source, b.source, twin, ghost]),
       { edgeInputComplete: true },
     );
@@ -539,6 +602,22 @@ describe("a chain scope applied to the store keeps its by-reference counts (6a r
     });
     // The contrast that makes the references field load-bearing.
     expect(useEvtxStore.getState().recordScope?.counts.notLoaded).toBe(1);
+  });
+});
+
+describe("originLookup", () => {
+  it("holds the placed items' origins and the unplaced origins by id", () => {
+    const placed = fixturePair(1);
+    const unplaced = fixturePair(2);
+    const lookup = originLookup([placed.item], [{ origin: unplaced.item.origin, reason: "missingTimestamp" }]);
+    expect([...lookup.keys()].sort()).toEqual([rid(1), rid(2)]);
+    expect(lookup.get(rid(2))).toBe(unplaced.item.origin);
+  });
+
+  it("lets a placed item win over an unplaced origin with the same id", () => {
+    const placed = fixturePair(1);
+    const twin = { origin: { ...placed.item.origin, provider: "Other" } as TimelineOrigin, reason: "missingTimestamp" as const };
+    expect(originLookup([placed.item], [twin]).get(rid(1))).toBe(placed.item.origin);
   });
 });
 
@@ -653,7 +732,7 @@ describe("linkCountsByRecord", () => {
     ]);
     const result = linkCountsByRecord(
       partners,
-      itemsByOriginId([a.item, b.item, c.item]),
+      originLookup([a.item, b.item, c.item], []),
       indexOf([a.source, b.source, c.source]),
     );
     expect(result.counts.get(a.source)).toBe(2);
@@ -669,7 +748,7 @@ describe("linkCountsByRecord", () => {
     const b = fixturePair(2);
     const result = linkCountsByRecord(
       linkPartnerCounts([{ left: rid(1), right: rid(2) }]),
-      itemsByOriginId([a.item, b.item]),
+      originLookup([a.item, b.item], []),
       indexOf([a.source, twin, b.source]),
     );
     expect(result.counts.has(a.source)).toBe(false);
@@ -690,7 +769,7 @@ describe("linkCountsByRecord", () => {
         { left: rid(1), right: "no-id" },
         { left: rid(1), right: "log|1:a|1:b|1|1" },
       ]),
-      itemsByOriginId([a.item, noIdentity]),
+      originLookup([a.item, noIdentity], []),
       indexOf([a.source]),
     );
     expect(result.counts.get(a.source)).toBe(3);
