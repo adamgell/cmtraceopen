@@ -969,6 +969,9 @@ export function EvtxGroupedView({ records, nowEpoch }: EvtxGroupedViewProps) {
   const sourceManifest = useEvtxStore((s) => s.sourceManifest);
   const coverageGaps = useEvtxStore((s) => s.coverageGaps);
   const tailCoverageGaps = useEvtxStore((s) => s.tailCoverageGaps);
+  const selectedChannels = useEvtxStore((s) => s.selectedChannels);
+  const loadedChannels = useEvtxStore((s) => s.loadedChannels);
+  const channelReadThrough = useEvtxStore((s) => s.channelReadThrough);
   const setFilterEventIds = useEvtxStore((s) => s.setFilterEventIds);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
   const setSelectedRecordId = useEvtxStore((s) => s.setSelectedRecordId);
@@ -979,7 +982,7 @@ export function EvtxGroupedView({ records, nowEpoch }: EvtxGroupedViewProps) {
   const theme = useMemo(() => getThemeById(themeId), [themeId]);
   const palette = useMemo(() => buildGroupedPalette(theme), [theme]);
 
-  const channelRead = useMemo(
+  const channelReads = useMemo(
     () =>
       classifyChannelReads({
         remoteMachine,
@@ -992,6 +995,15 @@ export function EvtxGroupedView({ records, nowEpoch }: EvtxGroupedViewProps) {
       }),
     [remoteMachine, channels, coverageDetails, sourceManifest, coverageGaps, tailCoverageGaps],
   );
+  // The channels the visible records can come from: selected and loaded in live mode; a file set
+  // is read as it is opened, so there every selected channel.
+  const scopeChannels = useMemo(
+    () =>
+      sourceMode === "live"
+        ? [...selectedChannels].filter((channel) => loadedChannels.has(channel))
+        : [...selectedChannels],
+    [sourceMode, selectedChannels, loadedChannels],
+  );
   const field = groupedViewField(groupBy);
   const input = useMemo<GroupSummariesInput>(
     () => ({
@@ -1002,7 +1014,9 @@ export function EvtxGroupedView({ records, nowEpoch }: EvtxGroupedViewProps) {
       timeWindow,
       nowMs: nowEpoch,
       sourceMode,
-      channelRead,
+      channelReads,
+      scopeChannels,
+      readThrough: channelReadThrough,
     }),
     [
       records,
@@ -1012,7 +1026,9 @@ export function EvtxGroupedView({ records, nowEpoch }: EvtxGroupedViewProps) {
       timeWindow,
       nowEpoch,
       sourceMode,
-      channelRead,
+      channelReads,
+      scopeChannels,
+      channelReadThrough,
     ],
   );
   const settled = useSettledValue(input, GROUPED_DEBOUNCE_MS);

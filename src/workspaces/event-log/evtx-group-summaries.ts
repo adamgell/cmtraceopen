@@ -8,11 +8,13 @@
  * without this phase editing a module another phase is changing.
  *
  * Evidence rule for the trend (soul.md): a bin holding events shows their count, which is
- * evidence. An empty bin is 0 only when every channel the group's events came from was read
- * across the whole bin; otherwise it is `null`, unknown, and must not be drawn as zero. What
- * "read" means comes from the coverage the store holds (see `classifyChannelReads`).
+ * evidence. An empty bin is 0 only when every channel in the visible scope (and any channel the
+ * group's events came from) was read across the whole bin; otherwise it is `null`, unknown, and
+ * must not be drawn as zero. What "read" means comes from the coverage the store holds
+ * (`classifyChannelReads`), each live load's read time (`readThrough`) and, for files, each file's
+ * own run of events (`channelReadSpans`). Records never extend a live read.
  *
- * Nothing here reads a clock; the caller passes `nowMs`.
+ * Nothing here reads a clock; the caller passes `nowMs` and the read times.
  */
 import { formatCoverageGap } from "./evtx-coverage";
 import { buildGroupedRows, type EvtxGroupField } from "./evtx-filter";
@@ -120,10 +122,11 @@ interface SourcedReason {
   kind: EvtxCoverageGapKind | null;
 }
 
-function parseGapString(text: string): SourcedReason | null {
+/** A gap string as "source: reason". One with no source keeps an empty source. */
+function parseGapString(text: string): SourcedReason {
   const message = text.trim();
   const separator = message.indexOf(": ");
-  if (separator <= 0) return null;
+  if (separator <= 0) return { source: "", reason: message, kind: null };
   return {
     source: message.slice(0, separator).trim(),
     reason: message.slice(separator + 2).trim(),
@@ -132,31 +135,51 @@ function parseGapString(text: string): SourcedReason | null {
 }
 
 /**
+ * A single event log file (an `.evtx`, a rotated `.evtx.N`, or such a member of an archive). A gap
+ * on one that no channel claims is a file that never opened: none of its events are loaded and no
+ * channel in the view stands for it, so it is outside the visible scope.
+ */
+const EVENT_LOG_FILE = /\.evtx(?:\.\d+)?$/i;
+
+/** The coverage the store holds, read per channel. */
+export interface ChannelReads {
+  kind: (channel: string) => ChannelReadKind;
+  /**
+   * True when a gap that says events may be missing names no channel: a coalesced summary such as
+   * `<coverage>` or `<live tail coverage>`, a folder, a pattern, or no source at all. Which
+   * channel it hides is unknown, so no empty bin anywhere can be called read.
+   */
+  unattributedLoss: boolean;
+}
+
+/**
  * Reads the store's coverage into a per-channel answer. A gap belongs to a channel when its source
  * is the channel's name, "machine/channel" for a remote query, or the path of a file the channel
- * was read from. A gap no channel claims concerns a source with no loaded events, so no group's
- * trend depends on it (the coverage banner still reports it).
+ * was read from. A loss on a source no channel claims sets `unattributedLoss`, except for a single
+ * event log file that never opened (see `EVENT_LOG_FILE`).
+ *
+ * A loss wins over the bound whatever order the gaps come in: the store writes a loss line before
+ * the bound's note, and structured gaps are read before strings.
  */
-export function classifyChannelReads(input: ChannelReadInput): (channel: string) => ChannelReadKind {
+export function classifyChannelReads(input: ChannelReadInput): ChannelReads {
+  const channelNames = new Set(input.channels.map((channel) => channel.name));
   const channelsBySource = new Map<string, Set<string>>();
-  const claim = (source: string, channel: string) => {
-    const owners = channelsBySource.get(source);
-    if (owners) owners.add(channel);
-    else channelsBySource.set(source, new Set([channel]));
-  };
   for (const channel of input.channels) {
     if (typeof channel.sourceType === "object" && "file" in channel.sourceType) {
-      claim(channel.sourceType.file.path, channel.name);
+      const path = channel.sourceType.file.path;
+      const owners = channelsBySource.get(path);
+      if (owners) owners.add(channel.name);
+      else channelsBySource.set(path, new Set([channel.name]));
     }
   }
   const remotePrefix = input.remoteMachine ? `${input.remoteMachine}/` : null;
-  const ownersOf = (source: string): Iterable<string> => {
+  const ownersOf = (source: string): Set<string> => {
     const owners = new Set(channelsBySource.get(source) ?? []);
-    owners.add(
+    const name =
       remotePrefix !== null && source.startsWith(remotePrefix)
         ? source.slice(remotePrefix.length)
-        : source,
-    );
+        : source;
+    if (channelNames.has(name)) owners.add(name);
     return owners;
   };
 
@@ -171,11 +194,11 @@ export function classifyChannelReads(input: ChannelReadInput): (channel: string)
     ...structured.map(({ source, kind, reason }) => ({ source, kind, reason })),
     ...[...input.legacyCoverage, ...input.tailCoverage]
       .filter((text) => !twins.has(text.trim()))
-      .map(parseGapString)
-      .filter((gap): gap is SourcedReason => gap !== null),
+      .map(parseGapString),
   ];
 
   const kinds = new Map<string, ChannelReadKind>();
+  let unattributedLoss = false;
   for (const gap of gaps) {
     let kind: ChannelReadKind | null;
     if (gap.kind !== null) {
@@ -186,11 +209,16 @@ export function classifyChannelReads(input: ChannelReadInput): (channel: string)
       kind = NEUTRAL_REASON.test(gap.reason) ? null : "incomplete";
     }
     if (kind === null) continue;
-    for (const channel of ownersOf(gap.source)) {
+    const owners = ownersOf(gap.source);
+    if (owners.size === 0) {
+      if (!EVENT_LOG_FILE.test(gap.source)) unattributedLoss = true;
+      continue;
+    }
+    for (const channel of owners) {
       if (kinds.get(channel) !== "incomplete") kinds.set(channel, kind);
     }
   }
-  return (channel) => kinds.get(channel) ?? "complete";
+  return { kind: (channel) => kinds.get(channel) ?? "complete", unattributedLoss };
 }
 
 // ── Summaries ───────────────────────────────────────────────────────────────
@@ -238,7 +266,15 @@ export interface GroupSummariesInput {
   /** The workspace clock snapshot: a finite window ends here. */
   nowMs: number;
   sourceMode: "files" | "live" | null;
-  channelRead: (channel: string) => ChannelReadKind;
+  channelReads: ChannelReads;
+  /**
+   * The channels the visible records can come from: the selected channels that are loaded (live)
+   * or the selected channels of the file set. An empty bin is 0 only where every one of them was
+   * read across the whole bin, whatever channels the group's own events came from.
+   */
+  scopeChannels: readonly string[];
+  /** Live: per channel, the instant its current load read through (`channelReadThrough`). */
+  readThrough: ReadonlyMap<string, number>;
 }
 
 export interface GroupSummariesResult {
@@ -270,49 +306,102 @@ interface Interval {
   endMs: number;
 }
 
+/** The union of `intervals` as disjoint intervals, earliest first. Overlapping ones merge. */
+function union(intervals: Iterable<Interval>): Interval[] {
+  const sorted = [...intervals].sort((a, b) => a.startMs - b.startMs);
+  const merged: Interval[] = [];
+  for (const interval of sorted) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && interval.startMs <= last.endMs) {
+      last.endMs = Math.max(last.endMs, interval.endMs);
+    } else {
+      merged.push({ ...interval });
+    }
+  }
+  return merged;
+}
+
 /**
- * The time each channel was read across, or null where nothing about its empty bins is known.
+ * The times each channel was read across, or null where nothing about its empty bins is known.
  *
- * It ends at the channel's newest loaded event in every mode. The store keeps no time for a
- * channel's last read, and the records changing is no proof either: loading another channel or a
- * tail batch for another channel changes them too. So nothing after a channel's newest event is
- * claimed, and a quiet channel's latest bins are left unknown rather than shown as zero.
+ * Live: one interval ending where the channel's current load read through (`readThrough`), never
+ * at a record, so live-tail records never extend it. It starts at the window's start for a channel
+ * read whole under a time window (the query asked for the whole window), and at the channel's
+ * oldest kept event when the load kept the newest only or asked for no window. A channel with no
+ * read time was not read by a load this view knows of.
  *
- * It starts at the window's start for a live channel read whole under a time window (the query
- * asked for the whole window). Otherwise it starts at the channel's oldest event: a load that kept
- * the newest events only, a query with no window (what came before the oldest retained event is
- * unknown), and a file, which holds a contiguous run of events and nothing either side of it.
+ * Files: a file holds a contiguous run of events and nothing either side of it, so each file
+ * covers its own oldest to newest event, and a channel read from several files covers the union
+ * of those, never the hull: the time between two files was not read.
  */
-function channelIntervals(
+function channelReadSpans(
   input: GroupSummariesInput,
   span: TrendSpan,
-): (channel: string) => Interval | null {
-  const bounds = new Map<string, Interval>();
+): (channel: string) => readonly Interval[] | null {
+  const live = input.sourceMode === "live";
+  const oldest = new Map<string, number>();
+  const files = new Map<string, Map<string, Interval>>();
   for (const record of input.loadedRecords) {
     const at = placedMs(record);
     if (at === null) continue;
-    const known = bounds.get(record.channel);
-    if (known === undefined) bounds.set(record.channel, { startMs: at, endMs: at });
+    const known = oldest.get(record.channel);
+    if (known === undefined || at < known) oldest.set(record.channel, at);
+    if (live) continue;
+    let byFile = files.get(record.channel);
+    if (byFile === undefined) {
+      byFile = new Map();
+      files.set(record.channel, byFile);
+    }
+    const file = byFile.get(record.sourceLabel);
+    if (file === undefined) byFile.set(record.sourceLabel, { startMs: at, endMs: at });
     else {
-      if (at < known.startMs) known.startMs = at;
-      if (at > known.endMs) known.endMs = at;
+      if (at < file.startMs) file.startMs = at;
+      if (at > file.endMs) file.endMs = at;
     }
   }
-  const cache = new Map<string, Interval | null>();
-  return (channel) => {
-    const cached = cache.get(channel);
-    if (cached !== undefined) return cached;
-    const read = input.channelRead(channel);
-    const own = bounds.get(channel);
-    let interval: Interval | null = null;
-    if (read !== "incomplete" && own !== undefined) {
-      const fromWindowStart =
-        input.sourceMode === "live" && read === "complete" && input.timeWindow !== "all";
-      interval = { startMs: fromWindowStart ? span.startMs : own.startMs, endMs: own.endMs };
+  const cache = new Map<string, readonly Interval[] | null>();
+  const spansOf = (channel: string): readonly Interval[] | null => {
+    const read = input.channelReads.kind(channel);
+    if (read === "incomplete") return null;
+    if (!live) {
+      const byFile = files.get(channel);
+      return byFile === undefined ? null : union(byFile.values());
     }
-    cache.set(channel, interval);
-    return interval;
+    const end = input.readThrough.get(channel);
+    const start =
+      read === "complete" && input.timeWindow !== "all" ? span.startMs : oldest.get(channel);
+    return end === undefined || start === undefined ? null : [{ startMs: start, endMs: end }];
   };
+  return (channel) => {
+    if (!cache.has(channel)) cache.set(channel, spansOf(channel));
+    return cache.get(channel) ?? null;
+  };
+}
+
+/** Bin `bin`'s start and end on `span`. The end of the span belongs to the last bin. */
+function binBounds(span: TrendSpan, bin: number): Interval {
+  const width = (span.endMs - span.startMs) / GROUP_TREND_BINS;
+  return {
+    startMs: span.startMs + bin * width,
+    endMs: bin === GROUP_TREND_BINS - 1 ? span.endMs : span.startMs + (bin + 1) * width,
+  };
+}
+
+/** Per bin: true when every one of `channels` was read across the whole bin. */
+function binsRead(
+  span: TrendSpan,
+  channels: Iterable<string>,
+  spansOf: (channel: string) => readonly Interval[] | null,
+): boolean[] {
+  const list = [...channels];
+  return Array.from({ length: GROUP_TREND_BINS }, (_, bin) => {
+    const { startMs, endMs } = binBounds(span, bin);
+    return list.every((channel) =>
+      (spansOf(channel) ?? []).some(
+        (interval) => startMs >= interval.startMs && endMs <= interval.endMs,
+      ),
+    );
+  });
 }
 
 interface Bucket {
@@ -378,18 +467,28 @@ function newestFirst(a: EvtxRecord, b: EvtxRecord): number {
   return b.id - a.id;
 }
 
+/** Which bins of a group's trend were read: the scope's, narrowed by any channel outside it. */
+interface ReadBins {
+  span: TrendSpan;
+  scope: ReadonlySet<string>;
+  scopeRead: readonly boolean[];
+  spansOf: (channel: string) => readonly Interval[] | null;
+  /** True when nothing about any empty bin is known (`ChannelReads.unattributedLoss`). */
+  none: boolean;
+}
+
 function summarize(
   bucket: Bucket,
   field: EvtxGroupField,
   span: TrendSpan | null,
-  intervalOf: ((channel: string) => Interval | null) | null,
+  readBins: ReadBins | null,
 ): EvtxGroupSummary {
   let level: EvtxLevel = "Verbose";
   let lastSeenMs: number | null = null;
   let unplaced = 0;
   const eventIds = new Set<number>();
   const providers = new Set<string>();
-  const channels = new Set<string>();
+  const outsideScope = new Set<string>();
   const counts = new Array<number>(GROUP_TREND_BINS).fill(0);
   const width = span === null ? 0 : (span.endMs - span.startMs) / GROUP_TREND_BINS;
 
@@ -397,7 +496,7 @@ function summarize(
     if (LEVEL_RANK[record.level] < LEVEL_RANK[level]) level = record.level;
     eventIds.add(record.eventId);
     providers.add(record.provider);
-    channels.add(record.channel);
+    if (readBins !== null && !readBins.scope.has(record.channel)) outsideScope.add(record.channel);
     const at = placedMs(record);
     if (at !== null && (lastSeenMs === null || at > lastSeenMs)) lastSeenMs = at;
     if (at === null || span === null || at < span.startMs || at > span.endMs) {
@@ -408,26 +507,19 @@ function summarize(
     }
   }
 
-  // Known only where every channel the group's events came from was read.
-  let known: Interval | null = null;
-  if (span !== null && intervalOf !== null) {
-    known = { startMs: -Infinity, endMs: Infinity };
-    for (const channel of channels) {
-      const interval = intervalOf(channel);
-      if (interval === null) {
-        known = null;
-        break;
-      }
-      known.startMs = Math.max(known.startMs, interval.startMs);
-      known.endMs = Math.min(known.endMs, interval.endMs);
-    }
-  }
+  // An empty bin is 0 only where every channel in the visible scope, and any channel the group's
+  // events came from outside it, was read across the whole bin.
+  const read =
+    readBins === null || readBins.none
+      ? null
+      : outsideScope.size === 0
+        ? readBins.scopeRead
+        : binsRead(readBins.span, outsideScope, readBins.spansOf).map(
+            (known, bin) => known && readBins.scopeRead[bin],
+          );
   const trend: TrendBin[] = counts.map((count, bin) => {
     if (count > 0) return count;
-    if (span === null || known === null) return null;
-    const binStart = span.startMs + bin * width;
-    const binEnd = bin === GROUP_TREND_BINS - 1 ? span.endMs : span.startMs + (bin + 1) * width;
-    return binStart >= known.startMs && binEnd <= known.endMs ? 0 : null;
+    return read !== null && read[bin] ? 0 : null;
   });
 
   return {
@@ -458,9 +550,21 @@ function compareValues(field: EvtxGroupField, a: string, b: string): number {
  */
 export function buildGroupSummaries(input: GroupSummariesInput): GroupSummariesResult {
   const span = trendSpan(input);
-  const intervalOf = span === null ? null : channelIntervals(input, span);
+  let readBins: ReadBins | null = null;
+  if (span !== null) {
+    const spansOf = channelReadSpans(input, span);
+    const scope = new Set(input.scopeChannels);
+    const none = input.channelReads.unattributedLoss;
+    readBins = {
+      span,
+      scope,
+      spansOf,
+      none,
+      scopeRead: none ? [] : binsRead(span, scope, spansOf),
+    };
+  }
   const summaries = bucketsFor(input).map((bucket) =>
-    summarize(bucket, input.field, span, intervalOf),
+    summarize(bucket, input.field, span, readBins),
   );
   summaries.sort(
     (a, b) =>
