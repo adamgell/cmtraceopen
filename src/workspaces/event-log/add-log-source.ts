@@ -23,8 +23,9 @@
  *
  * The Log workspace's filter is cleared only after an add that took, as every open does. The
  * multi-file loader clears it itself, before it parses, so an add that then fails or takes nothing
- * gives it back. Both loaders stop the earlier tail before they parse, so an add that then fails
- * leaves the earlier log correlated but no longer live; nothing here can undo that.
+ * gives it back, but only when that clear is the one thing that happened to the filter meanwhile
+ * (`watchFilterClauses`). Both loaders stop the earlier tail before they parse, so an add that then
+ * fails leaves the earlier log correlated but no longer live; nothing here can undo that.
  */
 import { open } from "@tauri-apps/plugin-dialog";
 import { getBaseName } from "../../lib/file-paths";
@@ -218,6 +219,37 @@ function failed(request: string, reason: string, coverage: readonly string[] = [
 }
 
 /**
+ * Watches the Log filter's clauses across a multi-file load.
+ *
+ * `loadFilesAsLogSource` always clears the filter once, right after it takes the load generation
+ * and before it parses (unless a newer load has already taken over, which this add reports as
+ * cancelled and does not touch). So when the add did not take, exactly one change to the clauses
+ * means the loader's own clear was the only thing that happened to the filter, and the filter that
+ * was there can be given back. Any other change (a clear or a new filter by someone else, before or
+ * after the loader's) is a second change, and what was done deliberately is left alone. The clauses
+ * being empty says nothing: the loader leaves them empty, and so does a deliberate clear.
+ */
+function watchFilterClauses() {
+  const prior = useFilterStore.getState().clauses;
+  let changes = 0;
+  let latest = prior;
+  const stop = useFilterStore.subscribe((state, previous) => {
+    if (state.clauses !== previous.clauses) {
+      changes += 1;
+      latest = state.clauses;
+    }
+  });
+  return {
+    stop,
+    giveBackIfOnlyTheLoaderCleared() {
+      stop();
+      const filter = useFilterStore.getState();
+      if (changes === 1 && prior.length > 0 && filter.clauses === latest) filter.setClauses(prior);
+    },
+  };
+}
+
+/**
  * Asks for a file or folder and loads it as the store's active text-log source.
  *
  * Never throws: a failure is an outcome. The caller disables its control while this runs.
@@ -235,15 +267,26 @@ export async function addLogSource(kind: AddLogSourceKind): Promise<AddLogSource
   const refusal = refusalFor(paths);
   if (refusal !== null) return { status: "rejected", message: refusal };
 
-  const request = describeRequest(kind, paths);
+  // Only the multi-file loader clears the Log filter itself (before it parses); the single-file and
+  // folder loaders never do, so an add that fails there has nothing to give back.
+  const watch = kind === "file" && paths.length > 1 ? watchFilterClauses() : null;
+  try {
+    return await loadAndReport(kind, paths, () => watch?.giveBackIfOnlyTheLoaderCleared());
+  } finally {
+    watch?.stop();
+  }
+}
 
-  // loadFilesAsLogSource clears the Log filter before it parses, so an add that then fails, or
-  // takes nothing, would have discarded it. Give it back unless something has set another since.
-  const priorClauses = useFilterStore.getState().clauses;
-  const keepFilter = () => {
-    const filter = useFilterStore.getState();
-    if (priorClauses.length > 0 && filter.clauses.length === 0) filter.setClauses(priorClauses);
-  };
+/**
+ * Loads the selection and decides what the add did. `keepFilter` gives the Log filter back when the
+ * add did not take and the multi-file loader's own clear is all that happened to it.
+ */
+async function loadAndReport(
+  kind: AddLogSourceKind,
+  paths: readonly string[],
+  keepFilter: () => void,
+): Promise<AddLogSourceOutcome> {
+  const request = describeRequest(kind, paths);
 
   let folderResult: LoadLogSourceResult | null = null;
   let settled: boolean;
@@ -254,7 +297,7 @@ export async function addLogSource(kind: AddLogSourceKind): Promise<AddLogSource
     } else if (paths.length === 1) {
       settled = (await loadPathAsLogSource(paths[0], { fallbackToFolder: false })) !== null;
     } else {
-      settled = await loadFilesAsLogSource(paths);
+      settled = await loadFilesAsLogSource([...paths]);
     }
   } catch (error) {
     keepFilter();

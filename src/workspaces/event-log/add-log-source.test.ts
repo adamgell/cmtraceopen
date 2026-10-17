@@ -289,6 +289,51 @@ describe("the Log workspace's filter", () => {
       expect(useFilterStore.getState().clauses).toHaveLength(1);
     });
 
+    it("is still given back when the Log view only recomputed its rows meanwhile", async () => {
+      withFilter();
+      commands.parseFilesBatch.mockImplementationOnce(async () => {
+        // The shell recomputes filteredIds as entries change; the clauses are not touched.
+        useFilterStore.getState().setIsFiltering(true);
+        useFilterStore.getState().setFilteredIds(new Set([1, 2]));
+        useFilterStore.getState().setIsFiltering(false);
+        throw new Error("The parse service stopped.");
+      });
+      dialog.open.mockResolvedValue([A, B]);
+
+      await addLogSource("file");
+      expect(useFilterStore.getState().clauses).toHaveLength(1);
+    });
+
+    it("is not given back over a deliberate clear after the loader's own", async () => {
+      withFilter();
+      commands.parseFilesBatch.mockImplementationOnce(async () => {
+        // The user clears the Log filter while the parse runs. The clauses are empty, as they are
+        // after the loader's clear, and that is the case an emptiness check cannot tell apart.
+        useFilterStore.getState().clearFilter();
+        throw new Error("The parse service stopped.");
+      });
+      dialog.open.mockResolvedValue([A, B]);
+
+      await addLogSource("file");
+      expect(useFilterStore.getState().clauses).toEqual([]);
+    });
+
+    it("is not given back over a deliberate clear that came before the loader's", async () => {
+      withFilter();
+      // An earlier log is open, so the loader stops its tail first, and the user clears the filter
+      // while that runs: the loader's clear then finds nothing to clear.
+      useLogStore.setState({ openFilePath: "C:\\logs\\open.log", sourceOpenMode: "single-file" });
+      commands.stopTail.mockImplementationOnce(async () => {
+        useFilterStore.getState().clearFilter();
+      });
+      commands.parseFilesBatch.mockRejectedValueOnce(new Error("The parse service stopped."));
+      dialog.open.mockResolvedValue([A, B]);
+
+      await addLogSource("file");
+      expect(commands.stopTail).toHaveBeenCalled();
+      expect(useFilterStore.getState().clauses).toEqual([]);
+    });
+
     it("is not given back over a filter someone set since", async () => {
       withFilter();
       commands.parseFilesBatch.mockImplementationOnce(async () => {
@@ -311,6 +356,32 @@ describe("the Log workspace's filter", () => {
       expect((await addLogSource("file")).status).toBe("added");
       expect(useFilterStore.getState().clauses).toEqual([]);
     });
+  });
+
+  // The single-file and folder loaders never clear the filter, so there is nothing to give back,
+  // and a clear that someone made meanwhile is theirs.
+  it("is never given back after a single-file failure, whatever happened to it meanwhile", async () => {
+    withFilter();
+    commands.openLogSourceFile.mockImplementationOnce(async () => {
+      useFilterStore.getState().clearFilter();
+      throw new Error("The file is locked.");
+    });
+    dialog.open.mockResolvedValue([A]);
+
+    expect((await addLogSource("file")).status).toBe("failed");
+    expect(useFilterStore.getState().clauses).toEqual([]);
+  });
+
+  it("is never given back after a folder failure, whatever happened to it meanwhile", async () => {
+    withFilter();
+    commands.listLogSourceFolder.mockImplementationOnce(async () => {
+      useFilterStore.getState().clearFilter();
+      throw new Error("The folder could not be listed.");
+    });
+    dialog.open.mockResolvedValue("C:\\logs\\bundle");
+
+    expect((await addLogSource("folder")).status).toBe("failed");
+    expect(useFilterStore.getState().clauses).toEqual([]);
   });
 
   it("is left alone when the add leaves none of its files correlated", async () => {
