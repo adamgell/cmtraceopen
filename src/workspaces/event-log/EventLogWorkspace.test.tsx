@@ -969,6 +969,75 @@ describe("EventLogWorkspace fixtures", () => {
       expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
     });
 
+    it.each(["combobox", "textbox", "searchbox", "spinbutton"])(
+      "leaves the range alone while focus is in an element with the %s role",
+      (role) => {
+        renderWithRange();
+        const control = document.createElement("div");
+        control.setAttribute("role", role);
+        control.tabIndex = 0;
+        document.body.appendChild(control);
+        try {
+          control.focus();
+          expect(control).toHaveFocus();
+          expect(pressEscape(control)).toBe(true);
+          expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+        } finally {
+          control.remove();
+        }
+      },
+    );
+
+    it("leaves the range alone while focus is in a contenteditable element", () => {
+      renderWithRange();
+      const editor = document.createElement("div");
+      editor.setAttribute("contenteditable", "true");
+      // jsdom does not compute isContentEditable from the attribute, so state the property it reads.
+      Object.defineProperty(editor, "isContentEditable", { value: true });
+      document.body.appendChild(editor);
+      try {
+        expect(pressEscape(editor)).toBe(true);
+        expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+      } finally {
+        editor.remove();
+      }
+    });
+
+    it("clears the range when focus is in a button or a link, which are not for typing", () => {
+      renderWithRange();
+      const button = document.createElement("button");
+      document.body.appendChild(button);
+      try {
+        button.focus();
+        pressEscape(button);
+      } finally {
+        button.remove();
+      }
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+    });
+
+    it("leaves the range alone while a native dialog is open", () => {
+      renderWithRange();
+      const dialog = document.createElement("dialog");
+      dialog.setAttribute("open", "");
+      document.body.appendChild(dialog);
+      try {
+        expect(pressEscape()).toBe(true);
+        expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+      } finally {
+        dialog.remove();
+      }
+      // The same dialog closed (no open attribute) no longer holds the key.
+      const closed = document.createElement("dialog");
+      document.body.appendChild(closed);
+      try {
+        pressEscape();
+      } finally {
+        closed.remove();
+      }
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+    });
+
     it("leaves the range alone while a modal dialog is open", () => {
       renderWithRange();
       const dialog = document.createElement("div");
