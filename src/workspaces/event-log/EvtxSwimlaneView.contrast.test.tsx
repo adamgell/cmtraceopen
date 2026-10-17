@@ -186,6 +186,11 @@ function paintModel(container: HTMLElement, themeId: string): PaintModel {
 
 function renderBrushed(themeId: ThemeId) {
   useUiStore.setState({ themeId, logListFontSize: 13 });
+  // The records the lanes draw are the store's, under ids that are their indexes.
+  records.forEach((record, index) => {
+    record.id = index;
+  });
+  useEvtxStore.setState({ records: [...records] });
   const view = render(<EvtxSwimlaneView records={records} loading={false} />);
   const histogram = buildHistogram(records, "utc");
   act(() => {

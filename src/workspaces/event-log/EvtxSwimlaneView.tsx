@@ -79,6 +79,7 @@ import {
   describeLaneCount,
   describeSwimlaneFigure,
   findRecordInScene,
+  isCurrentRecord,
   laneHeightFor,
   laneLabelFonts,
   laneLabelLineHeights,
@@ -490,6 +491,7 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
 
   const setTimeRange = useEvtxStore((s) => s.setTimeRange);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
+  const storeRecords = useEvtxStore((s) => s.records);
   const descriptionId = useId();
   const [hover, setHover] = useState<DotHit | null>(null);
   const [focused, setFocused] = useState(false);
@@ -549,9 +551,11 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
     if (row === undefined) return;
     if (cursorLane.id !== row.id || cursorLane.index !== laneIndex) setCursorLane({ id: row.id, index: laneIndex });
   }, [view, laneIndex, cursorLane]);
+  // Only a record of the store's current set is rung: a scene is published up to one throttle window
+  // late, and after a reload inside it holds the previous set's objects, whose ids are other events'.
   const selectedAt = useMemo(
-    () => (ready ? findRecordInScene(view, selectedRecordId) : null),
-    [ready, view, selectedRecordId],
+    () => (ready ? findRecordInScene(view, selectedRecordId, storeRecords) : null),
+    [ready, view, selectedRecordId, storeRecords],
   );
   // The lane stack scrolls, and the keyboard cursor can move to a lane that is out of view: bring it in.
   useEffect(() => {
@@ -689,6 +693,9 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
     // read now, from the record the lane holds: the store renumbers ids in place on every merge.
     const hit = hitAt(event);
     if (hit === null) return;
+    // A stale scene (a reload finished inside the throttle window) selects nothing: its ids are the
+    // new set's indexes, so selecting by one would open an event the user did not click.
+    if (!isCurrentRecord(hit.record, useEvtxStore.getState().records)) return;
     selectRecordAndShowDetails(hit.record.id);
     setCursorLane({ id: view.lanes[hit.lane].id, index: hit.lane });
   };
@@ -729,7 +736,9 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
       const row = view.lanes[laneIndex];
       const bucket = view.axis.buckets[cursor];
       const record = row && bucket ? topEventInCell(row, bucket.startMs, bucket.endMs) : null;
-      if (record !== null) selectRecordAndShowDetails(record.id);
+      if (record !== null && isCurrentRecord(record, useEvtxStore.getState().records)) {
+        selectRecordAndShowDetails(record.id);
+      }
       return;
     }
     if (BRUSH_KEYS.includes(event.key)) {

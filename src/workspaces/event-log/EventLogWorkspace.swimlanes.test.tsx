@@ -68,7 +68,8 @@ const record = (id: number, timestampEpoch: number, provider: string, level: Evt
 /** Twelve events, one every 20 minutes, in two providers. */
 const twelve = () =>
   Array.from({ length: 12 }, (_, i) =>
-    record(i + 1, T0 - (12 - i) * 20 * MINUTE, i % 3 === 0 ? "Alpha" : "Beta", i % 4 === 0 ? "Error" : "Information"),
+    // Ids are indexes, as the store leaves them.
+    record(i, T0 - (12 - i) * 20 * MINUTE, i % 3 === 0 ? "Alpha" : "Beta", i % 4 === 0 ? "Error" : "Information"),
   );
 
 function seed(records: EvtxRecord[], overrides: Record<string, unknown> = {}) {

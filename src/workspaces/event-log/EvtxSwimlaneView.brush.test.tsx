@@ -122,7 +122,19 @@ const stack = (list: readonly EvtxRecord[], loading = false) => (
   </>
 );
 
+/**
+ * The store's records for a list: the same objects, with ids that are their indexes, which is what the
+ * store leaves after a merge. A click selects by id, and only a record the store holds under its id.
+ */
+function syncStore(list: readonly EvtxRecord[]) {
+  list.forEach((record, index) => {
+    record.id = index;
+  });
+  useEvtxStore.setState({ records: [...list] });
+}
+
 function mount(list: readonly EvtxRecord[] = records) {
+  syncStore(list);
   const view = render(stack(list));
   return { ...view, ...sliders() };
 }
@@ -655,10 +667,19 @@ describe("clicking a dot", () => {
   it("reads the record's id when the click happens: the store renumbers ids in place", () => {
     const { laneSlider } = mount();
     const target = pick(1, 4);
-    target.record.id = 987654;
+    const before = target.record.id;
+    // A merge: the same objects, in another order, with the ids their new indexes give them.
+    const merged = [...useEvtxStore.getState().records].reverse();
+    merged.forEach((record, index) => {
+      record.id = index;
+    });
+    act(() => {
+      useEvtxStore.setState({ records: merged });
+    });
+    expect(target.record.id).not.toBe(before);
     down(laneSlider, target.x, target.y);
     up(laneSlider, target.x, target.y);
-    expect(useEvtxStore.getState().selectedRecordId).toBe(987654);
+    expect(useEvtxStore.getState().selectedRecordId).toBe(target.record.id);
   });
 
   it("ignores the secondary button, a non-primary pointer and a release with no press", () => {
@@ -896,7 +917,9 @@ describe("the lane cursor", () => {
       key(laneSlider, "ArrowDown");
       expect(laneSlider.getAttribute("aria-valuetext")!.startsWith("second, ")).toBe(true);
 
-      rerender(stack(grown(list)));
+      const next = grown(list);
+      syncStore(next);
+      rerender(stack(next));
       act(() => {
         vi.advanceTimersByTime(DERIVATION_THROTTLE_MS);
       });
@@ -1061,6 +1084,71 @@ describe("a press whose capture is lost before the release", () => {
     up(laneSlider, target.x, target.y);
     expect(useEvtxStore.getState().selectedRecordId).toBeNull();
     expect(setTimeRangeSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("a reload that finishes inside the throttle window", () => {
+  const settle = () =>
+    act(() => {
+      vi.advanceTimersByTime(DERIVATION_THROTTLE_MS);
+    });
+  /** A second load: other objects with the same small ids (their indexes), and the old scene still on screen. */
+  function reloadWithinTheWindow(rerender: (ui: React.ReactElement) => void) {
+    const fresh = records.map((record) => ({ ...record }));
+    // The load starts (records empty, loading) and ends before the 75 ms timer fires.
+    rerender(stack([], true));
+    syncStore(fresh);
+    rerender(stack(fresh));
+    return fresh;
+  }
+
+  it("selects nothing when an old dot is clicked, and the new set's dot once the scene catches up", () => {
+    vi.useFakeTimers({ now: PINNED_NOW });
+    const { laneSlider, rerender } = mount();
+    const old = dotPoint(records, 0, 3);
+    const fresh = reloadWithinTheWindow(rerender);
+    // The old dots are still drawn and clickable, and their ids are indexes of the new set.
+    expect(laneSlider).not.toHaveAttribute("aria-disabled", "true");
+    down(laneSlider, old.x, old.y);
+    up(laneSlider, old.x, old.y);
+    expect(useEvtxStore.getState().selectedRecordId).toBeNull();
+    settle();
+    const now = dotPoint(fresh, 0, 3);
+    down(laneSlider, now.x, now.y);
+    up(laneSlider, now.x, now.y);
+    expect(useEvtxStore.getState().selectedRecordId).toBe(now.record.id);
+    expect(useEvtxStore.getState().records[now.record.id]).toBe(now.record);
+  });
+
+  it("selects nothing with Space on the old scene, and the new set's event once it catches up", () => {
+    vi.useFakeTimers({ now: PINNED_NOW });
+    const { laneSlider, rerender } = mount();
+    fireEvent.focus(laneSlider);
+    reloadWithinTheWindow(rerender);
+    key(laneSlider, " ");
+    expect(useEvtxStore.getState().selectedRecordId).toBeNull();
+    settle();
+    key(laneSlider, " ");
+    const selected = useEvtxStore.getState().selectedRecordId;
+    expect(selected).not.toBeNull();
+    expect(useEvtxStore.getState().records[selected!].provider).toBe("A");
+  });
+
+  it("rings no dot of the old scene, and rings the selected id's dot in the new one", () => {
+    vi.useFakeTimers({ now: PINNED_NOW });
+    const { laneSlider, rerender } = mount();
+    const target = dotPoint(records, 0, 3);
+    down(laneSlider, target.x, target.y);
+    up(laneSlider, target.x, target.y);
+    expect(region("swimlanes").querySelector('[data-evtx-layer="selected"]')).not.toBeNull();
+    const selected = useEvtxStore.getState().selectedRecordId;
+    reloadWithinTheWindow(rerender);
+    // The selected id is still a small number, and an old record still carries it: it is not the
+    // store's, so nothing is ringed.
+    expect(useEvtxStore.getState().selectedRecordId).toBe(selected);
+    expect(region("swimlanes").querySelector('[data-evtx-layer="selected"]')).toBeNull();
+    settle();
+    expect(region("swimlanes").querySelector('[data-evtx-layer="selected"]')).not.toBeNull();
   });
 });
 
