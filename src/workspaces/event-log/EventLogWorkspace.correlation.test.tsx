@@ -68,10 +68,11 @@ import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { useEvtxStore } from "./evtx-store";
 import { useLogStore } from "../../stores/log-store";
 import type { UseEvtxCorrelationOptions } from "./useEvtxCorrelation";
+import type { LogEntry } from "../../types/log";
 
 const EDGES = fixtureEdges("exactPair");
 
-function analysisResult(sessionId: string, eventItems = 2) {
+function analysisResult(sessionId: string, eventItems = 2, pageable = false) {
   const items = [eventItem(1, T0, "error", "first failed"), eventItem(2, T0 + 6_000, "info", "second ok")];
   const status = {
     sessionId,
@@ -90,7 +91,8 @@ function analysisResult(sessionId: string, eventItems = 2) {
       sessionId,
       revision: status.revision,
       offset: 0,
-      nextOffset: null,
+      // A page that says more follows makes the member scan go on to read it.
+      nextOffset: pageable ? 1_000 : null,
       serializedBytes: 1_024,
       totalItems: status.totalItems,
       eventItems: status.eventItems,
@@ -222,6 +224,45 @@ describe("the Correlation view in the workspace", () => {
     );
     const snapshot = mocks.buildAnalysis.mock.calls[1]![0] as { records: unknown[] };
     expect(snapshot.records).toHaveLength(2);
+  });
+
+  it("keeps the scope of the model on show after five newer sessions are published, none scanned (P5)", async () => {
+    // The first session is narrowed to the two Information events of three loaded, and was given
+    // three text-log entries that the narrowing does not touch.
+    const logEntry = (n: number) => ({ id: n, lineNumber: n, message: `log ${n}` }) as unknown as LogEntry;
+    act(() => {
+      useLogStore.setState({ entries: [logEntry(1), logEntry(2), logEntry(3)], sourceOpenMode: "merged" });
+      useEvtxStore.setState({ filterLevels: new Set(["Information"]) });
+    });
+    await openView();
+    await screen.findByRole("figure");
+    expect(screen.getByTestId("correlation-notices")).toHaveTextContent(
+      "Links and strengths are computed over the 2 events visible.",
+    );
+    expect(screen.getByTestId("correlation-notices")).toHaveTextContent("Text logs are not scoped.");
+    // The hook was given the session's own counts together with its status and page.
+    const withScope = hookCalls().filter((call) => call.initialPage !== null && call.scope !== null);
+    expect(withScope[withScope.length - 1]!.scope).toEqual({ visibleCount: 2, loadedCount: 3, textLogCount: 3 });
+    // Every later session says more pages follow, and the page never arrives: its scan cannot
+    // finish, so the first session's full model stays on show, marked updating.
+    mocks.queryTimeline.mockReturnValue(new Promise(() => undefined));
+    let built = 1;
+    mocks.buildAnalysis.mockImplementation(async () => analysisResult(`late-${(built += 1)}`, 2, true));
+    const levels = [["Warning"], ["Information", "Warning"], ["Information"], ["Warning"], ["Information", "Warning"]] as const;
+    for (const next of levels) {
+      const before = mocks.buildAnalysis.mock.calls.length;
+      act(() => useEvtxStore.setState({ filterLevels: new Set(next) }));
+      await waitFor(() => expect(mocks.buildAnalysis.mock.calls.length).toBe(before + 1));
+    }
+    expect(mocks.buildAnalysis).toHaveBeenCalledTimes(6);
+    // The newest session is built from all three events: its own scope narrows nothing.
+    const snapshots = mocks.buildAnalysis.mock.calls.map((call) => (call[0] as { records: unknown[] }).records.length);
+    expect(snapshots[snapshots.length - 1]).toBe(3);
+    // The model on show is still the first session's, and so is the scope beside it.
+    expect(screen.getByTestId("correlation-updating")).toHaveTextContent("Updating correlation");
+    expect(screen.getByTestId("correlation-notices")).toHaveTextContent(
+      "Links and strengths are computed over the 2 events visible.",
+    );
   });
 
   it("filters the table to the chain, switches to Table and moves focus to the Table tab", async () => {

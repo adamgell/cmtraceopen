@@ -29,11 +29,7 @@ vi.mock("./evtx-insights-data", async (importOriginal) => {
 import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
-import EvtxCorrelationView, {
-  CORRELATION_ANNOUNCE_MS,
-  scopeFailureText,
-  type CorrelationSessionScope,
-} from "./EvtxCorrelationView";
+import EvtxCorrelationView, { CORRELATION_ANNOUNCE_MS, scopeFailureText } from "./EvtxCorrelationView";
 import viewSource from "./EvtxCorrelationView.tsx?raw";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
@@ -64,16 +60,10 @@ import type { TimelineCorrelationEdge, TimelineItem } from "./unified-timeline";
 
 const NO_UNPROVEN_CLAIM = /not placed|no timeline position|without a timeline position|no timestamp/i;
 
-const SCOPE: CorrelationSessionScope = { visibleCount: 9, loadedCount: 9, textLogCount: 0 };
-
-function show(
-  data: EvtxCorrelationData,
-  sessionScope: (builtFor: string | null) => CorrelationSessionScope | null = () => SCOPE,
-  nearby?: readonly TimelineItem[],
-) {
+function show(data: EvtxCorrelationData, nearby?: readonly TimelineItem[]) {
   const view = (value: EvtxCorrelationData) => (
     <EvtxCorrelationProvider value={value}>
-      <EvtxCorrelationView sessionScope={sessionScope} nearby={nearby} />
+      <EvtxCorrelationView nearby={nearby} />
     </EvtxCorrelationProvider>
   );
   const result = render(view(data));
@@ -377,21 +367,21 @@ describe("a 'Not linked' context marker through the view (decision A on #838, ac
   const strayName = () => document.querySelector<HTMLElement>('[data-role="nearby"]')?.getAttribute("aria-label");
 
   it("says 'Not linked' only when every edge is loaded, nothing is narrowed and no gap names a limit", () => {
-    show(data(), () => SCOPE, [stray()]);
+    show(data(), [stray()]);
     expect(strayName()).toContain("Not linked");
     expect(screen.getByRole("group", { name: "Legend" })).toHaveTextContent("not linked (no line)");
     expect(document.querySelectorAll("line[data-connector]")).toHaveLength(1);
   });
 
   it.each([
-    ["edges were not all loaded", () => data({ totalEdges: 8 }), () => SCOPE],
-    ["the view is narrowed", () => data(), () => ({ visibleCount: 3, loadedCount: 9, textLogCount: 0 })],
-    ["the scope of the model is not known", () => data(), () => null],
-    ["the engine limited correlation", () => data({ gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) }), () => SCOPE],
-    ["a gap names the entry's own origin", () => data({ gaps: classifyCoverageGaps([{ source: rid(9), reason: "x" }], 1) }), () => SCOPE],
-    ["a gap names a member of the chain", () => data({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "alias" }], 1) }), () => SCOPE],
-  ])("says 'No loaded link' instead when %s", (_why, makeDataFor, scopeFor) => {
-    show(makeDataFor(), scopeFor, [stray()]);
+    ["edges were not all loaded", () => data({ totalEdges: 8 })],
+    ["the view is narrowed", () => data({ scope: { visibleCount: 3, loadedCount: 9, textLogCount: 0 } })],
+    ["the scope of the model is not known", () => data({ scope: null })],
+    ["the engine limited correlation", () => data({ gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) })],
+    ["a gap names the entry's own origin", () => data({ gaps: classifyCoverageGaps([{ source: rid(9), reason: "x" }], 1) })],
+    ["a gap names a member of the chain", () => data({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "alias" }], 1) })],
+  ])("says 'No loaded link' instead when %s", (_why, makeDataFor) => {
+    show(makeDataFor(), [stray()]);
     expect(strayName()).toContain("No loaded link");
     expect(strayName()).not.toContain("Not linked");
     expect(screen.getByRole("group", { name: "Legend" })).toHaveTextContent("no loaded link (no line)");
@@ -464,28 +454,30 @@ describe("the notices", () => {
 
 describe("the scope (decision 10, acceptance 15)", () => {
   it("states the visible count and that text logs are not scoped, under the rail's condition", () => {
-    show(pairData(), () => ({ visibleCount: 3, loadedCount: 9, textLogCount: 4 }));
+    show(pairData({ scope: { visibleCount: 3, loadedCount: 9, textLogCount: 4 } }));
     const text = screen.getByTestId("correlation-notices").textContent ?? "";
     expect(text).toContain("Links and strengths are computed over the 3 events visible. Events outside the view can make an Exact link ambiguous.");
     expect(text).toContain("Text logs are not scoped.");
   });
 
   it("leaves out the text-log line when there are none, and both lines when nothing is narrowed", () => {
-    show(pairData(), () => ({ visibleCount: 3, loadedCount: 9, textLogCount: 0 }));
+    show(pairData({ scope: { visibleCount: 3, loadedCount: 9, textLogCount: 0 } }));
     expect(screen.getByTestId("correlation-notices").textContent).not.toContain("Text logs are not scoped.");
     cleanup();
-    show(pairData(), () => ({ visibleCount: 9, loadedCount: 9, textLogCount: 4 }));
+    show(pairData({ scope: { visibleCount: 9, loadedCount: 9, textLogCount: 4 } }));
     expect(screen.queryByTestId("correlation-notices")).toBeNull();
   });
 
-  it("reads the scope of the session the model was built for, not the newest one", () => {
-    const seen: (string | null)[] = [];
-    show(pairData({ builtFor: "old:3" }), (builtFor) => {
-      seen.push(builtFor);
-      return builtFor === "old:3" ? { visibleCount: 2, loadedCount: 9, textLogCount: 0 } : null;
-    });
-    expect(new Set(seen)).toEqual(new Set(["old:3"]));
+  it("states the scope the shown model carries, which is the one of its own session (P5)", () => {
+    show(pairData({ builtFor: "old:3", updating: true, scope: { visibleCount: 2, loadedCount: 9, textLogCount: 0 } }));
     expect(screen.getByTestId("correlation-notices")).toHaveTextContent("computed over the 2 events visible");
+  });
+
+  it("says the scope is not known when it is not, instead of showing no disclosure", () => {
+    show(pairData({ scope: null }));
+    expect(screen.getByTestId("correlation-notices")).toHaveTextContent(
+      "The events this model was built from are not known here, so events outside them may make an Exact link ambiguous.",
+    );
   });
 });
 
@@ -684,7 +676,7 @@ describe("Copy as text", () => {
 
   it("includes the scope and edge notices in the copy, so a paste cannot read as more certain", async () => {
     vi.mocked(writeText).mockResolvedValue(undefined);
-    show(pairData({ totalEdges: 30 }), () => ({ visibleCount: 3, loadedCount: 9, textLogCount: 0 }));
+    show(pairData({ totalEdges: 30, scope: { visibleCount: 3, loadedCount: 9, textLogCount: 0 } }));
     fireEvent.click(screen.getByRole("button", { name: "Copy as text" }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
     const text = vi.mocked(writeText).mock.calls[0]![0];
@@ -864,16 +856,11 @@ describe("the live regions (spec 10)", () => {
 
 describe("a model that is being rebuilt (acceptance 18)", () => {
   it("shows the previous model as updating and never pairs it with a newer session's numbers", () => {
-    const seen: (string | null)[] = [];
-    show(pairData({ builtFor: "old:1", updating: true, nextScan: { state: "running", progress: { scannedItems: 500, totalItems: 2000, retainedItems: 10 }, stoppedBy: null, error: null } }), (builtFor) => {
-      seen.push(builtFor);
-      return { visibleCount: 2, loadedCount: 2, textLogCount: 0 };
-    });
+    show(pairData({ builtFor: "old:1", updating: true, scope: { visibleCount: 2, loadedCount: 2, textLogCount: 0 }, nextScan: { state: "running", progress: { scannedItems: 500, totalItems: 2000, retainedItems: 10 }, stoppedBy: null, error: null } }));
     expect(screen.getByTestId("correlation-updating")).toHaveTextContent("Updating correlation...");
     expect(screen.getByTestId("correlation-updating")).toHaveTextContent("Reading 500 of 2,000 timeline items...");
     expect(screen.getByTestId("correlation-view")).toHaveAttribute("aria-busy", "true");
     expect(rows()).toHaveLength(1);
-    expect(new Set(seen)).toEqual(new Set(["old:1"]));
   });
 
   it("keeps a chain selected in the store while a rebuild is under way, even if it is not in the old model", () => {

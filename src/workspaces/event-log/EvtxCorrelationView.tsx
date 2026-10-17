@@ -88,27 +88,7 @@ interface ActionMessage {
 const MESSAGE_HEAD_CHARS = 140;
 const NO_NEARBY: readonly TimelineItem[] = [];
 
-/**
- * What the session the shown model was built from was given. The workspace records it when it
- * publishes a session, so the scope line states the scope of the numbers on screen and never pairs
- * the newest visible count with an older model.
- */
-export interface CorrelationSessionScope {
-  /** Events the session was built from (the visible events). */
-  visibleCount: number;
-  /** Events loaded at that time. */
-  loadedCount: number;
-  /** Text-log entries the session was given. */
-  textLogCount: number;
-}
-
-export interface EvtxCorrelationViewProps {
-  /**
-   * The scope of the session `builtFor` names (`EvtxCorrelationData.builtFor`), or null when it is
-   * not known. Not known reads as narrowed: "Not linked" is never said without it.
-   */
-  sessionScope: (builtFor: string | null) => CorrelationSessionScope | null;
-  /**
+export interface EvtxCorrelationViewProps {  /**
    * Context entries drawn as "Not linked" markers on the plot (decision A on issue 838). There is no
    * producer yet, so the workspace passes none; the seam exists so that what a marker may say
    * ("Not linked" or "No loaded link") is wired and tested through the view, not only in the plot.
@@ -337,7 +317,7 @@ function linkPhrase(chain: CorrelationChain, id: string, summary: ReturnType<typ
       : "no connector drawn";
 }
 
-export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }: EvtxCorrelationViewProps) {
+export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelationViewProps = {}) {
   const styles = useStyles();
   const data = useEvtxCorrelationData();
   const uid = useId();
@@ -378,10 +358,11 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
     }
   }, [model, data.updating, reconciled.selectedId, selectedChainId, selectChain]);
 
-  const session = sessionScope(data.builtFor);
-  const scope = session === null ? null : scopeDisclosure(session);
-  // Not knowing the scope reads as narrowed: "Not linked" is never said without it.
-  const narrowed = session === null || scope !== null;
+  // The scope of the session the shown model was built from; it travels with the model, so it is
+  // never a newer session's. A scope that is not known is disclosed as such and reads as narrowed:
+  // "Not linked" is never said without it.
+  const scope = scopeDisclosure(data.scope);
+  const narrowed = scope !== null;
 
   const plot = useMemo(
     () =>

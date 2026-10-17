@@ -57,7 +57,6 @@ import {
   buildEventLogAnalysisSession,
   EventLogAnalysisCancelled,
 } from "./event-analysis-session";
-import type { CorrelationSessionScope } from "./EvtxCorrelationView";
 import type { ScopeDisclosureInput } from "./evtx-correlation-copy";
 import { EvtxCorrelationProvider, useEvtxCorrelation } from "./useEvtxCorrelation";
 
@@ -170,8 +169,6 @@ interface EventLogAnalysisSnapshot {
   loadedCount: number;
 }
 
-/** Sessions whose scope is remembered: the one on show, the ones being built, and a few behind. */
-const SESSION_SCOPES_KEPT = 4;
 
 interface EventLogAnalysisPump {
   mounted: boolean;
@@ -355,14 +352,6 @@ export function EventLogWorkspace() {
   const [analysisScope, setAnalysisScope] = useState<ScopeDisclosureInput | null>(null);
   const [timelinePending, setTimelinePending] = useState(false);
   const [timelineError, setTimelineError] = useState<string | null>(null);
-  // What each published session was built from, by `sessionId:revision`. The Correlation view
-  // states the scope of the session its model was built for, which can be older than the newest.
-  const sessionScopesRef = useRef(new Map<string, CorrelationSessionScope>());
-  const sessionScope = useCallback(
-    (builtFor: string | null) =>
-      builtFor === null ? null : (sessionScopesRef.current.get(builtFor) ?? null),
-    [],
-  );
   const analysisPumpRef = useRef<EventLogAnalysisPump>({
     mounted: false,
     revision: 0,
@@ -486,17 +475,6 @@ export function EventLogWorkspace() {
             return;
           }
           pump.publishedSessionId = result.status.sessionId;
-          const scopes = sessionScopesRef.current;
-          scopes.set(`${result.status.sessionId}:${result.status.revision}`, {
-            visibleCount: snapshot.records.length,
-            loadedCount: snapshot.loadedCount,
-            textLogCount: snapshot.entries.length,
-          });
-          while (scopes.size > SESSION_SCOPES_KEPT) {
-            const oldest = scopes.keys().next().value;
-            if (oldest === undefined) break;
-            scopes.delete(oldest);
-          }
           setAnalysisStatus(result.status);
           setInitialTimelinePage(result.initialPage);
           setAnalysisScope({
@@ -631,7 +609,7 @@ export function EventLogWorkspace() {
     charts: { keepAlive: false, render: () => <ViewPlaceholder view="charts" /> },
     correlation: {
       keepAlive: false,
-      render: () => <EvtxCorrelationView sessionScope={sessionScope} />,
+      render: () => <EvtxCorrelationView />,
     },
   };
 
