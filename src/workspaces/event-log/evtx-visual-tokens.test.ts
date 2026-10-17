@@ -467,6 +467,15 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
       { surface: "rail", section: "8.13 Details tab finding callout (item 8)" },
     ],
   },
+  {
+    // Issue #840, Adam's comment of 2026-10-09: the chain bars of the overview strip keep 3:1.
+    role: "strength bar",
+    minimum: 3,
+    colors: (v) => ({ ...v.strengthBars }),
+    placements: [
+      { surface: "surface", section: "8.11 overview strip chain bars (#840)" },
+    ],
+  },
 ];
 
 /**
@@ -943,6 +952,21 @@ describe("evtx visual tokens", () => {
           ).toBeGreaterThanOrEqual(15);
         }
       }
+    });
+
+    it("draws the overview's chain bars in strengths.<s>.border, one per chain strength, none for Not linked", () => {
+      expect(Object.keys(visual.strengthBars).sort()).toEqual([
+        "ambiguous",
+        "candidate",
+        "coverageBlocked",
+        "exact",
+      ]);
+      for (const strength of ["exact", "candidate", "ambiguous", "coverageBlocked"] as const) {
+        expect(visual.strengthBars[strength], strength).toBe(visual.strengths[strength].border);
+        expect(resolveToken(visual.strengthBars[strength], theme), strength).toMatch(/^#[0-9a-f]{6}$/i);
+      }
+      // D7: a time-only relation is never a chain, so it never has a bar.
+      expect(visual.strengthBars).not.toHaveProperty("notCausal");
     });
 
     it("gives coverageBlocked a distinct border style and an icon", () => {
