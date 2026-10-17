@@ -191,39 +191,59 @@ export function viewDescription(view: EvtxView): string {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * What a typed name never holds: control characters, format characters (bidi marks and overrides,
- * zero width and tag characters, soft hyphen) and the other default-ignorable code points. They draw
- * nothing, so a name with them reads as another name: "Enrollment triage" followed by U+061C looks
- * like the built-in's. Matched by Unicode property, so a code point added to a class later is
- * covered without this list changing.
+ * What is removed from a name as it is stored: control characters and the bidi controls (U+061C,
+ * the marks and the overrides and isolates). The bidi controls can reorder text on screen, so a
+ * name could read as another one.
+ *
+ * Nothing else is removed. Zero width joiners, non-joiners and variation selectors change how
+ * letters and emoji are drawn (a family emoji, a text-style or emoji-style heart, Persian and Indic
+ * words), so a name keeps them and shows as it was typed.
  */
-const INVISIBLE_NAME_CHARACTERS = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
+const REMOVED_FROM_NAMES = /[\p{Cc}\p{Bidi_Control}]/gu;
 
 /**
- * A name as the library keeps it: whitespace collapsed, invisible characters removed, trimmed. The
- * invisible characters are removed rather than refused, so the name that results is the name that
- * shows, and it collides with the built-in's or another view's exactly when it reads as it. Null when
- * nothing usable is left or it is over the limit.
+ * What is also ignored when two names are compared: every format and default-ignorable code point.
+ * They draw nothing (or only change how neighbours join), so a name with one reads as the name
+ * without it: "Enrollment triage" followed by U+200B or U+2060 looks like the built-in's.
+ */
+const IGNORED_IN_COMPARISON = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
+
+/**
+ * The key two names are compared by, in every check that a name is taken (built-ins, the library,
+ * the entries of one import file, create and rename): fully stripped of what draws nothing, white
+ * space tidied, case folded. Two names with the same key read the same.
+ */
+export function viewNameKey(name: string): string {
+  return name
+    .replace(IGNORED_IN_COMPARISON, "")
+    .replace(/\p{White_Space}+/gu, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * A name as the library keeps it: as typed, with white space collapsed and trimmed and the control
+ * and bidi control characters removed. Null when nothing visible is left (a name of only invisible
+ * characters would read as blank) or the stored name is over the limit.
  */
 export function cleanViewName(input: unknown): string | null {
   if (typeof input !== "string") return null;
-  // Whitespace first: a tab or a newline is a space between words, not an invisible character that
-  // would join them. By the White_Space property, not `\s`, which also counts U+FEFF as a space: that
-  // one draws nothing and is removed with the rest.
+  // Whitespace first: a tab or a newline is a space between words, not a control character that
+  // would join them. By the White_Space property, not `\s`, which also counts U+FEFF as a space.
   const name = input
     .replace(/\p{White_Space}+/gu, " ")
-    .replace(INVISIBLE_NAME_CHARACTERS, "")
+    .replace(REMOVED_FROM_NAMES, "")
     .replace(/\p{White_Space}+/gu, " ")
     .trim();
-  if (!name || name.length > MAX_VIEW_NAME_LENGTH) return null;
+  if (!name || viewNameKey(name) === "" || name.length > MAX_VIEW_NAME_LENGTH) return null;
   return name;
 }
 
 function sameName(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase();
+  return viewNameKey(a) === viewNameKey(b);
 }
 
-/** Whether `name` is taken, ignoring case, by a built-in or by one of `custom`. */
+/** Whether `name` is taken, by the name key, by a built-in or by one of `custom`. */
 export function viewNameTaken(name: string, custom: readonly { name: string }[]): boolean {
   return (
     EVTX_BUILT_IN_VIEWS.some((view) => sameName(view.name, name)) ||
@@ -231,12 +251,20 @@ export function viewNameTaken(name: string, custom: readonly { name: string }[])
   );
 }
 
+/** `wanted` with `suffix`, cut by whole code points so the total stays within the limit. */
+function withSuffix(wanted: string, suffix: string): string {
+  const points = Array.from(wanted);
+  while (points.length > 0 && points.join("").length + suffix.length > MAX_VIEW_NAME_LENGTH) {
+    points.pop();
+  }
+  return `${points.join("").trimEnd()}${suffix}`;
+}
+
 /** `wanted`, or `wanted (2)`, `wanted (3)`... when that is taken, within the length limit. */
 export function uniqueViewName(wanted: string, custom: readonly { name: string }[]): string {
   if (!viewNameTaken(wanted, custom)) return wanted;
   for (let n = 2; ; n += 1) {
-    const suffix = ` (${n})`;
-    const candidate = `${wanted.slice(0, MAX_VIEW_NAME_LENGTH - suffix.length).trimEnd()}${suffix}`;
+    const candidate = withSuffix(wanted, ` (${n})`);
     if (!viewNameTaken(candidate, custom)) return candidate;
   }
 }
@@ -435,14 +463,14 @@ export function mergeViews(
   makeId: () => string,
 ): EvtxViewMerge {
   const views = [...existing];
-  // The names this file has already used, lower case: a later entry of the same name is not a
+  // The name keys this file has already used: a later entry of the same name is not a
   // replacement of the library's view, and not of the earlier entry either.
   const usedByFile = new Set<string>();
   let added = 0;
   let replaced = 0;
   let skipped = 0;
   for (const body of imported) {
-    const key = body.name.toLowerCase();
+    const key = viewNameKey(body.name);
     const at = usedByFile.has(key)
       ? -1
       : existing.findIndex((view) => sameName(view.name, body.name));

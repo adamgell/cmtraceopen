@@ -218,11 +218,24 @@ describe("the view library", () => {
       expect(state().views).toHaveLength(1);
     });
 
-    it("keeps the name that shows: invisible characters are removed, so a look-alike of a built-in is refused", () => {
-      const spoof = `Enrollment triage${String.fromCodePoint(0x61c)}`;
-      expect(state().create(spoof, CRITERIA, null)).toEqual({ ok: false, reason: "name-taken" });
-      const made = state().create(`Mine${String.fromCodePoint(0x200b)} ${String.fromCodePoint(0xe0041)}view`, CRITERIA, null);
-      expect(made.ok && made.view.name).toBe("Mine view");
+    it("stores the name as typed minus control and bidi control characters, and refuses a look-alike of a built-in (U1)", () => {
+      for (const code of [0x61c, 0x200b, 0x2060, 0xad]) {
+        const spoof = `Enrollment triage${String.fromCodePoint(code)}`;
+        expect(state().create(spoof, CRITERIA, null)).toEqual({ ok: false, reason: "name-taken" });
+      }
+      const heart = `${String.fromCodePoint(0x2764, 0xfe0f)} Boot`;
+      const made = state().create(heart, CRITERIA, null);
+      expect(made.ok && made.view.name).toBe(heart);
+      const overridden = state().create(`Mine${String.fromCodePoint(0x202e)} view`, CRITERIA, null);
+      expect(overridden.ok && overridden.view.name).toBe("Mine view");
+    });
+
+    it("renames to a look-alike of another view only when it is not one", () => {
+      state().create("Boot", CRITERIA, null);
+      state().create("Other", CRITERIA, null);
+      const other = state().views[1];
+      expect(state().rename(other.id, `BOOT${String.fromCodePoint(0x200b)}`)).toEqual({ ok: false, reason: "name-taken" });
+      expect(state().rename(other.id, `${String.fromCodePoint(0x2764, 0xfe0f)} Boot`).ok).toBe(true);
     });
 
     it("refuses a view when the library is full", () => {

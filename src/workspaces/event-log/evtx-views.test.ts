@@ -21,6 +21,7 @@ import {
   uniqueViewName,
   viewDescription,
   viewMatchesCriteria,
+  viewNameKey,
   viewNameTaken,
   viewSubtitle,
   type EvtxStoredView,
@@ -290,35 +291,70 @@ describe("listing and naming views", () => {
     }
   });
 
-  describe("characters that draw nothing are removed, so a name is the name that shows", () => {
-    // Control, format and default-ignorable code points, by Unicode property (T7).
-    const invisible: Array<[string, number]> = [
+  describe("a name is stored as typed, minus control and bidi control characters (U1)", () => {
+    // Removed from the stored name: \p{Cc} and \p{Bidi_Control}.
+    const removed: Array<[string, number]> = [
       ["U+0007 bell (control)", 0x07],
+      ["U+061C arabic letter mark", 0x61c],
+      ["U+200E left-to-right mark", 0x200e],
+      ["U+200F right-to-left mark", 0x200f],
+      ["U+202A left-to-right embedding", 0x202a],
+      ["U+202E right-to-left override", 0x202e],
+      ["U+2066 left-to-right isolate", 0x2066],
+      ["U+2069 pop directional isolate", 0x2069],
+    ];
+
+    it.each(removed)("removes %s from the stored name", (_label, code) => {
+      expect(cleanViewName(`Ab${ch(code)}c`)).toBe("Abc");
+      expect(cleanViewName(`${ch(code)}Abc${ch(code)}`)).toBe("Abc");
+    });
+
+    // Kept as typed: they change how neighbours are drawn, or draw nothing and are only ignored
+    // when names are compared.
+    const kept: Array<[string, number]> = [
       ["U+00AD soft hyphen", 0xad],
       ["U+034F combining grapheme joiner", 0x34f],
-      ["U+061C arabic letter mark", 0x61c],
       ["U+180E mongolian vowel separator", 0x180e],
       ["U+200B zero width space", 0x200b],
-      ["U+200F right-to-left mark", 0x200f],
-      ["U+202E right-to-left override", 0x202e],
+      ["U+200C zero width non-joiner", 0x200c],
+      ["U+200D zero width joiner", 0x200d],
       ["U+2060 word joiner", 0x2060],
-      ["U+2066 left-to-right isolate", 0x2066],
       ["U+3164 hangul filler", 0x3164],
-      ["U+FEFF byte order mark", 0xfeff],
+      ["U+FE0F variation selector 16", 0xfe0f],
       ["U+E0001 language tag", 0xe0001],
       ["U+E0041 tag latin capital a", 0xe0041],
       ["U+E007F cancel tag", 0xe007f],
     ];
 
-    it.each(invisible)("removes %s", (_label, code) => {
-      expect(cleanViewName(`Ab${ch(code)}c`)).toBe("Abc");
-      expect(cleanViewName(`${ch(code)}Abc${ch(code)}`)).toBe("Abc");
+    it.each(kept)("keeps %s in the stored name", (_label, code) => {
+      expect(cleanViewName(`Ab${ch(code)}c`)).toBe(`Ab${ch(code)}c`);
     });
 
-    it("keeps a tab or a newline as the space it is, not as an invisible character that joins two words", () => {
+    it("stores a text-style or emoji-style heart as typed, not as the bare heart", () => {
+      expect(cleanViewName(`${ch(0x2764)}${ch(0xfe0f)} Boot`)).toBe(`${ch(0x2764)}${ch(0xfe0f)} Boot`);
+      expect(cleanViewName(`${ch(0x2764)}${ch(0xfe0e)} Boot`)).toBe(`${ch(0x2764)}${ch(0xfe0e)} Boot`);
+    });
+
+    it("stores a ZWJ family emoji unchanged, as one family and not three people", () => {
+      const family = [0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467].map(ch).join("");
+      expect(cleanViewName(`${family} Triage`)).toBe(`${family} Triage`);
+      expect(cleanViewName(family)).toBe(family);
+    });
+
+    it("stores an emoji tag sequence unchanged: the flag of England", () => {
+      const england = [0x1f3f4, 0xe0067, 0xe0062, 0xe0065, 0xe006e, 0xe0067, 0xe007f].map(ch).join("");
+      expect(cleanViewName(england)).toBe(england);
+    });
+
+    it("stores a Persian name with a zero width non-joiner unchanged, so its letters stay apart", () => {
+      const persian = [0x645, 0x6cc, 0x200c, 0x62e, 0x648, 0x627, 0x647, 0x645].map(ch).join("");
+      expect(cleanViewName(persian)).toBe(persian);
+    });
+
+    it("keeps a tab or a newline as the space it is, not as a control character that joins two words", () => {
       expect(cleanViewName("one\ttwo\nthree")).toBe("one two three");
       expect(cleanViewName(`one${ch(0x85)}two${ch(0xa0)}three${ch(0x2028)}four`)).toBe("one two three four");
-      expect(cleanViewName(`one ${ch(0x200b)} two`)).toBe("one two");
+      expect(cleanViewName(`one ${ch(0x202e)} two`)).toBe("one two");
     });
 
     it("lets a name that is only text through untouched, accents and CJK included", () => {
@@ -326,20 +362,77 @@ describe("listing and naming views", () => {
       expect(cleanViewName("Crème brûlée 登録")).toBe("Crème brûlée 登録");
     });
 
-    it("measures the length after removing them", () => {
-      expect(cleanViewName(`${"x".repeat(MAX_VIEW_NAME_LENGTH)}${ch(0x200b)}${ch(0x61c)}`)).toBe("x".repeat(MAX_VIEW_NAME_LENGTH));
+    it("measures the length on the stored name", () => {
+      // The bidi control is removed, so it does not count; the zero width space is kept, so it does.
+      expect(cleanViewName(`${"x".repeat(MAX_VIEW_NAME_LENGTH)}${ch(0x61c)}`)).toBe("x".repeat(MAX_VIEW_NAME_LENGTH));
+      expect(cleanViewName(`${"x".repeat(MAX_VIEW_NAME_LENGTH)}${ch(0x200b)}`)).toBeNull();
     });
 
-    it("makes the built-in's name followed by one a taken name, in every way a name comes in", () => {
-      const spoof = `Enrollment triage${ch(0x61c)}`;
-      expect(cleanViewName(spoof)).toBe("Enrollment triage");
-      expect(viewNameTaken(cleanViewName(spoof)!, [])).toBe(true);
-      // From a file.
-      const merged = mergeViews([], [body({ name: spoof })].map((v) => sanitizeViewBody(plain(v))!), makeId);
-      expect(merged.views.map((v) => v.name)).toEqual(["Enrollment triage (2)"]);
+    it("refuses a name with nothing visible in it, which would read as blank", () => {
+      expect(cleanViewName(`${ch(0x200b)}${ch(0x61c)}`)).toBeNull();
+      expect(cleanViewName(`${ch(0x200d)} ${ch(0x2060)}`)).toBeNull();
+      expect(cleanViewName(`${ch(0xe0041)}${ch(0xfe0f)}`)).toBeNull();
+    });
+  });
+
+  describe("names compare by a fully stripped, case-folded key (U1)", () => {
+    const lookAlikes: Array<[string, string]> = [
+      ["followed by U+061C", `Enrollment triage${ch(0x61c)}`],
+      ["followed by U+200B", `Enrollment triage${ch(0x200b)}`],
+      ["followed by U+2060", `Enrollment triage${ch(0x2060)}`],
+      ["with U+200B inside a word", `Enroll${ch(0x200b)}ment triage`],
+      ["with a soft hyphen inside a word", `Enroll${ch(0xad)}ment triage`],
+      ["with a zero width joiner", `Enrollment${ch(0x200d)} triage`],
+      ["in other case", `ENROLLMENT TRIAGE${ch(0x200b)}`],
+      ["with a tag character", `Enrollment triage${ch(0xe0041)}`],
+    ];
+
+    it("gives a name and its look-alike the same key", () => {
+      expect(viewNameKey("Enrollment triage")).toBe("enrollment triage");
+      for (const [, name] of lookAlikes) expect(viewNameKey(name)).toBe("enrollment triage");
+    });
+
+    it.each(lookAlikes)("takes the built-in's name when it is %s", (_label, spoof) => {
+      const stored = cleanViewName(spoof)!;
+      expect(viewNameTaken(stored, [])).toBe(true);
+      // From a file: it is added under a suffix, never posing as the built-in.
+      const merged = mergeViews([], [{ ...body(), name: stored }], makeId);
+      expect(merged.views).toHaveLength(1);
+      expect(merged.views[0].name).toMatch(/ \(2\)$/);
+      expect(viewNameKey(merged.views[0].name)).not.toBe("enrollment triage");
       // From storage.
-      const { views } = sanitizeStoredViews([{ id: "9d1b3f6c-3d2a-4a43-9a6f-1c0d4f2e8b11", ...plain(body({ name: spoof })) }], makeId);
-      expect(views.map((v) => v.name)).toEqual(["Enrollment triage (2)"]);
+      const { views } = sanitizeStoredViews([{ id: "9d1b3f6c-3d2a-4a43-9a6f-1c0d4f2e8b11", ...plain(body({ name: stored })) }], makeId);
+      expect(views[0].name).toMatch(/ \(2\)$/);
+    });
+
+    it("makes a look-alike of a custom view unique, in the library and within one file", () => {
+      const custom: EvtxStoredView[] = [{ id: "a", ...body({ name: "Boot triage" }) }];
+      expect(viewNameTaken(`Boot${ch(0x200b)} triage`, custom)).toBe(true);
+      const merged = mergeViews([], [body({ name: "Boot triage" }), body({ name: `Boot triage${ch(0x2060)}` })], makeId);
+      expect(merged).toMatchObject({ added: 2, replaced: 0 });
+      expect(merged.views[1].name).toMatch(/ \(2\)$/);
+      const replaced = mergeViews(custom, [body({ name: `BOOT${ch(0x200b)} TRIAGE` })], makeId);
+      expect(replaced).toMatchObject({ added: 0, replaced: 1 });
+      // A second entry of the file that reads as the first never replaces the library's view again.
+      const twice = mergeViews(custom, [body({ name: "Boot triage" }), body({ name: `Boot triage${ch(0x2060)}` })], makeId);
+      expect(twice).toMatchObject({ added: 1, replaced: 1, skipped: 0 });
+      expect(twice.views.map((v) => v.name)).toEqual(["Boot triage", `Boot triage${ch(0x2060)} (2)`]);
+    });
+
+    it("does not make two different names collide", () => {
+      expect(viewNameKey("Boot")).not.toBe(viewNameKey("Boot 2"));
+      expect(viewNameKey(`${ch(0x2764)}${ch(0xfe0f)} Boot`)).not.toBe(viewNameKey("Boot"));
+      expect(viewNameKey(`${ch(0x2764)} Boot`)).not.toBe(viewNameKey("Boot"));
+    });
+
+    it("cuts a made-unique name by whole code points, so it stays valid and inside the limit", () => {
+      // 59 UTF-16 units: a plain cut at 56 would fall between the halves of a surrogate pair.
+      const astral = `x${ch(0x1f4a5).repeat(29)}`;
+      expect(astral.length).toBe(59);
+      const name = uniqueViewName(astral, [{ name: astral }]);
+      expect(name.length).toBeLessThanOrEqual(MAX_VIEW_NAME_LENGTH);
+      expect(name.endsWith(" (2)")).toBe(true);
+      expect(name).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/);
     });
   });
 
