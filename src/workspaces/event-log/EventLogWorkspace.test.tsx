@@ -1033,7 +1033,7 @@ describe("EventLogWorkspace fixtures", () => {
       });
       expect(screen.getByText(`Time: brushed 11:00${SEP}13:00`)).toHaveAttribute(
         "title",
-        `Time: brushed 11:00${SEP}13:00 (UTC)\n2 events without a timestamp are hidden by this range.`,
+        `Time: brushed 11:00${SEP}13:00 (UTC)\n2 events without a timestamp are hidden by this range`,
       );
     });
   });

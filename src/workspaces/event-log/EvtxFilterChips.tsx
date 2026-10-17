@@ -134,7 +134,7 @@ export function buildFilterChips(input: EvtxFilterChipInput): EvtxFilterChip[] {
     const lines = [`${label} (${timeZoneLabel(mode, startMs)})`];
     if (untimed > 0) {
       lines.push(
-        `${formatCount(untimed)} ${untimed === 1 ? "event without a timestamp is" : "events without a timestamp are"} hidden by this range.`,
+        `${formatCount(untimed)} ${untimed === 1 ? "event without a timestamp is" : "events without a timestamp are"} hidden by this range`,
       );
     }
     chips.push({

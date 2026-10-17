@@ -193,9 +193,9 @@ describe("buildFilterChips, the transient criteria", () => {
       buildFilterChips(input({ timeRange: RANGE, timeZoneMode: "utc", untimedHiddenCount }))[0].title;
     expect(tooltip(0)).not.toMatch(/timestamp/);
     expect(tooltip(1)).toBe(
-      `Time: brushed 09:00${SEP}09:45 (UTC)\n1 event without a timestamp is hidden by this range.`,
+      `Time: brushed 09:00${SEP}09:45 (UTC)\n1 event without a timestamp is hidden by this range`,
     );
-    expect(tooltip(1234)).toMatch(/\n1,234 events without a timestamp are hidden by this range\.$/);
+    expect(tooltip(1234)).toMatch(/\n1,234 events without a timestamp are hidden by this range$/);
   });
 
   it("makes a Finding chip and a Chain chip from the scope's kind and title", () => {
@@ -656,7 +656,7 @@ describe("EvtxFilterChips with the transient criteria", () => {
     render(<EvtxFilterChips visibleCount={3} loadedCount={9} untimedHiddenCount={2} />);
     expect(screen.getByText(`Time: brushed 09:00${SEP}09:45`)).toHaveAttribute(
       "title",
-      `Time: brushed 09:00${SEP}09:45 (UTC)\n2 events without a timestamp are hidden by this range.`,
+      `Time: brushed 09:00${SEP}09:45 (UTC)\n2 events without a timestamp are hidden by this range`,
     );
     expect(screen.getByText("Finding: MDM enrollment failed")).toHaveAttribute(
       "title",
