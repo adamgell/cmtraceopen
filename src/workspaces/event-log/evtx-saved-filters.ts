@@ -8,6 +8,7 @@
 import type { EvtxLevel, EvtxTimeWindow } from "./types";
 import {
   DEFAULT_QUICK_FILTER,
+  EVTX_LEVELS,
   EVTX_QUICK_FILTER_ACTIONS,
   EVTX_QUICK_FILTER_MODES,
   EVTX_QUICK_FILTER_SCOPES,
@@ -32,14 +33,6 @@ export interface EvtxSavedFilter {
   lastUsed: number | null;
 }
 
-/** Every level, and the fallback when a stored filter names none this build recognizes. */
-export const ALL_LEVELS: EvtxLevel[] = [
-  "Critical",
-  "Error",
-  "Warning",
-  "Information",
-  "Verbose",
-];
 const TIME_WINDOWS: EvtxTimeWindow[] = ["1h", "24h", "7d", "30d", "all"];
 /** Revalidates the interactive grammar when a filter is loaded from disk. */
 export function sanitizeQuickFilter(input: unknown): EvtxQuickFilter {
@@ -94,7 +87,7 @@ export function sanitizeCriteria(input: unknown): EvtxFilterCriteria {
 
   const levels = Array.isArray(before.levels)
     ? (before.levels.filter((level): level is EvtxLevel =>
-        ALL_LEVELS.includes(level as EvtxLevel)
+        EVTX_LEVELS.includes(level as EvtxLevel)
       ) as EvtxLevel[])
     : [];
   const groupBy = Array.isArray(after.groupBy)
@@ -108,7 +101,7 @@ export function sanitizeCriteria(input: unknown): EvtxFilterCriteria {
     : undefined;
   return {
     beforeLoad: {
-      levels: levels.length > 0 ? levels : [...ALL_LEVELS],
+      levels: levels.length > 0 ? levels : [...EVTX_LEVELS],
       eventIds: typeof before.eventIds === "string" ? before.eventIds : "",
       timeWindow: TIME_WINDOWS.includes(before.timeWindow as EvtxTimeWindow)
         ? (before.timeWindow as EvtxTimeWindow)

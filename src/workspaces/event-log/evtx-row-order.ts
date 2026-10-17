@@ -3,18 +3,10 @@
  * two cannot drift: sorted by the grid's sort, grouped by Group by, and with the records of
  * collapsed groups left out (they are not rows).
  */
-import { buildGroupedRows, type EvtxGroupField } from "./evtx-filter";
+import { buildGroupedRows, EVTX_LEVEL_RANK, type EvtxGroupField } from "./evtx-filter";
 import type { EvtxSortDirection, EvtxSortField } from "./evtx-store";
 import type { EvtxTimeZoneMode } from "./evtx-time";
-import type { EvtxLevel, EvtxRecord } from "./types";
-
-const LEVEL_ORDER: Record<EvtxLevel, number> = {
-  Critical: 0,
-  Error: 1,
-  Warning: 2,
-  Information: 3,
-  Verbose: 4,
-};
+import type { EvtxRecord } from "./types";
 
 export function compareRecords(
   a: EvtxRecord,
@@ -31,7 +23,7 @@ export function compareRecords(
       cmp = a.eventId - b.eventId;
       break;
     case "level":
-      cmp = LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level];
+      cmp = EVTX_LEVEL_RANK[a.level] - EVTX_LEVEL_RANK[b.level];
       break;
     case "provider":
       cmp = a.provider.localeCompare(b.provider);

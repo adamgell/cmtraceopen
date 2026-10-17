@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
 import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
+import { countByLevel, EVTX_LEVELS } from "./evtx-filter";
 import {
   buildSameIdSeries,
   correlationBreakdown,
@@ -50,6 +51,24 @@ describe("summarizeRecords", () => {
       { eventId: 3, count: 2 },
       { eventId: 7, count: 2 },
     ]);
+  });
+});
+
+describe("summarizeRecords level mix", () => {
+  const all = EVTX_LEVELS.flatMap((level, index) =>
+    Array.from({ length: index + 1 }, (_, copy) => record(index * 10 + copy, { level })),
+  );
+
+  it("lists the levels in EVTX_LEVELS order and omits a level with no records", () => {
+    expect(summarizeRecords(all).levelMix.map((entry) => entry.level)).toEqual([...EVTX_LEVELS]);
+    expect(
+      summarizeRecords(all.filter((r) => r.level !== "Warning")).levelMix.map((entry) => entry.level),
+    ).toEqual(["Critical", "Error", "Information", "Verbose"]);
+  });
+
+  it("counts exactly what the filter row's toggles count", () => {
+    const counts = countByLevel(all);
+    for (const entry of summarizeRecords(all).levelMix) expect(entry.count).toBe(counts[entry.level]);
   });
 });
 

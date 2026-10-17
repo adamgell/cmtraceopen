@@ -1,12 +1,12 @@
 /**
  * Pure derivations for the Insights rail (spec sections 8.13 and 11): no React, no stores.
  *
- * `summarizeRecords` counts levels and event IDs in one pass. Phase 5 plans a separate level count
- * in `evtx-filter.ts` for the filter row; when it lands, one of the two should call the other so
- * the rail and the filter row never disagree about a count.
+ * `summarizeRecords` takes its level counts from `countByLevel` in `evtx-filter.ts`, the count the
+ * filter row's toggles show, so the rail and the filter row cannot disagree about one.
  */
 import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
 import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
+import { countByLevel, EVTX_LEVELS } from "./evtx-filter";
 import type {
   DiagnosisEventEvidence,
   DiagnosisFinding,
@@ -17,15 +17,6 @@ import type {
 
 export const TOP_EVENT_ID_COUNT = 7;
 export const SAME_ID_BIN_COUNT = 24;
-
-/** Most severe first, the order of the level-mix bar and its legend. */
-export const LEVEL_ORDER: readonly EvtxLevel[] = [
-  "Critical",
-  "Error",
-  "Warning",
-  "Information",
-  "Verbose",
-];
 
 /** Counts as the app shows them elsewhere (the status bar uses the same locale formatting). */
 export function formatCount(value: number): string {
@@ -49,14 +40,14 @@ export interface RecordSummary {
 }
 
 export function summarizeRecords(records: readonly EvtxRecord[]): RecordSummary {
-  const levelCounts = new Map<EvtxLevel, number>();
   const idCounts = new Map<number, number>();
   for (const record of records) {
-    levelCounts.set(record.level, (levelCounts.get(record.level) ?? 0) + 1);
     idCounts.set(record.eventId, (idCounts.get(record.eventId) ?? 0) + 1);
   }
-  const levelMix = LEVEL_ORDER.flatMap((level) => {
-    const count = levelCounts.get(level) ?? 0;
+  // Most severe first, the order of the level-mix bar and its legend.
+  const levelCounts = countByLevel(records);
+  const levelMix = EVTX_LEVELS.flatMap((level) => {
+    const count = levelCounts[level];
     return count > 0 ? [{ level, count }] : [];
   });
   const topEventIds = [...idCounts.entries()]

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { EVTX_LEVELS } from "./evtx-filter";
 import {
   buildFilterExport,
   mergeFilters,
   orderFilters,
   parseFilterExport,
   SAVED_FILTER_SCHEMA,
-  ALL_LEVELS,
   sanitizeCriteria,
   sanitizeSavedFilter,
   type EvtxSavedFilter,
@@ -71,7 +71,7 @@ describe("sanitizeCriteria", () => {
     const criteria = sanitizeCriteria({ beforeLoad: { levels: ["Bogus"] } });
     // Compared against the constant rather than its current size, so adding a level does not
     // report a length mismatch that says nothing about the cause.
-    expect([...criteria.beforeLoad.levels].sort()).toEqual([...ALL_LEVELS].sort());
+    expect([...criteria.beforeLoad.levels].sort()).toEqual([...EVTX_LEVELS].sort());
   });
 
   it("falls back to a known time window", () => {
@@ -81,7 +81,7 @@ describe("sanitizeCriteria", () => {
   it("tolerates a completely wrong shape", () => {
     expect(sanitizeCriteria(null).beforeLoad.eventIds).toBe("");
     expect(sanitizeCriteria(42).onLoad.search).toBe("");
-    expect(sanitizeCriteria(["a"]).beforeLoad.levels).toEqual(ALL_LEVELS);
+    expect(sanitizeCriteria(["a"]).beforeLoad.levels).toEqual(EVTX_LEVELS);
   });
 });
 
