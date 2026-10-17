@@ -169,6 +169,40 @@ interface EventLogAnalysisPump {
   publishedSessionId: string | null;
 }
 
+/** A control the operator types into or picks from: Escape there belongs to the control. */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return true;
+  return ["textbox", "searchbox", "combobox", "spinbutton"].includes(target.getAttribute("role") ?? "");
+}
+
+/** A modal dialog is open, and Escape is its to spend. */
+function isModalDialogOpen(): boolean {
+  return document.querySelector('[aria-modal="true"], dialog[open]') !== null;
+}
+
+/**
+ * Escape clears the transient time range (spec section 9). One window listener for the mounted
+ * workspace, so it works wherever focus sits in it. It steps aside for anything that has already
+ * used the key: a popover or menu that handled it (`defaultPrevented`), a control being typed into,
+ * and an open modal dialog. It clears the range only: the record scope is cleared from its chip.
+ */
+function useClearTimeRangeOnEscape(): void {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (isEditableTarget(event.target) || isModalDialogOpen()) return;
+      const { timeRange, setTimeRange } = useEvtxStore.getState();
+      if (timeRange === null) return;
+      setTimeRange(null);
+      event.preventDefault();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+}
+
 function hasSameRecordMembership(
   left: readonly EvtxRecord[],
   right: readonly EvtxRecord[],
@@ -194,6 +228,7 @@ function useStableRecordMembership(records: EvtxRecord[]): EvtxRecord[] {
 }
 
 export function EventLogWorkspace() {
+  useClearTimeRangeOnEscape();
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
   const isLoading = useEvtxStore((s) => s.isLoading);

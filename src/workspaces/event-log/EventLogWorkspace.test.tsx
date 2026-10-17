@@ -904,6 +904,140 @@ describe("EventLogWorkspace fixtures", () => {
     expect(recordGridRows(document.body)).toHaveLength(1);
   });
 
+  describe("the transient time range and its Escape key", () => {
+    const SEP = "\u2013";
+    const RANGE = {
+      startMs: Date.parse("2026-01-15T11:00:00.000Z"),
+      endMs: Date.parse("2026-01-15T13:00:00.000Z"),
+    };
+    const pressEscape = (target: Element | Window = document.body) =>
+      fireEvent.keyDown(target, { key: "Escape" });
+    /** Seeds the fixture, renders the workspace, then sets the range through the store. */
+    const renderWithRange = () => {
+      seedFixtureEvents();
+      useEvtxStore.setState({ timeZoneMode: "utc" });
+      const view = render(<EventLogWorkspace />);
+      act(() => {
+        expect(useEvtxStore.getState().setTimeRange(RANGE)).toBe(true);
+      });
+      return view;
+    };
+    const chipText = () =>
+      document.querySelector("[data-evtx-chip='timeRange'] span")?.textContent ?? null;
+
+    it("shows the Time chip for the range, in the selected zone", () => {
+      renderWithRange();
+      expect(chipText()).toBe(`Time: brushed 11:00${SEP}13:00`);
+    });
+
+    it("clears the range on Escape, and says it handled the key", () => {
+      renderWithRange();
+      expect(pressEscape()).toBe(false);
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+      expect(chipText()).toBeNull();
+    });
+
+    it("leaves the key alone when there is no range", () => {
+      seedFixtureEvents();
+      render(<EventLogWorkspace />);
+      expect(pressEscape()).toBe(true);
+    });
+
+    it("does not clear the record scope", () => {
+      renderWithRange();
+      const [first] = useEvtxStore.getState().records;
+      act(() => {
+        useEvtxStore.getState().setRecordScope({
+          kind: "finding",
+          title: "A finding",
+          records: new Set([first]),
+          counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+        });
+      });
+      pressEscape();
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+      expect(useEvtxStore.getState().recordScope).not.toBeNull();
+      pressEscape();
+      expect(useEvtxStore.getState().recordScope).not.toBeNull();
+    });
+
+    it("leaves the range alone while a control is being typed into", () => {
+      renderWithRange();
+      const search = screen.getByRole("textbox", { name: "Search events" });
+      search.focus();
+      expect(pressEscape(search)).toBe(true);
+      expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+    });
+
+    it("leaves the range alone while a modal dialog is open", () => {
+      renderWithRange();
+      const dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      document.body.appendChild(dialog);
+      try {
+        expect(pressEscape()).toBe(true);
+        expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+      } finally {
+        dialog.remove();
+      }
+      pressEscape();
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+    });
+
+    it("steps aside for an Escape that something else has already used", () => {
+      renderWithRange();
+      const used = (event: Event) => event.preventDefault();
+      document.addEventListener("keydown", used);
+      try {
+        pressEscape();
+        expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+      } finally {
+        document.removeEventListener("keydown", used);
+      }
+      pressEscape();
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+    });
+
+    it("lets the More filters popover have the first Escape, and clears the range with the next", async () => {
+      renderWithRange();
+      fireEvent.click(screen.getByRole("button", { name: /^More filters/ }));
+      const dialog = await screen.findByRole("dialog", { name: "More filters" });
+
+      // The popover handles the key and prevents its default, so the workspace steps aside.
+      fireEvent.keyDown(dialog, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "More filters" })).toBeNull());
+      expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+
+      pressEscape();
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+    });
+
+    it("stops listening when the workspace unmounts", () => {
+      const view = renderWithRange();
+      view.unmount();
+      expect(pressEscape()).toBe(true);
+      expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+    });
+
+    it("counts, in the chip's tooltip, the events the range hides for want of a timestamp", () => {
+      seedFixtureEvents();
+      const untimed = { ...fixtureRecord(), eventRecordId: 43, timestampEpoch: 0, message: "no clock" };
+      useEvtxStore.setState({
+        timeZoneMode: "utc",
+        records: [fixtureRecord(), untimed, { ...untimed, eventRecordId: 44 }],
+      });
+      render(<EventLogWorkspace />);
+      act(() => {
+        useEvtxStore.getState().setTimeRange(RANGE);
+      });
+      expect(screen.getByText(`Time: brushed 11:00${SEP}13:00`)).toHaveAttribute(
+        "title",
+        `Time: brushed 11:00${SEP}13:00 (UTC)\n2 events without a timestamp are hidden by this range.`,
+      );
+    });
+  });
+
   it("offers CSV, TSV, JSON, and Event XML export of visible events", () => {
     seedFixtureEvents();
     render(<EventLogWorkspace />);
