@@ -37,6 +37,15 @@ export interface WorkspaceCapabilities {
    * the Log workspace as it does for a workspace that sets nothing.
    */
   keepsViewOnLogLoad?: boolean | readonly string[];
+  /**
+   * Whether this workspace's own `onOpenSource` reopens a text-log source as a text log, by loading
+   * it through the log store itself. It matters to one thing: a text-log load that fails Access
+   * Denied offers a restart as administrator, and the restore ticket names the workspace that
+   * reopens the source after it. A workspace with an `onOpenSource` that does not say so would
+   * reopen it as something else (Event Logs as EVTX, Timeline as a timeline), so the ticket names
+   * the Log workspace instead. Defaults to false; a workspace with no `onOpenSource` is not asked.
+   */
+  reopensTextLogs?: boolean;
 }
 
 export interface WorkspaceDefinition {

@@ -27,5 +27,10 @@ export const newIntuneWorkspace: WorkspaceDefinition = {
     folder: "Open IME or evidence folder...",
     placeholder: "Open Intune source...",
   },
+  capabilities: {
+    // The handler loads a file source through the log store before it analyzes it, so a restore
+    // through the handler reopens the text log too.
+    reopensTextLogs: true,
+  },
   onOpenSource: createIntuneOnOpenSource("new-intune"),
 };

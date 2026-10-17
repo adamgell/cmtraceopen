@@ -17,6 +17,7 @@
  */
 
 import type { LogSource, WorkspaceId } from "../types/log";
+import type { WorkspaceDefinition } from "../workspaces/types";
 import type {
   ElevationReason,
   ElevationRequest,
@@ -66,6 +67,25 @@ export function describeRestoreTarget(target: RestoreTarget): string {
     case "knownSource":
       return target.sourceId;
   }
+}
+
+/**
+ * The workspace a restore ticket names when a TEXT-LOG load failed Access Denied.
+ *
+ * After the elevated restart the ticket's workspace opens the source through its own
+ * `onOpenSource` (`restoreElevatedSource`), and only the Log workspace, which has none, falls
+ * through to the text-log loader. So the failing workspace keeps its own ticket when it has no
+ * handler (JAMF, which restores nothing, and Log) or says its handler reopens text logs (the Intune
+ * workspaces load them through the log store). Any other workspace with a handler would reopen the
+ * source as something else: the ticket names the Log workspace, whose restore is the text-log load
+ * the user asked for.
+ */
+export function textLogRestoreWorkspace(
+  active: WorkspaceId,
+  definition: Pick<WorkspaceDefinition, "onOpenSource" | "capabilities">,
+): WorkspaceId {
+  if (!definition.onOpenSource) return active;
+  return definition.capabilities?.reopensTextLogs === true ? active : "log";
 }
 
 export interface ElevationRequestContext {
