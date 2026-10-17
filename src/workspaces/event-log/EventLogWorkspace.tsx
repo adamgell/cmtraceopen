@@ -28,6 +28,7 @@ import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
 import { EvtxInsightsRail } from "./EvtxInsightsRail";
 import { EvtxViewBar } from "./EvtxViewBar";
+import { EvtxViewStrip } from "./EvtxViewStrip";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
 import {
   EVTX_VIEW_LABELS,
@@ -627,6 +628,7 @@ export function EventLogWorkspace() {
         </div>
       )}
       {isLoading && <ProgressBar style={{ width: "100%", flexShrink: 0 }} />}
+      <EvtxViewStrip />
       <EvtxViewBar nowEpoch={nowEpoch} />
       <EvtxFilterBar nowEpoch={nowEpoch} />
       <EvtxFilterChips

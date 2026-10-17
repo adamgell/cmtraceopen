@@ -308,4 +308,32 @@ test.describe("event-logs screenshots", () => {
       animations: "disabled",
     });
   });
+
+  test("event-logs views", async ({ page }) => {
+    // The view strip (spec 8.15) with the built-in Enrollment triage applied to the fixture: the
+    // DeviceManagement 76s (its 72s are not part of it, Q-12), the AAD warnings and DNS-Client
+    // 1014 in System, with the card active, the Channels and Search chips, and the source line.
+    const strip = page.locator('[data-evtx-region="view-strip"]');
+    await expect(strip).toBeVisible();
+    // Spec 5.1: about 30 px, which is 6 px of padding above a 24 px card.
+    const height = (await strip.boundingBox())?.height ?? 0;
+    expect(height).toBeGreaterThanOrEqual(28);
+    expect(height).toBeLessThanOrEqual(32);
+
+    const card = page.getByRole("button", { name: "Enrollment triage" });
+    await card.click();
+    await expect(card).toHaveAttribute("aria-pressed", "true");
+    // The strip sits above the view bar (spec 5.1).
+    const stripBox = await strip.boundingBox();
+    const barBox = await page.locator('[data-evtx-region="view-bar"]').boundingBox();
+    expect((stripBox?.y ?? 0) + (stripBox?.height ?? 0)).toBeLessThanOrEqual(barBox?.y ?? 0);
+    await expect(page.getByRole("list", { name: "Active filters" })).toContainText("Channels: 3 of 4");
+    // A click leaves the keyboard focus ring off; drop focus so no capture shows one.
+    await card.evaluate((element) => (element as HTMLElement).blur());
+    await assertNoHostPaths(page);
+    await page.screenshot({
+      path: outPath("event-logs-views.png"),
+      animations: "disabled",
+    });
+  });
 });
