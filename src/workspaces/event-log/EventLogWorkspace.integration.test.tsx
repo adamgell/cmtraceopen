@@ -11,12 +11,15 @@ const mocks = vi.hoisted(() => ({
   buildAnalysis: vi.fn(),
   closeAnalysis: vi.fn(),
   queryTimeline: vi.fn(),
+  queryEdges: vi.fn(),
   rail: vi.fn(),
 }));
 
 vi.mock("../../lib/commands", () => ({
   closeEventLogAnalysisSession: mocks.closeAnalysis,
   queryEventLogAnalysisTimeline: mocks.queryTimeline,
+  // The shared correlation model reads edge pages through the same module.
+  queryEventLogAnalysisEdges: mocks.queryEdges,
 }));
 vi.mock("./event-analysis-session", () => ({
   buildEventLogAnalysisSession: mocks.buildAnalysis,
