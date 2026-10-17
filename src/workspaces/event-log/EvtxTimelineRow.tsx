@@ -10,6 +10,7 @@ import {
   evtxQuickFilterTerms,
   isEvtxBookmark,
   isEvtxMarkerAddressable,
+  type EvtxHighlightTerms,
 } from "./evtx-marker-adapter";
 import type { EvtxQuickFilter } from "./evtx-filter";
 import {
@@ -54,28 +55,66 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function highlightValue(
+const NO_HIGHLIGHT_TERMS: EvtxHighlightTerms = { text: [], columns: {} };
+
+/**
+ * Where `terms` match in `value`, as [start, end) ranges. Only exact regular-expression matches
+ * count: re-testing with localeCompare widened matching (for example, treating é as e) and
+ * highlighted text that the quick-filter regular expression never matched.
+ */
+function matchRanges(
   value: string,
   terms: readonly string[],
   caseSensitive: boolean
+): Array<[number, number]> {
+  const pattern = terms.filter(Boolean).map(escapeRegExp).join("|");
+  if (!pattern) return [];
+  const ranges: Array<[number, number]> = [];
+  for (const match of value.matchAll(new RegExp(pattern, caseSensitive ? "g" : "gi"))) {
+    if (match[0]) ranges.push([match.index, match.index + match[0].length]);
+  }
+  return ranges;
+}
+
+/**
+ * Marks the free text (`textTerms`, with the quick filter's Case setting) and this cell's field
+ * values (`fieldTerms`, in any case, as field values match). Overlapping matches merge into one
+ * mark; adjacent ones stay separate, as one regular expression's matches always did.
+ */
+function highlightValue(
+  value: string,
+  textTerms: readonly string[],
+  caseSensitive: boolean,
+  fieldTerms: readonly string[]
 ) {
-  if (terms.length === 0) return value;
-  const pattern = terms.map(escapeRegExp).join("|");
-  if (!pattern) return value;
-  const matcher = new RegExp(`(${pattern})`, caseSensitive ? "g" : "gi");
-  return value.split(matcher).map((part, index) => {
-    // The single outer capture means odd split positions are exact regex matches. Re-testing with
-    // localeCompare widened matching (for example, treating é as e) and highlighted text that the
-    // quick-filter regular expression never matched.
-    const matched = index % 2 === 1;
-    return matched ? (
-      <mark key={`${part}-${index}`} aria-label="Quick-filter match">
-        {part}
+  const ranges = [
+    ...matchRanges(value, textTerms, caseSensitive),
+    ...matchRanges(value, fieldTerms, false),
+  ].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (ranges.length === 0) return value;
+  const merged: Array<[number, number]> = [];
+  for (const [start, end] of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && start < last[1]) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  const parts = [];
+  let cursor = 0;
+  for (const [start, end] of merged) {
+    if (start > cursor) {
+      parts.push(<Fragment key={`text-${cursor}`}>{value.slice(cursor, start)}</Fragment>);
+    }
+    parts.push(
+      <mark key={`mark-${start}`} aria-label="Quick-filter match">
+        {value.slice(start, end)}
       </mark>
-    ) : (
-      <Fragment key={`${part}-${index}`}>{part}</Fragment>
     );
-  });
+    cursor = end;
+  }
+  if (cursor < value.length) {
+    parts.push(<Fragment key={`text-${cursor}`}>{value.slice(cursor)}</Fragment>);
+  }
+  return parts;
 }
 
 export function EvtxMarkerControls({
@@ -271,7 +310,7 @@ export const EvtxTimelineRow = memo(
     const highlightEnabled = Boolean(quickFilter?.highlight && filterMatch);
     const highlightTerms = highlightEnabled && quickFilter
       ? evtxQuickFilterTerms(quickFilter)
-      : [];
+      : NO_HIGHLIGHT_TERMS;
     const visualState = resolveEvtxRowVisualState({
       isSelected,
       marker,
@@ -463,7 +502,13 @@ export const EvtxTimelineRow = memo(
               title={value}
             >
               {highlightEnabled
-                ? highlightValue(value, highlightTerms, quickFilter?.caseSensitive ?? false)
+                ? highlightValue(
+                    value,
+                    highlightTerms.text,
+                    quickFilter?.caseSensitive ?? false,
+                    // A field term marks only the cell of the column showing the field it tested.
+                    highlightTerms.columns[column.id] ?? []
+                  )
                 : value}
             </div>
           );

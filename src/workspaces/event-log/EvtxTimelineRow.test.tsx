@@ -264,3 +264,106 @@ describe("EvtxTimelineRow triage state", () => {
     expect(screen.queryByLabelText("Quick-filter match")).not.toBeInTheDocument();
   });
 });
+
+describe("EvtxTimelineRow field-query marks (spec 8.3, #833)", () => {
+  const aadRecord = (): EvtxRecord => ({
+    ...record(),
+    provider: "Microsoft-Windows-AAD",
+    channel: "Microsoft-Windows-AAD/Operational",
+    message: "AAD token broker error on the PCI bus",
+    computer: "PC01",
+  });
+  const fieldFilter = (query: string, caseSensitive = false) => ({
+    mode: "fieldQuery" as const,
+    query,
+    scope: "allColumns" as const,
+    action: "show" as const,
+    caseSensitive,
+    highlight: true,
+  });
+  const withComputer = {
+    ...defaultColumnConfig(),
+    order: [...defaultColumnConfig().order, "computer" as const],
+  };
+  const marks = (root: ParentNode) =>
+    Array.from(root.querySelectorAll('mark[aria-label="Quick-filter match"]')).map(
+      (mark) => mark.textContent,
+    );
+  const cell = (label: string) =>
+    screen
+      .getAllByRole("gridcell")
+      .find((candidate) => candidate.getAttribute("aria-label")?.startsWith(`${label}:`))!;
+
+  it("marks a provider: value in the Provider cell only, not in the Channel cell or the message", () => {
+    const { container } = renderRow({
+      record: aadRecord(),
+      quickFilter: fieldFilter("provider:AAD"),
+      quickFilterMatch: true,
+    });
+    expect(marks(container)).toEqual(["AAD"]);
+    expect(marks(cell("Provider"))).toEqual(["AAD"]);
+    expect(marks(cell("Channel"))).toEqual([]);
+    expect(marks(cell("Description"))).toEqual([]);
+  });
+
+  it("marks a field value in any case, with Case on, as field values match", () => {
+    const { container } = renderRow({
+      record: aadRecord(),
+      quickFilter: fieldFilter("provider:aad", true),
+      quickFilterMatch: true,
+    });
+    expect(marks(container)).toEqual(["AAD"]);
+    expect(marks(cell("Provider"))).toEqual(["AAD"]);
+  });
+
+  it("marks a computer: value only in a rendered Computer cell, never in the message", () => {
+    const hidden = renderRow({
+      record: aadRecord(),
+      quickFilter: fieldFilter("computer:PC"),
+      quickFilterMatch: true,
+    });
+    // No Computer column by default, so nothing is marked: not "PC" inside "PCI" in the message.
+    expect(marks(hidden.container)).toEqual([]);
+    hidden.unmount();
+
+    const shown = renderRow({
+      record: aadRecord(),
+      columnConfig: withComputer,
+      columns: visibleColumns(withComputer),
+      quickFilter: fieldFilter("computer:PC"),
+      quickFilterMatch: true,
+    });
+    expect(marks(shown.container)).toEqual(["PC"]);
+    expect(marks(cell("Computer"))).toEqual(["PC"]);
+    expect(marks(cell("Description"))).toEqual([]);
+  });
+
+  it("keeps marking free text in every cell, beside the field marks", () => {
+    const { container } = renderRow({
+      record: aadRecord(),
+      quickFilter: fieldFilter("token provider:AAD"),
+      quickFilterMatch: true,
+    });
+    expect(marks(container)).toEqual(["AAD", "token"]);
+    expect(marks(cell("Description"))).toEqual(["token"]);
+
+    const free = renderRow({
+      record: aadRecord(),
+      quickFilter: fieldFilter("aad"),
+      quickFilterMatch: true,
+    });
+    // Free text marks wherever it appears, as before: Channel, Provider and the message.
+    expect(marks(free.container)).toEqual(["AAD", "AAD", "AAD"]);
+  });
+
+  it("marks nothing for negated, source:, data.<Name>:, id: or level: terms", () => {
+    const { container } = renderRow({
+      record: { ...aadRecord(), eventData: [{ name: "Error", value: "AAD" }] },
+      quickFilter: fieldFilter(
+        "-provider:Kernel source:Application.evtx data.Error:AAD id:100 level:error",
+      ),
+      quickFilterMatch: true,
+    });
+    expect(marks(container)).toEqual([]);
+  });
+});

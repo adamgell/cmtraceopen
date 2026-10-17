@@ -493,7 +493,7 @@ describe("EVTX marker identity adapter", () => {
       query: "setup failure",
       highlight: true,
     };
-    expect(evtxQuickFilterTerms(quickFilter)).toEqual(["setup", "failure"]);
+    expect(evtxQuickFilterTerms(quickFilter)).toEqual({ text: ["setup", "failure"], columns: {} });
   });
 
   it.each(["Boot\rcompleted", "Boot\r\ncompleted"])(
@@ -506,34 +506,34 @@ describe("EVTX marker identity adapter", () => {
           query,
           highlight: true,
         }),
-      ).toEqual(["Boot", "completed"]);
+      ).toEqual({ text: ["Boot", "completed"], columns: {} });
     },
   );
 
-  it("marks a field query's free text and substring-field values, not IDs, levels or exclusions", () => {
+  it("marks a field query's free text in any cell and each field value only in its own column", () => {
     expect(
       evtxQuickFilterTerms({
         ...DEFAULT_EVTX_QUICK_FILTER,
         mode: "fieldQuery",
         query:
           'token "broker error" provider:AAD channel:Operational computer:PC-01 source:dm.evtx ' +
-          "data.ErrorCode:0x8018 id:1098 level:error -provider:Kernel OR -noise",
+          "data.ErrorCode:0x8018 id:1098 level:error provider:Broker -provider:Kernel OR -noise",
         highlight: true,
       }),
-    ).toEqual([
-      "token",
-      "broker error",
-      "AAD",
-      "Operational",
-      "PC-01",
-      "dm.evtx",
-      "0x8018",
-    ]);
+    ).toEqual({
+      text: ["token", "broker error"],
+      // source: and data.<Name>: have no grid column; id:, level: and negated terms mark nothing.
+      columns: {
+        provider: ["AAD", "Broker"],
+        channel: ["Operational"],
+        computer: ["PC-01"],
+      },
+    });
   });
 
   it("marks nothing for a field query that does not parse", () => {
     expect(
       evtxQuickFilterTerms({ ...DEFAULT_EVTX_QUICK_FILTER, mode: "fieldQuery", query: 'token "open' }),
-    ).toEqual([]);
+    ).toEqual({ text: [], columns: {} });
   });
 });
