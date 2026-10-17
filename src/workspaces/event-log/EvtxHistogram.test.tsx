@@ -84,7 +84,12 @@ function stubPlotRect(width = 720) {
   return plot;
 }
 
+/** The histogram names the year when its domain is not within the current one, so the clock is pinned. */
+const PINNED_NOW = Date.UTC(2026, 9, 16, 12, 0);
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(PINNED_NOW);
   seed();
   useUiStore.setState({ themeId: "light", logListFontSize: 13 });
 });
@@ -162,6 +167,29 @@ describe("EvtxHistogram", () => {
     const plot = stubPlotRect(histogram.buckets.length * 10);
     fireEvent.pointerMove(plot, { clientX: 100 + 5 });
     expect(tooltip()).toHaveTextContent(describeBucket(histogram.buckets[0], "utc", true));
+  });
+
+  it("names the year everywhere on a chart of a single past year, and nowhere on one within the current year", () => {
+    const past = [rec(Date.UTC(2024, 2, 3, 10), "Information", 1), rec(Date.UTC(2024, 8, 1, 10), "Error", 2)];
+    const view = render(<EvtxHistogram records={past} loading={false} />);
+    const histogram = buildHistogram(past, "utc");
+    expect(histogram.showYear).toBe(true);
+    const slider = screen.getByRole("slider", { name: "Time range" });
+    expect(slider.getAttribute("aria-valuetext")).toMatch(/ 2024 /);
+    expect(screen.getByRole("figure").getAttribute("aria-label")).toMatch(/ 2024 /);
+    expect(view.container.querySelector("[data-evtx-tick]")!.textContent).toMatch(/ 2024 /);
+    expect(within(screen.getByRole("table")).getAllByRole("rowheader")[0].textContent).toMatch(/ 2024 /);
+    const plot = stubPlotRect(histogram.buckets.length * 10);
+    fireEvent.pointerMove(plot, { clientX: 105 });
+    expect(tooltip()!.textContent).toMatch(/ 2024 /);
+    cleanup();
+
+    const current = [rec(Date.UTC(2026, 2, 3, 10), "Information", 1), rec(Date.UTC(2026, 8, 1, 10), "Error", 2)];
+    const now = render(<EvtxHistogram records={current} loading={false} />);
+    const slider2 = screen.getByRole("slider", { name: "Time range" });
+    expect(slider2.getAttribute("aria-valuetext")).not.toMatch(/\b2026\b/);
+    expect(screen.getByRole("figure").getAttribute("aria-label")).not.toMatch(/\b2026\b/);
+    expect(now.container.querySelector("[data-evtx-tick]")!.textContent).not.toMatch(/\b2026\b/);
   });
 
   it("recolours the bars from the token map in every theme", () => {
@@ -357,7 +385,7 @@ describe("EvtxHistogram", () => {
   });
 
   it("shows the throttled set, and not 'no events', while the first events are still arriving", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ now: PINNED_NOW });
     const records = dayOfEvents();
     const { rerender, container } = render(<EvtxHistogram records={[]} loading={false} />);
     expect(screen.getByRole("status")).toHaveTextContent("No events to chart.");
@@ -372,7 +400,7 @@ describe("EvtxHistogram", () => {
   });
 
   it("rebuckets at most once per 75 ms while a tail appends", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ now: PINNED_NOW });
     const first = dayOfEvents();
     const { rerender, container } = render(<EvtxHistogram records={first} loading={false} />);
     const widthBefore = container.querySelectorAll("[data-evtx-bucket]").length;

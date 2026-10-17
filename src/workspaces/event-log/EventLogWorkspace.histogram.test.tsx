@@ -113,6 +113,9 @@ function stubSlider(width = 360) {
 
 describe("the histogram in the workspace", () => {
   beforeEach(() => {
+    // The chart and the Time chip name the year when it is not the current one: pin the clock (Date only).
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(T0);
     seen.filterBar = -1;
     seen.timeline = -1;
   });

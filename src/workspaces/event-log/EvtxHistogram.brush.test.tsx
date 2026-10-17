@@ -51,7 +51,12 @@ const x = (bucket: number, offset = 4) => LEFT + bucket * BUCKET_PX + offset;
 let setTimeRangeSpy: ReturnType<typeof vi.fn>;
 const realSetTimeRange = useEvtxStore.getState().setTimeRange;
 
+/** The chart and the chip name the year by the same rule, which compares with the current one. */
+const PINNED_NOW = Date.UTC(2026, 9, 16, 12, 0);
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(PINNED_NOW);
   setTimeRangeSpy = vi.fn(realSetTimeRange);
   useEvtxStore.setState({
     timeZoneMode: "utc",
@@ -179,7 +184,7 @@ describe("dragging a range", () => {
   });
 
   it("freezes the buckets a drag began on while a live tail re-buckets the chart", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ now: PINNED_NOW });
     const { slider, rerender } = mount();
     down(slider, x(3));
     // The tail appends days of events: the chart would regrid to a wider interval.
@@ -201,7 +206,7 @@ describe("dragging a range", () => {
 
 describe("a press while a keyboard selection is pending", () => {
   it("anchors under the pointer on the grid the selection froze, not the regridded chart", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ now: PINNED_NOW });
     const { slider, rerender } = mount();
     fireEvent.focus(slider);
     // A Shift selection freezes the 72 buckets of 20 minutes it began on.
@@ -222,6 +227,47 @@ describe("a press while a keyboard selection is pending", () => {
     down(slider, LEFT + 360);
     up(slider, LEFT + 360);
     expect(storeRange()).toEqual(rangeOf(36, 36));
+  });
+});
+
+describe("the chart and the chip name the year by one rule", () => {
+  /** Two events a day for six months of a single past year. */
+  const inYear = (year: number) =>
+    Array.from({ length: 360 }, (_, i) => rec(Date.UTC(year, 2, 3) + Math.floor(i / 2) * 12 * HOUR + (i % 2) * HOUR, "Information", i));
+
+  function brushBucket(list: readonly EvtxRecord[]) {
+    const view = render(
+      <>
+        <EvtxFilterChips visibleCount={list.length} loadedCount={list.length} />
+        <EvtxHistogram records={list} loading={false} />
+      </>,
+    );
+    const slider = screen.getByRole("slider", { name: "Time range" });
+    const shown = buildHistogram(list, "utc");
+    const wide = 720 / shown.buckets.length;
+    slider.getBoundingClientRect = () =>
+      ({ left: LEFT, top: 0, right: LEFT + 720, bottom: 56, width: 720, height: 56, x: LEFT, y: 0, toJSON: () => ({}) }) as DOMRect;
+    down(slider, LEFT + 10 * wide + 1);
+    up(slider, LEFT + 10 * wide + 1);
+    return { ...view, slider, shown };
+  }
+
+  it("a chart of a single past year names the year, and a bucket brushed on it gives a chip with the same year", () => {
+    const { slider, shown } = brushBucket(inYear(2024));
+    expect(shown.showYear).toBe(true);
+    const chip = document.querySelector("[data-evtx-chip='timeRange'] span")!.textContent!;
+    expect(chip).toMatch(/^Time: brushed [A-Z][a-z]{2} \d{1,2} 2024 \d\d:\d\d/);
+    expect(slider.getAttribute("aria-valuetext")).toMatch(/ 2024 \d\d:\d\d.* 2024 \d\d:\d\d \u00b7 .*time range [A-Z][a-z]{2} \d{1,2} 2024 /);
+    // The year in the chip is the year in the chart's own labels.
+    expect(chip.match(/\b\d{4}\b/)![0]).toBe(slider.getAttribute("aria-valuetext")!.match(/\b\d{4}\b/)![0]);
+  });
+
+  it("a chart within the current year names no year on either side", () => {
+    const { slider, shown } = brushBucket(inYear(2026));
+    expect(shown.showYear).toBe(false);
+    const chip = document.querySelector("[data-evtx-chip='timeRange'] span")!.textContent!;
+    expect(chip).not.toMatch(/\b20\d\d\b/);
+    expect(slider.getAttribute("aria-valuetext")).not.toMatch(/\b20\d\d\b/);
   });
 });
 
@@ -495,7 +541,7 @@ describe("the keyboard", () => {
   });
 
   it("freezes the buckets of a pending selection while a tail re-buckets the chart", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ now: PINNED_NOW });
     const { slider, rerender } = mount();
     fireEvent.focus(slider);
     key(slider, "ArrowLeft", { shiftKey: true });
@@ -614,7 +660,7 @@ describe("a load that ends a gesture", () => {
     });
 
   it("derives the cursor from the chart once it is ready, when focus arrived during the load", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ now: PINNED_NOW });
     const { rerender } = render(withChips([], true));
     const slider = screen.getByRole("slider", { name: "Time range" });
     act(() => {
@@ -631,7 +677,7 @@ describe("a load that ends a gesture", () => {
   });
 
   it("shows no stale grid and commits none after a load, when a Shift selection was pending", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ now: PINNED_NOW });
     const { container, rerender } = render(withChips(records, false));
     const slider = screen.getByRole("slider", { name: "Time range" });
     act(() => {
@@ -660,7 +706,7 @@ describe("a load that ends a gesture", () => {
   });
 
   it("drops a drag in progress when a load starts, and commits nothing on release", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ now: PINNED_NOW });
     const { container, rerender } = render(withChips(records, false));
     const slider = screen.getByRole("slider", { name: "Time range" });
     slider.getBoundingClientRect = () =>

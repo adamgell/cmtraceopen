@@ -26,6 +26,7 @@ import {
   formatClock,
   formatDayClock,
   formatTimeRange,
+  timeRangeNeedsYear,
   timeZoneLabel,
   type EvtxTimeZoneMode,
 } from "./evtx-time";
@@ -180,8 +181,9 @@ export interface EvtxHistogram {
   /** First edge to last edge, or null when nothing is placed. */
   domain: EvtxTimeRange | null;
   /**
-   * Day labels carry the year: the domain crosses a calendar year in the zone, or the buckets are a
-   * year wide or more. Otherwise two buckets of different years would read alike.
+   * Day labels carry the year (`timeRangeNeedsYear`, the Time chip's rule too): the domain is not
+   * entirely within the current year in the zone, crosses a calendar year, or spans 365 days or more.
+   * Otherwise buckets of different years would read alike.
    */
   showYear: boolean;
 }
@@ -294,25 +296,16 @@ export function chooseBuckets(
 }
 
 /**
- * Whether day labels must carry the year: the domain crosses a calendar year in the zone, or a
- * bucket is a year wide or more (its two ends would otherwise read alike).
- */
-export function labelsNeedYear(intervalMs: number, domain: EvtxTimeRange, clock: ZoneClock): boolean {
-  return (
-    intervalMs >= 365 * DAY ||
-    clock.wall(domain.startMs).year !== clock.wall(domain.endMs - 1).year
-  );
-}
-
-/**
  * Buckets `records` by time in `clock`'s zone. Two passes over the records and one binary search
  * per record: the first finds the extent of the timed ones, the second counts. The work does not
- * grow with the number of buckets.
+ * grow with the number of buckets. `nowMs` is the clock the years of the day labels are compared
+ * with (see `showYear`); the real one unless a test gives another.
  */
 export function buildHistogram(
   records: readonly EvtxRecord[],
   mode: EvtxTimeZoneMode,
   clock: ZoneClock = zoneClockFor(mode),
+  nowMs: number = Date.now(),
 ): EvtxHistogram {
   let minMs = Infinity;
   let maxMs = -Infinity;
@@ -381,7 +374,7 @@ export function buildHistogram(
     placed,
     maxTotal,
     domain,
-    showYear: labelsNeedYear(intervalMs, domain, clock),
+    showYear: timeRangeNeedsYear(domain.startMs, domain.endMs, mode, nowMs),
   };
 }
 

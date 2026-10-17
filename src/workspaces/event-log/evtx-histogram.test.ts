@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isWithinTimeRange } from "./evtx-filter";
 import {
   HISTOGRAM_BAR_AREA_PX,
@@ -22,7 +22,6 @@ import {
   describeUntimed,
   fitScale,
   fractionAt,
-  labelsNeedYear,
   rangeOnPlot,
   zoneClockFor,
   type EvtxHistogram,
@@ -30,8 +29,22 @@ import {
   type WallParts,
   type ZoneClock,
 } from "./evtx-histogram";
-import { TIME_RANGE_SEPARATOR } from "./evtx-time";
+import { TIME_RANGE_SEPARATOR, timeRangeNeedsYear } from "./evtx-time";
 import type { EvtxLevel, EvtxRecord } from "./types";
+
+/**
+ * Day labels name the year when the charted domain is not entirely within the current year, so the
+ * clock is pinned (Date only; timers stay real) and the labels below do not change on 1 January.
+ */
+const PINNED_NOW = Date.UTC(2026, 9, 16, 12, 0);
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(PINNED_NOW);
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
@@ -710,12 +723,44 @@ describe("the year in day labels", () => {
     }
   });
 
-  it("needs the year for a rung of 365 days or more even over a domain inside one calendar year", () => {
-    const year = { startMs: on(2026, 1, 1), endMs: on(2027, 1, 1) };
-    // Jan 1 to Dec 31 is one calendar year, and a bucket a year wide would still read alike at both ends.
-    expect(labelsNeedYear(365 * DAY, year, UTC_CLOCK)).toBe(true);
-    expect(labelsNeedYear(90 * DAY, year, UTC_CLOCK)).toBe(false);
-    expect(labelsNeedYear(90 * DAY, { startMs: on(2026, 12, 1), endMs: on(2027, 1, 1) + 1 }, UTC_CLOCK)).toBe(true);
+  it("names the year on a chart of a single past year, on its axis, figure, buckets and nowhere ambiguous", () => {
+    const histogram = buildHistogram([rec(on(2024, 3, 3)), rec(on(2024, 9, 1))], "utc");
+    // The span is inside one calendar year, but not the current one (2026): 'Mar 3' would not say which.
+    expect(histogram.showYear).toBe(true);
+    expect(buildAxisTicks(histogram, "utc")[0].label).toMatch(/^Mar 3 2024 00:00$/);
+    expect(describeFigure(histogram, "utc")).toMatch(/over Mar 3 2024 00:00.*Sep \d{1,2} 2024 00:00 \(UTC\)/);
+    for (const bucket of histogram.buckets) {
+      expect(describeBucket(bucket, "utc", histogram.showYear)).toMatch(/ 2024 \d\d:\d\d.* 2024 \d\d:\d\d \u00b7 /);
+    }
+  });
+
+  it("names no year on a chart within the current year", () => {
+    const histogram = buildHistogram([rec(on(2026, 3, 3)), rec(on(2026, 9, 1))], "utc");
+    expect(histogram.showYear).toBe(false);
+    expect(buildAxisTicks(histogram, "utc")[0].label).toMatch(/^Mar 3 00:00$/);
+    expect(describeFigure(histogram, "utc")).not.toMatch(/\b20\d\d\b/);
+  });
+
+  it("compares with the clock it is given: the same chart names the year in another year", () => {
+    const records = [rec(on(2026, 3, 3)), rec(on(2026, 9, 1))];
+    expect(buildHistogram(records, "utc", UTC_CLOCK, on(2026, 10, 16)).showYear).toBe(false);
+    expect(buildHistogram(records, "utc", UTC_CLOCK, on(2030, 1, 1)).showYear).toBe(true);
+  });
+
+  it("uses the one label rule, the Time chip's: showYear is timeRangeNeedsYear of the domain", () => {
+    const samples: [number, number][] = [
+      [on(2026, 3, 3), on(2026, 9, 1)],
+      [on(2024, 3, 3), on(2024, 9, 1)],
+      [on(2025, 12, 31, 22), on(2026, 1, 1, 3)],
+      [on(2000, 3, 1), on(2026, 9, 1)],
+      [on(2027, 1, 5), on(2027, 1, 6)],
+    ];
+    for (const [from, to] of samples) {
+      const histogram = buildHistogram([rec(from), rec(to)], "utc");
+      expect(histogram.showYear, `${new Date(from).toISOString()}`).toBe(
+        timeRangeNeedsYear(histogram.domain!.startMs, histogram.domain!.endMs, "utc", PINNED_NOW),
+      );
+    }
   });
 
   it("names the year on a 365 day rung even when the span sits inside one calendar year", () => {
