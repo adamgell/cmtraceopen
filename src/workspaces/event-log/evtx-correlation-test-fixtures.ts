@@ -133,6 +133,8 @@ export interface DataOptions {
   scan?: Partial<EvtxCorrelationData["scan"]>;
   nextScan?: EvtxCorrelationData["nextScan"];
   unplaced?: Partial<EvtxCorrelationData["unplaced"]>;
+  /** The unplaced list and its count; by default an empty list the session counts as empty. */
+  unplacedList?: EvtxCorrelationData["unplacedList"];
   edgeState?: Partial<EvtxCorrelationData["edges"]>;
   error?: string | null;
   retry?: () => void;
@@ -144,6 +146,9 @@ export interface DataOptions {
 
 /** Nine events loaded and nine visible, no text logs: nothing narrowed. */
 export const UNNARROWED_SCOPE = { visibleCount: 9, loadedCount: 9, textLogCount: 0 } as const;
+
+/** An unplaced list the session counts as empty: no item, and a trusted count of 0. */
+export const EMPTY_UNPLACED_LIST: EvtxCorrelationData["unplacedList"] = { items: [], total: 0 };
 
 /** The edge total the hook would store: a count, or null when none can be trusted. */
 function knownEdgeTotal(total: number): number | null {
@@ -170,6 +175,7 @@ export function makeCounts(options: DataOptions): NonNullable<EvtxCorrelationDat
       ...options.edgeState,
     },
     linkPartners: linkPartnerCounts(model.linkedPairs),
+    unplacedList: options.unplacedList ?? EMPTY_UNPLACED_LIST,
     updating: options.updating ?? false,
   };
 }
@@ -209,6 +215,7 @@ export function makeData(options: DataOptions): EvtxCorrelationData {
       unplacedIds: new Set(),
       ...options.unplaced,
     },
+    unplacedList: options.unplacedList ?? EMPTY_UNPLACED_LIST,
     linkPartners: linkPartnerCounts(model.linkedPairs),
     counts: options.counts === undefined ? makeCounts(options) : options.counts,
     updating: options.updating ?? false,
