@@ -963,6 +963,9 @@ describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
       atLeast("exact badge text on the surface", visuals.strengths.exact.foreground, tokens.colorNeutralBackground1, 4.5);
       atLeast("exact badge border on the surface", visuals.strengths.exact.border, tokens.colorNeutralBackground1, 3);
       atLeast("selection edge on the surface", visuals.selection.border, tokens.colorNeutralBackground1, 3);
+      // On an unselected row the Exact badge keeps its own fill on the list surface (Background2).
+      atLeast("exact badge border on the list surface", visuals.strengths.exact.border, tokens.colorNeutralBackground2, 3);
+      atLeast("exact badge text on its own fill", visuals.strengths.exact.foreground, visuals.strengths.exact.background, 4.5);
       // The badge on its own fill is 1.00:1 against the selection fill, which is why it is not used there.
       expect(contrastRatio(r(visuals.strengths.exact.background), r(visuals.selection.background))).toBeLessThan(1.1);
       show(mixedData());
@@ -983,9 +986,25 @@ describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
         atLeast(`${strength} border on the list`, badge.border, tokens.colorNeutralBackground2, 3);
         atLeast(`${strength} border on a selected row`, badge.border, visuals.selection.background, 3);
       }
+      // The rows the first test cannot reach: every badge not on a selected row keeps its own fill
+      // and border, so what was measured is what is painted.
       show(mixedData());
-      const unselected = rows().find((row) => row.getAttribute("aria-selected") === "false")!;
-      expect(unselected.querySelector<HTMLElement>("[data-strength-badge]")!.style.backgroundColor).not.toBe("");
+      const unselected = rows().filter((row) => row.getAttribute("aria-selected") === "false");
+      expect(unselected.length).toBeGreaterThan(0);
+      for (const row of unselected) {
+        const badge = row.querySelector<HTMLElement>("[data-strength-badge]")!;
+        const strength = badge.getAttribute("data-strength-badge") as keyof typeof visuals.strengths;
+        const asPainted = (color: string) => {
+          const probe = document.createElement("span");
+          probe.style.color = color;
+          return probe.style.color;
+        };
+        expect(badge.style.color).toBe(asPainted(visuals.strengths[strength].foreground));
+        // The whole border, read back the way the browser normalizes a shorthand.
+        const probe = document.createElement("span");
+        probe.style.border = `1px ${visuals.strengths[strength].borderStyle} ${visuals.strengths[strength].border}`;
+        expect(badge.style.border).toBe(probe.style.border);
+      }
     });
 
     it("reads the level word of a Sequence entry at 4.5:1 on its card, in the level's own text color", () => {
