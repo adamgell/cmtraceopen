@@ -88,7 +88,8 @@ interface ActionMessage {
 const MESSAGE_HEAD_CHARS = 140;
 const NO_NEARBY: readonly TimelineItem[] = [];
 
-export interface EvtxCorrelationViewProps {  /**
+export interface EvtxCorrelationViewProps {
+  /**
    * Context entries drawn as "Not linked" markers on the plot (decision A on issue 838). There is no
    * producer yet, so the workspace passes none; the seam exists so that what a marker may say
    * ("Not linked" or "No loaded link") is wired and tested through the view, not only in the plot.
