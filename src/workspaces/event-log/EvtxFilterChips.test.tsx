@@ -19,6 +19,7 @@ import { moreFiltersActiveCount } from "./EvtxMoreFilters";
 import {
   DEFAULT_QUICK_FILTER,
   type EvtxRecordScope,
+  type EvtxRecordScopeCounts,
   type EvtxRecordScopeKind,
 } from "./evtx-filter";
 import { useEvtxStore } from "./evtx-store";
@@ -120,7 +121,7 @@ describe("buildFilterChips", () => {
 
 /** The en dash the spec writes between the two times of the brushed-time chip, as an escape. */
 const SEP = "\u2013";
-const NO_GAPS = { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false };
+const NO_GAPS: EvtxRecordScopeCounts = { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false };
 
 function recordOf(n: number): EvtxRecord {
   return {
@@ -230,6 +231,19 @@ describe("buildFilterChips, the transient criteria", () => {
       "1 cited reference matches more than one loaded event. Every match is included.",
       "The diagnosis response is bounded, so this finding may cite more events than were sent.",
     ]);
+  });
+
+  it("says in a Chain chip's tooltip that entries whose items were not read could not be matched, and that no absence is claimed", () => {
+    const chip = buildFilterChips(
+      input({ recordScope: scopeOf(2, "Enrollment 7a", "chain", { ...NO_GAPS, unresolved: 3 }) }),
+    )[0];
+    expect(chip.label).toBe("Chain: Enrollment 7a");
+    expect(chip.title?.split("\n")).toEqual([
+      "Chain: Enrollment 7a",
+      "2 events in this scope.",
+      "3 cited entries could not be matched to a record because their timeline items were not read.",
+    ]);
+    expect(chip.title).not.toMatch(/not loaded/);
   });
 
   it("lists them last, in the spec's order: time range, then record scope", () => {

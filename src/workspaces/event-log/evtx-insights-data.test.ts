@@ -656,6 +656,28 @@ describe("describeScopeCounts", () => {
     ]);
   });
 
+  it("names references it could not look for apart from ones that are not loaded, and claims no absence", () => {
+    expect(describeScopeCounts(counts({ unresolved: 3 }))).toEqual([
+      "3 cited entries could not be matched to a record because their timeline items were not read.",
+    ]);
+    expect(describeScopeCounts(counts({ unresolved: 1 }))).toEqual([
+      "1 cited entry could not be matched to a record because its timeline item was not read.",
+    ]);
+    const text = describeScopeCounts(counts({ unresolved: 5 })).join(" ");
+    expect(text).not.toMatch(/not loaded|no record|absent|missing/);
+  });
+
+  it("puts the unresolved sentence after no usable identity and before ambiguous", () => {
+    expect(
+      describeScopeCounts(counts({ notLoaded: 1, noUsableIdentity: 1, unresolved: 1, ambiguous: 1 })),
+    ).toEqual([
+      "1 cited event is not loaded.",
+      "1 cited event cannot be matched to a loaded event: no usable record identity.",
+      "1 cited entry could not be matched to a record because its timeline item was not read.",
+      "1 cited reference matches more than one loaded event. Every match is included.",
+    ]);
+  });
+
   it("uses the singular for one", () => {
     expect(describeScopeCounts(counts({ notLoaded: 1 }))).toEqual(["1 cited event is not loaded."]);
     expect(describeScopeCounts(counts({ ambiguous: 1 }))).toEqual([

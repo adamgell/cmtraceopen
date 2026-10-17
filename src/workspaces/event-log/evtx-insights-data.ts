@@ -447,6 +447,13 @@ export function describeScopeCounts(counts: EvtxRecordScopeCounts): string[] {
       `${events(counts.noUsableIdentity)} cannot be matched to a loaded event: no usable record identity.`,
     );
   }
+  const unresolved = counts.unresolved ?? 0;
+  if (unresolved > 0) {
+    // No absence is claimed: the record these name was never looked for, so it may well be loaded.
+    sentences.push(
+      `${formatCount(unresolved)} cited ${unresolved === 1 ? "entry" : "entries"} could not be matched to a record because ${unresolved === 1 ? "its timeline item was" : "their timeline items were"} not read.`,
+    );
+  }
   if (counts.ambiguous > 0) {
     sentences.push(
       `${formatCount(counts.ambiguous)} cited ${counts.ambiguous === 1 ? "reference matches" : "references match"} more than one loaded event. Every match is included.`,
