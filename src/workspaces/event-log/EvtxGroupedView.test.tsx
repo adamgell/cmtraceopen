@@ -34,6 +34,8 @@ import {
 } from "./evtx-group-summaries";
 import { useEvtxLayoutStore } from "./evtx-layout-store";
 import { isNewestOnlyGapReason, newestOnlyGapReason, useEvtxStore } from "./evtx-store";
+import { selectVisibleRecords } from "./evtx-filter";
+import { EvtxTimeline } from "./EvtxTimeline";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import type { EvtxLevel, EvtxRecord } from "./types";
 
@@ -926,5 +928,77 @@ describe("isNewestOnlyGapReason", () => {
     "",
   ])("rejects %j", (reason) => {
     expect(isNewestOnlyGapReason(reason)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Selection is shared with the table, which stays mounted, hidden, while Grouped is active.
+// ---------------------------------------------------------------------------------------------
+
+describe("a selection made in the Grouped view with the table mounted", () => {
+  function TableAndGrouped() {
+    const state = useEvtxStore();
+    const visible = selectVisibleRecords({
+      records: state.records,
+      selectedChannels: state.selectedChannels,
+      filterLevels: state.filterLevels,
+      filterEventIds: state.filterEventIds,
+      filterSearch: state.filterSearch,
+      quickFilter: state.quickFilter,
+      visibleColumns: state.columnConfig.order,
+      timeZoneMode: state.timeZoneMode,
+      timeWindow: state.timeWindow,
+      nowEpoch: NOW,
+    });
+    return (
+      <>
+        <div data-testid="table-view">
+          <EvtxTimeline nowEpoch={NOW} />
+        </div>
+        <EvtxGroupedView records={visible} nowEpoch={NOW} />
+      </>
+    );
+  }
+
+  beforeEach(() => {
+    useEvtxStore.getState().reset();
+    const records = sampleRecords();
+    useEvtxStore.setState({
+      records,
+      sourceMode: "files",
+      timeWindow: "all",
+      selectedChannels: new Set(records.map((record) => record.channel)),
+      // The table groups by Event ID with 7036 collapsed.
+      groupBy: ["eventId"],
+      collapsedGroups: new Set(["/eventId=7036"]),
+    });
+  });
+
+  afterEach(() => useEvtxStore.getState().reset());
+
+  it("holds when the event sits in a group the table has collapsed, and survives a return to Table", () => {
+    const view = render(<TableAndGrouped />);
+    const grouped = screen.getByRole("grid", { name: /^Grouped events/ });
+    fireEvent.click(within(grouped).getByRole("button", { name: /^Event ID 7036/ }));
+    const event = [...itemRows()][0];
+    fireEvent.click(event);
+    const id = useEvtxStore.getState().selectedRecordId;
+    expect(id).not.toBeNull();
+    expect(useEvtxStore.getState().records.find((record) => record.id === id)?.eventId).toBe(7036);
+    // The hidden table ran its effects with 7036 collapsed and left the selection alone.
+    expect([...itemRows()][0]).toHaveAttribute("aria-selected", "true");
+
+    // Back on the table: it renders again with the same collapsed group.
+    view.rerender(<TableAndGrouped />);
+    expect(useEvtxStore.getState().selectedRecordId).toBe(id);
+  });
+
+  it("is still cleared when the filters drop the selected event", () => {
+    render(<TableAndGrouped />);
+    fireEvent.click(screen.getByRole("button", { name: /^Event ID 7036/ }));
+    fireEvent.click([...itemRows()][0]);
+    expect(useEvtxStore.getState().selectedRecordId).not.toBeNull();
+    act(() => useEvtxStore.getState().setFilterEventIds("1000"));
+    expect(useEvtxStore.getState().selectedRecordId).toBeNull();
   });
 });
