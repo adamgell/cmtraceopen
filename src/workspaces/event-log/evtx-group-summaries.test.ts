@@ -721,13 +721,88 @@ describe("classifyChannelReads", () => {
       expect(read.unattributedLoss).toBe(true);
     });
 
-    it("but a single event log file that never opened is outside the visible scope", () => {
+    it("but a failed file is charged to the channel its name names, case-insensitively", () => {
       const read = classifyChannelReads({
         ...base,
-        manifestCoverage: [{ kind: "accessDenied", path: "C:/logs/Security.evtx", reason: "denied" }],
-        legacyCoverage: ["C:/logs/Security.evtx: denied"],
+        manifestCoverage: [{ kind: "accessDenied", path: "D:/pc02/system.EVTX", reason: "denied" }],
       });
       expect(read.unattributedLoss).toBe(false);
+      expect(read.kind("System")).toBe("incomplete");
+      expect(read.kind("Application")).toBe("complete");
     });
+
+    it("reads Event Viewer's %4 in a file name back as the channel's /", () => {
+      const read = classifyChannelReads({
+        ...base,
+        channels: [...base.channels, live("Microsoft-Windows-AAD/Operational")],
+        coverageDetails: [
+          { source: "C:/logs/Microsoft-Windows-AAD%4Operational.evtx", kind: "file", reason: "unreadable" },
+        ],
+      });
+      expect(read.kind("Microsoft-Windows-AAD/Operational")).toBe("incomplete");
+    });
+
+    it("treats a failed file whose name is no channel (export1.evtx) as outside the scope", () => {
+      const read = classifyChannelReads({
+        ...base,
+        manifestCoverage: [{ kind: "accessDenied", path: "C:/logs/export1.evtx", reason: "denied" }],
+        legacyCoverage: ["C:/logs/export1.evtx: denied"],
+      });
+      expect(read.unattributedLoss).toBe(false);
+      for (const channel of base.channels) expect(read.kind(channel.name)).toBe("complete");
+    });
+  });
+});
+
+describe("buildGroupSummaries: a file set where one file failed to open", () => {
+  const isNewestOnlyReason = () => false;
+  const opened = (name: string, path: string) => ({
+    name,
+    eventCount: 2,
+    sourceType: { file: { path } },
+  });
+  /** System.evtx from PC01 opened and covers the whole day; 7036 at 03:00 only. */
+  const systemRecords = () => [
+    rec({ eventId: 1, sourceLabel: "C:/pc01/System.evtx", at: DAY_START }),
+    rec({ sourceLabel: "C:/pc01/System.evtx", at: DAY_START + 3 * HOUR }),
+    rec({ eventId: 1, sourceLabel: "C:/pc01/System.evtx", at: DAY_START + 24 * HOUR }),
+  ];
+  const trendFor = (failedPath: string, extraChannels: { name: string; eventCount: number; sourceType: "live" }[] = []) => {
+    const channelReads = classifyChannelReads({
+      remoteMachine: null,
+      channels: [opened("System", "C:/pc01/System.evtx"), ...extraChannels],
+      coverageDetails: [{ source: failedPath, kind: "accessDenied", reason: "access is denied" }],
+      manifestCoverage: [],
+      legacyCoverage: [`${failedPath}: access is denied`],
+      tailCoverage: [],
+      isNewestOnlyReason,
+    });
+    return buildGroupSummaries(
+      input({
+        records: systemRecords(),
+        timeWindow: "all",
+        sourceMode: "files",
+        channelReads,
+        scopeChannels: ["System"],
+      }),
+    ).summaries.find((summary) => summary.value === "7036")!.trend;
+  };
+
+  it("two System.evtx files where one failed: System's empty bins are unknown", () => {
+    const trend = trendFor("C:/pc02/System.evtx");
+    expect(trend[3]).toBe(1);
+    expect(trend.filter((bin) => bin === null)).toHaveLength(GROUP_TREND_BINS - 1);
+  });
+
+  it("a failed Security.evtx with Security outside the scope leaves the other trends unchanged", () => {
+    const security = { name: "Security", eventCount: 0, sourceType: "live" as const };
+    const trend = trendFor("C:/pc01/Security.evtx", [security]);
+    expect(trend[3]).toBe(1);
+    expect(trend.filter((bin) => bin === 0)).toHaveLength(GROUP_TREND_BINS - 1);
+  });
+
+  it("a failed export1.evtx is treated as outside the scope", () => {
+    const trend = trendFor("C:/pc02/export1.evtx");
+    expect(trend.filter((bin) => bin === 0)).toHaveLength(GROUP_TREND_BINS - 1);
   });
 });

@@ -134,12 +134,24 @@ function parseGapString(text: string): SourcedReason {
   };
 }
 
-/**
- * A single event log file (an `.evtx`, a rotated `.evtx.N`, or such a member of an archive). A gap
- * on one that no channel claims is a file that never opened: none of its events are loaded and no
- * channel in the view stands for it, so it is outside the visible scope.
- */
+/** A single event log file: an `.evtx`, a rotated `.evtx.N`, or such a member of an archive. */
 const EVENT_LOG_FILE = /\.evtx(?:\.\d+)?$/i;
+
+/**
+ * The channel a single event log file's name names: its basename (an archive member's name after
+ * "::") without `.evtx` or `.evtx.N`, with Event Viewer's `%4` read back as `/`. Null when the
+ * source is not a single event log file.
+ */
+function fileStemChannel(source: string): string | null {
+  if (!EVENT_LOG_FILE.test(source)) return null;
+  const member = source.lastIndexOf("::");
+  const cut = Math.max(
+    source.lastIndexOf("/"),
+    source.lastIndexOf("\\"),
+    member === -1 ? -1 : member + 1,
+  );
+  return source.slice(cut + 1).replace(EVENT_LOG_FILE, "").replace(/%4/g, "/");
+}
 
 /** The coverage the store holds, read per channel. */
 export interface ChannelReads {
@@ -155,14 +167,20 @@ export interface ChannelReads {
 /**
  * Reads the store's coverage into a per-channel answer. A gap belongs to a channel when its source
  * is the channel's name, "machine/channel" for a remote query, or the path of a file the channel
- * was read from. A loss on a source no channel claims sets `unattributedLoss`, except for a single
- * event log file that never opened (see `EVENT_LOG_FILE`).
+ * was read from. A loss on a single event log file no channel claims (one that never opened) is
+ * charged to the channel its file name names (`fileStemChannel`); a loss on any other source no
+ * channel claims sets `unattributedLoss`.
  *
  * A loss wins over the bound whatever order the gaps come in: the store writes a loss line before
  * the bound's note, and structured gaps are read before strings.
  */
 export function classifyChannelReads(input: ChannelReadInput): ChannelReads {
   const channelNames = new Set(input.channels.map((channel) => channel.name));
+  const channelsByLowerName = new Map<string, string[]>();
+  for (const name of channelNames) {
+    const key = name.toLowerCase();
+    channelsByLowerName.set(key, [...(channelsByLowerName.get(key) ?? []), name]);
+  }
   const channelsBySource = new Map<string, Set<string>>();
   for (const channel of input.channels) {
     if (typeof channel.sourceType === "object" && "file" in channel.sourceType) {
@@ -211,7 +229,20 @@ export function classifyChannelReads(input: ChannelReadInput): ChannelReads {
     if (kind === null) continue;
     const owners = ownersOf(gap.source);
     if (owners.size === 0) {
-      if (!EVENT_LOG_FILE.test(gap.source)) unattributedLoss = true;
+      const stem = fileStemChannel(gap.source);
+      if (stem === null) {
+        unattributedLoss = true;
+        continue;
+      }
+      // A single event log file no channel claims never opened. It is charged to the channel its
+      // name names, matched case-insensitively: a second System.evtx that failed beside one that
+      // opened leaves System's span unknown, while a failed Security.evtx with Security outside
+      // the visible scope changes no trend. Residual risk: a failed file whose name is not its
+      // channel (export1.evtx holding System events) is treated as outside the scope. The
+      // channel pane and the coverage banner still disclose it.
+      for (const channel of channelsByLowerName.get(stem.toLowerCase()) ?? []) {
+        kinds.set(channel, "incomplete");
+      }
       continue;
     }
     for (const channel of owners) {
