@@ -984,8 +984,18 @@ describe("the dock's words (spec 8.12, #842)", () => {
   describe("nearbyReason (evidence first: by time, never a link)", () => {
     const reasons = ["notLinked", "noLoadedLink", "inAnotherChain", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const;
 
-    it("says time only in every reason", () => {
-      for (const reason of reasons) expect(nearbyReason(reason)).toMatch(/^time only/);
+    it("says time only in the three ruled reasons", () => {
+      for (const reason of ["notLinked", "noLoadedLink", "inAnotherChain"] as const) {
+        expect(nearbyReason(reason)).toMatch(/^time only/);
+      }
+    });
+
+    it("does not call an entry time only when the engine reported a shared key with the event (additions awaiting a ruling)", () => {
+      expect(nearbyReason("ambiguousWithEvent")).toBe("ambiguous with this event");
+      expect(nearbyReason("coverageBlockedWithEvent")).toBe("coverage blocked with this event");
+      for (const reason of ["ambiguousWithEvent", "coverageBlockedWithEvent"] as const) {
+        expect(nearbyReason(reason)).not.toMatch(/time only|not linked|no link/);
+      }
     });
 
     it("says 'not linked' only for the entry the session can speak for", () => {

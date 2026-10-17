@@ -500,9 +500,15 @@ export type NearbyReason =
   | "coverageBlockedWithEvent";
 
 /**
- * The reason beside an entry of "Also nearby" and in its marker's name. Each says it is there by
- * TIME ("time only"), then the one thing known about its links. "Not linked" appears only for the
- * entry the session can speak for.
+ * The reason beside an entry of "Also nearby" and in its marker's name.
+ *
+ * The three RULED reasons (#842 ruling 2) say the entry is there by TIME ("time only"), then the one
+ * thing known about its links; "not linked" appears only for the entry the session can speak for.
+ *
+ * The other two are ADDITIONS awaiting Main's ruling, and do not begin "time only", because the
+ * engine reported a shared identity key for those entries and "time only" would understate it: they
+ * share a key with the selected event in a row that establishes no link (ambiguous: several entries
+ * could be the same transaction; coverage blocked: a gap stopped the link).
  */
 export function nearbyReason(reason: NearbyReason): string {
   switch (reason) {
@@ -513,9 +519,9 @@ export function nearbyReason(reason: NearbyReason): string {
     case "inAnotherChain":
       return "time only; in another chain";
     case "ambiguousWithEvent":
-      return "time only; ambiguous with this event";
+      return "ambiguous with this event";
     case "coverageBlockedWithEvent":
-      return "time only; coverage blocked with this event";
+      return "coverage blocked with this event";
   }
 }
 
