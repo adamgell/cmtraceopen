@@ -732,6 +732,35 @@ describe("when the current period is not fully loaded", () => {
     expect(queryCommandCalls()).toBe(0);
   });
 
+  it("is cancelled by a Clear once it is on show, since it holds no result and names channels that changed", async () => {
+    await autoLoad({ System: AUTO_LOAD_MAX_EVENTS, Application: 5 });
+    await comparePreviousPeriod(ANCHOR);
+    expect(settled()).toMatchObject({
+      status: "unavailable",
+      reason: "currentPeriodIncomplete",
+      detail: expect.stringContaining("System reached the automatic load's cap") as string,
+    });
+    answerClear();
+
+    await useEvtxStore.getState().clearChannel("System", true);
+
+    // It still named System as capped and advised deselecting a channel that now holds nothing.
+    expect(getComparisonState()).toEqual({ phase: "idle" });
+  });
+
+  it("stays on show through updates that change nothing it names", async () => {
+    await autoLoad({ System: AUTO_LOAD_MAX_EVENTS, Application: 5 });
+    await comparePreviousPeriod(ANCHOR);
+    expect(settled().status).toBe("unavailable");
+
+    useEvtxStore.getState().setSelectedRecordId(3);
+    useEvtxStore.getState().setSortField("level");
+    useEvtxStore.getState().setGroupBy(["level"]);
+    useEvtxStore.getState().toggleGroup("k");
+
+    expect(getComparisonState().phase).toBe("settled");
+  });
+
   it("says no channel can be compared when every selected channel is at the cap", async () => {
     await autoLoad({ Security: AUTO_LOAD_MAX_EVENTS, System: AUTO_LOAD_MAX_EVENTS });
 
@@ -1270,6 +1299,27 @@ describe("comparing loaded files with their previous period", () => {
     }
     expect(invoke).not.toHaveBeenCalled();
     expect(useEvtxStore.getState().records).toBe(records);
+  });
+
+  it("stays on show through updates that touch nothing it compared", async () => {
+    // Files mode never fills loadedChannels, so a rule written as "a compared channel is not loaded"
+    // would hold for every update and cancel a settled files comparison on a row click.
+    const records = [
+      fileRecord({ timestampEpoch: PRIOR_FROM }),
+      fileRecord({ timestampEpoch: PRIOR_TO }),
+      fileRecord({ timestampEpoch: ANCHOR }),
+    ];
+    await resetStore({ sourceMode: "files", records, loadedChannels: new Set<string>() });
+    await comparePreviousPeriod(ANCHOR);
+    expect(settled().status).toBe("complete");
+
+    useEvtxStore.getState().setSelectedRecordId(5);
+    useEvtxStore.getState().setSortField("level");
+    useEvtxStore.getState().setSortDirection("desc");
+    useEvtxStore.getState().setGroupBy(["level"]);
+    useEvtxStore.getState().toggleGroup("k");
+
+    expect(getComparisonState().phase).toBe("settled");
   });
 
   it("is partial, stating the load's own holes, when the files were damaged or truncated", async () => {

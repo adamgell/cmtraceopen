@@ -53,6 +53,7 @@ import {
   cancelComparison,
   channelStartGap,
   comparedChannelsOfComparison,
+  getComparisonState,
   computePriorWindow,
   isComparisonRequestId,
   isTailAppended,
@@ -2289,12 +2290,20 @@ useEvtxStore.subscribe((state, previous) => {
     cancelComparison();
     return;
   }
-  // A Clear takes a channel out of what is loaded without a load. The comparison depends on the
-  // channels it compared, so it is cancelled when one of them is no longer loaded, and left alone
-  // when any other channel is cleared or loaded.
+  // A Clear takes a channel out of what is loaded without a load. A comparison depends on the
+  // channels it compared, so it is cancelled when one of them was loaded and no longer is; it is
+  // left alone when any other channel is cleared, and a load cancels it through `loadGeneration`.
+  // The test is stated on the two sets and not on a set's identity, so it is false for files, which
+  // never fill `loadedChannels`. An outcome that could not be made holds no result and names
+  // channels it refused (a capped one, an unstamped one), so it depends on every channel and goes
+  // with any change to what is loaded.
+  const comparison = getComparisonState();
+  const unavailable = comparison.phase === "settled" && comparison.outcome.status === "unavailable";
   if (
-    state.loadedChannels !== previous.loadedChannels &&
-    comparedChannelsOfComparison().some((channel) => !state.loadedChannels.has(channel))
+    (unavailable && state.loadedChannels !== previous.loadedChannels) ||
+    comparedChannelsOfComparison().some(
+      (channel) => previous.loadedChannels.has(channel) && !state.loadedChannels.has(channel)
+    )
   ) {
     cancelComparison();
   }
