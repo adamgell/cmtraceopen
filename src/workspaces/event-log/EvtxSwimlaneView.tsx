@@ -541,6 +541,16 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
     () => (ready ? findRecordInScene(view, selectedRecordId) : null),
     [ready, view, selectedRecordId],
   );
+  // The lane stack scrolls, and the keyboard cursor can move to a lane that is out of view: bring it in.
+  useEffect(() => {
+    if (!ready || !focused || !keyboardMode) return;
+    const scroller = plotRef.current?.closest<HTMLElement>("[data-evtx-swimlane-scroller]");
+    if (!scroller || scroller.clientHeight <= 0) return;
+    const top = laneIndex * laneHeight;
+    const bottom = top + laneHeight;
+    if (top < scroller.scrollTop) scroller.scrollTop = top;
+    else if (bottom > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = bottom - scroller.clientHeight;
+  }, [ready, focused, keyboardMode, laneIndex, laneHeight]);
 
   const notes: string[] = [];
   if (!loading && !catchingUp) {
@@ -724,10 +734,14 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
   const tip = ready && drag === null ? hover : null;
   const cellLane = view.lanes[laneIndex] ?? null;
   const cellBucket = ready && cursor < count ? view.axis.buckets[cursor] : null;
-  const cellText =
-    cellLane !== null && cellBucket !== null
-      ? describeLaneCell(cellLane, cellBucket.startMs, cellBucket.endMs, timeZoneMode, view.axis.showYear)
-      : null;
+  // Counted from the lane's dots, so it is kept while only the pointer moves.
+  const cellText = useMemo(
+    () =>
+      cellLane !== null && cellBucket !== null
+        ? describeLaneCell(cellLane, cellBucket.startMs, cellBucket.endMs, timeZoneMode, view.axis.showYear)
+        : null,
+    [cellLane, cellBucket, timeZoneMode, view.axis.showYear],
+  );
   const cursorText = focused && keyboardMode ? cellText : null;
   const valueText = (() => {
     if (!ready || cellText === null) return undefined;
@@ -900,7 +914,16 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
                   endGesture();
                 }}
                 onLostPointerCapture={() => {
-                  if (drag !== null) endGesture();
+                  if (drag !== null) {
+                    endGesture();
+                    return;
+                  }
+                  // A press the capture was taken from before its release: no click, and the scene it
+                  // held is let go (unless a pending keyboard selection still needs it).
+                  if (gestureRef.current !== null) {
+                    gestureRef.current = null;
+                    if (key === null || key.anchor === null) setFrozen(null);
+                  }
                 }}
                 onPointerLeave={() => {
                   pressRef.current = false;

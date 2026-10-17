@@ -902,6 +902,72 @@ describe("the whole scene is frozen during a drag", () => {
   });
 });
 
+describe("a press whose capture is lost before the release", () => {
+  it("is no click, and lets go of the scene it held", () => {
+    vi.useFakeTimers({ now: PINNED_NOW });
+    const start = [
+      ...Array.from({ length: 5 }, (_, i) => rec(FIRST + i * HOUR, "Information", "first")),
+      ...Array.from({ length: 2 }, (_, i) => rec(FIRST + i * HOUR, "Information", "second")),
+    ];
+    const { rerender, laneSlider } = mount(start);
+    const labels = () =>
+      [...region("swimlanes").querySelectorAll<HTMLElement>("[data-evtx-lane]")].map((li) => li.children[0].textContent);
+    const target = dotPoint(start, 0, 2);
+    down(laneSlider, target.x, target.y);
+    const grown = [...start, ...Array.from({ length: 6 }, (_, i) => rec(FIRST + i * 30 * MINUTE + 5, "Information", "second"))];
+    rerender(stack(grown));
+    act(() => {
+      vi.advanceTimersByTime(DERIVATION_THROTTLE_MS);
+    });
+    // Held while the press is down, as a drag would hold it.
+    expect(labels()).toEqual(["first", "second"]);
+    fireEvent.lostPointerCapture(laneSlider, { pointerId: 1 });
+    expect(labels()).toEqual(["second", "first"]);
+    up(laneSlider, target.x, target.y);
+    expect(useEvtxStore.getState().selectedRecordId).toBeNull();
+    expect(setTimeRangeSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("the lane stack scrolls", () => {
+  const many = Array.from({ length: 8 }, (_, lane) =>
+    Array.from({ length: 3 }, (_, i) => rec(FIRST + (lane * 3 + i) * HOUR, "Information", `lane-${lane}`)),
+  ).flat();
+
+  function scrollerOf(container: HTMLElement) {
+    const scroller = container.querySelector<HTMLElement>("[data-evtx-swimlane-scroller]")!;
+    // jsdom has no layout: give the scroller a 100 px window onto the stack.
+    Object.defineProperty(scroller, "clientHeight", { value: 100, configurable: true });
+    Object.defineProperty(scroller, "scrollTop", { value: 0, writable: true, configurable: true });
+    return scroller;
+  }
+
+  it("brings the lane the keyboard cursor moves to into view, and back", () => {
+    const { container, laneSlider } = mount(many);
+    const scroller = scrollerOf(container);
+    fireEvent.focus(laneSlider);
+    for (let step = 0; step < 5; step += 1) key(laneSlider, "ArrowDown");
+    // Lane 5 spans 180 to 216: its bottom sits at the bottom of the 100 px window.
+    expect(scroller.scrollTop).toBe(216 - 100);
+    for (let step = 0; step < 5; step += 1) key(laneSlider, "ArrowUp");
+    expect(scroller.scrollTop).toBe(0);
+  });
+
+  it("does not move the scroll for a lane already in view, or for a pointer that has focus", () => {
+    const { container, laneSlider } = mount(many);
+    const scroller = scrollerOf(container);
+    fireEvent.focus(laneSlider);
+    key(laneSlider, "ArrowDown");
+    expect(scroller.scrollTop).toBe(0);
+    scroller.scrollTop = 50;
+    fireEvent.blur(laneSlider);
+    const target = dotPoint(many, 4, 1);
+    down(laneSlider, target.x, target.y);
+    up(laneSlider, target.x, target.y);
+    expect(scroller.scrollTop).toBe(50);
+  });
+});
+
 describe("the slider", () => {
   it("is named apart from the histogram's, so both can be on screen", () => {
     mount();
