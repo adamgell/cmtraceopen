@@ -96,7 +96,7 @@ pub enum ElevationReason {
     ExplicitMenu,
     /// A source operation returned a confirmed access-denied classification.
     AccessDenied,
-    /// The ESP banner's coverage recommendation.
+    /// A coverage recommendation: the ESP banner, or the Event Logs coverage note.
     CoverageRecommended,
 }
 
