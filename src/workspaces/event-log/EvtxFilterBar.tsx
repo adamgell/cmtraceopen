@@ -1,86 +1,246 @@
-import { useMemo, useState } from "react";
+/**
+ * The workbench filter row (spec section 8.3): search, level toggles with counts, the time window
+ * and the "More filters" entry point. The active-criteria chips live in `EvtxFilterChips`.
+ *
+ * Everything the old single bar offered is still reachable. Group by, Columns and Export moved to
+ * the view bar in Phase 3. Event IDs, the quick filter, saved filters, sort and the time zone are
+ * in the More filters popover (`EvtxMoreFilters`), one open away.
+ *
+ * The search box reads the field grammar (`evtx-query-grammar.ts`, issue #833). Its text is a local
+ * criterion like any search: it never changes the live query, so typing never reloads. Text that
+ * does not parse is not applied (spec 8.3): the box keeps it as typed (`filterSearchDraft`), the
+ * view keeps the last search that parsed (`filterSearch`), and once the typing settles a polite
+ * status region under the row says it was not applied and why.
+ *
+ * Do the level toggles re-query in live mode? Only when they change what the service is asked for
+ * (verified in Phase 5, issue #832). In live mode with a loaded channel, a before-load change that
+ * alters `serverFilterKey` makes the store refetch every loaded channel: it empties `records` and
+ * sets `isLoading`. While Information is selected the level predicate is never sent
+ * (`levelsFilteredAtSource`), so toggling any other level is a local filter and nothing reloads;
+ * toggling Information, or a level while it is deselected, changes the pushed subset and reloads.
+ * File mode never reloads. The row says which toggles reload (tooltip and description). The
+ * workspace keeps this row mounted through a refresh, so while it runs the group is `aria-busy`, a
+ * spinner shows beside it and the counts read as not available rather than zero.
+ */
+import { useMemo, type CSSProperties } from "react";
 import {
   Badge,
-  Button,
-  Checkbox,
+  createCustomFocusIndicatorStyle,
+  createFocusOutlineStyle,
   Dropdown,
   Input,
   Option,
+  Spinner,
+  makeStyles,
+  mergeClasses,
+  shorthands,
   tokens,
 } from "@fluentui/react-components";
+import { Search16Regular } from "@fluentui/react-icons";
 import {
-  EVTX_QUICK_FILTER_ACTIONS,
-  EVTX_QUICK_FILTER_MODES,
-  EVTX_QUICK_FILTER_SCOPES,
-  parseEventIdSelectors,
-  type EvtxQuickFilterMode,
-  type EvtxQuickFilterScope,
-  type EvtxQuickFilterAction,
+  countByLevel,
+  EVTX_LEVELS,
+  levelsAfterToggle,
+  levelsFilteredAtSource,
 } from "./evtx-filter";
-import { useSavedFilterStore } from "./evtx-filter-store";
-import { orderFilters, sanitizeCriteria } from "./evtx-saved-filters";
-import { getLogListMetrics } from "../../lib/log-accessibility";
-import { useUiStore } from "../../stores/ui-store";
 import {
-  useEvtxStore,
-  type EvtxSortField,
-} from "./evtx-store";
+  LEVEL_TOGGLE_BACKGROUNDS,
+  LEVEL_TOGGLE_STATES,
+  levelToggleStates,
+  type LevelToggleState,
+  type LevelToggleStateVisual,
+} from "./evtx-level-toggle";
+import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
+import { EVTX_SEARCH_INPUT_ID } from "./EvtxFilterChips";
+import { EvtxMoreFilters } from "./EvtxMoreFilters";
+import { notAppliedMessage, useSettledQueryError } from "./evtx-query-error";
+import { getLogListMetrics } from "../../lib/log-accessibility";
+import { getThemeById } from "../../lib/themes";
+import { useUiStore } from "../../stores/ui-store";
+import { serverFilterKey, useEvtxStore } from "./evtx-store";
 import type { EvtxLevel, EvtxTimeWindow } from "./types";
 import { EVTX_TIME_WINDOW_LABELS } from "./types";
-import { timeZoneLabel } from "./evtx-time";
 
 const TIME_WINDOWS: EvtxTimeWindow[] = ["1h", "24h", "7d", "30d", "all"];
 
-const EVENT_ID_VALIDATION_HELP = "Use decimal Event IDs or ranges from 0 to 4294967295.";
+/** The `Main` mockup's placeholder, spacing included: free text, then three field terms. */
+export const EVTX_SEARCH_PLACEHOLDER = "Search…   id:76  level:error  provider:AAD";
 
-const LEVELS: EvtxLevel[] = ["Critical", "Error", "Warning", "Information", "Verbose"];
+/** The status region under the row that states why the search text does not parse. */
+export const EVTX_SEARCH_ERROR_ID = "evtx-filter-search-error";
 
-const LEVEL_COLORS: Record<EvtxLevel, string> = {
-  Critical: tokens.colorPaletteRedForeground1,
-  Error: tokens.colorPaletteRedForeground1,
-  Warning: tokens.colorPaletteMarigoldForeground1,
-  Information: tokens.colorBrandForeground1,
-  Verbose: tokens.colorNeutralForeground4,
-};
-
-const LEVEL_SHORT_LABELS: Record<EvtxLevel, string> = {
-  Critical: "Crit",
-  Error: "Err",
-  Warning: "Warn",
+/** Spec 8.3 labels. "Info" is the short form of Information only here; the rest read in full. */
+const LEVEL_TOGGLE_LABELS: Record<EvtxLevel, string> = {
+  Critical: "Critical",
+  Error: "Error",
+  Warning: "Warning",
   Information: "Info",
-  Verbose: "Verb",
+  Verbose: "Verbose",
 };
 
-const SORT_FIELD_LABELS: Record<EvtxSortField, string> = {
-  time: "Time",
-  eventId: "Event ID",
-  level: "Level",
-  provider: "Provider",
-  channel: "Channel",
-};
+/**
+ * Shown in place of a count that is not available: the spec's glyph for a value with no source
+ * (section 15.1), written as an escape. Never zero: unknown is not "none".
+ */
+const UNKNOWN_COUNT = "\u2014";
+const UNKNOWN_COUNT_TEXT = "Count not available";
 
-const SORT_FIELDS: EvtxSortField[] = ["time", "eventId", "level", "provider", "channel"];
+const RELOAD_NOTE = "Changing this level reloads the loaded channels from the live log.";
 
-const QUICK_FILTER_MODE_LABELS: Record<EvtxQuickFilterMode, string> = {
-  oneString: "One string",
-  multipleWords: "Any words",
-  multipleStrings: "Any strings",
-  allWords: "All words",
-  allStrings: "All strings",
-  eventIds: "Event IDs",
-};
-const QUICK_FILTER_SCOPE_LABELS: Record<EvtxQuickFilterScope, string> = {
-  allColumns: "All columns",
-  visibleColumns: "Visible columns",
-};
-const QUICK_FILTER_ACTION_LABELS: Record<EvtxQuickFilterAction, string> = {
-  show: "Show matches",
-  hide: "Hide matches",
-};
+/** Plain class names on the dot and the count, so a toggle's state rules can reach them. */
+const DOT_CLASS = "evtx-level-dot";
+const COUNT_CLASS = "evtx-level-count";
 
-interface EvtxFilterBarProps {
-  nowEpoch: number;
-}
+/**
+ * Windows contrast themes. The theme colors above do not apply there: the browser forces every
+ * color to a system color, which would leave a pressed toggle with only its heavier weight and
+ * drop the dots. Fluent's own checked ToggleButton answers the same way (Highlight and
+ * HighlightText), and so does this: a pressed toggle is a Highlight block, every dot keeps its
+ * level color inside a CanvasText ring, and a dot on a pressed toggle rings in HighlightText.
+ */
+const FORCED_COLORS = "@media (forced-colors: active)";
+// Fluent's focus ring is a Highlight pseudo-element, and on a Highlight block it would disappear into
+// the block (the block is not forced-color-adjusted, so the theme would not rescue it). CanvasText
+// is drawn against the page behind the ring and the block.
+const FORCED_PRESSED_FOCUS = createCustomFocusIndicatorStyle({
+  "::after": { ...shorthands.borderColor("CanvasText") },
+});
+const FORCED_PRESSED = {
+  backgroundColor: "Highlight",
+  ...shorthands.borderColor("Highlight"),
+  color: "HighlightText",
+  forcedColorAdjust: "none",
+  [`& .${COUNT_CLASS}`]: { color: "HighlightText" },
+  [`& .${DOT_CLASS}`]: { outlineColor: "HighlightText" },
+} as const;
+
+const useStyles = makeStyles({
+  levelGroup: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+  },
+  // The colors per state are CSS custom properties set on the group, because Griffel styles are
+  // static and the label, count and ring colors are resolved per theme (`evtx-level-toggle.ts`).
+  // The surfaces are the same Fluent tokens that module measures. Every state is written out here,
+  // so no Fluent hover or checked rule is left to pair a surface with a color nobody measured.
+  toggle: {
+    position: "relative",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "5px",
+    height: "26px",
+    boxSizing: "border-box",
+    paddingLeft: "9px",
+    paddingRight: "9px",
+    paddingTop: "0",
+    paddingBottom: "0",
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    borderRadius: tokens.borderRadiusMedium,
+    cursor: "pointer",
+    fontFamily: "inherit",
+    fontWeight: 400,
+    whiteSpace: "nowrap",
+    backgroundColor: LEVEL_TOGGLE_BACKGROUNDS.rest,
+    color: "var(--evtx-level-label-rest)",
+    [`& .${COUNT_CLASS}`]: { color: "var(--evtx-level-count-rest)" },
+    [`& .${DOT_CLASS}`]: { outlineColor: "transparent" },
+    ":hover": {
+      backgroundColor: LEVEL_TOGGLE_BACKGROUNDS.hover,
+      ...shorthands.borderColor(tokens.colorNeutralStroke1Hover),
+      color: "var(--evtx-level-label-hover)",
+      [`& .${COUNT_CLASS}`]: { color: "var(--evtx-level-count-hover)" },
+      [`& .${DOT_CLASS}`]: { outlineColor: "var(--evtx-level-ring-hover)" },
+    },
+    // `:active` covers a held mouse button and a held Space bar alike.
+    ":active": {
+      backgroundColor: LEVEL_TOGGLE_BACKGROUNDS.active,
+      ...shorthands.borderColor(tokens.colorNeutralStroke1Pressed),
+      color: "var(--evtx-level-label-active)",
+      [`& .${COUNT_CLASS}`]: { color: "var(--evtx-level-count-active)" },
+      [`& .${DOT_CLASS}`]: { outlineColor: "var(--evtx-level-ring-active)" },
+    },
+    // Fluent's default focus indicator, a ring drawn around this positioned box.
+    ...createFocusOutlineStyle(),
+    [FORCED_COLORS]: {
+      [`& .${DOT_CLASS}`]: { outlineColor: "CanvasText" },
+      ":hover": { [`& .${DOT_CLASS}`]: { outlineColor: "CanvasText" } },
+      ":active": { [`& .${DOT_CLASS}`]: { outlineColor: "CanvasText" } },
+    },
+  },
+  // The level is shown. Hover and mouse-down keep the selection surface, so the dot's ring is
+  // measured against one surface for all three.
+  pressed: {
+    fontWeight: 600,
+    ...shorthands.borderColor(tokens.colorNeutralStroke1),
+    backgroundColor: LEVEL_TOGGLE_BACKGROUNDS.pressed,
+    color: "var(--evtx-level-label-pressed)",
+    [`& .${COUNT_CLASS}`]: { color: "var(--evtx-level-count-pressed)" },
+    [`& .${DOT_CLASS}`]: { outlineColor: "var(--evtx-level-ring-pressed)" },
+    ":hover": {
+      backgroundColor: LEVEL_TOGGLE_BACKGROUNDS.pressed,
+      ...shorthands.borderColor(tokens.colorNeutralStroke1),
+      color: "var(--evtx-level-label-pressed)",
+      [`& .${COUNT_CLASS}`]: { color: "var(--evtx-level-count-pressed)" },
+      [`& .${DOT_CLASS}`]: { outlineColor: "var(--evtx-level-ring-pressed)" },
+    },
+    ":active": {
+      backgroundColor: LEVEL_TOGGLE_BACKGROUNDS.pressed,
+      ...shorthands.borderColor(tokens.colorNeutralStroke1),
+      color: "var(--evtx-level-label-pressed)",
+      [`& .${COUNT_CLASS}`]: { color: "var(--evtx-level-count-pressed)" },
+      [`& .${DOT_CLASS}`]: { outlineColor: "var(--evtx-level-ring-pressed)" },
+    },
+    // Hover and mouse-down repeat the block: the rules above are pseudo-class rules and would
+    // otherwise out-rank the base one and paint the theme's selection surface.
+    [FORCED_COLORS]: {
+      ...FORCED_PRESSED,
+      ":hover": FORCED_PRESSED,
+      ":active": FORCED_PRESSED,
+      ...FORCED_PRESSED_FOCUS,
+    },
+  },
+  dot: {
+    width: "8px",
+    height: "8px",
+    flexShrink: 0,
+    borderRadius: "50%",
+    outlineStyle: "solid",
+    outlineWidth: "1px",
+    outlineColor: "transparent",
+    // Keeps the level color; the ring is what the forced palette draws.
+    [FORCED_COLORS]: { forcedColorAdjust: "none" },
+  },
+  count: {
+    fontFamily: tokens.fontFamilyNumeric,
+    fontVariantNumeric: "tabular-nums",
+    fontWeight: 400,
+  },
+  visuallyHidden: {
+    position: "absolute",
+    width: "1px",
+    height: "1px",
+    overflow: "hidden",
+    clipPath: "inset(50%)",
+    whiteSpace: "nowrap",
+  },
+  // Fluent's outline Input draws its bottom edge in colorNeutralStrokeAccessible; spec 8.3 asks for a
+  // plain 1 px colorNeutralStroke1 border all round, so only the bottom edge is overridden here.
+  search: {
+    borderBottomColor: tokens.colorNeutralStroke1,
+    ":hover": { borderBottomColor: tokens.colorNeutralStroke1Hover },
+    // The key must match Fluent's own (no space after the comma) so that this replaces its class.
+    ":active,:focus-within": { borderBottomColor: tokens.colorNeutralStroke1Pressed },
+  },
+  searchSlot: {
+    display: "flex",
+    flexDirection: "column",
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: "280px",
+    minWidth: "200px",
+  },
+});
 
 export function eventLogTimeWindowSnapshotLabel(
   timeWindow: EvtxTimeWindow,
@@ -92,129 +252,178 @@ export function eventLogTimeWindowSnapshotLabel(
     : `${label} · as of ${new Date(nowEpoch).toLocaleString()}`;
 }
 
+/** The measured state colors as the custom properties the toggle styles read. */
+function toggleColorVariables(
+  states: Record<LevelToggleState, LevelToggleStateVisual>,
+): CSSProperties {
+  const variables: Record<string, string> = {};
+  for (const state of LEVEL_TOGGLE_STATES) {
+    variables[`--evtx-level-label-${state}`] = states[state].label;
+    variables[`--evtx-level-count-${state}`] = states[state].count;
+    variables[`--evtx-level-ring-${state}`] = states[state].dotRing ?? "transparent";
+  }
+  return variables as CSSProperties;
+}
+
+interface EvtxFilterBarProps {
+  nowEpoch: number;
+}
+
 export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
+  const styles = useStyles();
+  const records = useEvtxStore((s) => s.records);
   const filterLevels = useEvtxStore((s) => s.filterLevels);
   const toggleFilterLevel = useEvtxStore((s) => s.toggleFilterLevel);
-  const filterEventIds = useEvtxStore((s) => s.filterEventIds);
-  const setFilterEventIds = useEvtxStore((s) => s.setFilterEventIds);
-  const filterSearch = useEvtxStore((s) => s.filterSearch);
+  // The text as typed: the draft while it is not applied, else the applied search.
+  const searchText = useEvtxStore((s) => s.filterSearchDraft ?? s.filterSearch);
   const setFilterSearch = useEvtxStore((s) => s.setFilterSearch);
-  const quickFilter = useEvtxStore((s) => s.quickFilter);
-  const setQuickFilter = useEvtxStore((s) => s.setQuickFilter);
-  const eventIdInputInvalid = useMemo(
-    () => parseEventIdSelectors(filterEventIds).invalid,
-    [filterEventIds]
-  );
-  const quickEventIdInputInvalid = useMemo(
-    () =>
-      quickFilter.mode === "eventIds" &&
-      parseEventIdSelectors(quickFilter.query).invalid,
-    [quickFilter.mode, quickFilter.query]
-  );
-  const sortField = useEvtxStore((s) => s.sortField);
-  const setSortField = useEvtxStore((s) => s.setSortField);
-  const sortDirection = useEvtxStore((s) => s.sortDirection);
-  const setSortDirection = useEvtxStore((s) => s.setSortDirection);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
-  const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
-  // Sized from the operator's list font rather than hardcoded, so raising the list size raises
-  // these controls with it. Clamped down a step because a toolbar control sits beside the list
-  // rather than in it.
-  const logListFontSize = useUiStore((s) => s.logListFontSize);
-  const listMetrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
-  const controlFontSize = `${Math.max(11, listMetrics.fontSize - 1)}px`;
-  const separatorHeight = `${listMetrics.rowLineHeight}px`;
-  const setTimeZoneMode = useEvtxStore((s) => s.setTimeZoneMode);
   const setTimeWindow = useEvtxStore((s) => s.setTimeWindow);
+  const filterEventIds = useEvtxStore((s) => s.filterEventIds);
+  const loadedChannels = useEvtxStore((s) => s.loadedChannels);
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const isLoading = useEvtxStore((s) => s.isLoading);
+
+  // Sized from the operator's list font rather than hardcoded, so raising the list size raises
+  // these controls with it (spec 7.1: controls f - 1, level toggles f - 2).
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
+  const controlFontSize = `${Math.max(11, metrics.fontSize - 1)}px`;
+  const toggleFontSize = `${Math.max(10, metrics.fontSize - 2)}px`;
+
+  const themeId = useUiStore((s) => s.themeId);
+  const theme = useMemo(() => getThemeById(themeId), [themeId]);
+  const visual = useMemo(() => buildEvtxVisualTokens(theme), [theme]);
+  const toggleStates = useMemo(() => levelToggleStates(theme, visual), [theme, visual]);
+  const toggleVariables = useMemo(() => toggleColorVariables(toggleStates), [toggleStates]);
+
+  // The loaded totals, memoized on the records array so typing in the search box does not recount.
+  // One pass is cheap (about a millisecond at 100k records), so the 75 ms debounce spec 11 asks of
+  // heavier derivations is not needed here.
+  const levelCounts = useMemo(() => countByLevel(records), [records]);
+
+  const live = sourceMode === "live";
+  // Why the typed search is not applied, once the typing has settled. Secondary-label size (spec
+  // 7.1, f - 2), with the chip row's line height, in the Warning text color spec 8.3 names.
+  const searchError = useSettledQueryError(searchText);
+  const searchErrorColor = visual.levels.Warning.textColor;
+  const searchErrorFontPx = Math.max(10, metrics.fontSize - 2);
+
+  // A level the live query leaves out is not loaded, so its count is unknown rather than zero.
+  const leftOutAtSource = live && levelsFilteredAtSource(filterLevels);
+  const countIsKnown = (level: EvtxLevel) =>
+    !isLoading && (!leftOutAtSource || filterLevels.has(level));
+  // A toggle reloads the loaded channels only when it changes what the service is asked for. The
+  // store makes the same comparison (`serverFilterKey`) before it refetches.
+  const currentServerKey = serverFilterKey(timeWindow, filterEventIds, filterLevels);
+  const reloadsOnToggle = (level: EvtxLevel) =>
+    live &&
+    loadedChannels.size > 0 &&
+    serverFilterKey(timeWindow, filterEventIds, levelsAfterToggle(filterLevels, level)) !==
+      currentServerKey;
+
   const timeWindowSnapshotLabel = useMemo(
     () => eventLogTimeWindowSnapshotLabel(timeWindow, nowEpoch),
     [nowEpoch, timeWindow],
   );
-
-  const sortFieldLabel = useMemo(() => SORT_FIELD_LABELS[sortField], [sortField]);
-  const nextSortDirectionLabel =
-    sortDirection === "asc" ? "descending" : "ascending";
-
-  const setGroupBy = useEvtxStore((s) => s.setGroupBy);
-
-  const setBeforeLoadCriteria = useEvtxStore((s) => s.setBeforeLoadCriteria);
-  const savedFilters = useSavedFilterStore((s) => s.savedFilters);
-  const saveFilter = useSavedFilterStore((s) => s.save);
-  const markFilterUsed = useSavedFilterStore((s) => s.markUsed);
-  // The one ordering, not a second one. This re-implemented it and dropped the lastUsed
-  // tiebreak, so marking a filter used changed the stored order and never changed what the
-  // operator saw.
-  const orderedFilters = useMemo(() => orderFilters(savedFilters), [savedFilters]);
-
-
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  // An in-app field rather than window.prompt. Tauri's macOS webview is WKWebView, which does not
-  // implement prompt, so the save-filter action silently did nothing on macOS.
-  const [pendingName, setPendingName] = useState<string | null>(null);
-
-  const commitFilterName = (name: string) => {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    const state = useEvtxStore.getState();
-    const saved = saveFilter(
-      trimmed,
-      sanitizeCriteria({
-        beforeLoad: {
-          levels: [...state.filterLevels],
-          eventIds: state.filterEventIds,
-          timeWindow: state.timeWindow,
-          selectedChannels: [...state.selectedChannels],
-        },
-        onLoad: {
-          search: state.filterSearch,
-          quickFilter: state.quickFilter,
-        },
-        afterLoad: { groupBy: state.groupBy },
-      })
-    );
-    setPendingName(null);
-    setStatusMessage(saved ? `Saved "${trimmed}"` : "That name cannot be used");
-  };
-
-  const applySavedFilter = (id: string) => {
-    const filter = savedFilters.find((candidate) => candidate.id === id);
-    if (!filter) return;
-    const { criteria } = filter;
-    setBeforeLoadCriteria(criteria.beforeLoad);
-    setFilterSearch(criteria.onLoad.search);
-    setQuickFilter(criteria.onLoad.quickFilter);
-    setGroupBy(criteria.afterLoad.groupBy);
-    markFilterUsed(id);
-  };
+  // The window is a live-query criterion, so file mode hides the control. A saved filter can still
+  // set a window in file mode, and a hidden active criterion would hide events with no way back.
+  const showTimeWindow = live || timeWindow !== "all";
 
   return (
+    // The controls are one wrapping row and the search error a line under it, not inside the search
+    // slot: a taller slot would re-center every other control on the row while the error showed.
     <div
+      data-evtx-region="filter-row"
       style={{
         display: "flex",
-        alignItems: "center",
-        gap: "8px",
-        padding: "6px 12px",
-        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-        backgroundColor: tokens.colorNeutralBackground2,
-        flexWrap: "wrap",
+        flexDirection: "column",
+        padding: "6px 12px 4px",
+        backgroundColor: tokens.colorNeutralBackground1,
         flexShrink: 0,
         fontSize: controlFontSize,
       }}
     >
-      <Badge appearance="ghost" size="small" style={{ flexShrink: 0 }}>
-        Preview
-      </Badge>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+        <div className={styles.searchSlot}>
+          <Input
+            id={EVTX_SEARCH_INPUT_ID}
+            className={styles.search}
+            aria-label="Search events"
+            aria-invalid={searchError !== null}
+            aria-describedby={searchError ? EVTX_SEARCH_ERROR_ID : undefined}
+            contentBefore={<Search16Regular aria-hidden />}
+            input={{ style: { fontSize: controlFontSize } }}
+            value={searchText}
+            onChange={(_, data) => setFilterSearch(data.value)}
+            placeholder={EVTX_SEARCH_PLACEHOLDER}
+            // Invalid, the whole border takes the error color, as the More filters inputs do. That
+            // also replaces Fluent's own invalid border, a red that is not in the token map.
+            style={{ minHeight: "28px", borderColor: searchError ? searchErrorColor : undefined }}
+          />
+        </div>
 
-      {sourceMode === "live" && (
-        <>
+        <div
+          role="group"
+          aria-label="Level"
+          aria-busy={isLoading}
+          className={styles.levelGroup}
+          style={toggleVariables}
+        >
+          {EVTX_LEVELS.map((level) => {
+            const pressed = filterLevels.has(level);
+            const known = countIsKnown(level);
+            const descriptionId = `evtx-level-count-${level}`;
+            const countText = known
+              ? `${levelCounts[level].toLocaleString()} ${levelCounts[level] === 1 ? "event" : "events"} loaded`
+              : UNKNOWN_COUNT_TEXT;
+            // Why the count is not available, for a sighted operator's tooltip.
+            const unknownReason = isLoading
+              ? "Events are loading"
+              : `The live query leaves out ${level} events while this level is hidden`;
+            const reloads = reloadsOnToggle(level);
+            return (
+              <button
+                key={level}
+                type="button"
+                className={mergeClasses(styles.toggle, pressed && styles.pressed)}
+                aria-label={`Toggle ${level} events`}
+                aria-pressed={pressed}
+                aria-describedby={descriptionId}
+                title={reloads ? `Toggle ${level} events. ${RELOAD_NOTE}` : `Toggle ${level} events`}
+                onClick={() => toggleFilterLevel(level)}
+                style={{ fontSize: toggleFontSize }}
+              >
+                <span
+                  aria-hidden
+                  className={mergeClasses(DOT_CLASS, styles.dot)}
+                  style={{ backgroundColor: visual.levels[level].dotColor }}
+                />
+                <span>{LEVEL_TOGGLE_LABELS[level]}</span>
+                <span
+                  aria-hidden
+                  className={mergeClasses(COUNT_CLASS, styles.count)}
+                  title={known ? undefined : unknownReason}
+                >
+                  {known ? levelCounts[level].toLocaleString() : UNKNOWN_COUNT}
+                </span>
+                <span id={descriptionId} className={styles.visuallyHidden}>
+                  {reloads ? `${countText}. ${RELOAD_NOTE}` : countText}
+                </span>
+              </button>
+            );
+          })}
+          {isLoading && <Spinner size="extra-tiny" label="Reloading events" labelPosition="after" />}
+        </div>
+
+        {showTimeWindow && (
           <Dropdown
-            button={{ style: { fontSize: controlFontSize } }}
+            aria-label="Time window"
+            // 28 px (spec 8.3): the small dropdown is 24 px and the button, not the root, sets it.
+            button={{ style: { fontSize: controlFontSize, minHeight: "28px" } }}
             size="small"
             value={timeWindowSnapshotLabel}
             selectedOptions={[timeWindow]}
-            disabled={isLoading}
             style={{ minWidth: timeWindow === "all" ? "132px" : "260px" }}
             title={
               timeWindow === "all"
@@ -233,325 +442,33 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
               </Option>
             ))}
           </Dropdown>
-
-          <div
-            style={{
-              width: "1px",
-              height: separatorHeight,
-              backgroundColor: tokens.colorNeutralStroke2,
-            }}
-          />
-        </>
-      )}
-
-      <Button
-        size="small"
-        appearance="outline"
-        onClick={() => setTimeZoneMode(timeZoneMode === "local" ? "utc" : "local")}
-        style={{ minWidth: "auto", padding: "2px 8px", fontSize: controlFontSize }}
-        title={
-          timeZoneMode === "utc"
-            ? "Event times are shown in UTC, as Windows recorded them. Click for local time."
-            : "Event times are shown in this machine's local time. Click for UTC, which is what most other logs use."
-        }
-      >
-        {timeZoneLabel(timeZoneMode)}
-      </Button>
-
-      <div
-        style={{
-          width: "1px",
-          height: separatorHeight,
-          backgroundColor: tokens.colorNeutralStroke2,
-        }}
-      />
-
-      {LEVELS.map((level) => {
-        const active = filterLevels.has(level);
-        return (
-          <Button
-            key={level}
-            size="small"
-            appearance={active ? "primary" : "outline"}
-            aria-label={`Toggle ${level} events`}
-            aria-pressed={active}
-            onClick={() => toggleFilterLevel(level)}
-            style={{
-              minWidth: "auto",
-              padding: "2px 8px",
-              fontSize: controlFontSize,
-              borderColor: active ? undefined : LEVEL_COLORS[level],
-              color: active ? undefined : LEVEL_COLORS[level],
-            }}
-            title={`Toggle ${level} events`}
-          >
-            {LEVEL_SHORT_LABELS[level]}
-          </Button>
-        );
-      })}
-
-      <div
-        style={{
-          width: "1px",
-          height: separatorHeight,
-          backgroundColor: tokens.colorNeutralStroke2,
-        }}
-      />
-
-      <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-        <Input
-          input={{ style: { fontSize: controlFontSize } }}
-          aria-label="Event IDs"
-          aria-invalid={eventIdInputInvalid}
-          aria-describedby={eventIdInputInvalid ? "event-id-filter-error" : undefined}
-          title={eventIdInputInvalid ? EVENT_ID_VALIDATION_HELP : undefined}
-          value={filterEventIds}
-          onChange={(_, data) => setFilterEventIds(data.value)}
-          placeholder="Event IDs (comma sep.)"
-          size="small"
-          style={{
-            width: "160px",
-            borderColor: eventIdInputInvalid ? tokens.colorPaletteRedBorder2 : undefined,
-          }}
-        />
-        {eventIdInputInvalid && (
-          <span
-            id="event-id-filter-error"
-            role="alert"
-            aria-label="Invalid Event IDs"
-            title={EVENT_ID_VALIDATION_HELP}
-            style={{ color: tokens.colorPaletteRedForeground1, fontSize: controlFontSize }}
-          >
-            Invalid Event IDs
-          </span>
         )}
-      </span>
 
-      <Dropdown
-        button={{ style: { fontSize: controlFontSize } }}
-        size="small"
-        placeholder="Saved"
-        value=""
-        selectedOptions={[]}
-        style={{ minWidth: "104px" }}
-        title="Apply a saved filter"
-        onOptionSelect={(_, data) => {
-          if (data.optionValue === "__save__") setPendingName("");
-          else if (data.optionValue) applySavedFilter(data.optionValue);
+        <EvtxMoreFilters controlFontSize={controlFontSize} visual={visual} />
+
+        {/*
+          The epic's Preview label (#583) is pinned by a workspace test and the spec's filter row does
+          not mention it, so it stays, out of the way at the end of the row.
+        */}
+        <Badge appearance="ghost" size="small" style={{ flexShrink: 0, marginLeft: "auto" }}>
+          Preview
+        </Badge>
+      </div>
+      {/*
+        Always mounted and empty while the search is applied, so it takes no height and the message
+        is announced politely when it appears. The search box points at it while it has one.
+      */}
+      <div
+        id={EVTX_SEARCH_ERROR_ID}
+        role="status"
+        style={{
+          color: searchErrorColor,
+          fontSize: `${searchErrorFontPx}px`,
+          lineHeight: `${Math.round(searchErrorFontPx * 1.45)}px`,
+          marginTop: searchError ? "2px" : 0,
         }}
       >
-        <Option value="__save__" style={{ fontSize: controlFontSize }}>Save current...</Option>
-        {orderedFilters.map((filter) => (
-          <Option key={filter.id} value={filter.id} style={{ fontSize: controlFontSize }}>
-            {filter.favorite ? `\u2605 ${filter.name}` : filter.name}
-          </Option>
-        ))}
-      </Dropdown>
-
-      {pendingName !== null && (
-        <Input
-          input={{ style: { fontSize: controlFontSize } }}
-          autoFocus
-          size="small"
-          value={pendingName}
-          placeholder="Name this filter"
-          aria-label="Name this filter"
-          style={{ width: "180px" }}
-          onChange={(_, data) => setPendingName(data.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") commitFilterName(pendingName);
-            if (event.key === "Escape") setPendingName(null);
-          }}
-          onBlur={() => setPendingName(null)}
-        />
-      )}
-
-      {statusMessage && (
-        <span style={{ fontSize: controlFontSize, color: tokens.colorNeutralForeground3 }}>
-          {statusMessage}
-        </span>
-      )}
-
-      <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-        <Input
-          input={{ style: { fontSize: controlFontSize } }}
-          value={quickFilter.query}
-          onChange={(_, data) => setQuickFilter({ ...quickFilter, query: data.value })}
-          placeholder={
-            quickFilter.mode === "eventIds" ? "Quick IDs (e.g. 4624-4626)" : "Quick filter..."
-          }
-          aria-label="Quick filter query"
-          aria-invalid={quickEventIdInputInvalid}
-          aria-describedby={quickEventIdInputInvalid ? "quick-event-id-filter-error" : undefined}
-          title={quickEventIdInputInvalid ? EVENT_ID_VALIDATION_HELP : undefined}
-          size="small"
-          style={{
-            width: "180px",
-            borderColor: quickEventIdInputInvalid ? tokens.colorPaletteRedBorder2 : undefined,
-          }}
-        />
-        {quickEventIdInputInvalid && (
-          <span
-            id="quick-event-id-filter-error"
-            role="alert"
-            aria-label="Invalid quick Event IDs"
-            title={EVENT_ID_VALIDATION_HELP}
-            style={{ color: tokens.colorPaletteRedForeground1, fontSize: controlFontSize }}
-          >
-            Invalid quick Event IDs
-          </span>
-        )}
-      </span>
-      <Dropdown
-        button={{ style: { fontSize: controlFontSize } }}
-        size="small"
-        aria-label="Quick filter matching grammar"
-        value={QUICK_FILTER_MODE_LABELS[quickFilter.mode]}
-        selectedOptions={[quickFilter.mode]}
-        title="Quick filter matching grammar"
-        onOptionSelect={(_, data) => {
-          if (data.optionValue) {
-            setQuickFilter({
-              ...quickFilter,
-              mode: data.optionValue as EvtxQuickFilterMode,
-            });
-          }
-        }}
-      >
-        {EVTX_QUICK_FILTER_MODES.map((mode) => (
-          <Option
-            key={mode}
-            value={mode}
-            style={{ fontSize: controlFontSize }}
-          >
-            {QUICK_FILTER_MODE_LABELS[mode]}
-          </Option>
-        ))}
-      </Dropdown>
-      <Dropdown
-        button={{ style: { fontSize: controlFontSize } }}
-        size="small"
-        aria-label="Quick filter column scope"
-        value={QUICK_FILTER_SCOPE_LABELS[quickFilter.scope]}
-        selectedOptions={[quickFilter.scope]}
-        title="Quick filter column scope"
-        onOptionSelect={(_, data) => {
-          if (data.optionValue) {
-            setQuickFilter({
-              ...quickFilter,
-              scope: data.optionValue as EvtxQuickFilterScope,
-            });
-          }
-        }}
-      >
-          {EVTX_QUICK_FILTER_SCOPES.map((scope) => (
-            <Option
-              key={scope}
-              value={scope}
-              style={{ fontSize: controlFontSize }}
-            >
-              {QUICK_FILTER_SCOPE_LABELS[scope]}
-            </Option>
-          ))}
-      </Dropdown>
-      <Dropdown
-        button={{ style: { fontSize: controlFontSize } }}
-        size="small"
-        aria-label="Quick filter show or hide behavior"
-        value={QUICK_FILTER_ACTION_LABELS[quickFilter.action]}
-        selectedOptions={[quickFilter.action]}
-        title="Quick filter show or hide behavior"
-        onOptionSelect={(_, data) => {
-          if (data.optionValue) {
-            setQuickFilter({
-              ...quickFilter,
-              action: data.optionValue as EvtxQuickFilterAction,
-            });
-          }
-        }}
-      >
-          {EVTX_QUICK_FILTER_ACTIONS.map((action) => (
-            <Option
-              key={action}
-              value={action}
-              style={{ fontSize: controlFontSize }}
-            >
-              {QUICK_FILTER_ACTION_LABELS[action]}
-            </Option>
-          ))}
-      </Dropdown>
-      <Checkbox
-        checked={quickFilter.caseSensitive}
-        label={<span style={{ fontSize: controlFontSize }}>Case</span>}
-        title="Case-sensitive quick filter"
-        style={{ fontSize: controlFontSize }}
-        onChange={(_, data) =>
-          setQuickFilter({ ...quickFilter, caseSensitive: data.checked === true })
-        }
-      />
-      <Checkbox
-        checked={quickFilter.highlight}
-        label={<span style={{ fontSize: controlFontSize }}>Highlight</span>}
-        title="Highlight quick-filter matches"
-        style={{ fontSize: controlFontSize }}
-        onChange={(_, data) =>
-          setQuickFilter({ ...quickFilter, highlight: data.checked === true })
-        }
-      />
-
-      <Input
-        input={{ style: { fontSize: controlFontSize } }}
-        aria-label="Search events"
-        value={filterSearch}
-        onChange={(_, data) => setFilterSearch(data.value)}
-        placeholder="Search..."
-        size="small"
-        style={{ width: "180px" }}
-      />
-
-      <div style={{ flex: 1 }} />
-
-      <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-        <span
-          style={{
-            fontSize: controlFontSize,
-            color: tokens.colorNeutralForeground3,
-          }}
-        >
-          Sort:
-        </span>
-        <Dropdown
-          button={{ style: { fontSize: controlFontSize } }}
-          value={sortFieldLabel}
-          selectedOptions={[sortField]}
-          onOptionSelect={(_, data) => {
-            if (data.optionValue) {
-              setSortField(data.optionValue as EvtxSortField);
-            }
-          }}
-          size="small"
-          style={{ minWidth: "100px" }}
-        >
-          {SORT_FIELDS.map((f) => (
-            <Option key={f} value={f} style={{ fontSize: controlFontSize }}>
-              {SORT_FIELD_LABELS[f]}
-            </Option>
-          ))}
-        </Dropdown>
-        <Button
-          size="small"
-          appearance="subtle"
-          aria-label={`Change sort direction to ${nextSortDirectionLabel}`}
-          onClick={() =>
-            setSortDirection(
-              sortDirection === "asc" ? "desc" : "asc"
-            )
-          }
-          title={`Change sort direction to ${nextSortDirectionLabel}`}
-          style={{ minWidth: "auto", padding: "2px 6px", fontSize: controlFontSize }}
-        >
-          {sortDirection === "asc" ? "\u2191" : "\u2193"}
-        </Button>
+        {searchError ? notAppliedMessage(searchError) : ""}
       </div>
     </div>
   );

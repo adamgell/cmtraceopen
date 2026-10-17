@@ -1,13 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  compileFieldQuery,
+  countByLevel,
+  EVTX_LEVELS,
+  fieldQueryError,
   isWithinTimeWindow,
+  levelsAfterToggle,
+  levelsFilteredAtSource,
+  matchesQuickFilter,
   parseEventIdSelectors,
+  quickFilterApplies,
   selectVisibleRecords,
   sortRecords,
   type EvtxQuickFilter,
 } from "./evtx-filter";
 import * as evtxColumns from "./evtx-columns";
-import type { EvtxRecord } from "./types";
+import * as evtxQueryGrammar from "./evtx-query-grammar";
+import { migratePersistedSavedFilters } from "./evtx-filter-store";
+import {
+  buildFilterExport,
+  parseFilterExport,
+  SAVED_FILTER_SCHEMA,
+  sanitizeCriteria,
+  sanitizeQuickFilter,
+  type EvtxSavedFilter,
+} from "./evtx-saved-filters";
+import type { EvtxLevel, EvtxRecord } from "./types";
 
 const record = (overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
   id: 1,
@@ -43,7 +61,7 @@ const visible = (
   selectVisibleRecords({
     records,
     selectedChannels: new Set(["Application"]),
-    filterLevels: new Set(["Critical", "Error", "Warning", "Information", "Verbose"]),
+    filterLevels: new Set(EVTX_LEVELS),
     filterEventIds: "",
     filterSearch: "",
     quickFilter,
@@ -274,5 +292,472 @@ describe("sortRecords", () => {
     ];
     expect(sortRecords(records, "time", "asc").map((record) => record.eventId)).toEqual([1, 2]);
     expect(sortRecords(records, "time", "desc").map((record) => record.eventId)).toEqual([2, 1]);
+  });
+});
+
+describe("countByLevel", () => {
+  it("counts every level in one pass and reports a level with no records as zero", () => {
+    const records = [
+      record({ level: "Error" }),
+      record({ level: "Error" }),
+      record({ level: "Warning" }),
+      record({ level: "Information" }),
+      record({ level: "Information" }),
+      record({ level: "Information" }),
+    ];
+
+    expect(countByLevel(records)).toEqual({
+      Critical: 0,
+      Error: 2,
+      Warning: 1,
+      Information: 3,
+      Verbose: 0,
+    });
+  });
+
+  it("counts the records it is given and nothing else: channel and level filters do not apply", () => {
+    // The level toggles show what is loaded, so a record in a deselected channel still counts.
+    const records = [
+      record({ level: "Critical", channel: "Security" }),
+      record({ level: "Critical", channel: "Application" }),
+    ];
+
+    expect(countByLevel(records).Critical).toBe(2);
+  });
+
+  it("returns all zeros for no records", () => {
+    expect(countByLevel([])).toEqual({
+      Critical: 0,
+      Error: 0,
+      Warning: 0,
+      Information: 0,
+      Verbose: 0,
+    });
+  });
+
+  it("has a key for every level the filter bar lists, in severity order", () => {
+    expect(EVTX_LEVELS).toEqual(["Critical", "Error", "Warning", "Information", "Verbose"]);
+    expect(Object.keys(countByLevel([]))).toEqual([...EVTX_LEVELS]);
+  });
+});
+
+describe("levelsFilteredAtSource", () => {
+  const set = (...levels: EvtxLevel[]) => new Set<EvtxLevel>(levels);
+
+  it("is false when every level is selected, because no level predicate is sent", () => {
+    expect(levelsFilteredAtSource(set(...EVTX_LEVELS))).toBe(false);
+  });
+
+  it("is false while Information is selected, because Information is an unbounded raw-level domain kept local", () => {
+    expect(levelsFilteredAtSource(set("Critical", "Information"))).toBe(false);
+    expect(levelsFilteredAtSource(set("Information"))).toBe(false);
+  });
+
+  it("is true for a strict subset without Information", () => {
+    expect(levelsFilteredAtSource(set("Critical", "Error"))).toBe(true);
+    expect(levelsFilteredAtSource(set("Verbose"))).toBe(true);
+  });
+
+  it("is false for an empty selection, which the store never sends", () => {
+    expect(levelsFilteredAtSource(set())).toBe(false);
+  });
+});
+
+describe("levelsAfterToggle", () => {
+  const set = (...levels: EvtxLevel[]) => new Set<EvtxLevel>(levels);
+
+  it("flips one level without touching the others or the input", () => {
+    const before = set(...EVTX_LEVELS);
+    const after = levelsAfterToggle(before, "Verbose");
+    expect([...after]).toEqual(["Critical", "Error", "Warning", "Information"]);
+    expect(before.has("Verbose")).toBe(true);
+    expect(levelsAfterToggle(after, "Verbose").has("Verbose")).toBe(true);
+  });
+
+  it("selects every level again when the last one is toggled off", () => {
+    expect([...levelsAfterToggle(set("Error"), "Error")].sort()).toEqual([...EVTX_LEVELS].sort());
+  });
+});
+
+/** Four records with distinct values in every field the grammar can name. */
+const fieldRecords = {
+  aad: record({
+    id: 1,
+    eventRecordId: 1,
+    provider: "Microsoft-Windows-AAD",
+    channel: "Microsoft-Windows-AAD/Operational",
+    eventId: 1098,
+    level: "Error",
+    computer: "PC-01",
+    message: "Token broker error",
+    eventData: [{ name: "Error", value: "0xCAA2000C" }],
+    sourceLabel: "Live/AAD",
+  }),
+  mdm: record({
+    id: 2,
+    eventRecordId: 2,
+    provider: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+    channel: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+    eventId: 76,
+    level: "Error",
+    computer: "PC-01",
+    message: "Auto MDM Enroll: Failed",
+    eventData: [{ name: "ErrorCode", value: "0x80180001" }],
+    sourceLabel: "C:\\logs\\dm.evtx",
+  }),
+  power: record({
+    id: 3,
+    eventRecordId: 3,
+    provider: "Microsoft-Windows-Kernel-Power",
+    channel: "System",
+    eventId: 41,
+    level: "Critical",
+    computer: "PC-01",
+    message: "The system has rebooted without cleanly shutting down first.",
+    eventData: [{ name: "BugcheckCode", value: "0" }],
+    sourceLabel: "Live/System",
+  }),
+  service: record({
+    id: 4,
+    eventRecordId: 4,
+    provider: "Service Control Manager",
+    channel: "System",
+    eventId: 7036,
+    level: "Information",
+    computer: "PC-02",
+    message: "Logon failed. Status: 0xC000006D at C:\\Windows\\System32\\svchost.exe",
+    eventData: [{ name: "param1", value: "Windows Update" }],
+    sourceLabel: "Live/System",
+  }),
+};
+const allFieldRecords = Object.values(fieldRecords);
+const fieldChannels = new Set(allFieldRecords.map((entry) => entry.channel));
+const names = (records: EvtxRecord[]) =>
+  records.map((entry) => Object.keys(fieldRecords).find((key) =>
+    fieldRecords[key as keyof typeof fieldRecords] === entry));
+
+/** The records the search box leaves on screen for `filterSearch`. */
+const searched = (filterSearch: string, quickFilter?: EvtxQuickFilter) =>
+  names(
+    selectVisibleRecords({
+      records: allFieldRecords,
+      selectedChannels: fieldChannels,
+      filterLevels: new Set(EVTX_LEVELS),
+      filterEventIds: "",
+      filterSearch,
+      quickFilter,
+      visibleColumns: ["message"],
+    }),
+  );
+
+/** The records a `fieldQuery` quick filter leaves on screen. */
+const fieldQuick = (query: string, overrides: Partial<EvtxQuickFilter> = {}) =>
+  searched("", quick({ mode: "fieldQuery", query, ...overrides }));
+
+describe("field query terms", () => {
+  it("id: matches single IDs and inclusive ranges exactly, as the Event IDs mode does", () => {
+    expect(searched("id:76")).toEqual(["mdm"]);
+    expect(searched("id:1098,76")).toEqual(["aad", "mdm"]);
+    expect(searched("id:40-80")).toEqual(["mdm", "power"]);
+    // Exact, never a substring of 76 or 7036.
+    expect(searched("id:7")).toEqual([]);
+  });
+
+  it("id: rejects a value the Event ID grammar rejects, at the value", () => {
+    expect(fieldQueryError("level:error id:12x")).toEqual({
+      position: 15,
+      message:
+        'id: takes Event IDs and ranges from 0 to 4294967295, as in id:4624,4625 or id:4624-4634, not "12x".',
+    });
+    expect(fieldQueryError("id:4294967296")).toMatchObject({ position: 3 });
+    expect(fieldQueryError("id:,")).toMatchObject({ position: 3 });
+  });
+
+  it("level: maps names through EVTX_LEVELS case-insensitively, with info and comma lists", () => {
+    expect(searched("level:ERROR")).toEqual(["aad", "mdm"]);
+    // "Info" is the filter row's label for Information.
+    expect(searched("level:info")).toEqual(["service"]);
+    expect(searched("level:Information")).toEqual(["service"]);
+    expect(searched("level:critical,information")).toEqual(["power", "service"]);
+  });
+
+  it("level: rejects an unknown name at that name, and an empty list at the term", () => {
+    expect(fieldQueryError("level:error,erro")).toEqual({
+      position: 12,
+      message: 'level: takes critical, error, warning, info, information or verbose, not "erro".',
+    });
+    expect(fieldQueryError('level:"error, erro"')).toMatchObject({ position: 14 });
+    expect(fieldQueryError("level:,")).toEqual({ position: 0, message: "level: needs a value." });
+  });
+
+  it("provider, channel, computer and source match a case-insensitive substring", () => {
+    expect(searched("provider:aad")).toEqual(["aad"]);
+    expect(searched("channel:SYSTEM")).toEqual(["power", "service"]);
+    expect(searched("computer:pc-02")).toEqual(["service"]);
+    // The record's source label: a live channel or a file path.
+    expect(searched("source:live/")).toEqual(["aad", "power", "service"]);
+    expect(searched('source:"dm.evtx"')).toEqual(["mdm"]);
+  });
+
+  it("data.<Name>: matches the EventData field of that name, the name case-insensitively", () => {
+    expect(searched("data.errorcode:0x8018")).toEqual(["mdm"]);
+    expect(searched("data.Error:caa2")).toEqual(["aad"]);
+    // The value is searched only in the named field: the AAD record's code is in Error.
+    expect(searched("data.ErrorCode:CAA2")).toEqual([]);
+  });
+
+  it("a negated data term keeps the records that lack the field", () => {
+    expect(searched("-data.ErrorCode:0x8018")).toEqual(["aad", "power", "service"]);
+  });
+
+  it("ANDs clauses, ORs within a clause, and excludes negated terms", () => {
+    expect(searched("provider:DeviceManagement OR id:1098,1014")).toEqual(["aad", "mdm"]);
+    expect(searched("level:error -provider:aad")).toEqual(["mdm"]);
+    expect(searched("channel:system -id:7036")).toEqual(["power"]);
+    expect(searched("level:error computer:PC-01 OR id:41")).toEqual(["aad", "mdm"]);
+  });
+});
+
+describe("the search box speaks the field grammar", () => {
+  it("keeps the old free-text rule for a word: a case-insensitive substring of message or provider", () => {
+    expect(searched("TOKEN")).toEqual(["aad"]);
+    expect(searched("kernel-power")).toEqual(["power"]);
+    // Free text never searched the computer or EventData, and still does not.
+    expect(searched("PC-02")).toEqual([]);
+    expect(searched("0xCAA2000C")).toEqual([]);
+  });
+
+  it("matches each bare word anywhere, where it used to match the whole text as one phrase", () => {
+    expect(searched("broker token")).toEqual(["aad"]);
+    expect(searched('"broker token"')).toEqual([]);
+    expect(searched('"token broker"')).toEqual(["aad"]);
+  });
+
+  it("reads text with a colon before something that is not a field as text", () => {
+    expect(searched("Status: 0xC000006D")).toEqual(["service"]);
+    expect(searched("C:\\Windows\\System32")).toEqual(["service"]);
+    expect(fieldQueryError("Status: 0xC000006D C:\\Windows\\System32 http://host 12:00:01")).toBeNull();
+  });
+
+  it("does not apply a query that does not parse, not even in part, and says why (spec 8.3)", () => {
+    const every = ["aad", "mdm", "power", "service"];
+    expect(searched("level:erro")).toEqual(every);
+    // "token" alone would narrow to one record: the valid part is not applied either.
+    expect(searched('token "broker')).toEqual(every);
+    expect(searched("token OR")).toEqual(every);
+    expect(fieldQueryError("level:erro")?.message).toBe(
+      'level: takes critical, error, warning, info, information or verbose, not "erro".',
+    );
+    expect(fieldQueryError('token "broker')?.message).toBe("The quote at character 7 is not closed.");
+  });
+
+  it("has no error for blank text or a query that parses", () => {
+    expect(fieldQueryError("   ")).toBeNull();
+    expect(fieldQueryError("id:76  level:error  provider:AAD")).toBeNull();
+  });
+
+  it("compiles the search and a field quick filter once per pass, not once per record", () => {
+    const parse = vi.spyOn(evtxQueryGrammar, "parseFieldQuery");
+    try {
+      expect(searched("level:error", quick({ mode: "fieldQuery", query: "-id:76" }))).toEqual([
+        "aad",
+      ]);
+      expect(parse).toHaveBeenCalledTimes(2);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+});
+
+describe("the fieldQuery quick-filter mode", () => {
+  it("searches free text in the quick filter's scope, EventData included for all columns", () => {
+    expect(fieldQuick("0xcaa2", { scope: "allColumns" })).toEqual(["aad"]);
+    expect(fieldQuick("0xcaa2", { scope: "visibleColumns" })).toEqual([]);
+    // Unlike the search box, the computer column is searched when it is in scope.
+    expect(fieldQuick("PC-02", { scope: "allColumns" })).toEqual(["service"]);
+  });
+
+  it("applies field terms whatever the scope: the term names its field", () => {
+    expect(fieldQuick("provider:aad", { scope: "visibleColumns" })).toEqual(["aad"]);
+    // The visible columns are only the message here, so no field these terms name is in scope.
+    expect(
+      fieldQuick("channel:system source:live/ data.param1:update", { scope: "visibleColumns" }),
+    ).toEqual(["service"]);
+  });
+
+  it("applies Case to free text only: every field value matches whatever its case (spec 8.3)", () => {
+    const caseOn = { caseSensitive: true };
+    expect(fieldQuick("token", caseOn)).toEqual([]);
+    expect(fieldQuick("Token", caseOn)).toEqual(["aad"]);
+    expect(fieldQuick("provider:aad", caseOn)).toEqual(["aad"]);
+    expect(fieldQuick("PROVIDER:AAD", caseOn)).toEqual(["aad"]);
+    expect(fieldQuick("channel:SYSTEM", caseOn)).toEqual(["power", "service"]);
+    expect(fieldQuick("computer:pc-02", caseOn)).toEqual(["service"]);
+    // source: and data.<Name>: follow the same rule, a recorded addition to spec 8.3.
+    expect(fieldQuick("source:LIVE/aad", caseOn)).toEqual(["aad"]);
+    expect(fieldQuick("data.Error:caa2", caseOn)).toEqual(["aad"]);
+    expect(fieldQuick("data.ERRORCODE:0X8018", caseOn)).toEqual(["mdm"]);
+    expect(fieldQuick("LEVEL:ERROR", caseOn)).toEqual(["aad", "mdm"]);
+  });
+
+  it("still applies Case to the free text of a query that also has field terms", () => {
+    const caseOn = { caseSensitive: true };
+    expect(fieldQuick("provider:aad token", caseOn)).toEqual([]);
+    expect(fieldQuick("provider:aad Token", caseOn)).toEqual(["aad"]);
+  });
+
+  it("ignores Case for field values under negation and inside an OR group", () => {
+    const caseOn = { caseSensitive: true };
+    expect(fieldQuick("-provider:aad", caseOn)).toEqual(["mdm", "power", "service"]);
+    expect(fieldQuick("provider:aad OR channel:system", caseOn)).toEqual([
+      "aad",
+      "power",
+      "service",
+    ]);
+    expect(fieldQuick("-data.errorcode:0x8018 level:error", caseOn)).toEqual(["aad"]);
+  });
+
+  it("ignores Case for field values in a quick filter loaded from a saved filter", () => {
+    const loaded = sanitizeQuickFilter(
+      quick({ mode: "fieldQuery", query: "provider:aad", caseSensitive: true }),
+    );
+    expect(loaded.caseSensitive).toBe(true);
+    expect(searched("", loaded)).toEqual(["aad"]);
+  });
+
+  it("removes the matches with a hide rule", () => {
+    expect(fieldQuick("level:error", { action: "hide" })).toEqual(["power", "service"]);
+  });
+
+  it("does not apply a query that does not parse, as a show rule or a hide rule (spec 8.3)", () => {
+    const every = ["aad", "mdm", "power", "service"];
+    expect(fieldQuick("level:erro")).toEqual(every);
+    expect(fieldQuick("level:error -id:", { action: "hide" })).toEqual(every);
+  });
+
+  it("can be applied as edited unless it is a field query that does not parse", () => {
+    expect(quickFilterApplies(quick({ mode: "fieldQuery", query: "level:error" }))).toBe(true);
+    expect(quickFilterApplies(quick({ mode: "fieldQuery", query: "  " }))).toBe(true);
+    expect(quickFilterApplies(quick({ mode: "fieldQuery", query: "level:" }))).toBe(false);
+    // Other modes have no grammar to fail, and Event IDs keeps its own rule for a bad list.
+    expect(quickFilterApplies(quick({ mode: "oneString", query: "level:" }))).toBe(true);
+    expect(quickFilterApplies(quick({ mode: "eventIds", query: "abc" }))).toBe(true);
+  });
+
+  it("gives the row's match state the same answer, and false for a query that does not parse", () => {
+    const filter = quick({ mode: "fieldQuery", query: "level:error -id:76" });
+    expect(matchesQuickFilter(fieldRecords.aad, filter, ["message"])).toBe(true);
+    expect(matchesQuickFilter(fieldRecords.mdm, filter, ["message"])).toBe(false);
+    expect(
+      matchesQuickFilter(fieldRecords.aad, quick({ mode: "fieldQuery", query: "level:" }), ["message"]),
+    ).toBe(false);
+  });
+
+  it("compiles free text with the Case setting and every field value in lower case", () => {
+    const compiled = compileFieldQuery("Token provider:AAD data.Error:CAA2", true);
+    expect(compiled.ok && compiled.query.clauses).toMatchObject([
+      [{ kind: "text", needle: "Token" }],
+      [{ kind: "textField", field: "provider", needle: "aad" }],
+      [{ kind: "data", name: "error", needle: "caa2" }],
+    ]);
+  });
+});
+
+describe("saved filters carry the fieldQuery mode", () => {
+  const fieldFilter: EvtxQuickFilter = {
+    mode: "fieldQuery",
+    query: "provider:DeviceManagement OR id:1098,1014",
+    scope: "visibleColumns",
+    action: "hide",
+    caseSensitive: true,
+    highlight: false,
+  };
+  const saved: EvtxSavedFilter = {
+    id: "enrollment",
+    name: "Enrollment",
+    favorite: false,
+    tags: [],
+    lastUsed: null,
+    criteria: sanitizeCriteria({
+      onLoad: { search: "level:error -source:dm.evtx", quickFilter: fieldFilter },
+    }),
+  };
+
+  it("keeps the mode and every quick-filter setting when sanitized", () => {
+    expect(sanitizeQuickFilter(fieldFilter)).toEqual(fieldFilter);
+    expect(saved.criteria.onLoad).toEqual({
+      search: "level:error -source:dm.evtx",
+      quickFilter: fieldFilter,
+    });
+  });
+
+  it("round-trips through an export file without a schema change", () => {
+    expect(SAVED_FILTER_SCHEMA).toBe(2);
+    const imported = parseFilterExport(buildFilterExport([saved]));
+    expect(imported).toEqual({ filters: [saved], skipped: 0 });
+    expect(imported.filters[0].criteria.onLoad.quickFilter).toEqual(fieldFilter);
+  });
+
+  it("round-trips through local storage", () => {
+    const restored = migratePersistedSavedFilters({ savedFilters: [saved] }, 2);
+    expect(restored).toEqual({ savedFilters: [saved] });
+    expect(restored.savedFilters[0].criteria.onLoad.quickFilter).toEqual(fieldFilter);
+  });
+
+  it("falls back in an older build to One string: a show rule matches nothing, a hide rule hides nothing", () => {
+    // An older build's sanitizer has no fieldQuery, so it treats the value as this one treats any
+    // unknown mode: One string, with the query kept as typed.
+    const older = sanitizeQuickFilter({ ...fieldFilter, mode: "aModeThisBuildDoesNotKnow" });
+    expect(older).toEqual({ ...fieldFilter, mode: "oneString" });
+    const unscoped = { ...older, scope: "allColumns" as const, caseSensitive: false };
+    expect(searched("", { ...unscoped, action: "show" })).toEqual([]);
+    // Reported to Main: no record contains the query text, so an older build's hide rule widens
+    // to every record. That build cannot be changed from here.
+    expect(searched("", { ...unscoped, action: "hide" })).toEqual([
+      "aad",
+      "mdm",
+      "power",
+      "service",
+    ]);
+  });
+});
+
+describe("source: matches the grid record's source label", () => {
+  // The labels the backend gives grid records: an EVTX file's path, an archive member's
+  // "<archive>::<member>" label (text members too), and "Live" or "Remote: <machine>".
+  const evtxFile = record({
+    id: 21,
+    eventRecordId: 21,
+    sourceLabel: "C:\\logs\\System.evtx",
+    channel: "System",
+  });
+  const archiveText = record({
+    id: 22,
+    eventRecordId: 22,
+    originKind: "log",
+    sourceLabel: "evidence.zip::logs/AppIntent.log",
+    channel: "evidence.zip::logs/AppIntent.log",
+    provider: "AppIntentHandler",
+  });
+  const live = record({ id: 23, eventRecordId: 23, sourceLabel: "Live", channel: "Application" });
+  const remote = record({ id: 24, eventRecordId: 24, sourceLabel: "Remote: PC-07", channel: "Application" });
+  const sources = [evtxFile, archiveText, live, remote];
+  const matching = (query: string) =>
+    selectVisibleRecords({
+      records: sources,
+      selectedChannels: new Set(sources.map((entry) => entry.channel)),
+      filterLevels: new Set(EVTX_LEVELS),
+      filterEventIds: "",
+      filterSearch: query,
+    }).map((entry) => entry.id);
+
+  it("matches each kind of label by substring", () => {
+    expect(matching("source:System.evtx")).toEqual([21]);
+    // A text-log line from an evidence archive: its label is the file it came from, which is the
+    // origin.file the analysis session records for it, never the code file a CCM line names.
+    expect(matching("source:AppIntent.log")).toEqual([22]);
+    expect(matching("source:evidence.zip::")).toEqual([22]);
+    expect(matching("source:live")).toEqual([23]);
+    expect(matching('source:"Remote: PC-07"')).toEqual([24]);
   });
 });

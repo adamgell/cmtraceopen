@@ -4,6 +4,8 @@ import {
   EVTX_STRING_QUERY_SEPARATOR,
   type EvtxQuickFilter,
 } from "./evtx-filter";
+import type { EvtxColumnId } from "./evtx-columns";
+import { parseFieldQuery, type EvtxQueryField } from "./evtx-query-grammar";
 import type { EvtxRecord } from "./types";
 
 export const DEFAULT_EVTX_QUICK_FILTER: EvtxQuickFilter = {
@@ -247,28 +249,74 @@ export function toggleEvtxBookmark(record: EvtxRecord): void {
   persistEvtxMarkers(record.sourceLabel);
 }
 
+/**
+ * The text a row marks for its quick filter. Row visibility still comes from the centralized
+ * matcher; these only choose what is drawn as <mark>.
+ */
+export interface EvtxHighlightTerms {
+  /** Free text, marked in any cell, with the quick filter's Case setting. */
+  text: string[];
+  /**
+   * Field-term values by the column that renders the field the term tested. Each is marked only
+   * in that column's cell, in any case, as field values match (spec 8.3).
+   */
+  columns: Partial<Record<EvtxColumnId, string[]>>;
+}
+
+/**
+ * The grid column that renders each field a term can test. `source:` has no column (the grid does
+ * not render the source label) and `data.<Name>:` has none (the grid renders no EventData field),
+ * so their values mark nothing; `id:` and `level:` values are not text the row contains as typed.
+ */
+const FIELD_HIGHLIGHT_COLUMNS: Partial<Record<EvtxQueryField, EvtxColumnId>> = {
+  provider: "provider",
+  channel: "channel",
+  computer: "computer",
+};
+
 /** Select the terms rendered as <mark> nodes; row visibility still comes from the centralized matcher. */
-export function evtxQuickFilterTerms(
-  quickFilter: EvtxQuickFilter,
-): string[] {
+export function evtxQuickFilterTerms(quickFilter: EvtxQuickFilter): EvtxHighlightTerms {
   const query = quickFilter.query.trim();
-  if (!query || quickFilter.mode === "eventIds") {
+  if (quickFilter.mode === "fieldQuery") return fieldQueryHighlightTerms(query);
+  return { text: textModeTerms(quickFilter.mode, query), columns: {} };
+}
+
+function textModeTerms(mode: EvtxQuickFilter["mode"], query: string): string[] {
+  if (!query || mode === "eventIds") {
     return query ? query.split(/[\s,;]+/).filter(Boolean) : [];
   }
-  if (
-    quickFilter.mode === "multipleStrings" ||
-    quickFilter.mode === "allStrings"
-  ) {
+  if (mode === "multipleStrings" || mode === "allStrings") {
     return query
       .split(EVTX_STRING_QUERY_SEPARATOR)
       .map((part) => part.trim())
       .filter(Boolean);
   }
-  if (quickFilter.mode === "multipleWords" || quickFilter.mode === "allWords") {
+  if (mode === "multipleWords" || mode === "allWords") {
     return query
       .split(/\s+/)
       .map((part) => part.trim())
       .filter(Boolean);
   }
   return [query];
+}
+
+/**
+ * A field query's marks: its free text, bare or quoted, for every cell, and each field term's value
+ * for its own column's cell only. A negated term names what a matching row lacks, so it marks
+ * nothing, and a query that does not parse marks nothing.
+ */
+function fieldQueryHighlightTerms(query: string): EvtxHighlightTerms {
+  const terms: EvtxHighlightTerms = { text: [], columns: {} };
+  const parsed = parseFieldQuery(query);
+  if (!parsed.ok) return terms;
+  for (const term of parsed.query.clauses.flat()) {
+    if (term.negated) continue;
+    if (term.kind === "text") {
+      terms.text.push(term.value);
+    } else if (term.kind === "field") {
+      const column = FIELD_HIGHLIGHT_COLUMNS[term.field];
+      if (column) (terms.columns[column] ??= []).push(term.value);
+    }
+  }
+  return terms;
 }

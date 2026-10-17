@@ -83,8 +83,13 @@ function configureInvoke() {
   });
 }
 
+// Captured so a test can stream record batches the way the backend does.
+const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => undefined),
+  listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
+    listeners.set(name, handler);
+    return Promise.resolve(() => undefined);
+  }),
 }));
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({
@@ -154,7 +159,9 @@ import {
   MIN_LOG_LIST_FONT_SIZE,
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
-import { useEvtxStore } from "./evtx-store";
+import { deferred } from "../../test-utils/deferred";
+import { EVTX_LEVELS } from "./evtx-filter";
+import { sourceKeyOf, useEvtxStore } from "./evtx-store";
 import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { defaultColumnConfig, visibleColumns } from "./evtx-columns";
 import { EventLogWorkspace } from "./EventLogWorkspace";
@@ -347,7 +354,7 @@ describe("event-viewer shared font metrics", () => {
     expect(providerDisclosure).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("keeps row, virtualizer, pickers, filter, and detail metrics aligned at persisted limits", () => {
+  it("keeps row, virtualizer, pickers, filter, and detail metrics aligned at persisted limits", async () => {
     seedEventLog();
     useEvtxStore.setState({ groupBy: ["level"] });
 
@@ -375,13 +382,19 @@ describe("event-viewer shared font metrics", () => {
     channel.unmount();
 
     const filter = render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    // Spec 7.1: level toggles are f - 2, the other filter controls f - 1.
     expect(screen.getByRole("button", { name: "Toggle Critical events" }).style.fontSize).toBe(
+      `${Math.max(10, smallList.fontSize - 2)}px`
+    );
+    expect(screen.getByRole("textbox", { name: "Search events" }).style.fontSize).toBe(
       `${Math.max(11, smallList.fontSize - 1)}px`
     );
-    expect(screen.getByPlaceholderText("Event IDs (comma sep.)").style.fontSize).toBe(
+    fireEvent.click(screen.getByRole("button", { name: /^More filters/ }));
+    const smallPopover = within(await screen.findByRole("dialog", { name: "More filters" }));
+    expect(smallPopover.getByPlaceholderText("Event IDs (comma sep.)").style.fontSize).toBe(
       `${Math.max(11, smallList.fontSize - 1)}px`
     );
-    expect(screen.getAllByRole("combobox")[0].style.fontSize).toBe(
+    expect(smallPopover.getAllByRole("combobox")[0].style.fontSize).toBe(
       `${Math.max(11, smallList.fontSize - 1)}px`
     );
     filter.unmount();
@@ -436,12 +449,17 @@ describe("event-viewer shared font metrics", () => {
 
     const filterLarge = render(<EvtxFilterBar nowEpoch={Date.now()} />);
     expect(screen.getByRole("button", { name: "Toggle Critical events" }).style.fontSize).toBe(
+      `${Math.max(10, largeList.fontSize - 2)}px`
+    );
+    expect(screen.getByRole("textbox", { name: "Search events" }).style.fontSize).toBe(
       `${Math.max(11, largeList.fontSize - 1)}px`
     );
-    expect(screen.getByPlaceholderText("Event IDs (comma sep.)").style.fontSize).toBe(
+    fireEvent.click(screen.getByRole("button", { name: /^More filters/ }));
+    const largePopover = within(await screen.findByRole("dialog", { name: "More filters" }));
+    expect(largePopover.getByPlaceholderText("Event IDs (comma sep.)").style.fontSize).toBe(
       `${Math.max(11, largeList.fontSize - 1)}px`
     );
-    expect(screen.getAllByRole("combobox")[0].style.fontSize).toBe(
+    expect(largePopover.getAllByRole("combobox")[0].style.fontSize).toBe(
       `${Math.max(11, largeList.fontSize - 1)}px`
     );
     filterLarge.unmount();
@@ -526,7 +544,7 @@ describe("event-viewer shared font metrics", () => {
     expect(channelInput.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
     expect(channelRow.style.height).toBe(`${largeList.rowHeight}px`);
     expect(filter.getByRole("button", { name: "Toggle Critical events" })).toBe(filterButton);
-    expect(filterButton.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE - 1}px`);
+    expect(filterButton.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE - 2}px`);
     expect(recordGridRows(timeline.container)[0]).toBe(recordRow);
     expect(recordRow.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
     expect(recordRow.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
@@ -758,6 +776,8 @@ function seedFixtureEvents() {
       },
     ],
     sourceMode: "live",
+    // A live source whose first load has completed (the store records this as a load ends).
+    completedSourceKey: sourceKeyOf({ sourceMode: "live", remoteMachine: null, sourcePaths: [] }),
     isLoading: false,
     loadError: null,
     coverageGaps: [],
@@ -767,13 +787,7 @@ function seedFixtureEvents() {
       "Microsoft-Windows-AAD/Operational",
     ]),
     loadedChannels: new Set(["Application"]),
-    filterLevels: new Set([
-      "Critical",
-      "Error",
-      "Warning",
-      "Information",
-      "Verbose",
-    ]),
+    filterLevels: new Set(EVTX_LEVELS),
     filterEventIds: "",
     filterSearch: "",
     timeWindow: "all",
@@ -1057,7 +1071,335 @@ describe("EventLogWorkspace fixtures", () => {
     expect(errorToggle).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("identifies invalid ordinary and quick Event ID filters", () => {
+  // A live re-query empties the records (refreshLoadedChannels). The full-screen spinner belongs to
+  // a source's first load only: every later refresh keeps the view bar, the filter row, the chip
+  // row, the channel pane and the rail mounted, so the toggle that was just pressed keeps its focus
+  // and an open popover stays open.
+  describe("a live re-query", () => {
+    const pendingQuery = () =>
+      invoke.mockImplementation(async (command: string) => {
+        if (command === "evtx_query_channels") return new Promise(() => undefined);
+        if (command === "load_markers") return null;
+        return undefined;
+      });
+
+    it("keeps the filter row mounted, and focus on the pressed toggle", async () => {
+      pendingQuery();
+      seedFixtureEvents();
+      render(<EventLogWorkspace />);
+      // Toggling Information changes what the service is asked for, so this one re-queries.
+      const information = screen.getByRole("button", { name: "Toggle Information events" });
+      information.focus();
+      expect(information).toHaveFocus();
+
+      fireEvent.click(information);
+
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("evtx_query_channels", expect.anything()),
+      );
+      expect(useEvtxStore.getState().isLoading).toBe(true);
+      expect(useEvtxStore.getState().records).toEqual([]);
+      expect(screen.queryByText("Loading event logs...")).toBeNull();
+      expect(screen.getByRole("button", { name: "Toggle Information events" })).toBe(information);
+      expect(information).toHaveFocus();
+      expect(screen.getByRole("group", { name: "Level" })).toHaveAttribute("aria-busy", "true");
+      expect(document.querySelector("[data-evtx-region='view-bar']")).not.toBeNull();
+      expect(document.querySelector("[data-evtx-region='channels']")).not.toBeNull();
+    });
+
+    it("shows the row's busy state once the first batch streams in", async () => {
+      pendingQuery();
+      seedFixtureEvents();
+      render(<EventLogWorkspace />);
+      fireEvent.click(screen.getByRole("button", { name: "Toggle Information events" }));
+      await waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(true));
+
+      // A batch lands while the query is still running.
+      act(() => useEvtxStore.setState({ records: [fixtureRecord()] }));
+
+      expect(screen.getByRole("group", { name: "Level" })).toHaveAttribute("aria-busy", "true");
+      expect(screen.getByRole("progressbar", { name: "Reloading events" })).toBeInTheDocument();
+      // Counts are unknown, not the batch's partial totals.
+      expect(screen.getByRole("button", { name: "Toggle Error events" })).toHaveAccessibleDescription(
+        /count not available/i,
+      );
+      expect(document.querySelector("[data-evtx-filter-count]")).toBeNull();
+    });
+
+    it("does not re-query for a toggle that leaves the server filter alone", async () => {
+      pendingQuery();
+      seedFixtureEvents();
+      render(<EventLogWorkspace />);
+      const verbose = screen.getByRole("button", { name: "Toggle Verbose events" });
+      verbose.focus();
+      fireEvent.click(verbose);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(invoke).not.toHaveBeenCalledWith("evtx_query_channels", expect.anything());
+      expect(useEvtxStore.getState().isLoading).toBe(false);
+      expect(verbose).toHaveAttribute("aria-pressed", "false");
+      expect(verbose).toHaveFocus();
+    });
+
+    it("keeps More filters open while Event IDs are typed, and sends one query when they are committed", async () => {
+      pendingQuery();
+      seedFixtureEvents();
+      render(<EventLogWorkspace />);
+      fireEvent.click(screen.getByRole("button", { name: /^More filters/ }));
+      const dialog = await screen.findByRole("dialog", { name: "More filters" });
+      const eventIds = within(dialog).getByRole("textbox", { name: "Event IDs" });
+      eventIds.focus();
+
+      for (const typed of ["4", "46", "462", "4624"]) {
+        fireEvent.change(eventIds, { target: { value: typed } });
+      }
+      await act(async () => {
+        await Promise.resolve();
+      });
+      // Nothing is sent per keystroke.
+      expect(invoke).not.toHaveBeenCalledWith("evtx_query_channels", expect.anything());
+      expect(useEvtxStore.getState().filterEventIds).toBe("");
+
+      fireEvent.keyDown(eventIds, { key: "Enter" });
+      await waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(true));
+
+      const calls = invoke.mock.calls.filter(([name]) => name === "evtx_query_channels");
+      expect(calls).toHaveLength(1);
+      expect(calls[0][1].filter.eventIds).toEqual([{ kind: "single", id: 4624 }]);
+      expect(useEvtxStore.getState().filterEventIds).toBe("4624");
+      // The popover and the field survived the re-query.
+      expect(screen.getByRole("dialog", { name: "More filters" })).toBeInTheDocument();
+      expect(screen.getByRole("textbox", { name: "Event IDs" })).toBe(eventIds);
+      expect(eventIds).toHaveFocus();
+    });
+
+    it("never brings the full-screen spinner back when a change made during the first live load is replayed", async () => {
+      // A real first load: Application streams in and finishes while System is still reading, the
+      // operator widens the window from the enabled Time window, and the load then ends. The replay
+      // starts in the same tick the load ends, and the rows must stay mounted through it.
+      const release = deferred<void>();
+      let released = false;
+      const streamed = (args: { requestId: string; channels: string[] }) => {
+        const channel = args.channels[0];
+        listeners.get("evtx-record-batch")?.({
+          payload: {
+            requestId: args.requestId,
+            channel,
+            sequence: 0,
+            records: [{ ...RECORD, id: 1, eventRecordId: 1, channel }],
+          },
+        });
+        listeners.get("evtx-record-stream-complete")?.({
+          payload: { requestId: args.requestId, channel, sequenceCount: 1, totalRecords: 1 },
+        });
+        return {
+          records: [],
+          channels: [{ name: channel, eventCount: 1, sourceType: "live" as const }],
+          totalRecords: 1,
+          parseErrors: 0,
+          errorMessages: [],
+        };
+      };
+      invoke.mockImplementation(async (command: string, args: { requestId: string; channels: string[] }) => {
+        if (command === "load_markers") return null;
+        if (command === "evtx_enumerate_channels") {
+          return ["Application", "System"].map((name) => ({
+            name,
+            eventCount: 1,
+            sourceType: "live" as const,
+            enabledState: "enabled" as const,
+          }));
+        }
+        if (command !== "evtx_query_channels") return undefined;
+        const reply = streamed(args);
+        if (args.channels[0] === "System" && !released) await release.promise;
+        return reply;
+      });
+
+      render(<EventLogWorkspace />);
+      act(() => {
+        void useEvtxStore.getState().enumerateChannels();
+      });
+      // Application's records have landed, so the rows are mounted while System is still reading.
+      const group = await screen.findByRole("group", { name: "Level" });
+      expect(useEvtxStore.getState().isLoading).toBe(true);
+
+      let spinnerSeen = false;
+      const observer = new MutationObserver(() => {
+        if (document.body.textContent?.includes("Loading event logs...")) spinnerSeen = true;
+      });
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Time window" }));
+      fireEvent.click(await screen.findByRole("option", { name: "Last 7 days" }));
+      expect(useEvtxStore.getState().timeWindow).toBe("7d");
+
+      released = true;
+      release.resolve();
+      await waitFor(() =>
+        expect(invoke.mock.calls.filter(([name]) => name === "evtx_query_channels")).toHaveLength(4),
+      );
+      await waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+      observer.disconnect();
+
+      expect(spinnerSeen).toBe(false);
+      expect(screen.getByRole("group", { name: "Level" })).toBe(group);
+    });
+
+    it("still shows the full-screen spinner on a source's first load", () => {
+      useEvtxStore.setState({
+        sourceMode: "live",
+        records: [],
+        channels: [{ name: "Application", eventCount: 0, sourceType: "live" }],
+        isLoading: true,
+      });
+      render(<EventLogWorkspace />);
+      expect(screen.getByText("Loading event logs...")).toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: "Level" })).toBeNull();
+    });
+
+    it("keeps the rows mounted for a refetch after a first load that found nothing", async () => {
+      pendingQuery();
+      useEvtxStore.setState({
+        sourceMode: "live",
+        records: [],
+        channels: [{ name: "Application", eventCount: 0, sourceType: "live" }],
+        selectedChannels: new Set(["Application"]),
+        loadedChannels: new Set<string>(),
+        isLoading: true,
+      });
+      render(<EventLogWorkspace />);
+      expect(screen.getByText("Loading event logs...")).toBeInTheDocument();
+
+      // The first load completes: the channel is loaded and holds nothing in the window.
+      act(() => useEvtxStore.setState({ isLoading: false, loadedChannels: new Set(["Application"]) }));
+      const information = screen.getByRole("button", { name: "Toggle Information events" });
+      information.focus();
+
+      // The operator corrects the filter that found nothing: the refetch must not swap the view out.
+      fireEvent.click(information);
+      await waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(true));
+      expect(screen.queryByText("Loading event logs...")).toBeNull();
+      expect(screen.getByRole("button", { name: "Toggle Information events" })).toBe(information);
+      expect(information).toHaveFocus();
+    });
+
+    it("shows the first-load spinner when the source changes in one batch with isLoading", () => {
+      seedFixtureEvents();
+      render(<EventLogWorkspace />);
+      expect(screen.getByRole("group", { name: "Level" })).toBeInTheDocument();
+
+      // What a file parse does to the store at its start: no source and loading, in one set().
+      act(() =>
+        useEvtxStore.setState({
+          sourceMode: null,
+          records: [],
+          channels: [],
+          loadedChannels: new Set<string>(),
+          isLoading: true,
+        }),
+      );
+      expect(screen.getByText("Loading event logs...")).toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: "Level" })).toBeNull();
+    });
+
+    it("goes through the transition the store really makes for a machine change: no source, then a first load", () => {
+      seedFixtureEvents();
+      render(<EventLogWorkspace />);
+      expect(screen.getByRole("group", { name: "Level" })).toBeInTheDocument();
+
+      // enumerateRemoteChannels first clears the source (nothing loading), then enumerateChannels
+      // starts the remote load. Two store updates, not one.
+      act(() =>
+        useEvtxStore.setState({
+          remoteMachine: null,
+          channels: [],
+          records: [],
+          sourceMode: null,
+          selectedChannels: new Set<string>(),
+          loadedChannels: new Set<string>(),
+          isLoading: false,
+        }),
+      );
+      expect(screen.queryByRole("group", { name: "Level" })).toBeNull();
+      expect(screen.queryByText("Loading event logs...")).toBeNull();
+
+      act(() =>
+        useEvtxStore.setState({
+          remoteMachine: "SRV01",
+          sourceMode: "live",
+          channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+          isLoading: true,
+        }),
+      );
+      expect(screen.getByText("Loading event logs...")).toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: "Level" })).toBeNull();
+
+      act(() => useEvtxStore.setState({ isLoading: false, loadedChannels: new Set(["Application"]) }));
+      expect(screen.getByRole("group", { name: "Level" })).toBeInTheDocument();
+    });
+
+    it("pins the source key: a machine change in one batch with isLoading is a new source", () => {
+      seedFixtureEvents();
+      render(<EventLogWorkspace />);
+      expect(screen.getByRole("group", { name: "Level" })).toBeInTheDocument();
+
+      act(() =>
+        useEvtxStore.setState({
+          remoteMachine: "SRV01",
+          records: [],
+          loadedChannels: new Set<string>(),
+          isLoading: true,
+        }),
+      );
+      expect(screen.getByText("Loading event logs...")).toBeInTheDocument();
+
+      act(() => useEvtxStore.setState({ isLoading: false, loadedChannels: new Set(["Application"]) }));
+      expect(screen.getByRole("group", { name: "Level" })).toBeInTheDocument();
+      // And the next refetch for this machine keeps it mounted.
+      act(() => useEvtxStore.setState({ isLoading: true, records: [], loadedChannels: new Set<string>() }));
+      expect(screen.queryByText("Loading event logs...")).toBeNull();
+      expect(screen.getByRole("group", { name: "Level" })).toHaveAttribute("aria-busy", "true");
+    });
+
+    it("goes back to the first-load spinner once the source is reset", async () => {
+      seedFixtureEvents();
+      render(<EventLogWorkspace />);
+      expect(screen.getByRole("group", { name: "Level" })).toBeInTheDocument();
+
+      act(() => useEvtxStore.getState().reset());
+      act(() =>
+        useEvtxStore.setState({
+          sourceMode: "live",
+          channels: [{ name: "Application", eventCount: 0, sourceType: "live" }],
+          isLoading: true,
+        }),
+      );
+
+      expect(screen.getByText("Loading event logs...")).toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: "Level" })).toBeNull();
+    });
+  });
+
+  it("mounts the chip row under the filter row with the workspace's visible and loaded counts", () => {
+    seedFixtureEvents();
+    useEvtxStore.setState({ filterSearch: "no event says this" });
+    render(<EventLogWorkspace />);
+
+    const filterRow = document.querySelector("[data-evtx-region='filter-row']")!;
+    const chipRow = document.querySelector("[data-evtx-region='chip-row']")!;
+    expect(screen.getByRole("button", { name: "Remove Search: no event says this" })).toBeInTheDocument();
+    // Directly after the filter row, above the body.
+    expect(filterRow.nextElementSibling).toBe(chipRow);
+    // The search removes the only loaded event from view: 0 shown of 1 loaded, not a bare 0.
+    expect(chipRow.querySelector("[data-evtx-filter-count]")?.textContent).toBe("Showing 0 of 1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
+    expect(document.querySelector("[data-evtx-region='chip-row']")).toBeNull();
+  });
+
+  it("identifies invalid ordinary and quick Event ID filters", async () => {
     seedFixtureEvents();
     useEvtxStore.setState((state) => ({
       filterEventIds: "1000,broken",
@@ -1068,6 +1410,9 @@ describe("EventLogWorkspace fixtures", () => {
       },
     }));
     render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    // Event IDs and the quick filter live in the More filters popover, one open away.
+    fireEvent.click(screen.getByRole("button", { name: /^More filters/ }));
+    await screen.findByRole("dialog", { name: "More filters" });
 
     const eventIds = screen.getByRole("textbox", { name: "Event IDs" });
     expect(eventIds).toHaveAttribute("aria-invalid", "true");
@@ -1089,9 +1434,11 @@ describe("EventLogWorkspace fixtures", () => {
     expect(screen.queryByRole("alert", { name: "Invalid quick Event IDs" })).toBeNull();
   });
 
-  it("names the sort-direction action that the button will perform", () => {
+  it("names the sort-direction action that the button will perform", async () => {
     seedFixtureEvents();
     render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    fireEvent.click(screen.getByRole("button", { name: /^More filters/ }));
+    await screen.findByRole("dialog", { name: "More filters" });
 
     const changeToDescending = screen.getByTitle(
       "Change sort direction to descending",

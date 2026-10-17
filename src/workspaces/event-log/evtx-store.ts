@@ -34,10 +34,13 @@ import {
 export { selectVisibleRecords } from "./evtx-filter";
 import {
   DEFAULT_QUICK_FILTER,
+  fieldQueryError,
   parseEventIdSelectors,
+  quickFilterApplies,
   type EvtxBeforeLoadCriteria,
   type EvtxEventIdSelector,
   type EvtxGroupField,
+  type EvtxOnLoadCriteria,
   type EvtxQuickFilter,
 } from "./evtx-filter";
 import {
@@ -414,6 +417,18 @@ function isLatestTailStop(outcome: TailStopOutcome): boolean {
 
 let requestGeneration = 0;
 let activeRequestId = "initial";
+/**
+ * The request the operator stopped (`cancelActiveLoad`), so the load that ends under it knows it was
+ * stopped. Cleared when the next request begins.
+ */
+let stoppedRequestId: string | null = null;
+/**
+ * The server criteria the active request reads with, remembered by each load next to its own filter
+ * snapshot (so a criterion that load itself adjusts, like the first live load's window, is what is
+ * kept). A load that ends with a change queued that will not be replayed (it was stopped, its source
+ * dropped, or it failed before reading) restores exactly these.
+ */
+let requestCriteria: { requestId: string; criteria: FilterSnapshot } | null = null;
 let tailGeneration = 0;
 let activeTailRequestId: string | null = null;
 let activeTailSourceRequestId: string | null = null;
@@ -510,6 +525,7 @@ function beginRequest(): string {
   activeTailSourceRequestId = null;
   activeTailChannels = new Set<string>();
   activeRequestId = `event-log-${++requestGeneration}`;
+  stoppedRequestId = null;
   // A new request supersedes every stale tail cleanup represented above. Remove its old failure
   // records before clearing the gap-owner index, otherwise a later stop completion can retain
   // request-scoped state that no longer has a visible owner.
@@ -701,6 +717,31 @@ function buildServerFilter(
   }
   return filter;
 }
+
+/**
+ * One string per distinct refetch request: the filter the service is sent and how many events the
+ * refetch asks for.
+ *
+ * A refetch empties the records and reloads every loaded channel, so the setters below refetch only
+ * when this key changes. While Information is selected the level predicate is never sent, so a
+ * toggle changes nothing the service sees and the criterion is just a local filter. The request has
+ * a second part that the filter does not carry: an invalid Event ID list is dropped from the filter,
+ * yet the refetch sends maxEvents 0 for it and reads nothing. So an invalid list is keyed apart from
+ * no list; otherwise clearing one would look like no change and leave an empty read on screen.
+ * Exported so the filter row can say which toggles reload. Levels are sorted: the same set in
+ * another insertion order is the same request.
+ */
+export function serverFilterKey(
+  timeWindow: EvtxTimeWindow,
+  filterEventIds: string,
+  filterLevels: Set<EvtxLevel>
+): string {
+  const filter = buildServerFilter(timeWindow, filterEventIds, filterLevels);
+  return JSON.stringify({
+    filter: { ...filter, levels: filter.levels && [...filter.levels].sort() },
+    readsNothing: hasInvalidEventIdFilter(filterEventIds),
+  });
+}
 function hasInvalidEventIdFilter(raw: string): boolean {
   const trimmed = raw.trim();
   return trimmed.length > 0 && parseEventIdSelectors(trimmed).invalid;
@@ -725,6 +766,21 @@ function snapshotFilterInputs(
   };
 }
 
+/**
+ * Which source the workspace is showing: its mode, machine and paths, or null for no source (a
+ * reset, or a file parse that has not finished). The store records it when a load completes
+ * (`completedSourceKey`) and the workspace compares it with the current one, so both compute it here.
+ */
+export function sourceKeyOf(source: {
+  sourceMode: EvtxSourceMode;
+  remoteMachine: string | null;
+  sourcePaths: readonly string[];
+}): string | null {
+  return source.sourceMode === null
+    ? null
+    : [source.sourceMode, source.remoteMachine ?? "", ...source.sourcePaths].join("\u0000");
+}
+
 interface EvtxState {
   records: EvtxRecord[];
   channels: EvtxChannelInfo[];
@@ -744,6 +800,13 @@ interface EvtxState {
   selectedChannels: Set<string>;
   loadedChannels: Set<string>;
   /**
+   * The source (`sourceKeyOf`) whose load last completed, set as a load ends and cleared with the
+   * source. The workspace shows its full-screen spinner only for a source whose first load has not
+   * completed, so a refetch that starts in the same tick as the end of the first load cannot bring
+   * the spinner back.
+   */
+  completedSourceKey: string | null;
+  /**
    * Structured parser locations behind `coverageGaps`. The legacy strings remain for live
    * streaming diagnostics, while file recovery gaps retain chunk/record identity here.
    */
@@ -751,9 +814,21 @@ interface EvtxState {
   archiveMembers: EvtxArchiveMember[];
   filterLevels: Set<EvtxLevel>;
   filterEventIds: string;
+  /**
+   * The search applied to the records: the last text the search box held that parsed as a field
+   * query (spec 8.3: a query that does not parse is not applied). Every view, count, chip and
+   * export reads this one.
+   */
   filterSearch: string;
-  /** The on-load and after-load quick criteria are retained across every refetch. */
+  /** The search box's text while it is not applied, else null: the box shows `filterSearch`. */
+  filterSearchDraft: string | null;
+  /**
+   * The quick filter applied, retained across every refetch like the other on-load criteria: the
+   * last one edited that `quickFilterApplies`.
+   */
   quickFilter: EvtxQuickFilter;
+  /** The quick filter as edited while it is not applied, else null: More filters shows `quickFilter`. */
+  quickFilterDraft: EvtxQuickFilter | null;
   timeWindow: EvtxTimeWindow;
   /** Which clock event times are shown in. */
   timeZoneMode: EvtxTimeZoneMode;
@@ -774,7 +849,16 @@ loadGeneration: number;
   enumerateChannels: () => Promise<void>;
   enumerateLocalChannels: () => Promise<void>;
   enumerateRemoteChannels: (machine: string) => Promise<void>;
-  queryChannels: (channels: string[], maxEvents?: number) => Promise<void>;
+  /**
+   * `boundedChannels` are read to the refetch bound (`AUTO_LOAD_MAX_EVENTS`) instead of `maxEvents`:
+   * channels the operator did not ask to load, which a replay reads again only to keep their records
+   * from sitting under criteria they were not read with.
+   */
+  queryChannels: (
+    channels: string[],
+    maxEvents?: number,
+    boundedChannels?: readonly string[]
+  ) => Promise<void>;
   loadSelectedChannels: () => Promise<void>;
   refreshLoadedChannels: () => Promise<void>;
   startLiveTail: () => Promise<EvtxTailStatus[]>;
@@ -790,8 +874,15 @@ loadGeneration: number;
   toggleFilterLevel: (level: EvtxLevel) => void;
   setFilterEventIds: (eventIds: string) => void;
   setBeforeLoadCriteria: (criteria: EvtxBeforeLoadCriteria) => void;
+  /** An edit: applies the text when it parses, and otherwise keeps it as the draft. */
   setFilterSearch: (search: string) => void;
+  /** An edit: applies the filter when it can be applied, and otherwise keeps it as the draft. */
   setQuickFilter: (filter: EvtxQuickFilter) => void;
+  /**
+   * Replaces both on-load criteria, as a saved filter does. A search or quick filter that cannot
+   * be applied leaves none applied, rather than the one from before the load.
+   */
+  setOnLoadCriteria: (criteria: EvtxOnLoadCriteria) => void;
   setTimeWindow: (window: EvtxTimeWindow) => void;
   setGroupBy: (fields: EvtxGroupField[]) => void;
   toggleColumnVisible: (id: EvtxColumnId) => void;
@@ -890,13 +981,260 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       refreshScheduled = false;
       const state = get();
       if (state.isLoading) return;
-      if (state.sourceMode === "live" && state.loadedChannels.size > 0) {
-        refreshRequested = false;
-        void state.refreshLoadedChannels();
-      } else if (!state.isLoading) {
-        refreshRequested = false;
-      }
+      refreshRequested = false;
+      // An operator change while idle on a live source reads again the channels that hold records:
+      // the loaded ones, and those a Stop or a failure left only partly read. That is a new request,
+      // not a replay of a stopped one, and it keeps the criteria shown equal to the ones the records
+      // were read with. With no records at all there is nothing to reconcile and nothing is read.
+      if (state.sourceMode !== "live") return;
+      const holders = [
+        ...new Set([...state.loadedChannels, ...state.records.map((record) => record.channel)]),
+      ];
+      if (holders.length > 0) void refreshChannels(holders);
     });
+  };
+
+  const currentServerFilterKey = () => {
+    const { timeWindow, filterEventIds, filterLevels } = get();
+    return serverFilterKey(timeWindow, filterEventIds, filterLevels);
+  };
+  // Refetches only when the setter changed the request the service would receive.
+  const refreshIfServerFilterChanged = (before: string) => {
+    if (currentServerFilterKey() !== before) refreshBeforeLoad();
+  };
+
+  /**
+   * Forgets a change that was queued for the source being replaced, so it cannot replay on the new
+   * one, and the snapshot that went with it.
+   */
+  const dropQueuedChange = () => {
+    refreshRequested = false;
+    requestCriteria = null;
+  };
+
+  /**
+   * The one rule for a before-load change made while a load ran (`refreshRequested`), applied where
+   * every kind of load ends: the channel refetch, the explicit Load and the first live load. The
+   * invariant it keeps is literal: after every load end, either the criteria the controls show equal
+   * the criteria the loaded data was read with, or exactly one replay runs, so at every load end a
+   * window, level list or Event ID list is not left over data read with another one. The one state
+   * outside a load end is a source that is not live, holding fragments, with a criterion changed while
+   * idle: nothing is read there, by the ruling that only a live source is read.
+   *
+   * `settleQueuedChange` is the restore half: for every queued change that will not be replayed it
+   * returns the criteria the load read with, to be written in the same `set` that clears `isLoading`
+   * (never through the setters, which would queue a read, and never a frame later, which would show
+   * the new window over old data). A change is not replayed when the operator stopped the load (Stop
+   * means stop: no read starts on its own), or when the source is no longer live once the load has
+   * ended (a remote refetch or first load that failed everywhere drops to no source), or when the load
+   * failed before reading anything. A Stop leaves no cancelled gap on a channel whose scan had already
+   * finished, or when the cancel failed, and a dropped source leaves fragments, so the coverage banner
+   * cannot be relied on to say the criteria differ. Quick filter and search are not server criteria
+   * and stay as the operator left them. `endingSourceMode` is the source mode the load's final `set`
+   * writes, which is what `takeQueuedChange` will see.
+   */
+  const settleQueuedChange = (
+    requestId: string,
+    endingSourceMode: EvtxSourceMode
+  ): Partial<EvtxState> => {
+    if (!refreshRequested) return {};
+    if (requestId !== stoppedRequestId && endingSourceMode === "live") return {};
+    refreshRequested = false;
+    const kept = requestCriteria?.requestId === requestId ? requestCriteria.criteria : null;
+    return kept
+      ? {
+          timeWindow: kept.timeWindow,
+          filterEventIds: kept.filterEventIds,
+          filterLevels: new Set(kept.filterLevels),
+        }
+      : {};
+  };
+
+  /**
+   * The replay half, evaluated after the load has ended: true when the caller should read again now,
+   * which is exactly when `settleQueuedChange` left the queued change alone. A stopped load never
+   * replays. Otherwise the caller replays against the channels its finished load attempted, not only
+   * those that ended usable, so a load in which every channel failed still applies the newer
+   * criterion once. An explicit Load also reads again every channel that holds records (to the
+   * refetch bound, since it did not ask for them), so no channel's records are left under a window
+   * they were not read with. Only a live source replays: a remote refetch or first load that failed everywhere
+   * has dropped to no source, while an explicit Load never drops the source, so a remote Load that
+   * failed everywhere stays live and replays once. Nothing retries: the flag is set only by an
+   * operator change.
+   */
+  const takeQueuedChange = (finishedRequestId: string): boolean => {
+    if (!refreshRequested) return false;
+    refreshRequested = false;
+    if (finishedRequestId === stoppedRequestId) return false;
+    return get().sourceMode === "live";
+  };
+
+  /** Re-reads `loaded` with the current criteria: the channel refetch. */
+  const refreshChannels = async (loaded: string[]): Promise<void> => {
+    const state = get();
+    if (loaded.length === 0) return;
+    const requestId = beginRequest();
+    const generation = state.loadGeneration + 1;
+    const remoteMachine = state.remoteMachine;
+    const startTime = performance.now();
+    captureSelectedRecord(get().records, get().selectedRecordId);
+    invalidateAllStreamedRecords(requestId);
+    set({
+      records: [],
+      loadedChannels: new Set<string>(),
+      selectedRecordId: null,
+      sourceManifest: null,
+      loadGeneration: generation,
+      isLoading: true,
+      loadError: null,
+      loadStartTime: startTime,
+      loadElapsedMs: null,
+      coverageGaps: [],
+      coverageDetails: [],
+      archiveMembers: [],
+    });
+    const filterSnapshot = snapshotFilterInputs(
+      get().timeWindow,
+      get().filterEventIds,
+      get().filterLevels
+    );
+    requestCriteria = { requestId, criteria: filterSnapshot };
+    for (const channel of loaded) resetStreamedRecords([channel], requestId);
+    // Refresh invokes the streaming command directly, so drain its batch before merging the
+    // command reply (which intentionally carries only records not emitted in batches). Channel
+    // completion metadata is published once after every worker settles; publishing it once per
+    // channel can synchronously restart hundreds of React external-store subscribers.
+    const results = await mapWithConcurrency(
+      loaded,
+      MAX_CONCURRENT_CHANNEL_QUERIES,
+      async (channel) => {
+        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) {
+          return { channel, result: null, error: null, stale: true };
+        }
+        try {
+          const result = await invokeEventQuery<EvtxParseResult>(
+            requestId,
+            remoteMachine,
+            [channel],
+            hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : AUTO_LOAD_MAX_EVENTS,
+            buildServerFilter(
+              filterSnapshot.timeWindow,
+              filterSnapshot.filterEventIds,
+              filterSnapshot.filterLevels
+            )
+          );
+          observeStreamReply(channel, requestId, { kind: "success" });
+          return { channel, result, error: null, stale: false };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          observeStreamReply(channel, requestId, { kind: "error", message });
+          return { channel, result: null, error: message, stale: false };
+        }
+      }
+    );
+    if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+    const recordsToMerge: EvtxRecord[] = [];
+    const eventCounts = new Map<string, number>();
+    const channelUsability = new Map<string, boolean>();
+    const reportedGaps: string[] = [];
+    const reportedDetails: EvtxCoverageGap[] = [];
+    let loadError: string | null = null;
+
+    for (const { channel, result, error, stale } of results) {
+      if (stale || !isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+      const context = remoteMachine ? `${remoteMachine}/${channel}` : channel;
+      try {
+        if (!result) {
+          await waitForStreamReconciliation(channel, requestId);
+          if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+          appendRecords(recordsToMerge, drainStreamedRecords(channel, requestId).records);
+          acknowledgeStreamedRecords(channel, requestId);
+          const message = error ?? "unknown error";
+          console.warn(`[evtx] Refresh failed for ${context}: ${message}`);
+          loadError ??= `${context}: ${message}`;
+          reportedGaps.push(`${context}: not read (${message})`);
+          channelUsability.set(channel, false);
+          continue;
+        }
+
+        await waitForStreamReconciliation(channel, requestId);
+        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+        const reconciliation = reconcileStreamedResult(
+          channel,
+          requestId,
+          result,
+          context,
+          AUTO_LOAD_MAX_EVENTS
+        );
+        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+        const { checked, records } = reconciliation;
+        appendRecords(recordsToMerge, records);
+        for (const resultChannel of result.channels) {
+          eventCounts.set(resultChannel.name, resultChannel.eventCount);
+        }
+        reportedGaps.push(...reconciliation.gaps);
+        reportedDetails.push(...checked.coverageGaps);
+        channelUsability.set(
+          channel,
+          hasUsableChannelData(
+            records.length,
+            result.channels.find((candidate) => candidate.name === channel)?.eventCount ?? 0,
+            reconciliation.gaps.length,
+            reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall,
+            checked.coverageGaps.some((gap) => gap.kind === "cancelled")
+          )
+        );
+        acknowledgeStreamedRecords(channel, requestId);
+      } catch (processingError) {
+        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+        appendRecords(recordsToMerge, drainStreamedRecords(channel, requestId).records);
+        acknowledgeStreamedRecords(channel, requestId);
+        const message =
+          processingError instanceof Error ? processingError.message : String(processingError);
+        console.warn(`[evtx] Failed to process refreshed ${context}: ${message}`);
+        loadError ??= `${context}: ${message}`;
+        reportedGaps.push(`${context}: not read (${message})`);
+        channelUsability.set(channel, false);
+      }
+    }
+
+    const finalState = get();
+    const merged = mergeRecordsPreservingSelection(
+      finalState.records,
+      finalState.selectedRecordId,
+      recordsToMerge
+    );
+    const loadedChannels = new Set(
+      [...channelUsability].filter(([, usable]) => usable).map(([channel]) => channel)
+    );
+    const nextCoverageGaps = mergeCoverageGaps(finalState.coverageGaps, reportedGaps);
+    const remoteRefreshFailed =
+      remoteMachine !== null &&
+      loadedChannels.size === 0 &&
+      nextCoverageGaps.length > 0;
+    clearVisibleRequestPublication(requestId);
+    const endingSourceMode = remoteRefreshFailed ? null : finalState.sourceMode;
+    set({
+      ...merged,
+      channels: finalState.channels.map((channel) => ({
+        ...channel,
+        eventCount: eventCounts.get(channel.name) ?? channel.eventCount,
+      })),
+      loadedChannels,
+      coverageGaps: nextCoverageGaps,
+      coverageDetails: mergeStructuredCoverageGaps(
+        finalState.coverageDetails,
+        reportedDetails
+      ),
+      sourceMode: endingSourceMode,
+      isLoading: false,
+      loadError,
+      loadingChannel: null,
+      loadingProgress: null,
+      loadElapsedMs: performance.now() - startTime,
+      ...settleQueuedChange(requestId, endingSourceMode),
+    });
+    if (takeQueuedChange(requestId)) void refreshChannels(loaded);
   };
 
   return ({
@@ -918,10 +1256,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   sourceManifest: null,
   selectedChannels: new Set<string>(),
   loadedChannels: new Set<string>(),
+  completedSourceKey: null,
   filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
   filterEventIds: "",
   filterSearch: "",
+  filterSearchDraft: null,
   quickFilter: { ...DEFAULT_QUICK_FILTER },
+  quickFilterDraft: null,
   timeZoneMode: "local" as EvtxTimeZoneMode,
   timeWindow: "24h",
   columnConfig: defaultColumnConfig(),
@@ -945,7 +1286,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     const requestId = beginRequest();
     preservedSelectedRecordKey = null;
     invalidateAllStreamedRecords(requestId);
-    refreshRequested = false;
+    dropQueuedChange();
     set({
       loadGeneration: generation,
       records: [],
@@ -1005,7 +1346,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     const requestId = beginRequest();
     preservedSelectedRecordKey = null;
     invalidateAllStreamedRecords(requestId);
-    refreshRequested = false;
+    dropQueuedChange();
     set({
       loadGeneration: generation,
       records: [],
@@ -1092,6 +1433,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         get().filterEventIds,
         get().filterLevels
       );
+      requestCriteria = { requestId, criteria: filterSnapshot };
       try {
         const remoteMachine = get().remoteMachine;
         const channels = remoteMachine
@@ -1242,15 +1584,19 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           (availableCore.length === 0
             ? channels.length === 0
             : finalState.loadedChannels.size === 0 && finalState.coverageGaps.length > 0);
+        const endingSourceMode = remoteQueryFailed ? null : "live";
         set({
-          sourceMode: remoteQueryFailed ? null : "live",
+          sourceMode: endingSourceMode,
           isLoading: false,
           loadingChannel: null,
           loadingProgress: null,
           loadElapsedMs: performance.now() - startTime,
           loadError,
+          ...settleQueuedChange(requestId, endingSourceMode),
         });
-        if (refreshRequested) refreshBeforeLoad();
+        if (takeQueuedChange(requestId) && availableCore.length > 0) {
+          void refreshChannels(availableCore);
+        }
       } catch (error) {
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
         const message = error instanceof Error ? error.message : String(error);
@@ -1270,7 +1616,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           coverageGaps: remoteGap
             ? mergeCoverageGaps(state.coverageGaps, [remoteGap])
             : state.coverageGaps,
+          // The enumeration itself failed, so nothing was read and nothing will replay: restore.
+          ...settleQueuedChange(requestId, null),
         }));
+        dropQueuedChange();
       }
     })();
     // Cleared however the load ends, including an unexpected throw, so one failed load cannot leave
@@ -1283,6 +1632,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   },
 
   enumerateLocalChannels: async () => {
+    dropQueuedChange();
     set({
       remoteMachine: null,
       channels: [],
@@ -1301,6 +1651,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   enumerateRemoteChannels: async (machine) => {
     get().supersedePendingLoad();
     beginRequest();
+    dropQueuedChange();
     set({
       remoteMachine: null,
       channels: [],
@@ -1341,7 +1692,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     await get().enumerateChannels();
   },
 
-  queryChannels: async (channels, maxEvents) => {
+  queryChannels: async (channels, maxEvents, boundedChannels) => {
     const generation = get().loadGeneration + 1;
     const requestId = beginRequest();
     captureSelectedRecord(get().records, get().selectedRecordId);
@@ -1363,6 +1714,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       get().filterEventIds,
       get().filterLevels
     );
+    requestCriteria = { requestId, criteria: filterSnapshot };
     // One request per channel rather than one request for all of them. The backend collects a
     // whole request's records into a single vector before replying, so asking for forty channels
     // at once held every event of every channel in memory twice, once per channel and once in the
@@ -1385,7 +1737,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             requestId,
             remoteMachine,
             [ch],
-            hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : maxEvents ?? null,
+            hasInvalidEventIdFilter(filterSnapshot.filterEventIds)
+              ? 0
+              : boundedChannels?.includes(ch)
+                ? AUTO_LOAD_MAX_EVENTS
+                : maxEvents ?? null,
             buildServerFilter(
               filterSnapshot.timeWindow,
               filterSnapshot.filterEventIds,
@@ -1425,7 +1781,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         }
         await waitForStreamReconciliation(channel, requestId);
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-        const reconciliation = reconcileStreamedResult(channel, requestId, result, context);
+        const reconciliation = reconcileStreamedResult(
+          channel,
+          requestId,
+          result,
+          context,
+          // A bounded read that fills its bound may have been cut off, and says so.
+          boundedChannels?.includes(channel) ? AUTO_LOAD_MAX_EVENTS : undefined
+        );
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
         const { checked, records } = reconciliation;
         appendRecords(recordsToMerge, records);
@@ -1461,6 +1824,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     // guard when "All channels" was used.
     const processedChannelNames = [...processedChannels];
     clearVisibleRequestPublication(requestId);
+    // An explicit Load never changes the source mode.
+    const settledCriteria = settleQueuedChange(requestId, get().sourceMode);
     set((state) => {
       const merged = mergeRecordsPreservingSelection(
         state.records,
@@ -1499,33 +1864,45 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         ),
         isLoading: false,
         loadError,
+        ...settledCriteria,
       };
     });
-    if (refreshRequested && get().sourceMode === "live") {
-      refreshRequested = false;
-      const refreshChannels = [...new Set([...channels, ...get().loadedChannels])];
+    if (takeQueuedChange(requestId)) {
+      const replayChannels = [...new Set([...channels, ...get().loadedChannels])];
+      // Channels that hold records this Load neither queried nor has loaded: partial reads an earlier
+      // Stop or failure left behind. They are read again with the Load's channels, to the refetch
+      // bound and not to the Load's own, so their records are never shown under a window they were
+      // not read with and a read the operator stopped is not restarted unbounded. The bound chains:
+      // a replay of a replay keeps it for the channels this call read bounded (they are loaded or
+      // queried by now, so they no longer look like extras), and adds the extras it finds itself.
+      const extras = [...new Set(get().records.map((record) => record.channel))].filter(
+        (channel) => !replayChannels.includes(channel)
+      );
+      const reread = [...replayChannels, ...extras];
+      const bounded = [
+        ...new Set([
+          ...(boundedChannels ?? []).filter((channel) => reread.includes(channel)),
+          ...extras,
+        ]),
+      ];
       set((s) => ({
-        records: s.records.filter((record) => !refreshChannels.includes(record.channel)),
+        records: s.records.filter((record) => !reread.includes(record.channel)),
         loadedChannels: new Set(
-          [...s.loadedChannels].filter((channel) => !refreshChannels.includes(channel))
+          [...s.loadedChannels].filter((channel) => !reread.includes(channel))
         ),
         sourceManifest: null,
         coverageGaps: s.coverageGaps.filter(
           (gap) =>
-            !refreshChannels.some((channel) =>
-              coverageBelongsToChannel(gap, channel, s.remoteMachine)
-            )
+            !reread.some((channel) => coverageBelongsToChannel(gap, channel, s.remoteMachine))
         ),
         coverageDetails: s.coverageDetails.filter(
           (detail) =>
-            !refreshChannels.some((channel) =>
+            !reread.some((channel) =>
               coverageBelongsToChannel(detail.source, channel, s.remoteMachine)
             )
         ),
       }));
-      void get().queryChannels(refreshChannels, maxEvents);
-    } else {
-      refreshRequested = false;
+      void get().queryChannels(reread, maxEvents, bounded);
     }
   },
   loadSelectedChannels: async () => {
@@ -1536,170 +1913,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     if (unloaded.length === 0) return;
     await get().queryChannels(unloaded);
   },
-  refreshLoadedChannels: async () => {
-    const state = get();
-    const loaded = [...state.loadedChannels];
-    if (loaded.length === 0) return;
-    const requestId = beginRequest();
-    const generation = state.loadGeneration + 1;
-    const remoteMachine = state.remoteMachine;
-    const startTime = performance.now();
-    captureSelectedRecord(get().records, get().selectedRecordId);
-    invalidateAllStreamedRecords(requestId);
-    set({
-      records: [],
-      loadedChannels: new Set<string>(),
-      selectedRecordId: null,
-      sourceManifest: null,
-      loadGeneration: generation,
-      isLoading: true,
-      loadError: null,
-      loadStartTime: startTime,
-      loadElapsedMs: null,
-      coverageGaps: [],
-      coverageDetails: [],
-      archiveMembers: [],
-    });
-    const filterSnapshot = snapshotFilterInputs(
-      get().timeWindow,
-      get().filterEventIds,
-      get().filterLevels
-    );
-    for (const channel of loaded) resetStreamedRecords([channel], requestId);
-    // Refresh invokes the streaming command directly, so drain its batch before merging the
-    // command reply (which intentionally carries only records not emitted in batches). Channel
-    // completion metadata is published once after every worker settles; publishing it once per
-    // channel can synchronously restart hundreds of React external-store subscribers.
-    const results = await mapWithConcurrency(
-      loaded,
-      MAX_CONCURRENT_CHANNEL_QUERIES,
-      async (channel) => {
-        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) {
-          return { channel, result: null, error: null, stale: true };
-        }
-        try {
-          const result = await invokeEventQuery<EvtxParseResult>(
-            requestId,
-            remoteMachine,
-            [channel],
-            hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : AUTO_LOAD_MAX_EVENTS,
-            buildServerFilter(
-              filterSnapshot.timeWindow,
-              filterSnapshot.filterEventIds,
-              filterSnapshot.filterLevels
-            )
-          );
-          observeStreamReply(channel, requestId, { kind: "success" });
-          return { channel, result, error: null, stale: false };
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          observeStreamReply(channel, requestId, { kind: "error", message });
-          return { channel, result: null, error: message, stale: false };
-        }
-      }
-    );
-    if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-    const recordsToMerge: EvtxRecord[] = [];
-    const eventCounts = new Map<string, number>();
-    const channelUsability = new Map<string, boolean>();
-    const reportedGaps: string[] = [];
-    const reportedDetails: EvtxCoverageGap[] = [];
-    let loadError: string | null = null;
-
-    for (const { channel, result, error, stale } of results) {
-      if (stale || !isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-      const context = remoteMachine ? `${remoteMachine}/${channel}` : channel;
-      try {
-        if (!result) {
-          await waitForStreamReconciliation(channel, requestId);
-          if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-          appendRecords(recordsToMerge, drainStreamedRecords(channel, requestId).records);
-          acknowledgeStreamedRecords(channel, requestId);
-          const message = error ?? "unknown error";
-          console.warn(`[evtx] Refresh failed for ${context}: ${message}`);
-          loadError ??= `${context}: ${message}`;
-          reportedGaps.push(`${context}: not read (${message})`);
-          channelUsability.set(channel, false);
-          continue;
-        }
-
-        await waitForStreamReconciliation(channel, requestId);
-        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-        const reconciliation = reconcileStreamedResult(
-          channel,
-          requestId,
-          result,
-          context,
-          AUTO_LOAD_MAX_EVENTS
-        );
-        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-        const { checked, records } = reconciliation;
-        appendRecords(recordsToMerge, records);
-        for (const resultChannel of result.channels) {
-          eventCounts.set(resultChannel.name, resultChannel.eventCount);
-        }
-        reportedGaps.push(...reconciliation.gaps);
-        reportedDetails.push(...checked.coverageGaps);
-        channelUsability.set(
-          channel,
-          hasUsableChannelData(
-            records.length,
-            result.channels.find((candidate) => candidate.name === channel)?.eventCount ?? 0,
-            reconciliation.gaps.length,
-            reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall,
-            checked.coverageGaps.some((gap) => gap.kind === "cancelled")
-          )
-        );
-        acknowledgeStreamedRecords(channel, requestId);
-      } catch (processingError) {
-        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-        appendRecords(recordsToMerge, drainStreamedRecords(channel, requestId).records);
-        acknowledgeStreamedRecords(channel, requestId);
-        const message =
-          processingError instanceof Error ? processingError.message : String(processingError);
-        console.warn(`[evtx] Failed to process refreshed ${context}: ${message}`);
-        loadError ??= `${context}: ${message}`;
-        reportedGaps.push(`${context}: not read (${message})`);
-        channelUsability.set(channel, false);
-      }
-    }
-
-    const finalState = get();
-    const merged = mergeRecordsPreservingSelection(
-      finalState.records,
-      finalState.selectedRecordId,
-      recordsToMerge
-    );
-    const loadedChannels = new Set(
-      [...channelUsability].filter(([, usable]) => usable).map(([channel]) => channel)
-    );
-    const nextCoverageGaps = mergeCoverageGaps(finalState.coverageGaps, reportedGaps);
-    const remoteRefreshFailed =
-      remoteMachine !== null &&
-      loadedChannels.size === 0 &&
-      nextCoverageGaps.length > 0;
-    clearVisibleRequestPublication(requestId);
-    set({
-      ...merged,
-      channels: finalState.channels.map((channel) => ({
-        ...channel,
-        eventCount: eventCounts.get(channel.name) ?? channel.eventCount,
-      })),
-      loadedChannels,
-      coverageGaps: nextCoverageGaps,
-      coverageDetails: mergeStructuredCoverageGaps(
-        finalState.coverageDetails,
-        reportedDetails
-      ),
-      sourceMode: remoteRefreshFailed ? null : finalState.sourceMode,
-      isLoading: false,
-      loadError,
-      loadingChannel: null,
-      loadingProgress: null,
-      loadElapsedMs: performance.now() - startTime,
-    });
-    if (refreshRequested) refreshBeforeLoad();
-  },
+  refreshLoadedChannels: () => refreshChannels([...get().loadedChannels]),
   startLiveTail: async () => {
     const state = get();
     if (state.sourceMode !== "live") return [];
@@ -2077,8 +2291,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   },
 
   setFilterLevels: (levels) => {
+    const before = currentServerFilterKey();
     set({ filterLevels: levels });
-    refreshBeforeLoad();
+    refreshIfServerFilterChanged(before);
   },
 
   toggleFilterLevel: (level) => {
@@ -2087,15 +2302,18 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     if (next.has(level)) next.delete(level);
     else next.add(level);
     if (next.size === 0) ALL_LEVELS.forEach((known) => next.add(known));
+    const before = currentServerFilterKey();
     set({ filterLevels: next });
-    refreshBeforeLoad();
+    refreshIfServerFilterChanged(before);
   },
 
   setFilterEventIds: (eventIds) => {
+    const before = currentServerFilterKey();
     set({ filterEventIds: eventIds });
-    refreshBeforeLoad();
+    refreshIfServerFilterChanged(before);
   },
   setBeforeLoadCriteria: (criteria) => {
+    const before = currentServerFilterKey();
     set({
       filterLevels: new Set(criteria.levels),
       filterEventIds: criteria.eventIds,
@@ -2104,13 +2322,35 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         ? { selectedChannels: new Set(criteria.selectedChannels) }
         : {}),
     });
-    refreshBeforeLoad();
+    refreshIfServerFilterChanged(before);
   },
-  setFilterSearch: (search) => set({ filterSearch: search }),
-  setQuickFilter: (filter) => set({ quickFilter: { ...filter } }),
+  // Local criteria: none of these changes the server filter, so none refetches.
+  setFilterSearch: (search) =>
+    set(
+      fieldQueryError(search)
+        ? { filterSearchDraft: search }
+        : { filterSearchDraft: null, filterSearch: search }
+    ),
+  setQuickFilter: (filter) =>
+    set(
+      quickFilterApplies(filter)
+        ? { quickFilterDraft: null, quickFilter: { ...filter } }
+        : { quickFilterDraft: { ...filter } }
+    ),
+  setOnLoadCriteria: ({ search, quickFilter }) => {
+    const searchApplies = fieldQueryError(search) === null;
+    const quickApplies = quickFilterApplies(quickFilter);
+    set({
+      filterSearch: searchApplies ? search : "",
+      filterSearchDraft: searchApplies ? null : search,
+      quickFilter: quickApplies ? { ...quickFilter } : { ...quickFilter, query: "" },
+      quickFilterDraft: quickApplies ? null : { ...quickFilter },
+    });
+  },
   setTimeWindow: (window) => {
+    const before = currentServerFilterKey();
     set({ timeWindow: window });
-    refreshBeforeLoad();
+    refreshIfServerFilterChanged(before);
   },
   // Changing the grouping invalidates every collapse key, so the old set is discarded rather than
   // left to collapse unrelated groups that happen to share a key.
@@ -2136,6 +2376,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     preservedSelectedRecordKey = null;
     const requestId = beginRequest();
     invalidateAllStreamedRecords(requestId);
+    dropQueuedChange();
     tailStopGapOwners.clear();
     set({
       records: [],
@@ -2155,8 +2396,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
       filterEventIds: "",
       filterSearch: "",
+      filterSearchDraft: null,
       timeZoneMode: "local",
       quickFilter: { ...DEFAULT_QUICK_FILTER },
+      quickFilterDraft: null,
       timeWindow: "24h",
       // Reset with everything else. Gaps describe records that are gone, so surviving a reset
       // would report a hole in a set no longer on screen, and a zone left over from a previous
@@ -2178,6 +2421,22 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     });
   },
 });
+});
+
+// Records which source's load just completed, in the same tick as the end of that load. The store
+// notifies this listener synchronously from inside the `set` that clears `isLoading`, so a read that
+// starts right after (a replayed change) cannot be rendered before the key is recorded, and the
+// workspace's first-load gate sees every load end whichever of the load sites finished it. The key
+// is cleared with the source.
+useEvtxStore.subscribe((state, previous) => {
+  const key = sourceKeyOf(state);
+  if (key === null) {
+    if (state.completedSourceKey !== null) useEvtxStore.setState({ completedSourceKey: null });
+    return;
+  }
+  if (previous.isLoading && !state.isLoading && state.completedSourceKey !== key) {
+    useEvtxStore.setState({ completedSourceKey: key });
+  }
 });
 
 // Listen for progress events from the Rust backend
@@ -2693,6 +2952,9 @@ export function resetStreamedRecords(channels: string[], requestId: string): voi
  */
 export async function cancelActiveLoad(): Promise<void> {
   if (!useEvtxStore.getState().isLoading) return;
+  // Recorded before the command goes out, and whether or not it succeeds: the operator pressed Stop,
+  // so whatever load ends under this request must not be followed by a read of its own accord.
+  stoppedRequestId = activeRequestId;
   try {
     await invoke("evtx_cancel_channel_query", { requestId: activeRequestId });
   } catch (error) {

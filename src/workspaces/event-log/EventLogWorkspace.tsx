@@ -14,7 +14,7 @@ import {
   type EventLogAnalysisSessionStatus,
   type EventLogAnalysisTimelinePage,
 } from "../../lib/commands";
-import { useEvtxStore } from "./evtx-store";
+import { sourceKeyOf, useEvtxStore } from "./evtx-store";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import { getLogListMetrics } from "../../lib/log-accessibility";
@@ -22,6 +22,7 @@ import type { LogEntry } from "../../types/log";
 import { SourcePicker } from "./SourcePicker";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxFilterBar } from "./EvtxFilterBar";
+import { EvtxFilterChips } from "./EvtxFilterChips";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
@@ -460,6 +461,20 @@ export function EventLogWorkspace() {
     [analysisStatus],
   );
 
+  // The full-screen spinner is for a source's first load only: until a load has completed for the
+  // current source. A later refresh (a live level or Event ID change empties the records and
+  // reloads the loaded channels) keeps the view bar, filter row, chip row, channel pane and rail
+  // mounted, so the control that was just used keeps its focus, an open popover stays open, and the
+  // filter row shows its own busy state. That holds when the first load found nothing, which is
+  // when the operator is most likely to widen a filter. The store records which source a completed
+  // load belonged to, in the same tick the load ends, so a replayed change that starts reading
+  // straight away cannot be rendered before it is known that the first load finished.
+  const remoteMachine = useEvtxStore((s) => s.remoteMachine);
+  const sourcePaths = useEvtxStore((s) => s.sourcePaths);
+  const completedSourceKey = useEvtxStore((s) => s.completedSourceKey);
+  const sourceKey = sourceKeyOf({ sourceMode, remoteMachine, sourcePaths });
+  const firstLoadDone = sourceKey !== null && completedSourceKey === sourceKey;
+
   const hasData =
     scopedLogEntries.length > 0 ||
     (sourceMode !== null &&
@@ -512,7 +527,7 @@ export function EventLogWorkspace() {
     return <SourcePicker />;
   }
 
-  if (isLoading && records.length === 0) {
+  if (isLoading && records.length === 0 && !firstLoadDone) {
     return (
       <div
         style={{
@@ -561,6 +576,7 @@ export function EventLogWorkspace() {
       {isLoading && <ProgressBar style={{ width: "100%", flexShrink: 0 }} />}
       <EvtxViewBar nowEpoch={nowEpoch} />
       <EvtxFilterBar nowEpoch={nowEpoch} />
+      <EvtxFilterChips visibleCount={visibleRecords.length} loadedCount={records.length} />
       <EvtxCoverageBanner />
 
       {timelineError && (

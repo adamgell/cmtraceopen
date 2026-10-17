@@ -222,14 +222,26 @@ test.describe("event-logs screenshots", () => {
     });
     await expect(page.getByText("Loading timeline row")).toHaveCount(0);
 
-    // Newest first, through the filter bar's own sort control, so the table opens on the Warning
-    // rows instead of the early-morning run of Information rows. The first Error is row 39.
-    await page
+    // Newest first, through the sort control in the More filters popover, so the table opens on
+    // the Warning rows instead of the early-morning run of Information rows. The first Error is
+    // row 39. The popover is closed again before any capture.
+    await page.getByRole("button", { name: /^More filters/ }).click();
+    const moreFilters = page.getByRole("dialog", { name: "More filters" });
+    await moreFilters
       .getByRole("button", { name: "Change sort direction to descending" })
       .click();
     await expect(
-      page.getByRole("button", { name: "Change sort direction to ascending" }),
+      moreFilters.getByRole("button", { name: "Change sort direction to ascending" }),
     ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(moreFilters).toHaveCount(0);
+    // Escape returns focus to the More filters button, and after a key press the browser paints
+    // its keyboard focus ring there. Wait for that, then drop it, so no capture shows a ring the
+    // operator did not ask for.
+    const moreFiltersButton = page.getByRole("button", { name: /^More filters/ });
+    await expect(moreFiltersButton).toBeFocused();
+    await moreFiltersButton.evaluate((element) => (element as HTMLElement).blur());
+    await expect(moreFiltersButton).not.toBeFocused();
   });
 
   test("event-logs table", async ({ page }) => {
