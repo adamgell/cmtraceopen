@@ -7,7 +7,7 @@ import analysisSessionSource from "../../../src-tauri/src/event_log/analysis_ses
 import {
   UNPLACED_LIST_LIMIT,
   describeUnplaced,
-  loadedLinesOf,
+  logViewerLines,
   notPlacedCaption,
   notPlacedLabel,
   openAtLineAvailability,
@@ -261,12 +261,13 @@ describe("the Insights card's line (8.13 item 6)", () => {
 
 describe("Open in Log Viewer (R4)", () => {
   const file = "C:\\Logs\\ccm1.log";
+  const other = "C:\\Logs\\other.log";
   const entries = [
     { filePath: file, lineNumber: 7 },
     { filePath: file, lineNumber: 8 },
-    { filePath: "C:\\Logs\\other.log", lineNumber: 7 },
   ];
-  const viewer = (openFilePath: string | null) => ({ openFilePath, lines: loadedLinesOf(entries, openFilePath) });
+  const mixed = [...entries, { filePath: other, lineNumber: 7 }];
+  const viewer = (openFilePath: string | null, loaded = entries) => logViewerLines(openFilePath, loaded);
 
   it("is enabled only for the open file when it holds that exact line", () => {
     const result = openAtLineAvailability(viewer(file), file, 7);
@@ -284,7 +285,7 @@ describe("Open in Log Viewer (R4)", () => {
   });
 
   it("is disabled when a different file is open, naming the file to open first", () => {
-    const result = openAtLineAvailability(viewer("C:\\Logs\\other.log"), file, 7);
+    const result = openAtLineAvailability(viewer(other, mixed), file, 7);
     expect(result.enabled).toBe(false);
     expect(result.reason).toBe("The Log Viewer has a different file open. Open ccm1.log there first.");
   });
@@ -293,14 +294,24 @@ describe("Open in Log Viewer (R4)", () => {
     const result = openAtLineAvailability(viewer(file), file, 99);
     expect(result.enabled).toBe(false);
     expect(result.reason).toBe("Line 99 is not among the lines the Log Viewer has loaded.");
-    // The same line number in the other file does not count for this one.
-    expect(loadedLinesOf(entries, file)?.has(7)).toBe(true);
-    expect(loadedLinesOf(entries, "C:\\Logs\\other.log")?.has(8)).toBe(false);
+    expect(logViewerLines(other, mixed).lines.has(7)).toBe(true);
+    expect(logViewerLines(other, mixed).lines.has(8)).toBe(false);
   });
 
-  it("is disabled when the file is open but its lines were not read", () => {
-    const result = openAtLineAvailability({ openFilePath: file, lines: null }, file, 7);
+  it("is disabled when lines of several files are loaded, as after a merged tab, even for the open file's own line", () => {
+    // createMergedTab leaves openFilePath as it was while the entries span several files, and the
+    // consumer of the scroll target ignores the file: line 7 could select the other file's line 7.
+    const result = openAtLineAvailability(viewer(file, mixed), file, 7);
     expect(result.enabled).toBe(false);
+    expect(result.reason).toBe(
+      "The Log Viewer has lines of several files loaded, so it cannot open this one at its place.",
+    );
+    expect(viewer(file, mixed).otherFilesLoaded).toBe(true);
+    expect(viewer(file).otherFilesLoaded).toBe(false);
+  });
+
+  it("is disabled when the open file's lines were not loaded", () => {
+    expect(openAtLineAvailability(viewer(file, []), file, 7).enabled).toBe(false);
   });
 
   it("compares the path exactly, with no case or slash folding", () => {

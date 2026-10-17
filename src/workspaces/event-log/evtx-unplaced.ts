@@ -204,22 +204,32 @@ export function unplacedCardLine(list: UnplacedListInput): string | null {
   return `At least ${count(list.items.length)} timeline ${list.items.length === 1 ? "item" : "items"} could not be placed: no timestamp. The total is not known.`;
 }
 
-/** What the Log Viewer holds: the one file it has open, and that file's loaded line numbers. */
+/** What the Log Viewer holds: the file it has open and which lines of it are loaded. */
 export interface LogViewerLines {
   openFilePath: string | null;
-  /** The line numbers loaded for `openFilePath`; null when no single file is open. */
-  lines: ReadonlySet<number> | null;
+  /** The line numbers loaded for `openFilePath`. */
+  lines: ReadonlySet<number>;
+  /**
+   * Lines of OTHER files are loaded too. `createMergedTab` (log-store.ts) replaces the entries with
+   * several files' lines and leaves `openFilePath` as it was, and the Log Viewer's consumer of a
+   * scroll target does not look at the file, so in that state a line number can select another
+   * file's line.
+   */
+  otherFilesLoaded: boolean;
 }
 
-/** The line numbers of one file among the Log Viewer's loaded entries, in one pass. */
-export function loadedLinesOf(
+/** The Log Viewer's open file and its loaded lines, in one pass over the entries. */
+export function logViewerLines(
+  openFilePath: string | null,
   entries: readonly { filePath: string; lineNumber: number }[],
-  file: string | null,
-): ReadonlySet<number> | null {
-  if (file === null) return null;
+): LogViewerLines {
   const lines = new Set<number>();
-  for (const entry of entries) if (entry.filePath === file) lines.add(entry.lineNumber);
-  return lines;
+  let otherFilesLoaded = false;
+  for (const entry of entries) {
+    if (entry.filePath === openFilePath) lines.add(entry.lineNumber);
+    else otherFilesLoaded = true;
+  }
+  return { openFilePath, lines, otherFilesLoaded };
 }
 
 export interface OpenAtLine {
@@ -232,10 +242,12 @@ export interface OpenAtLine {
 
 /**
  * Whether "Open in Log Viewer" may be offered for a log line. The Log Viewer consumes the target
- * only for the one file it has open, and selects the first line it shows at or after the target, so
- * it is enabled only when that file is exactly the line's file and holds exactly that line. Anything
- * else is disabled with its reason: a target that cannot be consumed would stay armed for a later
- * load. The button is "near line n" because a filter in the Log Viewer can hide the line itself.
+ * only for the one file it has open, and selects the first line it shows at or after the target
+ * WITHOUT looking at the file, so it is enabled only when that file is exactly the line's file, holds
+ * exactly that line, and no other file's lines are loaded beside it. Anything else is disabled with
+ * its reason: a target that cannot be consumed would stay armed for a later load, and one that is
+ * consumed among several files can select another file's line. The button is "near line n" because
+ * a filter in the Log Viewer can hide the line itself.
  */
 export function openAtLineAvailability(
   viewer: LogViewerLines,
@@ -257,7 +269,14 @@ export function openAtLineAvailability(
       name,
     };
   }
-  if (viewer.lines === null || !viewer.lines.has(line)) {
+  if (viewer.otherFilesLoaded) {
+    return {
+      enabled: false,
+      reason: "The Log Viewer has lines of several files loaded, so it cannot open this one at its place.",
+      name,
+    };
+  }
+  if (!viewer.lines.has(line)) {
     return {
       enabled: false,
       reason: `Line ${count(line)} is not among the lines the Log Viewer has loaded.`,

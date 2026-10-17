@@ -23,6 +23,7 @@ import type { CorrelationChain } from "./evtx-correlation-chains";
 import {
   CORRELATION_MIN_WINDOW_MS,
   defaultLaneWindow,
+  formatDelta,
   tickLabels,
   type TimeWindow,
 } from "./evtx-correlation-view-model";
@@ -269,14 +270,7 @@ export function zoomWindowFor(state: ZoomState | null, chainId: string | null): 
  */
 export function bandValueText(window: TimeWindow, mode: EvtxTimeZoneMode, nowMs?: number): string {
   const [from, to] = tickLabels([window.startMs, window.endMs], mode, { withSeconds: true, nowMs });
-  const seconds = Math.round((window.endMs - window.startMs) / 1_000);
-  const width =
-    seconds < 60
-      ? `${seconds} s`
-      : seconds < 3_600
-        ? `${Math.floor(seconds / 60)} min${seconds % 60 === 0 ? "" : ` ${seconds % 60} s`}`
-        : `${Math.floor(seconds / 3_600)} h${Math.floor((seconds % 3_600) / 60) === 0 ? "" : ` ${Math.floor((seconds % 3_600) / 60)} min`}`;
-  return `${from} to ${to}, ${width} wide`;
+  return `${from} to ${to}, ${formatDelta(window.endMs - window.startMs)} wide`;
 }
 
 // ---- paint --------------------------------------------------------------------------------------
