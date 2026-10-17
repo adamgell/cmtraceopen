@@ -17,3 +17,12 @@ export const EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT = 2;
 
 /** The most serialized timeline bytes one consumer keeps in memory. */
 export const EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT = 24 * 1024 * 1024;
+
+/**
+ * Items in each preview the first timeline reply carries: unplaced items, correlation edges and
+ * coverage gaps, each at most this many (`MAX_ANALYSIS_TIMELINE_PREVIEW_ITEMS` in
+ * analysis_session.rs, which a test keeps equal), and together within one byte budget. The previews
+ * have no pager, so a count beyond this is a count of items that cannot be listed. Every consumer
+ * that lists or caps one of them uses this number; none keeps its own copy of it.
+ */
+export const EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT = 100;

@@ -3,9 +3,7 @@
  * exactly as the engine serializes them (origin and reason, nothing else).
  */
 import { describe, expect, it } from "vitest";
-import analysisSessionSource from "../../../src-tauri/src/event_log/analysis_session.rs?raw";
 import {
-  UNPLACED_LIST_LIMIT,
   describeUnplaced,
   logViewerLines,
   notPlacedCaption,
@@ -17,6 +15,7 @@ import {
   unplacedOmittedNotice,
   type UnplacedListInput,
 } from "./evtx-unplaced";
+import { EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT } from "./evtx-timeline-paging";
 import unplacedSource from "./evtx-unplaced.ts?raw";
 import type { SourceOpenMode } from "../../lib/tab-snapshot-cache";
 import type { UnplacedItem } from "./unified-timeline";
@@ -87,10 +86,13 @@ describe("the cap and what it left out", () => {
     expect(unplacedOmittedNotice(view)).toBeNull();
   });
 
-  it("keeps the limit together with the engine's own preview cap", () => {
-    const engine = /const MAX_ANALYSIS_TIMELINE_PREVIEW_ITEMS: usize = (\d+);/.exec(analysisSessionSource);
-    expect(engine).not.toBeNull();
-    expect(UNPLACED_LIST_LIMIT).toBe(Number(engine?.[1]));
+  it("caps at the engine's preview limit, the one constant, and keeps no number of its own", () => {
+    expect(describeUnplaced(list(many(EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT + 1))).rows).toHaveLength(
+      EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT,
+    );
+    const code = unplacedSource.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+    expect(code).toMatch(/limit: number = EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT,/);
+    expect(code).not.toMatch(/\b100\b|\b(UNPLACED_LIST_LIMIT|UNPLACED_PREVIEW_LIMIT)\b/);
   });
 
   it("preserves the engine's order and does not sort", () => {
@@ -405,6 +407,7 @@ describe("an unplaced item is never positioned (acceptance)", () => {
         "../../lib/file-paths",
         "../../lib/tab-snapshot-cache",
         "./evtx-insights-data",
+        "./evtx-timeline-paging",
         "./unified-timeline",
       ].sort(),
     );

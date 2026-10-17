@@ -22,6 +22,7 @@
 import { getBaseName } from "../../lib/file-paths";
 import type { SourceOpenMode } from "../../lib/tab-snapshot-cache";
 import { engineRecordIdentity } from "./evtx-insights-data";
+import { EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT } from "./evtx-timeline-paging";
 import {
   isEventOrigin,
   originContext,
@@ -31,13 +32,6 @@ import {
   unplacedSummary,
   type UnplacedItem,
 } from "./unified-timeline";
-
-/**
- * Rows listed at once (spec 8.11a `UNPLACED_PREVIEW_LIMIT`). The engine's own preview is capped at
- * the same number (`MAX_ANALYSIS_TIMELINE_PREVIEW_ITEMS`, analysis_session.rs); a test keeps the two
- * together. Past this the pane says how many it left out.
- */
-export const UNPLACED_LIST_LIMIT = 100;
 
 /** The engine's unplaced list as the first reply gave it (`UnplacedListData` in useEvtxCorrelation). */
 export interface UnplacedListInput {
@@ -130,7 +124,7 @@ const NO_RUN: UnplacedView = {
  */
 export function describeUnplaced(
   list: UnplacedListInput | null,
-  limit: number = UNPLACED_LIST_LIMIT,
+  limit: number = EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT,
 ): UnplacedView {
   if (list === null) return NO_RUN;
   const rows = list.items.slice(0, limit).map(toRow);
