@@ -22,7 +22,7 @@ import {
   useEvtxCorrelationData,
   type UseEvtxCorrelationOptions,
 } from "./useEvtxCorrelation";
-import type { TimelineCorrelationEdge, TimelineItem } from "./unified-timeline";
+import type { TimelineCorrelationEdge, TimelineCoverageGap, TimelineItem } from "./unified-timeline";
 
 afterEach(cleanup);
 
@@ -86,6 +86,10 @@ interface SessionOptions {
   previewEdges?: number;
   unplacedCount?: number;
   totalUnplaced?: number;
+  /** The coverage gaps the first page's preview carries. */
+  gaps?: TimelineCoverageGap[];
+  /** What the session counts, when it is not the preview's length. */
+  totalCoverageGaps?: number;
 }
 
 class FakeSession {
@@ -121,7 +125,7 @@ class FakeSession {
       logItems: 0,
       totalUnplaced: this.options.totalUnplaced ?? this.options.unplacedCount ?? 0,
       totalEdges: this.edges.length,
-      totalCoverageGaps: 0,
+      totalCoverageGaps: this.options.totalCoverageGaps ?? this.options.gaps?.length ?? 0,
       finalized: true,
     };
   }
@@ -142,7 +146,7 @@ class FakeSession {
         reason: "missingTimestamp" as const,
       })),
       edgesPreview: offset === 0 ? this.edges.slice(0, this.previewEdges) : [],
-      coverageGapsPreview: [],
+      coverageGapsPreview: offset === 0 ? (this.options.gaps ?? []) : [],
     };
   }
 
@@ -580,6 +584,85 @@ describe("items (the Correlation view and the Chains tab)", () => {
     act(() => two.timelineGate?.open());
     await waitFor(() => expect(result.current.builtFor).toBe(`${two.id}:2`));
     expect(result.current.unplaced.unplacedIds.size).toBe(5);
+  });
+
+  describe("the engine's correlation coverage gaps (J1)", () => {
+    const fanOut = (id: string): TimelineCoverageGap => ({
+      source: id,
+      reason: "exact UserId identity group exceeds the 256-member correlation limit",
+    });
+
+    it("exposes the classified gaps of the model's own first reply, with no scan needed", async () => {
+      const session = new FakeSession({
+        itemCount: 50,
+        pairs: [[1, 2]],
+        gaps: [fanOut("item-30"), { source: "correlation", reason: "edge budget" }],
+        totalCoverageGaps: 2,
+      });
+      const props = session.props();
+      const { result } = renderHook(() => useEvtxCorrelation(props));
+      await waitFor(() => expect(result.current.stage).toBe("edgesOnly"));
+      expect(result.current.gaps).toEqual({
+        originIds: new Set(["item-30"]),
+        global: true,
+        previewCut: false,
+      });
+    });
+
+    it.each([
+      ["more gaps than the preview holds", [fanOut("item-30")], 301],
+      ["a count that is not a count, over a gap", [fanOut("item-30")], Number.NaN],
+      ["a count that is not a count, over no gaps at all", [], Number.NaN],
+    ])("is cut for %s", async (_why, gaps, total) => {
+      const session = new FakeSession({ itemCount: 50, pairs: [[1, 2]], gaps, totalCoverageGaps: total });
+      const props = session.props();
+      const { result } = renderHook(() => useEvtxCorrelation(props));
+      await waitFor(() => expect(result.current.stage).toBe("edgesOnly"));
+      expect(result.current.gaps.previewCut).toBe(true);
+    });
+
+    it("says nothing is known before any session: the safe value claims a cut preview", () => {
+      const { result } = renderHook(() => useEvtxCorrelation(NONE));
+      expect(result.current.gaps.previewCut).toBe(true);
+    });
+
+    it("reads the items of the origins the gaps name, though no edge has them, so the join can place them", async () => {
+      // The edge is between items on page 0 and page 2; the gap names an item on page 1.
+      const session = new FakeSession({
+        itemCount: 2_500,
+        pairs: [[5, 2_400]],
+        gaps: [fanOut("item-1200")],
+        totalCoverageGaps: 1,
+      });
+      const props = session.props({ needItems: true });
+      const { result } = renderHook(() => useEvtxCorrelation(props));
+      await waitFor(() => expect(result.current.stage).toBe("ready"));
+      expect(result.current.origins.has("item-1200")).toBe(true);
+      expect(result.current.itemsById.has("item-1200")).toBe(true);
+      // And the chain is unaffected by the extra item.
+      expect(result.current.model?.counts.exact).toBe(1);
+      expect(result.current.scan.progress?.retainedItems).toBe(3);
+    });
+
+    it("keeps the gaps of the model on show while a newer session loads", async () => {
+      const one = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200]], revision: 1, gaps: [fanOut("item-7")], totalCoverageGaps: 1 });
+      const two = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200]], revision: 2, gaps: [], totalCoverageGaps: 0 });
+      const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+        initialProps: one.props({ needItems: true }),
+      });
+      await waitFor(() => expect(result.current.stage).toBe("ready"));
+      const shown = result.current.gaps;
+      expect(shown.originIds.has("item-7")).toBe(true);
+      two.timelineGate = gate();
+      rerender(two.props({ needItems: true }));
+      await waitFor(() => expect(result.current.nextScan?.state).toBe("running"));
+      expect(result.current.updating).toBe(true);
+      expect(result.current.gaps).toBe(shown);
+      act(() => two.timelineGate?.open());
+      await waitFor(() => expect(result.current.builtFor).toBe(`${two.id}:2`));
+      expect(result.current.gaps.originIds.size).toBe(0);
+      expect(result.current.gaps.previewCut).toBe(false);
+    });
   });
 
   it("gives the join the unplaced origins of the model's own page", async () => {

@@ -63,6 +63,11 @@ import {
   type LinkedItemsProgress,
 } from "./evtx-correlation-load";
 import {
+  classifyCoverageGaps,
+  UNKNOWN_CORRELATION_GAPS,
+  type CorrelationGaps,
+} from "./evtx-correlation-gaps";
+import {
   itemsByOriginId,
   linkPartnerCounts,
   originLookup,
@@ -135,6 +140,12 @@ export interface EvtxCorrelationData {
   origins: OriginLookup;
   /** The edges `model` was built from. */
   edges: CorrelationEdgeState;
+  /**
+   * The engine's correlation coverage gaps of the session `model` was built from. Pass them to the
+   * links index and to the plot: without them a record the engine never correlated reads as having
+   * no link. The origins they name were read with the items, so `origins` holds them.
+   */
+  gaps: CorrelationGaps;
   /** The scan `model` was built from. */
   scan: CorrelationScanState;
   /** The scan in flight for a newer session, with its progress, or null. */
@@ -185,6 +196,7 @@ export const UNAVAILABLE_CORRELATION: EvtxCorrelationData = {
   itemsById: NO_ITEMS,
   origins: NO_ORIGINS,
   edges: NO_EDGES,
+  gaps: UNKNOWN_CORRELATION_GAPS,
   scan: IDLE_SCAN,
   nextScan: null,
   unplaced: NO_UNPLACED,
@@ -203,6 +215,7 @@ interface ModelState {
   itemsById: ReadonlyMap<string, TimelineItem>;
   origins: OriginLookup;
   edges: CorrelationEdgeState;
+  gaps: CorrelationGaps;
   scan: CorrelationScanState;
   unplaced: UnplacedEvidence;
   linkPartners: ReadonlyMap<string, number>;
@@ -332,6 +345,12 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
         totalTimelineEdges: modelEdgeTotal(edges.totalEdges),
         findings: NO_FINDINGS,
       });
+    // From this run's own first reply: its gap preview and its own count travel together, and an
+    // untrusted count is unknown, never 0.
+    const gaps = classifyCoverageGaps(
+      initialPage.coverageGapsPreview,
+      knownTotal(initialPage.totalCoverageGaps),
+    );
     // From this run's own page and status, so the evidence belongs to the model it is stored with.
     const unplacedEvidence = (scanComplete: boolean): UnplacedEvidence => ({
       scanComplete,
@@ -391,6 +410,7 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
             itemsById: NO_ITEMS,
             origins: originLookup([], initialPage.unplacedPreview),
             edges: edgeState(loadedEdges),
+            gaps,
             scan: IDLE_SCAN,
             unplaced: unplacedEvidence(false),
             linkPartners: linkPartnerCounts(model.linkedPairs),
@@ -402,7 +422,10 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
 
         let items = cache.items;
         if (items === undefined || cache.itemsFor !== loadedEdges) {
+          // The origins the gaps name are read too: a gap says an origin was never correlated, and
+          // which records that makes unknown needs its fields, whether or not it has an edge.
           const wantedIds = edgeEndpointIds(loadedEdges.edges);
+          for (const originId of gaps.originIds) wantedIds.add(originId);
           update({ nextScan: { state: "running", progress: null, stoppedBy: null, error: null } });
           if (initialPage.nextOffset !== null && wantedIds.size > 0) {
             await deps.sleep(settleMs);
@@ -434,6 +457,7 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
           itemsById: itemsByOriginId(scanned.items),
           origins: originLookup(scanned.items, initialPage.unplacedPreview),
           edges: edgeState(loadedEdges),
+          gaps,
           scan: {
             state: scanned.complete ? "complete" : "incomplete",
             progress: {
@@ -478,6 +502,7 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
       itemsById: primary?.itemsById ?? NO_ITEMS,
       origins: primary?.origins ?? NO_ORIGINS,
       edges: primary?.edges ?? NO_EDGES,
+      gaps: primary?.gaps ?? UNKNOWN_CORRELATION_GAPS,
       scan: primary?.scan ?? IDLE_SCAN,
       nextScan: run.nextScan,
       unplaced: primary?.unplaced ?? NO_UNPLACED,
