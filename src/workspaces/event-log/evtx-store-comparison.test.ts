@@ -34,6 +34,12 @@ import {
 import { DEFAULT_QUICK_FILTER, selectVisibleRecords } from "./evtx-filter";
 import type { EvtxChannelInfo, EvtxLevel, EvtxRecord } from "./types";
 
+/** The test types carry no Node globals; this is the one Node API the file touches. */
+declare const process: {
+  on(event: "unhandledRejection", listener: (reason: unknown) => void): void;
+  off(event: "unhandledRejection", listener: (reason: unknown) => void): void;
+};
+
 const invoke = vi.hoisted(() => vi.fn());
 
 const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
@@ -104,6 +110,23 @@ function answerClear(): void {
 
 function comparisonQueries(): PendingQuery[] {
   return queries.filter((query) => isComparisonRequestId(query.args.requestId));
+}
+
+/** Lets the callbacks of replies that were just resolved, or rejected, run. */
+function nextTick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * Fails when `run` is still waiting after a moment, instead of leaving a test to its timeout. A
+ * cancelled comparison hands the call back without its reads having replied.
+ */
+async function expectReturned(run: Promise<void>): Promise<void> {
+  const outcome = await Promise.race([
+    run.then(() => "returned"),
+    new Promise<string>((resolve) => setTimeout(() => resolve("still waiting"), 200)),
+  ]);
+  expect(outcome).toBe("returned");
 }
 
 function cancelCalls(): string[] {
@@ -550,6 +573,26 @@ describe("comparing a live source with its previous period", () => {
     void startComparison();
     await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(1));
     expect(comparisonQueries().map((query) => query.args.channels)).toEqual([["System"]]);
+  });
+
+  it("returns only once the comparison has settled, which waits out a straggling batch", async () => {
+    const run = startComparison();
+    await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
+    let returned = false;
+    void run.then(() => {
+      returned = true;
+    });
+
+    // Every query has replied, each reporting an event that no batch has delivered: the channels
+    // wait for it, and the call waits for them.
+    comparisonQueries().forEach((query) => query.resolve(reply(1)));
+    await nextTick();
+    expect(returned).toBe(false);
+    expect(getComparisonState().phase).toBe("running");
+
+    await run;
+    expect(returned).toBe(true);
+    expect(getComparisonState().phase).toBe("settled");
   });
 
   it("lists a channel whose query was rejected as unread instead of counting it as 0", async () => {
@@ -1432,10 +1475,12 @@ describe("a comparison is invalidated by what it compared", () => {
     expect(getComparisonState()).toEqual({ phase: "idle" });
     expect(cancelCalls()).toContain(requestId);
 
-    // Whatever the abandoned queries still deliver or reply is dropped.
+    // The call returns without the abandoned queries having replied, and whatever they still
+    // deliver or reply afterwards is dropped.
+    await expectReturned(run);
     deliver("System", 0, [priorEvent("System")], requestId);
     comparisonQueries().forEach((query) => query.resolve(reply(1)));
-    await run;
+    await nextTick();
     expect(getComparisonState()).toEqual({ phase: "idle" });
   });
 
@@ -1454,6 +1499,78 @@ describe("a comparison is invalidated by what it compared", () => {
     expect(getComparisonState()).toEqual({ phase: "idle" });
     // A finished comparison has no query left to stop.
     expect(cancelCalls()).not.toContain(requestId);
+  });
+
+  describe("a cancelled comparison whose reads never reply", () => {
+    let unhandled: unknown[];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    beforeEach(() => {
+      unhandled = [];
+      process.on("unhandledRejection", onUnhandled);
+    });
+    afterEach(() => {
+      process.off("unhandledRejection", onUnhandled);
+    });
+
+    it("hands the call back at once, and drops what the reads deliver, reply or reject afterwards", async () => {
+      const run = startComparison();
+      await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
+      const [system, application] = comparisonQueries();
+      const requestId = system.args.requestId;
+
+      cancelComparison();
+
+      // Neither query was resolved: the call does not wait on a scan the backend may not have
+      // stopped.
+      await expectReturned(run);
+      expect(getComparisonState()).toEqual({ phase: "idle" });
+      expect(cancelCalls()).toContain(requestId);
+
+      deliver("System", 0, [priorEvent("System")], requestId);
+      complete("System", 1, 1, requestId);
+      system.resolve(reply(1));
+      application.reject(new Error("the scan was stopped"));
+      await nextTick();
+      await nextTick();
+
+      expect(getComparisonState()).toEqual({ phase: "idle" });
+      expect(unhandled).toEqual([]);
+    });
+
+    it("also hands the call back when a newer comparison supersedes it", async () => {
+      const run = startComparison();
+      await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
+      const first = comparisonQueries().map((query) => query);
+      const firstRequestId = first[0].args.requestId;
+
+      const second = startComparison();
+      await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(4));
+      const secondRequestId = comparisonQueries()[2].args.requestId;
+      expect(secondRequestId).not.toBe(firstRequestId);
+
+      await expectReturned(run);
+      expect(cancelCalls()).toContain(firstRequestId);
+      expect(getComparisonState()).toMatchObject({ phase: "running", requestId: secondRequestId });
+
+      // The first comparison's late reply cannot touch the one now running.
+      deliver("System", 0, [priorEvent("System")], firstRequestId);
+      first.forEach((query) => query.resolve(reply(1)));
+      await nextTick();
+      expect(getComparisonState()).toMatchObject({ phase: "running", requestId: secondRequestId });
+
+      comparisonQueries()
+        .filter((query) => query.args.requestId === secondRequestId)
+        .forEach((query) => {
+          complete(query.args.channels[0], 0, 0, secondRequestId);
+          query.resolve(reply(0));
+        });
+      await second;
+      const outcome = settled();
+      expect(outcome.status).toBe("complete");
+      if (outcome.status === "complete") expect(outcome.result.counts.total).toBe(0);
+    });
   });
 
   describe("a Clear of a channel that is loaded but was not compared", () => {
@@ -1904,8 +2021,9 @@ describe("the anchor of a live comparison", () => {
 
         expect(getComparisonState()).toEqual({ phase: "idle" });
         expect(cancelCalls()).toContain(requestId);
+        await expectReturned(run);
         comparisonQueries().forEach((query) => query.resolve(reply(0)));
-        await run;
+        await nextTick();
         expect(getComparisonState()).toEqual({ phase: "idle" });
       });
 
@@ -1989,9 +2107,10 @@ describe("the anchor of a live comparison", () => {
         expect(cancelCalls()).toContain(requestId);
 
         // The starts that were held land and the abandoned queries reply: nothing comes back.
+        await expectReturned(run);
         await tail.land();
         comparisonQueries().forEach((query) => query.resolve(reply(0)));
-        await run;
+        await nextTick();
         expect(getComparisonState()).toEqual({ phase: "idle" });
       });
 

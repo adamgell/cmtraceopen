@@ -2911,7 +2911,9 @@ function incompleteCurrentPeriodDetail(
  * criteria and an explicit `between` window, under a request ID of its own: the events stream into
  * the comparison's aggregator and are discarded, never entering `records`. The outcome, including
  * why a comparison is unavailable or only partial, is published to `useComparisonStore`; it is
- * cleared when the source, channels, window or criteria change.
+ * cleared when the source, channels, window or criteria change. The returned promise resolves when
+ * the comparison settles, or is cancelled or superseded; a cancelled comparison does not hold it
+ * for a read that has not replied.
  */
 export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
   const state = useEvtxStore.getState();
@@ -3087,7 +3089,7 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
     ...buildServerFilter("all", state.filterEventIds, state.filterLevels),
     time: { kind: "between", from: session.prior.from, to: session.prior.to },
   };
-  await mapWithConcurrency(channels, MAX_CONCURRENT_CHANNEL_QUERIES, async (channel) => {
+  const pool = mapWithConcurrency(channels, MAX_CONCURRENT_CHANNEL_QUERIES, async (channel) => {
     if (!session.isActive()) return;
     let result: EvtxParseResult;
     try {
@@ -3106,5 +3108,14 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
     }
     session.replied(channel, result);
   });
+  // A cancelled or superseded comparison must hand the call back at once. The pool returns only
+  // when every backend scan has, the scan is unbounded, and the cancel is best effort, so waiting on
+  // it would keep a caller busy long after the comparison went idle. `session.done` resolves on a
+  // cancel, a supersede and a settle. The abandoned pool drains on its own: the session drops every
+  // late reply, and a rejection it ends in is logged and not left unhandled.
+  pool.catch((error: unknown) => {
+    console.debug("[evtx] A previous-period comparison read ended in an error:", error);
+  });
+  await Promise.race([pool, session.done]);
   await session.done;
 }
