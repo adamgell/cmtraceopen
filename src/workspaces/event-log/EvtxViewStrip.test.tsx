@@ -39,6 +39,8 @@ import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import type { EvtxRecord } from "./types";
 
 const TRANSIENT = /timeRange|startMs|endMs|recordScope|scopeRecord/i;
+/** The one message for a name that is empty, over 60 characters, or has nothing visible in it (U2). */
+const NAME_RULE = "Use a name of 1 to 60 characters.";
 const DMEDP = "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin";
 const AAD = "Microsoft-Windows-AAD/Operational";
 const TRIAGE = EVTX_BUILT_IN_VIEWS[0];
@@ -565,7 +567,7 @@ describe("EvtxViewStrip", () => {
       const dialog = openDialog();
       const name = within(dialog).getByRole("textbox", { name: /Name/ });
       fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-      expect(within(dialog).getByRole("alert")).toHaveTextContent("Enter a name.");
+      expect(within(dialog).getByRole("alert")).toHaveTextContent(NAME_RULE);
       expect(name).toHaveAttribute("aria-invalid", "true");
       fireEvent.change(name, { target: { value: "enrollment TRIAGE" } });
       expect(within(dialog).queryByRole("alert")).toBeNull();
@@ -578,6 +580,29 @@ describe("EvtxViewStrip", () => {
       fireEvent.change(name, { target: { value: "One more" } });
       fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
       expect(within(dialog).getByRole("alert")).toHaveTextContent(`The library holds ${MAX_CUSTOM_VIEWS} views.`);
+    });
+
+    it("says exactly \"Use a name of 1 to 60 characters.\" for a name that is empty, nothing visible, or too long (U2)", () => {
+      const dialog = openDialog();
+      const name = within(dialog).getByRole("textbox", { name: /Name/ });
+      const saveButton = within(dialog).getByRole("button", { name: "Save" });
+      const alert = () => within(dialog).getByRole("alert").textContent;
+
+      fireEvent.click(saveButton);
+      expect(alert()).toBe("Use a name of 1 to 60 characters.");
+
+      // Nothing visible left once the invisible characters are ignored: it would read as blank.
+      fireEvent.change(name, { target: { value: `${String.fromCodePoint(0x200b)}${String.fromCodePoint(0x61c)}` } });
+      fireEvent.click(saveButton);
+      expect(alert()).toBe("Use a name of 1 to 60 characters.");
+
+      // The field's maxLength stops typing past 60, so a longer name arrives by paste or script; the
+      // store refuses it with the same message, and the old clause about control characters is gone.
+      fireEvent.change(name, { target: { value: "n".repeat(61) } });
+      fireEvent.click(saveButton);
+      expect(alert()).toBe("Use a name of 1 to 60 characters.");
+      expect(alert()).not.toMatch(/control/i);
+      expect(useEvtxViewStore.getState().views).toEqual([]);
     });
 
     it("limits the name's length in the field", () => {
@@ -769,7 +794,7 @@ describe("EvtxViewStrip context menu", () => {
       expect(within(dialog).getByRole("alert")).toHaveTextContent("already exists");
       fireEvent.change(name, { target: { value: "" } });
       fireEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
-      expect(within(dialog).getByRole("alert")).toHaveTextContent("Enter a name.");
+      expect(within(dialog).getByRole("alert")).toHaveTextContent(NAME_RULE);
       expect(useEvtxViewStore.getState().views.map((v) => v.name)).toEqual(["A", "B"]);
     });
 

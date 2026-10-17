@@ -305,7 +305,7 @@ export function EvtxViewStrip() {
       clearMessages();
       announce(`Updated ${view.name} from the current filters.`);
     } else {
-      setProblem(`${view.name} was not updated. ${viewFailureMessage(result.reason, view.name)}`);
+      setProblem(`${view.name} was not updated. ${viewFailureMessage(result.reason)}`);
     }
   };
   const duplicateView = (view: EvtxView) => {
@@ -315,7 +315,7 @@ export function EvtxViewStrip() {
       announce(`Duplicated ${view.name} as ${result.view.name}.`);
       focusSoon(result.view.id);
     } else {
-      setProblem(`${view.name} was not duplicated. ${viewFailureMessage(result.reason, view.name)}`);
+      setProblem(`${view.name} was not duplicated. ${viewFailureMessage(result.reason)}`);
     }
   };
   const deleteView = (id: string) => {

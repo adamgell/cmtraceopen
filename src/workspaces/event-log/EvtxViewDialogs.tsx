@@ -30,12 +30,10 @@ import type { EvtxViewFailure } from "./evtx-views-store";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 
 /** What the dialog says when a request is refused, in the operator's terms. */
-export function viewFailureMessage(reason: EvtxViewFailure, name: string): string {
+export function viewFailureMessage(reason: EvtxViewFailure): string {
   switch (reason) {
     case "invalid-name":
-      return name.trim()
-        ? `Use a name of up to ${MAX_VIEW_NAME_LENGTH} characters, without control characters.`
-        : "Enter a name.";
+      return `Use a name of 1 to ${MAX_VIEW_NAME_LENGTH} characters.`;
     case "name-taken":
       return "A view with that name already exists.";
     case "library-full":
@@ -141,7 +139,7 @@ export function EvtxViewNameDialog({
   const save = () => {
     const failure = onSave(name, includeLayout);
     if (failure === null) onClose();
-    else setError(viewFailureMessage(failure, name));
+    else setError(viewFailureMessage(failure));
   };
   const importViews = async () => {
     if (!onImport) return;
