@@ -15,7 +15,7 @@
 
 import type { LogSource } from "../types/log";
 import { canOfferElevation, readElevationState } from "./elevation";
-import { buildElevationRequest } from "./elevation-request";
+import { buildElevationRequest, textLogRestoreWorkspace } from "./elevation-request";
 import { readAccessDenied } from "./source-error";
 
 /**
@@ -56,12 +56,18 @@ export async function offerElevationForSourceFailure({
     // Imported dynamically because the store reaches the workspace registry,
     // which reaches back here through log-source.
     const { useUiStore } = await import("../stores/ui-store");
+    const { getWorkspace } = await import("../workspaces/registry");
 
     // Captured before the elevation probe, which is an IPC round trip the user
     // can switch workspaces during. The failure being recovered belongs to the
     // workspace that was active when it happened, not to whichever one is on
     // screen by the time the probe answers.
-    const workspace = useUiStore.getState().activeWorkspace;
+    //
+    // Every caller of this offer is a text-log load, so the ticket names the
+    // workspace that reopens a text log after the restart, which is not always
+    // the one that was active: Event Logs would reopen the source as EVTX.
+    const active = useUiStore.getState().activeWorkspace;
+    const workspace = textLogRestoreWorkspace(active, getWorkspace(active));
 
     const state = await readElevationState();
     // Covers unsupported platform, already elevated, and the post-retry loop

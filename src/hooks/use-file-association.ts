@@ -226,7 +226,7 @@ export function useFileAssociation() {
  * naming a workspace this platform or build does not offer falls back to the
  * default rather than forcing an unavailable view.
  */
-async function restoreElevatedSource(
+export async function restoreElevatedSource(
   ticket: RestoreTicket,
   clearFilter: () => void,
 ): Promise<void> {
