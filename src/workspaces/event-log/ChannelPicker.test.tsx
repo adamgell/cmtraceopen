@@ -902,7 +902,11 @@ describe("the Add log source link", () => {
       await addFile();
       const alert = alertRegion();
 
-      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      // Focus is on Dismiss when it is pressed; it leaves with the button, so it has to be put back.
+      const dismiss = screen.getByRole("button", { name: "Dismiss" });
+      dismiss.focus();
+      expect(dismiss).toHaveFocus();
+      fireEvent.click(dismiss);
 
       expect(alertRegion()).toBe(alert);
       expect(alert).toBeEmptyDOMElement();
