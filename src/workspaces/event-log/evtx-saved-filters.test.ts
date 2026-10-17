@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { EVTX_LEVELS } from "./evtx-filter";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import { EVTX_LEVELS, type EvtxFilterModel } from "./evtx-filter";
+import { useSavedFilterStore } from "./evtx-filter-store";
 import {
   buildFilterExport,
   mergeFilters,
@@ -211,5 +212,77 @@ describe("hostile stored values", () => {
       expect(parsed.filters).toHaveLength(0);
       expect(parsed.unsupportedSchema).toBe(true);
     }
+  });
+});
+
+/**
+ * Spec section 9 and Q-2: the transient time range and record scope are never saved, so
+ * SAVED_FILTER_SCHEMA stays 2. The criteria shape below is the saved shape; this is the test that
+ * must be read before anything is added to it.
+ */
+describe("the transient criteria are not part of a saved filter", () => {
+  // Not a bare "scope": the quick filter has a field of that name, which is a saved setting.
+  const TRANSIENT = /timeRange|startMs|endMs|recordScope|scopeRecord/i;
+  const hostile = {
+    timeRange: { startMs: 1, endMs: 2 },
+    scopeRecordIds: [1, 2],
+    recordScope: { kind: "finding", title: "t", records: [{ id: 1 }] },
+    beforeLoad: {
+      levels: ["Error"],
+      timeRange: { startMs: 1, endMs: 2 },
+      scopeRecords: [1],
+    },
+    onLoad: {
+      search: "logon",
+      timeRange: { startMs: 1, endMs: 2 },
+      scopeRecordIds: [1, 2],
+      recordScope: { kind: "chain" },
+    },
+    afterLoad: { groupBy: ["level"], timeRange: { startMs: 1, endMs: 2 } },
+  };
+
+  it("drops them from a hand-edited or shared file, wherever they are written", () => {
+    const criteria = sanitizeCriteria(hostile);
+    expect(JSON.stringify(criteria)).not.toMatch(TRANSIENT);
+    // What the file did say survives.
+    expect(criteria.beforeLoad.levels).toEqual(["Error"]);
+    expect(criteria.onLoad.search).toBe("logon");
+    expect(criteria.afterLoad.groupBy).toEqual(["level"]);
+  });
+
+  it("drops them from an import and from the export written after it", () => {
+    const file = JSON.stringify({
+      schema: SAVED_FILTER_SCHEMA,
+      filters: [{ id: "a", name: "Shared", criteria: hostile }],
+    });
+    const { filters } = parseFilterExport(file);
+    expect(filters).toHaveLength(1);
+    expect(JSON.stringify(filters)).not.toMatch(TRANSIENT);
+    expect(buildFilterExport(filters)).not.toMatch(TRANSIENT);
+  });
+
+  it("pins the saved shape: a field added to it must come with a schema decision", () => {
+    const criteria = sanitizeCriteria(hostile);
+    expect(Object.keys(criteria)).toEqual(["beforeLoad", "onLoad", "afterLoad"]);
+    expect(Object.keys(criteria.beforeLoad)).toEqual([
+      "levels",
+      "eventIds",
+      "timeWindow",
+      "selectedChannels",
+    ]);
+    expect(Object.keys(criteria.onLoad)).toEqual(["search", "quickFilter"]);
+    expect(Object.keys(criteria.afterLoad)).toEqual(["groupBy"]);
+    // The type says the same, so a transient field cannot be added to the model unnoticed.
+    expectTypeOf<keyof EvtxFilterModel>().toEqualTypeOf<"beforeLoad" | "onLoad" | "afterLoad">();
+    expectTypeOf<keyof EvtxFilterModel["onLoad"]>().toEqualTypeOf<"search" | "quickFilter">();
+    expectTypeOf<keyof EvtxFilterModel["beforeLoad"]>().toEqualTypeOf<
+      "levels" | "eventIds" | "timeWindow" | "selectedChannels"
+    >();
+  });
+
+  it("keeps the saved-filter schema and the stored envelope at version 2", () => {
+    expect(SAVED_FILTER_SCHEMA).toBe(2);
+    expect(JSON.parse(buildFilterExport([])).schema).toBe(2);
+    expect(useSavedFilterStore.persist.getOptions().version).toBe(2);
   });
 });
