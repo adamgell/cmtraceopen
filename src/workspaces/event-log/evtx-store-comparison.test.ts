@@ -1972,6 +1972,29 @@ describe("the anchor of a live comparison", () => {
         expect(getComparisonState()).toEqual({ phase: "idle" });
       });
 
+      it("cancels a comparison in flight when one compared channel enters the tail on a write of its own", async () => {
+        const tail = await startTailWithAnEarlyBatch();
+        const run = comparePreviousPeriod(ANCHOR);
+        await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
+        const requestId = comparisonQueries()[0].args.requestId;
+        expect(getComparisonState()).toMatchObject({ phase: "running", requestId });
+
+        // System's own first batch arrives before its start lands. The tail request is as it was,
+        // and System is the only compared channel to enter the tail in this write: Application,
+        // the other, has not.
+        tailBatch("System", [record("System")], 0, tail.tailRequest);
+
+        expect(useEvtxStore.getState().tailChannels).toEqual(new Set(["Security", "System"]));
+        expect(getComparisonState()).toEqual({ phase: "idle" });
+        expect(cancelCalls()).toContain(requestId);
+
+        // The starts that were held land and the abandoned queries reply: nothing comes back.
+        await tail.land();
+        comparisonQueries().forEach((query) => query.resolve(reply(0)));
+        await run;
+        expect(getComparisonState()).toEqual({ phase: "idle" });
+      });
+
       it("leaves a comparison alone when a channel it did not compare joins the tail", async () => {
         const tail = await startTailWithAnEarlyBatch(["Setup"]);
         await runAndSettle(ANCHOR);
