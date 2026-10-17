@@ -21,10 +21,10 @@
  * nothing here assumes which of those happened. An add that leaves none of its files correlated is
  * not "added".
  *
- * The Log workspace's filter is cleared only after an add that took, as every open does. Both
- * loaders stop the earlier tail before they parse, so an add that then fails leaves the earlier log
- * correlated but no longer live, and `loadFilesAsLogSource` clears the filter itself before it
- * parses.
+ * The Log workspace's filter is cleared only after an add that took, as every open does. The
+ * multi-file loader clears it itself, before it parses, so an add that then fails or takes nothing
+ * gives it back. Both loaders stop the earlier tail before they parse, so an add that then fails
+ * leaves the earlier log correlated but no longer live; nothing here can undo that.
  */
 import { open } from "@tauri-apps/plugin-dialog";
 import { getBaseName } from "../../lib/file-paths";
@@ -215,6 +215,14 @@ export async function addLogSource(kind: AddLogSourceKind): Promise<AddLogSource
 
   const request = describeRequest(kind, paths);
 
+  // loadFilesAsLogSource clears the Log filter before it parses, so an add that then fails, or
+  // takes nothing, would have discarded it. Give it back unless something has set another since.
+  const priorClauses = useFilterStore.getState().clauses;
+  const keepFilter = () => {
+    const filter = useFilterStore.getState();
+    if (priorClauses.length > 0 && filter.clauses.length === 0) filter.setClauses(priorClauses);
+  };
+
   let folderResult: LoadLogSourceResult | null = null;
   let settled: boolean;
   try {
@@ -227,8 +235,10 @@ export async function addLogSource(kind: AddLogSourceKind): Promise<AddLogSource
       settled = await loadFilesAsLogSource(paths);
     }
   } catch (error) {
+    keepFilter();
     return failed(request, classifySourceError(error).message);
   }
+  // A newer load took over, and it owns the filter from here.
   if (!settled) return { status: "cancelled" };
 
   const log = useLogStore.getState();
@@ -257,6 +267,7 @@ export async function addLogSource(kind: AddLogSourceKind): Promise<AddLogSource
       : [];
 
   if (loaded.length === 0) {
+    keepFilter();
     return failed(
       request,
       kind === "folder" ? "no readable log file was found" : "no text log could be read",
@@ -293,6 +304,7 @@ export async function addLogSource(kind: AddLogSourceKind): Promise<AddLogSource
   parts.push(...coverage);
 
   if (unlisted.length === loaded.length) {
+    keepFilter();
     return { status: "notAdded", message: `Not added: ${parts.join(" ")}` };
   }
 

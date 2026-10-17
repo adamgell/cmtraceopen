@@ -258,6 +258,61 @@ describe("the Log workspace's filter", () => {
     expect(useFilterStore.getState().clauses).toHaveLength(1);
   });
 
+  // The multi-file loader clears the filter itself, before it parses (log-source.ts), so the
+  // helper has to give it back when the add does not take.
+  describe("after the multi-file loader has cleared it", () => {
+    it("is given back when the parse fails", async () => {
+      withFilter();
+      const before = useFilterStore.getState().clauses;
+      commands.parseFilesBatch.mockRejectedValueOnce(new Error("The parse service stopped."));
+      dialog.open.mockResolvedValue([A, B]);
+
+      expect((await addLogSource("file")).status).toBe("failed");
+      expect(useFilterStore.getState().clauses).toEqual(before);
+    });
+
+    it("is given back when nothing could be read", async () => {
+      withFilter();
+      commands.parseFilesBatch.mockResolvedValue([]);
+      dialog.open.mockResolvedValue([A, B]);
+
+      expect((await addLogSource("file")).status).toBe("failed");
+      expect(useFilterStore.getState().clauses).toHaveLength(1);
+    });
+
+    it("is given back when every file is empty", async () => {
+      withFilter();
+      commands.parseFilesBatch.mockResolvedValue([parsed(A, 0), parsed(B, 0)]);
+      dialog.open.mockResolvedValue([A, B]);
+
+      expect((await addLogSource("file")).status).toBe("notAdded");
+      expect(useFilterStore.getState().clauses).toHaveLength(1);
+    });
+
+    it("is not given back over a filter someone set since", async () => {
+      withFilter();
+      commands.parseFilesBatch.mockImplementationOnce(async () => {
+        useFilterStore.getState().clearFilter();
+        useFilterStore.getState().addQuickFilter("Component", "other", "Equals");
+        throw new Error("The parse service stopped.");
+      });
+      dialog.open.mockResolvedValue([A, B]);
+
+      await addLogSource("file");
+      expect(useFilterStore.getState().clauses).toEqual([
+        { field: "Component", value: "other", op: "Equals" },
+      ]);
+    });
+
+    it("is cleared, as every open does, when the add takes", async () => {
+      withFilter();
+      dialog.open.mockResolvedValue([A, B]);
+
+      expect((await addLogSource("file")).status).toBe("added");
+      expect(useFilterStore.getState().clauses).toEqual([]);
+    });
+  });
+
   it("is left alone when the add leaves none of its files correlated", async () => {
     withFilter();
     commands.openLogSourceFile.mockResolvedValue(parsed(A, 0));
