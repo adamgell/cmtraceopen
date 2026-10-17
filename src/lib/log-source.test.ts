@@ -128,6 +128,21 @@ describe("Device Inventory known-source routing", () => {
     expect(commands.openLogSourceFile).not.toHaveBeenCalled();
   });
 
+  it("carries the child errors of a known folder on its result", async () => {
+    const childErrors = [{ path: deviceInventoryFolder.defaultPath, reason: "entry is not readable" }];
+    commands.listLogSourceFolder.mockResolvedValue({
+      sourceKind: "known",
+      source: deviceInventoryFolder,
+      entries: folderEntries,
+      childErrors,
+      bundleMetadata: null,
+    });
+
+    const result = await loadLogSource(deviceInventoryFolder);
+
+    expect(result?.childErrors).toEqual(childErrors);
+  });
+
   it.each(deviceInventoryFiles)(
     "opens direct Device Inventory file source $sourceId",
     async (source) => {
@@ -1020,6 +1035,26 @@ describe("source loading progress ownership", () => {
 
     pendingBatch.resolve([]);
     await expect(staleFolderLoad).resolves.toBeNull();
+  });
+
+  it("carries the folder listing's child errors on the result of a folder load", async () => {
+    // The store keeps nothing of them, and a caller that reports coverage needs them.
+    const childErrors = [
+      { path: folderSource.path, reason: "folder listing reached the 4096-entry limit" },
+      { path: "C:/Windows/CCM/Logs/locked", reason: "entry is not readable" },
+    ];
+    commands.listLogSourceFolder.mockResolvedValue({
+      sourceKind: "folder",
+      source: folderSource,
+      entries: sourceEntries,
+      childErrors,
+      bundleMetadata: null,
+    });
+    commands.parseFilesBatch.mockResolvedValue([]);
+
+    const result = await loadLogSource(folderSource);
+
+    expect(result?.childErrors).toEqual(childErrors);
   });
 
   it("leaves the loading flag false when a cached file takes over from a folder load", async () => {

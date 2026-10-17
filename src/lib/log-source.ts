@@ -27,6 +27,7 @@ import type {
   LogEntry,
   LogSource,
   ParseResult,
+  PathDiagnostic,
 } from "../types/log";
 import type { RegistryParseResult } from "../types/registry";
 
@@ -57,6 +58,12 @@ export interface LoadLogSourceResult {
   entries: FolderEntry[];
   selectedFilePath: string | null;
   parseResult: ParseResult | null;
+  /**
+   * What a folder listing could not include: entries that were unreadable or unsafe, and the
+   * listing's own limits. Only the folder lanes set it; a caller that reports coverage reads it
+   * here because the store keeps nothing of it.
+   */
+  childErrors?: PathDiagnostic[];
 }
 
 const KNOWN_SOURCE_BY_PRESET_MENU_ID: Record<string, string> = {
@@ -1246,6 +1253,7 @@ export async function loadLogSource(
           entries: listing.entries,
           selectedFilePath: null,
           parseResult: null,
+          childErrors: listing.childErrors,
         };
       }
 
@@ -1331,6 +1339,7 @@ export async function loadLogSource(
         entries: listing.entries,
         selectedFilePath: null,
         parseResult: null,
+        childErrors: listing.childErrors,
       };
     }
 
