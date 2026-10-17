@@ -76,6 +76,14 @@ import type { TimelineItem } from "./unified-timeline";
 /** Spec 10: a polite announcement at most once every 5 s. */
 export const CORRELATION_ANNOUNCE_MS = 5_000;
 const LIST_WIDTH_PX = 250;
+const NO_ANALYSIS_TEXT = "No event analysis is available. Load events to see correlation.";
+const READING_EDGES_TEXT = "Reading correlation edges...";
+
+/** A reply to something the operator did, or the failure of it (a failure is announced as an alert). */
+interface ActionMessage {
+  kind: "reply" | "failure";
+  text: string;
+}
 /** Message heads in the Sequence list; the full message is in the copied text. */
 const MESSAGE_HEAD_CHARS = 140;
 const NO_NEARBY: readonly TimelineItem[] = [];
@@ -393,9 +401,12 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
 
   const [showAllSequence, setShowAllSequence] = useState(false);
   const [showAllWhy, setShowAllWhy] = useState(false);
-  // What the last action said (a marker that selected nothing, a table that was not filtered, a
-  // copy that worked or failed). It is shown under the plot and is never kept for another chain.
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  // What the last action said: a reply to something the operator did (a marker that selected
+  // nothing, a copy that worked), or a failure of it (a table that was not filtered, a copy that
+  // failed). It is shown under the plot and is never kept for another chain.
+  const [actionMessage, setActionMessage] = useState<ActionMessage | null>(null);
+  const reply = useCallback((text: string) => setActionMessage({ kind: "reply", text }), []);
+  const fail = useCallback((text: string) => setActionMessage({ kind: "failure", text }), []);
   // The chain that was selected is gone and another is shown: said once, until the operator picks.
   const [selectionLost, setSelectionLost] = useState(false);
   useEffect(() => {
@@ -415,7 +426,11 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
   );
 
   const announcement = useMemo(() => {
-    if (model === null) return "";
+    if (model === null) {
+      // Without a model the one polite status says where things stand; a failure is an alert.
+      if (data.error !== null) return "";
+      return data.stage === "unavailable" ? NO_ANALYSIS_TEXT : READING_EDGES_TEXT;
+    }
     return [
       `${model.totalCount.toLocaleString()} ${model.totalCount === 1 ? "chain" : "chains"}`,
       model.edgeInputComplete ? null : "Correlation edges are partial",
@@ -424,7 +439,7 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
     ]
       .filter((part): part is string => part !== null)
       .join(". ");
-  }, [model, selectionLost, data.updating]);
+  }, [model, selectionLost, data.updating, data.error, data.stage]);
   const spoken = useThrottledValue(announcement, CORRELATION_ANNOUNCE_MS);
 
   const optionId = (index: number) => `${uid}-chain-${index}`;
@@ -487,18 +502,16 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
       if (item === undefined) return;
       const resolution = resolveOriginRecords(item.origin, evidenceIndex);
       if (resolution.kind === "notEvent") {
-        setActionMessage("A text-log line is not an event record, so there is no record to select.");
+        reply("A text-log line is not an event record, so there is no record to select.");
       } else if (resolution.kind === "noUsableIdentity") {
-        setActionMessage("This entry has no usable record identity, so no record is selected.");
+        reply("This entry has no usable record identity, so no record is selected.");
       } else if (resolution.records.length === 1) {
         setActionMessage(null);
         selectRecordAndShowDetails((resolution.records[0] as { id: number }).id);
       } else if (resolution.records.length === 0) {
-        setActionMessage("No loaded event matches this entry, so no record is selected.");
+        reply("No loaded event matches this entry, so no record is selected.");
       } else {
-        setActionMessage(
-          `${resolution.records.length.toLocaleString()} loaded events match this entry, so none is selected.`,
-        );
+        reply(`${resolution.records.length.toLocaleString()} loaded events match this entry, so none is selected.`);
       }
     },
     [itemsById, evidenceIndex],
@@ -517,7 +530,7 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
       counts: chainScope.counts,
     });
     if (!applied) {
-      setActionMessage(scopeFailureText(chainScope.counts, useEvtxStore.getState().isLoading));
+      fail(scopeFailureText(chainScope.counts, useEvtxStore.getState().isLoading));
       return;
     }
     setActionMessage(null);
@@ -538,10 +551,10 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
     });
     try {
       await writeText(text);
-      setActionMessage("Copied the chain as text.");
+      reply("Copied the chain as text.");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setActionMessage(`Copy failed: ${message}`);
+      fail(`Copy failed: ${message}`);
     }
   };
 
@@ -553,23 +566,55 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
     fontFamily: LOG_UI_FONT_FAMILY,
     backgroundColor: tokens.colorNeutralBackground1,
   } as const;
-  const message = (text: string, role: "status" | "alert" = "status") => (
-    <div
-      role={role}
-      style={{ padding: "12px", fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground2 }}
-    >
-      {text}
-    </div>
+  // The two polite regions of the view (spec 10), mounted in every state so that text placed in
+  // them is announced: the throttled announcer, which says everything unsolicited (data loaded,
+  // updating, selection lost, edges partial), and one reply to the operator's own action, which
+  // expects an answer at once. A failure of an action is an alert, not a status.
+  const announcer = (
+    <span role="status" aria-live="polite" data-testid="correlation-announcer" className={styles.visuallyHidden}>
+      {spoken}
+    </span>
+  );
+  const feedback = (
+    <>
+      <div
+        role="status"
+        aria-live="polite"
+        data-testid="correlation-action-status"
+        style={{ fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground2 }}
+      >
+        {actionMessage?.kind === "reply" ? actionMessage.text : ""}
+      </div>
+      {actionMessage?.kind === "failure" && (
+        <div
+          role="alert"
+          data-testid="correlation-action-alert"
+          style={{ fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground1 }}
+        >
+          {actionMessage.text}
+        </div>
+      )}
+    </>
+  );
+  const plain = (text: string) => (
+    <div style={{ padding: "12px", fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground2 }}>{text}</div>
   );
 
   if (model === null) {
     return (
       <div data-testid="correlation-view" style={rootStyle}>
-        {data.error !== null
-          ? message(`Correlation could not be built: ${data.error}`, "alert")
-          : data.stage === "unavailable"
-            ? message("No event analysis is available. Load events to see correlation.")
-            : message("Reading correlation edges...")}
+        {announcer}
+        {data.error !== null ? (
+          <div
+            role="alert"
+            style={{ padding: "12px", fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground1 }}
+          >
+            {`Correlation could not be built: ${data.error}`}
+          </div>
+        ) : (
+          plain(data.stage === "unavailable" ? NO_ANALYSIS_TEXT : READING_EDGES_TEXT)
+        )}
+        {feedback}
       </div>
     );
   }
@@ -603,9 +648,7 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
 
   return (
     <div data-testid="correlation-view" aria-busy={data.updating || reading || undefined} style={rootStyle}>
-      <span role="status" aria-live="polite" data-testid="correlation-announcer" className={styles.visuallyHidden}>
-        {spoken}
-      </span>
+      {announcer}
       <div
         style={{
           width: `${LIST_WIDTH_PX}px`,
@@ -662,7 +705,9 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
 
       <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "10px 14px", display: "grid", gap: "10px", alignContent: "start" }}>
         {(data.updating || reading) && (
-          <div role="status" data-testid="correlation-updating" style={{ fontSize: `${sizes.lane}px`, color: palette.caption }}>
+          // Not a live region: the scan reports a page at a time, which would queue an announcement
+          // per page. The announcer says "Updating" once, throttled.
+          <div data-testid="correlation-updating" style={{ fontSize: `${sizes.lane}px`, color: palette.caption }}>
             {data.updating ? "Updating correlation... " : ""}
             {reading
               ? progress === null
@@ -750,21 +795,15 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
                     {plotNotice}
                   </div>
                 )}
-                <div
-                  role="status"
-                  data-testid="correlation-action-status"
-                  style={{ fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground2 }}
-                >
-                  {actionMessage ?? ""}
-                </div>
               </>
             ) : (
-              <div role="status" style={{ fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground2 }}>
+              <div style={{ fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground2 }}>
                 {reading
                   ? "The entries of this chain are being read."
                   : "The entries of this chain were not read, so there is no plot or evidence table."}
               </div>
             )}
+            {feedback}
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
               <section aria-labelledby={`${uid}-why`} style={cardStyle}>
@@ -900,6 +939,7 @@ export default function EvtxCorrelationView({ sessionScope, nearby = NO_NEARBY }
             </div>
           </>
         )}
+        {chain === null && feedback}
       </div>
     </div>
   );

@@ -96,6 +96,8 @@ function seedStore(records: EvtxRecord[] = []) {
 const rows = () => screen.getAllByRole("option");
 const rowTitles = () => rows().map((row) => row.getAttribute("data-chain-id"));
 const status = () => screen.getByTestId("correlation-action-status");
+const announcer = () => screen.getByTestId("correlation-announcer");
+const alertText = () => screen.getByTestId("correlation-action-alert");
 
 beforeEach(() => {
   localStorage.clear();
@@ -113,14 +115,16 @@ afterEach(() => {
 describe("without a model", () => {
   it("says there is no analysis when none exists, and claims nothing", () => {
     show(UNAVAILABLE_CORRELATION);
-    expect(screen.getByRole("status")).toHaveTextContent("No event analysis is available");
+    expect(screen.getByTestId("correlation-view")).toHaveTextContent("No event analysis is available");
+    expect(announcer()).toHaveTextContent("No event analysis is available");
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(document.body.textContent).not.toMatch(/\b0 chains\b/);
   });
 
   it("says edges are being read while a session is built, never '0 chains'", () => {
     show({ ...UNAVAILABLE_CORRELATION, stage: "pending" });
-    expect(screen.getByRole("status")).toHaveTextContent("Reading correlation edges");
+    expect(screen.getByTestId("correlation-view")).toHaveTextContent("Reading correlation edges");
+    expect(announcer()).toHaveTextContent("Reading correlation edges");
     expect(document.body.textContent).not.toMatch(/\b0 chains\b/);
   });
 
@@ -568,7 +572,9 @@ describe("Filter table to chain (acceptance 6 to 8)", () => {
     expect(useEvtxStore.getState().recordScope).toBeNull();
     expect(useEvtxLayoutStore.getState().activeView).toBe("correlation");
     expect(tab).not.toHaveFocus();
-    expect(status()).toHaveTextContent("2 events of this chain are not loaded.");
+    // A table that was not filtered is a failure of the operator's action: an alert, not a status.
+    expect(alertText()).toHaveTextContent("2 events of this chain are not loaded.");
+    expect(status()).toHaveTextContent("");
     tab.remove();
   });
 
@@ -578,7 +584,7 @@ describe("Filter table to chain (acceptance 6 to 8)", () => {
     show(makeData({ items: [], edges: fixtureEdges("exactPair"), hasItems: true }));
     fireEvent.click(screen.getByRole("button", { name: "Filter table to chain" }));
     expect(useEvtxStore.getState().recordScope).toBeNull();
-    const text = status().textContent ?? "";
+    const text = alertText().textContent ?? "";
     expect(text).toContain("2 entries of this chain could not be matched to a record because their timeline items were not read.");
     expect(text).not.toMatch(/no loaded events?/i);
     expect(text).not.toMatch(/not loaded/i);
@@ -589,7 +595,7 @@ describe("Filter table to chain (acceptance 6 to 8)", () => {
     useEvtxStore.setState({ isLoading: true });
     show(pairData());
     fireEvent.click(screen.getByRole("button", { name: "Filter table to chain" }));
-    expect(status()).toHaveTextContent("events are still loading");
+    expect(alertText()).toHaveTextContent("events are still loading");
     expect(useEvtxLayoutStore.getState().activeView).toBe("correlation");
   });
 
@@ -636,6 +642,7 @@ describe("Copy as text", () => {
     expect(text).toContain("Exact: 101 · first failed");
     expect(text).toContain("Sequence (ordered by recorded time; order is not evidence of cause)");
     await waitFor(() => expect(status()).toHaveTextContent("Copied the chain as text."));
+    expect(screen.queryByTestId("correlation-action-alert")).toBeNull();
   });
 
   it("includes the scope and edge notices in the copy, so a paste cannot read as more certain", async () => {
@@ -652,7 +659,8 @@ describe("Copy as text", () => {
     vi.mocked(writeText).mockRejectedValue(new Error("clipboard denied"));
     show(pairData());
     fireEvent.click(screen.getByRole("button", { name: "Copy as text" }));
-    await waitFor(() => expect(status()).toHaveTextContent("Copy failed: clipboard denied"));
+    await waitFor(() => expect(alertText()).toHaveTextContent("Copy failed: clipboard denied"));
+    expect(status()).toHaveTextContent("");
   });
 });
 
@@ -687,6 +695,99 @@ describe("selecting an entry's record from the plot", () => {
     expect(notCancelled).toBe(false);
     expect(screen.getByRole("listbox")).toHaveFocus();
     expect(useEvtxStore.getState().timeRange).not.toBeNull();
+  });
+});
+
+/**
+ * Spec 10: one polite status, throttled to 5 s. The view has exactly two live regions in every
+ * state: the throttled announcer, which says everything unsolicited, and one reply to the
+ * operator's own action (which expects an answer at once). A failure is an alert. The scan's
+ * progress line is a plain line: it changes with every page read.
+ */
+describe("the live regions (spec 10)", () => {
+  const regions = () => screen.getAllByRole("status").map((node) => node.getAttribute("data-testid"));
+  const TWO = ["correlation-announcer", "correlation-action-status"];
+  const running = {
+    state: "running" as const,
+    progress: { scannedItems: 500, totalItems: 2_000, retainedItems: 10 },
+    stoppedBy: null,
+    error: null,
+  };
+
+  it.each([
+    ["no session", () => UNAVAILABLE_CORRELATION],
+    ["a session being built", () => ({ ...UNAVAILABLE_CORRELATION, stage: "pending" as const })],
+    ["a failure with no model", () => ({ ...UNAVAILABLE_CORRELATION, stage: "pending" as const, error: "boom" })],
+    ["a full model", () => pairData()],
+    ["a model with no chain", () => makeData({ items: [], edges: [], totalEdges: 0 })],
+    ["a counts-only model", () => pairData({ hasItems: false, stage: "edgesOnly" })],
+    ["a scan in flight", () => pairData({ stage: "scanning", nextScan: running, updating: true })],
+    ["a stopped read and an edge failure", () => pairData({ scan: { state: "incomplete", stoppedBy: "budget" }, edgeState: { error: "edges down" } })],
+    ["a model with a failure that is not a load result", () => pairData({ error: "boom" })],
+  ])("has exactly the announcer and the action reply as status regions with %s", (_why, makeFor) => {
+    show(makeFor());
+    expect([...regions()].sort()).toEqual([...TWO].sort());
+    expect(document.querySelectorAll('[aria-live]').length).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps both regions after an action failed, which adds an alert and no third status", async () => {
+    vi.mocked(writeText).mockRejectedValue(new Error("clipboard denied"));
+    show(pairData());
+    fireEvent.click(screen.getByRole("button", { name: "Copy as text" }));
+    await waitFor(() => expect(alertText()).toBeInTheDocument());
+    expect([...regions()].sort()).toEqual([...TWO].sort());
+  });
+
+  it("does not make the progress line a live region, nor put it inside one", () => {
+    show(pairData({ stage: "scanning", nextScan: running, updating: true }));
+    const line = screen.getByTestId("correlation-updating");
+    expect(line).toHaveTextContent("Reading 500 of 2,000 timeline items...");
+    expect(line.getAttribute("role")).toBeNull();
+    expect(line.getAttribute("aria-live")).toBeNull();
+    expect(line.closest('[role="status"], [role="alert"], [role="log"], [aria-live]')).toBeNull();
+  });
+
+  it("announces at most once inside 5 s however many pages the scan reads", () => {
+    vi.useFakeTimers();
+    const data = (scannedItems: number) =>
+      pairData({
+        stage: "scanning",
+        updating: true,
+        nextScan: { ...running, progress: { scannedItems, totalItems: 100_000, retainedItems: 10 } },
+      });
+    const view = show(data(1_000));
+    const live = '[role="status"], [role="alert"], [role="log"], [aria-live]';
+    const observer = new MutationObserver(() => undefined);
+    observer.observe(screen.getByTestId("correlation-view"), { subtree: true, childList: true, characterData: true });
+    let announcements = 0;
+    for (let page = 2; page <= 101; page += 1) {
+      view.update(data(page * 1_000));
+      act(() => {
+        vi.advanceTimersByTime(40);
+      });
+      announcements += observer
+        .takeRecords()
+        .filter((record) => {
+          const element = record.target instanceof Element ? record.target : record.target.parentElement;
+          return element?.closest(live) != null;
+        }).length;
+    }
+    observer.disconnect();
+    expect(screen.getByTestId("correlation-updating")).toHaveTextContent("Reading 101,000 of 100,000");
+    expect(announcements).toBeLessThanOrEqual(1);
+  });
+
+  it("announces that the view is updating, not how far the scan has got", () => {
+    show(pairData({ stage: "scanning", nextScan: running, updating: true }));
+    expect(announcer().textContent).toBe("1 chain. Updating");
+  });
+
+  it("says an action's reply in the action region and nothing else of it", async () => {
+    vi.mocked(writeText).mockResolvedValue(undefined);
+    show(pairData());
+    fireEvent.click(screen.getByRole("button", { name: "Copy as text" }));
+    await waitFor(() => expect(status()).toHaveTextContent("Copied the chain as text."));
+    expect(announcer().textContent).not.toContain("Copied");
   });
 });
 
