@@ -1729,6 +1729,36 @@ describe("event-log analysis diagnosis IPC boundary", () => {
     ).resolves.toBe(summary);
   });
 
+  it("accepts coverage rows that echo the ordinals of the inputs they report", async () => {
+    const summary = makeValidDiagnosisSummary();
+    summary.coverageGaps = [{ ...summary.coverageGaps[0], inputIndices: [0, 3] }];
+    vi.mocked(invoke).mockResolvedValueOnce(summary);
+
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).resolves.toBe(summary);
+  });
+
+  it.each([
+    ["a negative ordinal", [-1]],
+    ["a fractional ordinal", [1.5]],
+    ["a string ordinal", ["0"]],
+    ["an ordinal past u32", [2 ** 32]],
+    ["a non-array value", 0],
+  ])("rejects coverage input ordinals with %s", async (_caseName, inputIndices) => {
+    const summary = makeValidDiagnosisSummary();
+    summary.coverageGaps = [
+      { ...summary.coverageGaps[0], inputIndices: inputIndices as never },
+    ];
+    vi.mocked(invoke).mockResolvedValueOnce(summary);
+
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).rejects.toThrow(
+      "Command 'evtx_diagnose_analysis_session' returned an invalid response.",
+    );
+  });
+
   it.each(malformedDiagnosisCases)(
     "rejects malformed diagnosis summary %s",
     async (_caseName, mutateSummary) => {
