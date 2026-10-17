@@ -816,6 +816,25 @@ describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
       expect(unselected.querySelector<HTMLElement>("[data-strength-badge]")!.style.backgroundColor).not.toBe("");
     });
 
+    it("reads the level word of a Sequence entry at 4.5:1 on its card, in the level's own text color", () => {
+      const visuals = buildEvtxVisualTokens(theme);
+      for (const level of ["Critical", "Error", "Warning", "Information", "Verbose"] as const) {
+        atLeast(`${level} word`, visuals.levels[level].textColor, tokens.colorNeutralBackground1, 4.5);
+      }
+      show(pairData());
+      const entries = Array.from(document.querySelectorAll<HTMLElement>("[data-sequence-entry]"));
+      const word = (entry: HTMLElement, text: string) =>
+        Array.from(entry.querySelectorAll<HTMLElement>("span")).find((span) => span.textContent?.trim() === text)!;
+      // The browser reads a hex color back as rgb(), so the token is read back the same way.
+      const asPainted = (color: string) => {
+        const probe = document.createElement("span");
+        probe.style.color = color;
+        return probe.style.color;
+      };
+      expect(word(entries[0]!, "Error").style.color).toBe(asPainted(visuals.levels.Error.textColor));
+      expect(word(entries[1]!, "Information").style.color).toBe(asPainted(visuals.levels.Information.textColor));
+    });
+
     it("reads the list's titles and captions at 4.5:1 on the list surface", () => {
       const rail = pickRailTextColors(theme);
       atLeast("title", rail.primary, tokens.colorNeutralBackground2, 4.5);
