@@ -57,6 +57,7 @@ import {
   loadAnalysisEdges,
   loadLinkedItems,
   modelEdgeTotal,
+  sessionKeyOf,
   type CorrelationLoadDeps,
   type LoadedEdges,
   type LoadedLinkedItems,
@@ -301,10 +302,6 @@ export interface UseEvtxCorrelationOptions {
   needItems: boolean;
   settleMs?: number;
   deps?: Partial<CorrelationLoadDeps>;
-}
-
-function sessionKeyOf(status: EventLogAnalysisSessionStatus | null): string | null {
-  return status === null ? null : `${status.sessionId}:${status.revision}`;
 }
 
 export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorrelationData {

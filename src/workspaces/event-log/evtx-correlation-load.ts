@@ -135,6 +135,17 @@ export async function withRetry<T>(
 }
 
 /**
+ * The key a model, a window and a scan carry for the session they were read from: its id and its
+ * revision. Two things read from one session have the same key; a reader that pairs them compares
+ * keys, never ids alone. Null when there is no session.
+ */
+export function sessionKeyOf(
+  status: Pick<EventLogAnalysisSessionStatus, "sessionId" | "revision"> | null,
+): string | null {
+  return status === null ? null : `${status.sessionId}:${status.revision}`;
+}
+
+/**
  * Why a reply belongs to another session or revision than `status`, or null when it does not. The
  * session is immutable once published, so a mismatch means the caller has moved on.
  */

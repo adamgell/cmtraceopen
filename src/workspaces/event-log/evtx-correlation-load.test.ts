@@ -22,6 +22,7 @@ import {
   messageOf,
   modelEdgeTotal,
   replyProblem,
+  sessionKeyOf,
   sessionProblem,
   withRetry,
   type CorrelationLoadDeps,
@@ -817,6 +818,18 @@ describe("the helpers the window loader shares (#842)", () => {
       expect(messageOf(new Error("boom"))).toBe("boom");
       expect(messageOf("plain")).toBe("plain");
       expect(messageOf(42)).toBe("42");
+    });
+  });
+
+  describe("sessionKeyOf", () => {
+    it("is the id and the revision, and null with no session", () => {
+      expect(sessionKeyOf(status)).toBe(`${SESSION}:3`);
+      expect(sessionKeyOf(null)).toBeNull();
+    });
+
+    it("tells two revisions of one session apart, and two sessions of one revision", () => {
+      expect(sessionKeyOf({ sessionId: SESSION, revision: 4 })).not.toBe(sessionKeyOf(status));
+      expect(sessionKeyOf({ sessionId: "other", revision: 3 })).not.toBe(sessionKeyOf(status));
     });
   });
 
