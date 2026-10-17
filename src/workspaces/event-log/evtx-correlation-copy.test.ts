@@ -24,6 +24,7 @@ import {
   type UnplacedEvidence,
 } from "./evtx-correlation-copy";
 import * as copyExports from "./evtx-correlation-copy";
+import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import * as viewModelExports from "./evtx-correlation-view-model";
 import {
   NOT_LINKED_LABEL,
@@ -491,7 +492,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     const itemsById = mapOf(read);
     const narrowed = scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 });
     const incomplete = { edgeInputComplete: false, unloadedEdgeCount: 9 };
-    const plot = buildChainPlot({ chain, itemsById, edgeInputComplete: true, narrowed: false });
+    const plot = buildChainPlot({ chain, itemsById, edgeInputComplete: true, narrowed: false, gaps: classifyCoverageGaps([], 0) });
     return [
       unresolvedNotice(chain, evidence) ?? "",
       chainCopyText({

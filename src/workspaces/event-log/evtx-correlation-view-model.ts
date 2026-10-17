@@ -24,6 +24,7 @@ import type {
   CorrelationChainStrength,
   CorrelationEvidenceRow,
 } from "./evtx-correlation-chains";
+import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
 import { formatClock, TIME_RANGE_SEPARATOR, type EvtxTimeZoneMode } from "./evtx-time";
 import type { EvtxLevel } from "./types";
 import {
@@ -300,11 +301,16 @@ export function evidenceForEdge(
 
 // ---- the plot -----------------------------------------------------------------------------------
 
-/** What a context marker and the legend say when edges are complete and nothing is narrowed. */
+/**
+ * What a context marker and the legend say when the session can speak for the entry: every edge is
+ * loaded, nothing is narrowed, no correlation limit or truncation gap exists, and no gap names the
+ * entry's own origin.
+ */
 export const NOT_LINKED_LABEL = "Not linked";
 /**
- * What they say otherwise. An edge that was never loaded, or an event the view left out, may link
- * the entry; the absence of a loaded link is a coverage state, not evidence of no link.
+ * What they say otherwise. An edge that was never loaded, an event the view left out, or an origin
+ * the engine never correlated may link the entry; the absence of a loaded link is a coverage
+ * state, not evidence of no link.
  */
 export const NO_LOADED_LINK_LABEL = "No loaded link";
 
@@ -389,6 +395,13 @@ export interface ChainPlotInput {
    * link an entry shown here. Required for the same reason.
    */
   narrowed: boolean;
+  /**
+   * The engine's correlation coverage gaps (`classifyCoverageGaps`). Required: a limit or
+   * truncation gap, a preview that does not show every gap, or a gap naming an entry's own origin
+   * each stop "Not linked" from being said (an uncorrelated entry has no edge because none was
+   * computed).
+   */
+  gaps: CorrelationGaps;
   /** Overrides the default window (the zoom band, a later phase). */
   window?: TimeWindow | null;
   /** Context entries to draw as "Not linked" markers. Production passes none (decision A). */
@@ -403,9 +416,12 @@ function isLinkingStrength(strength: CorrelationChainStrength): strength is "exa
 
 export function buildChainPlot(input: ChainPlotInput): ChainPlot {
   const { chain, itemsById } = input;
-  // "Not linked" is a claim about the whole session; it needs every edge and every event.
-  const notLinkedLabel =
-    input.edgeInputComplete && !input.narrowed ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
+  // "Not linked" is a claim about the whole session; it needs every edge, every event and every
+  // origin correlated. A gap that names an entry's own origin withdraws it for that entry alone.
+  const sessionClear =
+    input.edgeInputComplete && !input.narrowed && !gapsClearCompleteness(input.gaps);
+  const labelFor = (originId: string) =>
+    sessionClear && !input.gaps.originIds.has(originId) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
   const markerCap = input.markerCap ?? CORRELATION_MARKER_CAP;
   const connectorCap = input.connectorCap ?? CORRELATION_CONNECTOR_CAP;
   const placed = chain.memberIds.flatMap((id) => {
@@ -433,7 +449,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     omittedConnectors: 0,
     membersWithoutItem,
     showsNotLinkedLegend: false,
-    notLinkedLabel,
+    notLinkedLabel: sessionClear ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL,
   };
   if (window === null) return empty;
 
@@ -476,7 +492,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
           ? null
           : `${shortEntryId(item, lane)} · ${formatDelta(placement.outsideMs)} ${placement.pinned === "before" ? "earlier" : "later"}`,
       sequenceIndex,
-      linkLabel: role === "nearby" ? notLinkedLabel : null,
+      linkLabel: role === "nearby" ? labelFor(id) : null,
     };
   };
 
@@ -531,7 +547,12 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     omittedConnectors,
     membersWithoutItem,
     showsNotLinkedLegend: nearby.length > 0,
-    notLinkedLabel,
+    // One legend entry for the dotted marker: it says "Not linked" only if every marker it stands
+    // for may be called that.
+    notLinkedLabel:
+      sessionClear && nearby.every((marker) => marker.linkLabel === NOT_LINKED_LABEL)
+        ? NOT_LINKED_LABEL
+        : NO_LOADED_LINK_LABEL,
   };
 }
 

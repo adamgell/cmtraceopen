@@ -42,6 +42,7 @@ import {
   isProvenUnplaced,
   partitionUnplaced,
 } from "./evtx-correlation-view-model";
+import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import { TIME_RANGE_SEPARATOR } from "./evtx-time";
 import {
   assertUnifiedTimelineShape,
@@ -53,8 +54,8 @@ import {
 } from "./unified-timeline";
 
 const rid = (n: number) => `source4:Live|machine10:DESKTOP-01|channel6:System|record${n}`;
-/** Edges complete and nothing narrowed: the only state in which "Not linked" may be said. */
-const VIEW = { edgeInputComplete: true, narrowed: false };
+/** Edges complete, nothing narrowed, no coverage gap: the only state in which "Not linked" may be said. */
+const VIEW = { edgeInputComplete: true, narrowed: false, gaps: classifyCoverageGaps([], 0) };
 /** What no string may say unless the entry is proven unplaced (the scan finished, on a complete list). */
 const NO_UNPROVEN_CLAIM = /not placed|no timeline position|without a timeline position|no timestamp/i;
 
@@ -622,7 +623,7 @@ describe("buildChainPlot", () => {
       ["the view is narrowed", { edgeInputComplete: true, narrowed: true }, NO_LOADED_LINK_LABEL],
       ["both", { edgeInputComplete: false, narrowed: true }, NO_LOADED_LINK_LABEL],
     ])("labels a context marker and the legend by what is known: %s", (_why, state, label) => {
-      const plot = buildChainPlot({ chain: chain(), itemsById: mapOf(items), nearby: [stray], ...state });
+      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], ...state });
       expect(plot.nearby[0]?.linkLabel).toBe(label);
       expect(plot.notLinkedLabel).toBe(label);
       expect(plot.showsNotLinkedLegend).toBe(true);
@@ -631,8 +632,78 @@ describe("buildChainPlot", () => {
       expect(plot.members.map((m) => m.linkLabel)).toEqual([null, null]);
     });
 
+    describe("needs the engine's correlation gaps to allow it (J1)", () => {
+      const gapped = (gaps: ReturnType<typeof classifyCoverageGaps>, nearby = [stray]) =>
+        buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby, gaps });
+      const originGap = (id: string) => ({
+        source: id,
+        reason: "exact UserId identity group exceeds the 256-member correlation limit",
+      });
+
+      it.each([
+        ["the correlation input limit", [{ source: "timeline-correlation-projection", reason: "limit" }], 1],
+        ["the reducer's truncation", [{ source: "correlation", reason: "edge budget" }], 1],
+        ["a gap preview that does not show every gap", [originGap(rid(70))], 40],
+        ["a gap count that is not known", [], null],
+      ])("reads 'No loaded link' for every marker and the legend under %s", (_why, preview, total) => {
+        const plot = gapped(classifyCoverageGaps(preview, total));
+        expect(plot.nearby[0]?.linkLabel).toBe(NO_LOADED_LINK_LABEL);
+        expect(plot.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
+        expect(plot.showsNotLinkedLegend).toBe(true);
+      });
+
+      it("withdraws 'Not linked' for the marker a gap names, and for the legend that stands for it", () => {
+        const named = eventItem(8, T0 + 2_000);
+        const plot = gapped(classifyCoverageGaps([originGap(rid(9))], 1), [stray, named]);
+        expect(plot.nearby.map((m) => [m.id, m.linkLabel])).toEqual([
+          [rid(8), NOT_LINKED_LABEL],
+          [rid(9), NO_LOADED_LINK_LABEL],
+        ]);
+        expect(plot.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
+      });
+
+      it("keeps 'Not linked' for a marker no gap names", () => {
+        const plot = gapped(classifyCoverageGaps([originGap(rid(70))], 1));
+        expect(plot.nearby[0]?.linkLabel).toBe(NOT_LINKED_LABEL);
+        expect(plot.notLinkedLabel).toBe(NOT_LINKED_LABEL);
+      });
+
+      it("lets list-view compaction gaps pass", () => {
+        const plot = gapped(
+          classifyCoverageGaps(
+            [
+              { source: "timeline-item-projection", reason: "a" },
+              { source: "timeline-message-projection", reason: "b" },
+            ],
+            2,
+          ),
+        );
+        expect(plot.nearby[0]?.linkLabel).toBe(NOT_LINKED_LABEL);
+      });
+
+      it("gives the same words for a chain with no placed member, where nothing can be drawn", () => {
+        const bare = chainOf(fixtureEdges("exactPair"), []);
+        const clear = buildChainPlot({ ...VIEW, chain: bare, itemsById: new Map() });
+        expect(clear.window).toBeNull();
+        expect(clear.notLinkedLabel).toBe(NOT_LINKED_LABEL);
+        const cut = buildChainPlot({
+          ...VIEW,
+          chain: bare,
+          itemsById: new Map(),
+          gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1),
+        });
+        expect(cut.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
+      });
+
+      it("takes the words from the legend even when no marker is drawn", () => {
+        const none = gapped(classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1), []);
+        expect(none.showsNotLinkedLegend).toBe(false);
+        expect(none.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
+      });
+    });
+
     it("gives the legend its words even when no marker is drawn, and never reads Not linked on an unknown state", () => {
-      const plot = buildChainPlot({ chain: chain(), itemsById: mapOf(items), edgeInputComplete: false, narrowed: false });
+      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), edgeInputComplete: false });
       expect(plot.showsNotLinkedLegend).toBe(false);
       expect(plot.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
       expect(NO_LOADED_LINK_LABEL).not.toBe(NOT_LINKED_LABEL);
