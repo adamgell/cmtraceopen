@@ -35,8 +35,14 @@ import {
   chainAccessibleName,
   chainSequence,
   chainTitle,
+  describeLanes,
   entriesText,
+  entryLabel,
+  formatDelta,
   keyHeader,
+  middleTruncate,
+  shortEntryId,
+  spanText,
   whyRows,
 } from "./evtx-correlation-view-model";
 import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
@@ -492,7 +498,26 @@ describe("no string claims an entry is unplaced without proof", () => {
     const itemsById = mapOf(read);
     const narrowed = scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 });
     const incomplete = { edgeInputComplete: false, unloadedEdgeCount: 9 };
-    const plot = buildChainPlot({ chain, itemsById, edgeInputComplete: true, narrowed: false, gaps: classifyCoverageGaps([], 0) });
+    const view = { edgeInputComplete: true, narrowed: false, gaps: classifyCoverageGaps([], 0) };
+    const plot = buildChainPlot({ chain, itemsById, ...view });
+    // An explicit window that leaves every member outside it, so the pinned labels are built.
+    const pinned = buildChainPlot({ chain, itemsById, ...view, window: { startMs: T0 + 1, endMs: T0 + 2 } });
+    const logLine: TimelineItem = {
+      timestampMs: T0,
+      severity: "warning",
+      message: "line",
+      origin: {
+        kind: "log",
+        file: "C:\\Logs\\AppEnforce.log",
+        component: null,
+        line: 9,
+        source: "writer.cpp",
+        machine: null,
+        bundle: null,
+        recordId: 9,
+      },
+    };
+    const lane = describeLanes([logLine.origin, ...read.map((item) => item.origin)])[0];
     return [
       unresolvedNotice(chain, evidence) ?? "",
       chainCopyText({
@@ -524,9 +549,61 @@ describe("no string claims an entry is unplaced without proof", () => {
       keyKindLabel("activityId"),
       keyHeader(chain.keys)?.shortValue ?? "",
       ...plot.members.flatMap((marker) => [marker.entry, marker.pinLabel ?? ""]),
+      ...pinned.members.flatMap((marker) => [marker.entry, marker.pinLabel ?? ""]),
+      ...read.flatMap((item) => [shortEntryId(item, undefined), entryLabel(item, undefined)]),
+      shortEntryId(logLine, lane),
+      entryLabel(logLine, lane),
+      spanText(chain.startMs, chain.endMs, "utc") ?? "",
+      spanText(null, null, "utc") ?? "",
+      spanText(null, null, "local") ?? "",
+      ...[0, 1, 850, 3_300, 60_000, 125_000, 3_840_000, 97_200_000, -5_000].map(formatDelta),
+      middleTruncate("{3b7e9c1a-5d24-4f8e-a0c6-1e2b3d4f5a6b}"),
       ...chainSequence(chain, itemsById).entries.flatMap((entry) => [entry.entry, entry.laneLabel]),
     ];
   }
+
+  it("builds pinned labels for the audit, so shortEntryId and the pin text are really run", () => {
+    const view = { edgeInputComplete: true, narrowed: false, gaps: classifyCoverageGaps([], 0) };
+    const chain = chainFor("exactPair", items);
+    const pinned = buildChainPlot({
+      chain,
+      itemsById: mapOf(items),
+      ...view,
+      window: { startMs: T0 + 1, endMs: T0 + 2 },
+    });
+    expect(pinned.members.map((marker) => marker.pinLabel)).toEqual(["72 \u00b7 1 ms earlier", "76 \u00b7 6 s later"]);
+  });
+
+  it("calls every string-producing export of the view model, by name, in the helper", () => {
+    // The manifest proves each export is classified; this proves the ones classified as producing
+    // text are really called by the audit, so an edit to one of them is audited too.
+    const called = everyString.toString();
+    for (const name of [
+      "spanText",
+      "formatDelta",
+      "shortEntryId",
+      "entryLabel",
+      "middleTruncate",
+      "keyHeader",
+      "whyRows",
+      "chainSequence",
+      "chainTitle",
+      "chainAccessibleName",
+      "entriesText",
+      "buildChainPlot",
+      "unresolvedNotice",
+      "chainCopyText",
+      "edgeInputNotice",
+      "renderCapNotice",
+      "plotOmissionNotice",
+      "scopeDisclosure",
+      "whyHeading",
+      "whyStatement",
+      "keyKindLabel",
+    ]) {
+      expect(called, name).toContain(name);
+    }
+  });
 
   for (const [shapeName, chain, read] of shapes) {
     it.each(weakEvidence)(`says nothing unproven for ${shapeName} when %s`, (_why, evidence) => {
