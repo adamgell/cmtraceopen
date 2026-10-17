@@ -3,12 +3,14 @@ import { EVTX_LEVELS, type EvtxFilterModel } from "./evtx-filter";
 import { useSavedFilterStore } from "./evtx-filter-store";
 import {
   buildFilterExport,
+  captureCriteria,
   mergeFilters,
   orderFilters,
   parseFilterExport,
   SAVED_FILTER_SCHEMA,
   sanitizeCriteria,
   sanitizeSavedFilter,
+  type EvtxCriteriaSource,
   type EvtxSavedFilter,
 } from "./evtx-saved-filters";
 
@@ -284,5 +286,67 @@ describe("the transient criteria are not part of a saved filter", () => {
     expect(SAVED_FILTER_SCHEMA).toBe(2);
     expect(JSON.parse(buildFilterExport([])).schema).toBe(2);
     expect(useSavedFilterStore.persist.getOptions().version).toBe(2);
+  });
+});
+
+describe("captureCriteria", () => {
+  const source: EvtxCriteriaSource = {
+    filterLevels: new Set(["Error", "Warning"]),
+    filterEventIds: "75,76",
+    timeWindow: "7d",
+    selectedChannels: new Set(["System", "Application"]),
+    filterSearch: "applied",
+    filterSearchDraft: null,
+    quickFilter: {
+      mode: "allWords",
+      query: "boot failed",
+      scope: "visibleColumns",
+      action: "hide",
+      caseSensitive: true,
+      highlight: false,
+    },
+    quickFilterDraft: null,
+    groupBy: ["level", "provider"],
+  };
+
+  it("reads the named fields into the saved shape", () => {
+    expect(captureCriteria(source)).toEqual({
+      beforeLoad: {
+        levels: ["Error", "Warning"],
+        eventIds: "75,76",
+        timeWindow: "7d",
+        selectedChannels: ["System", "Application"],
+      },
+      onLoad: { search: "applied", quickFilter: source.quickFilter },
+      afterLoad: { groupBy: ["level", "provider"] },
+    });
+  });
+
+  it("takes the text as typed: a draft wins over what is applied", () => {
+    const criteria = captureCriteria({
+      ...source,
+      filterSearchDraft: "provider:",
+      quickFilterDraft: { ...source.quickFilter, mode: "fieldQuery", query: "level:erro" },
+    });
+    expect(criteria.onLoad.search).toBe("provider:");
+    expect(criteria.onLoad.quickFilter.query).toBe("level:erro");
+    expect(criteria.onLoad.quickFilter.mode).toBe("fieldQuery");
+  });
+
+  it("never carries the transient criteria of a source that holds them, as the store does", () => {
+    const withTransients = {
+      ...source,
+      timeRange: { startMs: 1, endMs: 2 },
+      recordScope: { kind: "finding", title: "t", records: new Set([{ id: 1 }]) },
+      scopeRecordIds: [1, 2],
+    };
+    const criteria = captureCriteria(withTransients);
+    expect(JSON.stringify(criteria)).not.toMatch(/timeRange|startMs|endMs|recordScope|scopeRecord/i);
+    expect(Object.keys(criteria)).toEqual(["beforeLoad", "onLoad", "afterLoad"]);
+  });
+
+  it("is already in the sanitized form, so sanitizing it again changes nothing", () => {
+    const criteria = captureCriteria(source);
+    expect(sanitizeCriteria(criteria)).toEqual(criteria);
   });
 });

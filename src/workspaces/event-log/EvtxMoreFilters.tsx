@@ -36,7 +36,8 @@ import {
 import { useFilterChips, type EvtxFilterChip } from "./EvtxFilterChips";
 import { notAppliedMessage, useSettledQueryError } from "./evtx-query-error";
 import { useSavedFilterStore } from "./evtx-filter-store";
-import { orderFilters, sanitizeCriteria } from "./evtx-saved-filters";
+import { applyCriteria } from "./evtx-criteria-actions";
+import { captureCriteria, orderFilters } from "./evtx-saved-filters";
 import { timeZoneLabel } from "./evtx-time";
 import { useEvtxStore, type EvtxSortField } from "./evtx-store";
 import type { EvtxVisualTokens } from "./evtx-visual-tokens";
@@ -110,9 +111,6 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
   const setSortDirection = useEvtxStore((s) => s.setSortDirection);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const setTimeZoneMode = useEvtxStore((s) => s.setTimeZoneMode);
-  const setGroupBy = useEvtxStore((s) => s.setGroupBy);
-  const setBeforeLoadCriteria = useEvtxStore((s) => s.setBeforeLoadCriteria);
-  const setOnLoadCriteria = useEvtxStore((s) => s.setOnLoadCriteria);
 
   // Event IDs are a before-load criterion: committing a list refetches the loaded channels in live
   // mode. So the field edits a draft, and the list is committed on Enter or blur, never per
@@ -157,24 +155,7 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
   const commitFilterName = (name: string) => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    const state = useEvtxStore.getState();
-    const saved = saveFilter(
-      trimmed,
-      sanitizeCriteria({
-        beforeLoad: {
-          levels: [...state.filterLevels],
-          eventIds: state.filterEventIds,
-          timeWindow: state.timeWindow,
-          selectedChannels: [...state.selectedChannels],
-        },
-        // The operator's text, as typed, whether or not it is applied.
-        onLoad: {
-          search: state.filterSearchDraft ?? state.filterSearch,
-          quickFilter: state.quickFilterDraft ?? state.quickFilter,
-        },
-        afterLoad: { groupBy: state.groupBy },
-      }),
-    );
+    const saved = saveFilter(trimmed, captureCriteria(useEvtxStore.getState()));
     setPendingName(null);
     setStatusMessage(saved ? `Saved "${trimmed}"` : "That name cannot be used");
   };
@@ -182,10 +163,7 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
   const applySavedFilter = (id: string) => {
     const filter = savedFilters.find((candidate) => candidate.id === id);
     if (!filter) return;
-    const { criteria } = filter;
-    setBeforeLoadCriteria(criteria.beforeLoad);
-    setOnLoadCriteria(criteria.onLoad);
-    setGroupBy(criteria.afterLoad.groupBy);
+    applyCriteria(filter.criteria);
     markFilterUsed(id);
   };
 
