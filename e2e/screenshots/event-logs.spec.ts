@@ -9,7 +9,8 @@
  * ---------
  * The workspace is driven the way the source picker opens several files: `openEventLogSources`
  * calls `evtx_expand_sources`, then the store's `parseManifest` calls `evtx_parse_manifest`, then
- * the analysis pump calls the `evtx_*_analysis_*` commands. All of them are answered by
+ * the analysis pump and the Correlation view call the analysis commands (create, append, finalize,
+ * timeline page, edge page, diagnose, close). Each of those is answered by
  * `window.__e2e_ipc_overrides__`:
  *
  * - `evtx_expand_sources` and `evtx_parse_manifest` are built by `buildSourceManifest()` and
@@ -24,12 +25,14 @@
  *   the diagnosis. No edge page was captured, so that command always fails. A failed check
  *   carries a message saying what to regenerate or update, is also kept on the page, and the
  *   afterEach fails the test that raised it. That catches a replay that no longer matches its
- *   capture. It does not catch a command the spec does not override (the shim answers it with
- *   its static default), or a change in the engine's source: run
+ *   capture. It does not catch a command the spec does not override: the shim answers that with
+ *   its static default if it has one, and otherwise the invoke rejects with an error the guard
+ *   does not record. Nor does it catch a change in the engine's source: run
  *   `node e2e/fixtures/capture-event-log-replies.mjs --check` for that.
  *
  * The 127.0.0.1:1422 IPC bridge is blocked, so a running `npm run app:dev` cannot leak live host
- * replies into a capture: a command with no override gets the shim's static defaults.
+ * replies into a capture. A command with no override is answered with the shim's static default if
+ * it has one, and otherwise the invoke rejects.
  *
  * These captures are the baseline of the CURRENT Event Logs UI.
  */
@@ -87,8 +90,8 @@ test.describe("event-logs screenshots", () => {
     await page.addInitScript(
       ({ parseResult, replies, selections, manifest }) => {
         const overrides = window.__e2e_ipc_overrides__;
-        // A guard failure reaches the app as a rejected invoke, which the app shows as an alert
-        // that no test step need be looking at. So every guard error is also kept here, in the
+        // A guard failure reaches the app as a rejected invoke, which the analysis pump shows as an
+        // alert that no test step need be looking at. So every guard error is also kept here, in the
         // order it was raised, and the afterEach below fails the test if there is one.
         const guardErrors: string[] = [];
         window.__evtxReplayGuardErrors = guardErrors;
@@ -185,7 +188,8 @@ test.describe("event-logs screenshots", () => {
         };
         // No test pages edges: the first timeline page previews all of them. No edge page was
         // captured, so a fixture that holds more edges than that page carries reaches this and
-        // fails through the guard record, not through the shim's generic unrecorded error.
+        // fails through the guard record, not through the shim's "no static response" error, which
+        // the guard does not record.
         overrides["evtx_query_analysis_edges"] = (args: {
           sessionId: string;
           offset: number;
@@ -296,7 +300,8 @@ test.describe("event-logs screenshots", () => {
   // was given, or a timeline or edge page that was not captured), wherever in the test that
   // happened: the init script keeps the message of every guard error it builds on the page. It
   // does not see a command the script does not override (the shim answers it with its static
-  // default), and the record is lost if the page reloads. No message is tolerated. A step that
+  // default if it has one, and otherwise the invoke rejects with an error the guard does not
+  // record), and the record is lost if the page reloads. No message is tolerated. A step that
   // would narrow the analysis cannot be part of a test here, because the replies describe only
   // the full set (see the end of "event-logs correlation").
   test.afterEach(async ({ page }) => {

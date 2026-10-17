@@ -40,7 +40,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => undefined)),
 }));
-// Imported after the mocks: the store subscribes to the bridge at module scope.
+// Imported after the mocks: the store subscribes to Tauri events (`listen`) at module scope.
 const { useEvtxStore } = await import("./evtx-store");
 
 type EventOrigin = Extract<TimelineOrigin, { kind: "event" }>;
