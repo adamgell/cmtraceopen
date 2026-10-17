@@ -123,11 +123,26 @@ describe("EvtxHistogram", () => {
       expect(levels).toEqual(order);
       for (const segment of segments) {
         expect(segment.style.backgroundColor).toBe(colorOf(segment.dataset.evtxLevel as EvtxLevel));
-        expect(parseFloat(segment.style.height)).toBeGreaterThanOrEqual(2);
+        // 2 px of colour under the 1 px separator the segment's top border draws.
+        expect(parseFloat(segment.style.height)).toBeGreaterThanOrEqual(3);
       }
       const total = segments.reduce((sum, segment) => sum + parseFloat(segment.style.height), 0);
       expect(total).toBeLessThanOrEqual(56);
     }
+  });
+
+  it("draws a lone Critical event in a tall bucket with 2 px of colour under its 1 px separator", () => {
+    const tall = Array.from({ length: 3000 }, (_, i) => rec(FIRST + 1000 + (i % 60) * 1000, "Information", i));
+    const records = [...tall, rec(FIRST + 5000, "Critical", 9000), rec(FIRST + 3 * HOUR, "Information", 9001)];
+    const { container } = render(<EvtxHistogram records={records} loading={false} />);
+    const critical = container.querySelector<HTMLElement>('[data-evtx-level="Critical"]')!;
+    expect(critical.style.height).toBe("3px");
+    const column = critical.parentElement!;
+    const total = [...column.querySelectorAll<HTMLElement>("[data-evtx-level]")].reduce(
+      (sum, segment) => sum + parseFloat(segment.style.height),
+      0,
+    );
+    expect(total).toBeLessThanOrEqual(56);
   });
 
   it("recolours the bars from the token map in every theme", () => {

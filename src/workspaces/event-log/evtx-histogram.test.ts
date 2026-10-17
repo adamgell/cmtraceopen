@@ -6,6 +6,7 @@ import {
   HISTOGRAM_STACK_ORDER,
   MAX_BUCKETS,
   MIN_SEGMENT_PX,
+  SEPARATOR_PX,
   UTC_CLOCK,
   bucketEdges,
   bucketIndexAt,
@@ -607,11 +608,19 @@ describe("bar geometry", () => {
     expect(Math.max(...heights)).toBeGreaterThanOrEqual(HISTOGRAM_BAR_AREA_PX - 3);
   });
 
-  it("never draws a non-empty segment under 2 px, even one Critical event in a tall bucket", () => {
+  it("never draws a non-empty segment with under 2 px of colour, even one Critical event in a tall bucket", () => {
     const histogram = buildOf([{ Information: 5000, Critical: 1 }]);
     const segments = bucketSegments(histogram.buckets[0], fitScale(histogram));
-    expect(segments.find((segment) => segment.level === "Critical")?.heightPx).toBe(MIN_SEGMENT_PX);
-    expect(Math.min(...segments.map((segment) => segment.heightPx))).toBeGreaterThanOrEqual(MIN_SEGMENT_PX);
+    const critical = segments.find((segment) => segment.level === "Critical")!;
+    // The segment's height includes its 1 px separator, so 2 px of colour is a 3 px segment.
+    expect(critical.heightPx - SEPARATOR_PX).toBe(MIN_SEGMENT_PX);
+    expect(MIN_SEGMENT_PX).toBe(2);
+    expect(SEPARATOR_PX).toBe(1);
+    for (const segment of segments) {
+      expect(segment.heightPx - SEPARATOR_PX).toBeGreaterThanOrEqual(MIN_SEGMENT_PX);
+    }
+    const total = segments.reduce((sum, segment) => sum + segment.heightPx, 0);
+    expect(total).toBeLessThanOrEqual(HISTOGRAM_BAR_AREA_PX);
   });
 
   it("fits the area even when every level is present and the counts are small", () => {

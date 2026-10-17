@@ -33,7 +33,13 @@ import type { EvtxLevel, EvtxRecord } from "./types";
 
 /** Height of the bar area in pixels (spec 8.5). */
 export const HISTOGRAM_BAR_AREA_PX = 56;
-/** A non-empty segment is never thinner than this, its 1 px separator included (spec 8.5). */
+/** The separator a segment draws on its top edge (spec 8.5): a segment's height includes it. */
+export const SEPARATOR_PX = 1;
+/**
+ * A non-empty segment shows at least this many pixels of its level colour (spec 8.5 "at least 2 px,
+ * with a 1 px separator on top"), so its height is at least this plus the separator: a lone Critical
+ * event in a tall bucket is a 2 px band of red, not a 1 px line under a 1 px line of surface.
+ */
 export const MIN_SEGMENT_PX = 2;
 
 /** Levels from the bottom of a bar to the top: Info, Warning, Error, Critical (spec 8.5), with Verbose under them. */
@@ -524,7 +530,7 @@ export interface BarSegment {
 }
 
 const segmentHeight = (count: number, pxPerEvent: number) =>
-  count === 0 ? 0 : Math.max(MIN_SEGMENT_PX, Math.round(count * pxPerEvent));
+  count === 0 ? 0 : Math.max(MIN_SEGMENT_PX + SEPARATOR_PX, Math.round(count * pxPerEvent));
 
 const stackHeight = (counts: LevelCounts, pxPerEvent: number) =>
   HISTOGRAM_STACK_ORDER.reduce((sum, level) => sum + segmentHeight(counts[level], pxPerEvent), 0);
