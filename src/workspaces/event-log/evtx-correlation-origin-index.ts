@@ -28,6 +28,7 @@ import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session
 import type { CorrelationChain } from "./evtx-correlation-chains";
 import { countScopeReferences, type EvtxRecordScopeCounts } from "./evtx-filter";
 import {
+  engineRecordIdentity,
   recordsForIdentity,
   redactedValueMatches,
   type EvidenceIndex,
@@ -73,14 +74,13 @@ function normalizedMachine(value: string): string | null {
 }
 
 /**
- * The origin's record identity text in the engine's order, or null when the record carried none:
- * a `recordIdText` of digits with a non-zero digit, then a non-zero `recordId`. This is read from
- * the origin's fields; the stable id is never consulted.
+ * The origin's record identity text, by the same rule the record side uses
+ * (`engineRecordIdentity`): the engine's own, so a record and the origin built from it are keyed
+ * alike whatever their text looks like. Read from the origin's fields; the stable id is never
+ * consulted.
  */
 export function originIdentityText(origin: EventOrigin): string | null {
-  const text = origin.recordIdText?.trim();
-  if (text !== undefined && /^\d+$/.test(text) && /[1-9]/.test(text)) return text;
-  return origin.recordId !== 0 ? String(origin.recordId) : null;
+  return engineRecordIdentity(origin.recordIdText, origin.recordId);
 }
 
 /**

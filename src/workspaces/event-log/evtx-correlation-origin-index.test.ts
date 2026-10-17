@@ -63,11 +63,26 @@ function record(recordId: number, overrides: Partial<EvtxRecord> = {}): EvtxReco
   };
 }
 
+/** The engine's placeholder words, copied from `normalized_provenance` (event_log/timeline.rs). */
+const ENGINE_NO_PROVENANCE = [
+  "unknown",
+  "n/a",
+  "na",
+  "none",
+  "null",
+  "not available",
+  "not_applicable",
+];
+
 function normalizedMachine(value: string): string | null {
   const trimmed = value.trim();
-  return trimmed === "" || ["unknown", "n/a", "na", "none", "null"].includes(trimmed.toLowerCase())
-    ? null
-    : trimmed;
+  return trimmed === "" || ENGINE_NO_PROVENANCE.includes(trimmed.toLowerCase()) ? null : trimmed;
+}
+
+/** The engine's `record_id_text`: the trimmed text when it is all digits, else none. */
+function engineRecordIdText(text: string | null | undefined): string | null {
+  const trimmed = (text ?? "").trim();
+  return /^\d+$/.test(trimmed) ? trimmed : null;
 }
 
 function originOf(source: EvtxRecord, overrides: Partial<EventOrigin> = {}): EventOrigin {
@@ -83,7 +98,7 @@ function originOf(source: EvtxRecord, overrides: Partial<EventOrigin> = {}): Eve
     processId: null,
     eventId: source.eventId,
     recordId: source.eventRecordId,
-    recordIdText: source.eventRecordIdText ?? null,
+    recordIdText: engineRecordIdText(source.eventRecordIdText),
     ...overrides,
   };
 }
@@ -174,6 +189,37 @@ describe("resolveOriginRecords: the strict field join", () => {
     );
   });
 
+  describe("one identity rule for the record side and the origin side (the engine's)", () => {
+    const twin = () => record(7, { eventRecordIdText: "7" });
+
+    it.each([
+      ["padded text", " 7"],
+      ["all-zero text", "000"],
+      ["text that is not digits", "x7"],
+      ["empty text", ""],
+    ])("reads a record with %s and number 7 as record 7, so it and a twin with text '7' are both named", (_label, text) => {
+      const odd = record(7, { eventRecordIdText: text });
+      const other = twin();
+      const index = indexOf([odd, other]);
+      for (const wanted of [odd, other]) {
+        const resolution = resolveOriginRecords(originOf(wanted), index);
+        expect(resolution).toEqual({ kind: "matches", records: [odd, other] });
+      }
+    });
+
+    it.each([" 7", "000", "x7", ""])("finds a record with text %j on its own", (text) => {
+      const odd = record(7, { eventRecordIdText: text });
+      expect(soleRecordForOrigin(originOf(odd), indexOf([odd]))).toBe(odd);
+    });
+
+    it("keeps leading zeros in usable digit text, as the engine's stable id does", () => {
+      const padded = record(7, { eventRecordIdText: "007" });
+      const plain = record(7, { eventRecordIdText: "7" });
+      expect(soleRecordForOrigin(originOf(padded), indexOf([padded, plain]))).toBe(padded);
+      expect(soleRecordForOrigin(originOf(plain), indexOf([padded, plain]))).toBe(plain);
+    });
+  });
+
   it("keeps two archives apart by their source label", () => {
     const a = record(42, { sourceLabel: "a.evtx" });
     const b = record(42, { sourceLabel: "b.evtx" });
@@ -233,6 +279,27 @@ describe("resolveOriginRecords: the strict field join", () => {
         expect(soleRecordForOrigin(origin, indexOf([wanted])), computer).toBe(wanted);
         // An origin with no machine does not name a record that has one.
         expect(soleRecordForOrigin(origin, indexOf([record(42)])), computer).toBeNull();
+      }
+    });
+
+    it.each(ENGINE_NO_PROVENANCE)(
+      "reads the engine's placeholder %j as no machine, in any case and padding",
+      (word) => {
+        for (const computer of [word, word.toUpperCase(), `  ${word}  `, word[0]!.toUpperCase() + word.slice(1)]) {
+          const wanted = record(42, { computer });
+          const origin = originOf(wanted);
+          expect(origin.machine, `engine: ${computer}`).toBeNull();
+          // The record side must reach the same answer, or this record would read as not loaded.
+          expect(soleRecordForOrigin(origin, indexOf([wanted])), `join: ${computer}`).toBe(wanted);
+        }
+      },
+    );
+
+    it("does not read a longer word that merely contains a placeholder as no machine", () => {
+      for (const computer of ["unknown-host", "nan", "nonexistent", "n/a1"]) {
+        const wanted = record(42, { computer });
+        expect(originOf(wanted).machine, computer).toBe(computer);
+        expect(soleRecordForOrigin(originOf(wanted), indexOf([wanted])), computer).toBe(wanted);
       }
     });
 

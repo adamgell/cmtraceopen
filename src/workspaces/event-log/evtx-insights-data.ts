@@ -215,10 +215,29 @@ export function redactedValueMatches(evidenceValue: string, recordValue: string)
   );
 }
 
+/**
+ * The engine's record identity (`stable_event_id`, event_log/timeline.rs): the TRIMMED text when it
+ * is digits with a non-zero digit, otherwise the non-zero number, otherwise none. Padded text
+ * (" 7"), all-zero text ("000") and text that is not digits are therefore the record the number
+ * names, exactly as the engine reads them, so a loaded record and the timeline origin the engine
+ * built from it are keyed the same.
+ *
+ * A number past the safe-integer range reaches the engine as 2^53 (`eventLogAnalysisRecordForTransport`),
+ * so it is read that way here.
+ */
+export function engineRecordIdentity(
+  text: string | null | undefined,
+  numericId: number,
+): string | null {
+  const trimmed = typeof text === "string" ? text.trim() : "";
+  if (/^\d+$/.test(trimmed) && /[1-9]/.test(trimmed)) return trimmed;
+  if (!Number.isFinite(numericId) || numericId <= 0) return null;
+  return String(Number.isSafeInteger(numericId) ? numericId : Number.MAX_SAFE_INTEGER + 1);
+}
+
 /** The record's identity text in the engine's order, or null when the provider never numbered it. */
 function recordIdentityText(record: EvtxRecord): string | null {
-  if (hasRecordIdText(record.eventRecordIdText)) return record.eventRecordIdText;
-  return record.eventRecordId !== 0 ? String(record.eventRecordId) : null;
+  return engineRecordIdentity(record.eventRecordIdText, record.eventRecordId);
 }
 
 /**

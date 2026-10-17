@@ -9,6 +9,7 @@ import {
   describeScopeCounts,
   DIAGNOSIS_NESTED_ROW_CAP,
   DIAGNOSIS_PROJECTION_GAP_SOURCE,
+  engineRecordIdentity,
   eventEvidenceLabel,
   evidenceMatchesRecord,
   findRecordById,
@@ -371,6 +372,54 @@ describe("findRecordById", () => {
     expect(findRecordById(records, 7)).toBe(records[2]);
     expect(findRecordById(records, 99)).toBeNull();
     expect(findRecordById(records, null)).toBeNull();
+  });
+});
+
+describe("engineRecordIdentity (the engine's rule, timeline.rs stable_event_id)", () => {
+  it.each([
+    ["7", 7, "7"],
+    [" 7", 7, "7"],
+    ["  42\t", 0, "42"],
+    ["007", 7, "007"],
+    ["000", 7, "7"],
+    ["0", 7, "7"],
+    ["", 7, "7"],
+    ["x7", 7, "7"],
+    ["7x", 7, "7"],
+    ["-7", 7, "7"],
+    [null, 7, "7"],
+    [undefined, 7, "7"],
+    ["000", 0, null],
+    ["0", 0, null],
+    ["", 0, null],
+    [null, 0, null],
+    ["x", 0, null],
+    [" ", 0, null],
+    ["x", -3, null],
+    ["x", Number.NaN, null],
+  ] as [string | null | undefined, number, string | null][])(
+    "reads text %j with number %d as %j",
+    (text, numericId, expected) => {
+      expect(engineRecordIdentity(text, numericId)).toBe(expected);
+    },
+  );
+
+  it("takes the text over a different number, as the engine does", () => {
+    expect(engineRecordIdentity("42", 7)).toBe("42");
+  });
+
+  it("reads a number past the safe range as 2^53, which is how the transport sends it", () => {
+    expect(engineRecordIdentity(null, Number.MAX_SAFE_INTEGER + 5)).toBe("9007199254740992");
+    expect(engineRecordIdentity("9007199254740993", 9007199254740992)).toBe("9007199254740993");
+  });
+
+  it("keys a record by it, so padded, zero and non-digit text all land on the record the number names", () => {
+    const plain = record(1, { eventId: 7, eventRecordId: 7, eventRecordIdText: "7" });
+    const padded = record(2, { eventId: 7, eventRecordId: 7, eventRecordIdText: " 7" });
+    const zero = record(3, { eventId: 7, eventRecordId: 7, eventRecordIdText: "000" });
+    const text = record(4, { eventId: 7, eventRecordId: 7, eventRecordIdText: "x7" });
+    const index = buildEvidenceIndex([plain, padded, zero, text]);
+    expect(recordsForIdentity(index, 7, "7")).toEqual([plain, padded, zero, text]);
   });
 });
 
