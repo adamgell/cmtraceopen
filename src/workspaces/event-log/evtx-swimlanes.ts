@@ -304,6 +304,22 @@ export function topEventInCell(
   return best < 0 ? null : lane.records[best];
 }
 
+/**
+ * Where the record with this id is drawn, or null if it is not charted (filtered out, untimed, or
+ * not loaded). Ids are read now, not when the scene was built: the store rewrites them in place.
+ */
+export function findRecordInScene(
+  scene: SwimlaneScene,
+  recordId: number | null,
+): { lane: number; dot: number } | null {
+  if (recordId === null) return null;
+  for (let lane = 0; lane < scene.lanes.length; lane += 1) {
+    const dot = scene.lanes[lane].records.findIndex((record) => record.id === recordId);
+    if (dot >= 0) return { lane, dot };
+  }
+  return null;
+}
+
 /** The lane at `index` of `lanes`, or null (a cursor held across a rebuild may be past the end). */
 export function laneAt(scene: SwimlaneScene, index: number): SwimlaneLane | null {
   return scene.lanes[index] ?? null;

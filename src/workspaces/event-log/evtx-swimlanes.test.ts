@@ -22,6 +22,7 @@ import {
   describeLaneCell,
   describeLaneCount,
   describeSwimlaneFigure,
+  findRecordInScene,
   laneCellCounts,
   laneHeightFor,
   laneKeyOf,
@@ -418,6 +419,26 @@ describe("a lane in one cell", () => {
   it("selects nothing in an empty cell", () => {
     expect(topEventInCell(lane(), T0 + HOUR, T0 + 2 * HOUR)).toBeNull();
     expect(laneCellCounts(lane(), T0 + HOUR, T0 + 2 * HOUR).total).toBe(0);
+  });
+});
+
+describe("finding a record in the scene", () => {
+  it("locates a record by its id as it is now, and not by the id it had when the scene was built", () => {
+    const records = [...many("a", 3), ...many("b", 2, T0 + HOUR)];
+    records.forEach((record, index) => (record.id = index));
+    const scene = build(records);
+    expect(findRecordInScene(scene, 4)).toEqual({ lane: 1, dot: 1 });
+    // The store renumbers records in place on a merge.
+    records[4].id = 40;
+    expect(findRecordInScene(scene, 4)).toBeNull();
+    expect(findRecordInScene(scene, 40)).toEqual({ lane: 1, dot: 1 });
+  });
+
+  it("is null for no id, an id not charted and an untimed record", () => {
+    const scene = build([...many("a", 2), rec({ id: 77, timestampEpoch: 0 })]);
+    expect(findRecordInScene(scene, null)).toBeNull();
+    expect(findRecordInScene(scene, 999)).toBeNull();
+    expect(findRecordInScene(scene, 77)).toBeNull();
   });
 });
 

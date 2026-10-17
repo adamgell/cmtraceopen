@@ -19,10 +19,14 @@
 import {
   memo,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Dropdown, Option, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
 import { getLogListMetrics } from "../../lib/log-accessibility";
@@ -38,32 +42,54 @@ import {
   describeUntimed,
   rangeOnPlot,
 } from "./evtx-histogram";
-import { brushPaletteFor, solveBrushOpacity } from "./evtx-histogram-brush";
+import {
+  brushPaletteFor,
+  bucketIndexFromFraction,
+  clampBrushState,
+  draftSpan,
+  initialBrushCursor,
+  rangeAfterActivate,
+  rangeOfSpan,
+  reduceBrushKey,
+  solveBrushOpacity,
+  spanOfIndices,
+  spanOfRange,
+  spanToApply,
+  type BrushKey,
+  type BrushKeyState,
+} from "./evtx-histogram-brush";
 import {
   DOT_MARKS,
   PLOT_INSET_PX,
   canvasWidthFor,
+  hitTest,
   paintSwimlanes,
   planPaint,
   swimlaneColors,
+  type DotHit,
 } from "./evtx-swimlane-canvas";
 import {
   SWIMLANE_FIELDS,
   SWIMLANE_FIELD_LABELS,
   SWIMLANE_FIELD_NOUNS,
   buildSwimlanes,
+  describeDot,
   describeFoldedLanes,
+  describeLaneCell,
   describeLaneCount,
   describeSwimlaneFigure,
+  findRecordInScene,
   laneHeightFor,
   laneLabelFonts,
   laneLabelLineHeights,
+  topEventInCell,
   type SwimlaneField,
   type SwimlaneScene,
 } from "./evtx-swimlanes";
+import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
 import { DERIVATION_THROTTLE_MS, useThrottledValue } from "./evtx-throttle";
-import { timeZoneLabel } from "./evtx-time";
+import { formatTimeRange, timeZoneLabel } from "./evtx-time";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 import type { EvtxLevel, EvtxRecord } from "./types";
 
@@ -81,6 +107,16 @@ export const SWIMLANE_HELP_TEXT =
 const LABEL_TEXT_WIDTH_PX = 172;
 const LABEL_PAD_PX = 8;
 export const LABEL_WIDTH_PX = LABEL_TEXT_WIDTH_PX + LABEL_PAD_PX;
+
+/**
+ * A press that moves this far across the plot (CSS pixels) is a brush; one that moves less is a
+ * click. A click selects the dot under it and never sets or clears the time range: the histogram's
+ * click toggles a bucket, but here a click is aimed at a dot, and a hand's jitter must not be able
+ * to turn it into a range.
+ */
+export const DRAG_THRESHOLD_PX = 3;
+
+const BRUSH_KEYS: readonly string[] = ["ArrowLeft", "ArrowRight", "Home", "End"];
 
 /** The space a lane view without lanes (loading, empty) keeps, so the message has somewhere to be. */
 const MESSAGE_MIN_HEIGHT_PX = 56;
@@ -166,6 +202,24 @@ const useStyles = makeStyles({
     },
   },
   interactive: { cursor: "crosshair" },
+  overDot: { cursor: "pointer" },
+  // One tooltip for the plot, for the pointer, drawn here rather than with Fluent's Tooltip: that
+  // component handles Escape on the document and marks it handled, which would stop the workspace's
+  // Escape from clearing the time range whenever a tooltip was showing.
+  tooltip: {
+    position: "absolute",
+    zIndex: 10,
+    pointerEvents: "none",
+    whiteSpace: "nowrap",
+    padding: "4px 8px",
+    borderRadius: tokens.borderRadiusMedium,
+    color: tokens.colorNeutralForeground1,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    boxShadow: tokens.shadow8,
+    fontFamily: tokens.fontFamilyNumeric,
+    fontVariantNumeric: "tabular-nums",
+  },
   layer: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 },
   // Under forced colors the surface is forced to Canvas but the marks keep their own colours, so the
   // wash's 3:1 proof (made on the theme's surface) no longer holds. The wash is dropped there and the
@@ -320,6 +374,34 @@ interface EvtxSwimlaneViewProps {
   loading: boolean;
 }
 
+/** A ring around a dot: centred on a point of the plot, in a border that is a token. */
+function ringStyle(left: string, top: number, size: number, border: string): CSSProperties {
+  return {
+    position: "absolute",
+    left,
+    top: `${top}px`,
+    width: `${size}px`,
+    height: `${size}px`,
+    boxSizing: "border-box",
+    transform: "translate(-50%, -50%)",
+    borderRadius: "50%",
+    border,
+    pointerEvents: "none",
+  };
+}
+
+/**
+ * Where the tooltip sits against its dot: centred above it, tucked to the side near either end of
+ * the plot so it stays inside, and below the dot in the first lane where there is no room above.
+ */
+function tooltipTransform(tip: DotHit, plotWidth: number, laneHeight: number): string {
+  const fraction = plotWidth > 0 ? (tip.x - PLOT_INSET_PX) / plotWidth : 0.5;
+  const horizontal =
+    fraction < 0.15 ? "translateX(-10px)" : fraction > 0.85 ? "translateX(calc(-100% + 10px))" : "translateX(-50%)";
+  const vertical = tip.y < laneHeight ? "translateY(12px)" : "translateY(calc(-100% - 12px))";
+  return `${horizontal} ${vertical}`;
+}
+
 const EMPTY_FIELD_SCENE = (field: SwimlaneField): SwimlaneScene => buildSwimlanes([], field, "utc");
 
 export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
@@ -344,7 +426,11 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
   const catchingUp = shown !== records && shown.length === 0;
   const scene = useMemo(() => buildSwimlanes(shown, field, timeZoneMode), [shown, field, timeZoneMode]);
   const ready = !loading && !catchingUp && scene.axis.domain !== null;
-  const view = scene;
+  // The scene a gesture started on. A live tail can regrid the axis, and the top 12 lanes can
+  // reorder, under a pointer or a pending keyboard selection; the gesture keeps the whole scene it
+  // began with (axis, lanes and their order) and commits that axis's edges.
+  const [frozen, setFrozen] = useState<SwimlaneScene | null>(null);
+  const view = frozen ?? scene;
 
   const theme = useMemo(() => getThemeById(themeId), [themeId]);
   // Resolved again whenever the theme changes, with no reload and no remount: the canvas repaints.
@@ -403,7 +489,59 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
     paintSwimlanes(context, plan, colors, forcedRing);
   }, [plan, colors, forcedRing]);
 
+  const setTimeRange = useEvtxStore((s) => s.setTimeRange);
+  const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
+  const descriptionId = useId();
+  const [hover, setHover] = useState<DotHit | null>(null);
+  const [focused, setFocused] = useState(false);
+  // Whether the plot is being used from the keyboard: set by Tab focus or a key, cleared by a press.
+  // The cursor line in the caption is for the keyboard; a pointer press focuses the plot too, and
+  // must not show it.
+  const [keyboardMode, setKeyboardMode] = useState(false);
+  const pressRef = useRef(false);
+  // A press that is not yet known to be a click or a brush: where it started.
+  const gestureRef = useRef<{ startX: number } | null>(null);
+  const [keys, setKeys] = useState<BrushKeyState | null>(null);
+  const [drag, setDrag] = useState<{ anchor: number; current: number } | null>(null);
+  const [cursorLane, setCursorLane] = useState(0);
+
+  // When a load begins (or the first events of the next set are still arriving), whatever a gesture
+  // held belongs to the set that is going away: the scene it froze, the drag, the anchor, the
+  // cursor. They are dropped, and derived again from the new scene once it is ready. A new lane
+  // field starts over for the same reason. Done while rendering, so no frame draws the old scene
+  // under the new state.
+  const busy = loading || catchingUp;
+  const [wasBusy, setWasBusy] = useState(busy);
+  const [seenField, setSeenField] = useState(field);
+  if (busy !== wasBusy || field !== seenField) {
+    setWasBusy(busy);
+    setSeenField(field);
+    if (busy || field !== seenField) {
+      setDrag(null);
+      setFrozen(null);
+      setKeys(null);
+      setHover(null);
+      if (field !== seenField) setCursorLane(0);
+    }
+  }
+
+  const count = view.axis.buckets.length;
+  const laneCount = view.lanes.length;
+  const appliedSpan = ready && timeRange !== null ? spanOfRange(view.axis, timeRange) : null;
   const appliedOnPlot = ready && timeRange !== null ? rangeOnPlot(view.axis, timeRange) : null;
+  const key = keys === null ? null : clampBrushState(keys, count);
+  const draft = drag !== null ? spanOfIndices(drag.anchor, drag.current) : key === null ? null : draftSpan(key);
+  const draftOnPlot = ready && draft !== null ? rangeOnPlot(view.axis, rangeOfSpan(view.axis, draft)) : null;
+  // A gesture in progress shows its draft alone: the wash over an applied range as well would be
+  // twice as opaque as the opacity that was solved.
+  const shownRange = draftOnPlot ?? appliedOnPlot;
+  const cursor = key?.cursor ?? initialBrushCursor(count, appliedSpan);
+  const laneIndex = Math.min(Math.max(0, laneCount - 1), cursorLane);
+  const selectedAt = useMemo(
+    () => (ready ? findRecordInScene(view, selectedRecordId) : null),
+    [ready, view, selectedRecordId],
+  );
+
   const notes: string[] = [];
   if (!loading && !catchingUp) {
     if (scene.untimed > 0) notes.push(describeUntimed(scene.untimed));
@@ -431,7 +569,179 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
   const noun = SWIMLANE_FIELD_NOUNS[field];
   const stackHeight = ready ? view.lanes.length * laneHeight : MESSAGE_MIN_HEIGHT_PX;
 
-  const edge = (fraction: number, side: string) => (
+  /** The pointer on the plot, in the plot's own pixels, or null if the plot has no size. */
+  const plotPoint = (event: { clientX: number; clientY: number }) => {
+    const rect = plotRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return null;
+    return { width: rect.width, x: event.clientX - rect.left, y: event.clientY - rect.top };
+  };
+  const indexAt = (event: { clientX: number; clientY: number }): number => {
+    const point = plotPoint(event);
+    return point === null ? 0 : bucketIndexFromFraction(point.x / point.width, count);
+  };
+  /** The dot a click here would select. */
+  const hitAt = (event: { clientX: number; clientY: number }): DotHit | null => {
+    const point = plotPoint(event);
+    if (point === null) return null;
+    return hitTest(view, { plotWidth: point.width, laneHeight }, point.x + PLOT_INSET_PX, point.y);
+  };
+  const endGesture = () => {
+    setDrag(null);
+    setFrozen(null);
+  };
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // Any press, ready or not: the focus it causes is the pointer's, not the keyboard's, and the
+    // browser focuses the plot itself while it is not ready (a disabled slider still has a tab stop).
+    // onFocus reads `pressRef`; a press, a cancel, leaving the plot or a blur ends it.
+    setKeyboardMode(false);
+    pressRef.current = true;
+    // Primary button only: a right-click opens the context menu and must not arm a gesture.
+    if (!ready || event.button !== 0 || !event.isPrimary) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    // Not a brush yet: it becomes one when the pointer moves `DRAG_THRESHOLD_PX`, else it is a click.
+    // Either way it is aimed at the scene on screen now, so that scene is held until the release:
+    // a live tail can regrid the axis or reorder the lanes in between.
+    gestureRef.current = { startX: event.clientX };
+    setFrozen(view);
+    event.currentTarget.focus({ preventScroll: true });
+  };
+
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!ready) return;
+    const press = gestureRef.current;
+    if (drag === null && press !== null) {
+      // The button was released outside the page or the capture was lost: no gesture.
+      if (event.buttons === 0) {
+        gestureRef.current = null;
+        if (key === null || key.anchor === null) setFrozen(null);
+        return;
+      }
+      if (Math.abs(event.clientX - press.startX) < DRAG_THRESHOLD_PX) return;
+      // The press became a brush, from the bucket it started on, in the scene it was aimed at.
+      gestureRef.current = null;
+      const anchor = indexAt({ clientX: press.startX, clientY: event.clientY });
+      const current = indexAt(event);
+      setHover(null);
+      setDrag({ anchor, current });
+      setKeys({ cursor: current, anchor: null });
+      return;
+    }
+    if (drag !== null) {
+      if (event.buttons === 0) {
+        endGesture();
+        return;
+      }
+      const index = indexAt(event);
+      if (index !== drag.current) setDrag({ ...drag, current: index });
+      return;
+    }
+    const hit = hitAt(event);
+    setHover((previous) =>
+      previous?.lane === hit?.lane && previous?.dot === hit?.dot && previous?.more === hit?.more ? previous : hit,
+    );
+  };
+
+  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    pressRef.current = false;
+    const press = gestureRef.current;
+    gestureRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    if (drag !== null) {
+      const index = indexAt(event);
+      const span = spanOfIndices(drag.anchor, index);
+      const axis = view.axis;
+      endGesture();
+      setKeys({ cursor: index, anchor: null });
+      // Whole buckets of the axis the drag began on: the histogram's own commit.
+      setTimeRange(rangeAfterActivate(axis, timeRange, span));
+      return;
+    }
+    // The scene is held for a pending keyboard selection, which froze it first, and let go otherwise.
+    if (key === null || key.anchor === null) setFrozen(null);
+    if (press === null || !ready) return;
+    // A click: it selects the dot under it, if any, and never touches the time range. The id is
+    // read now, from the record the lane holds: the store renumbers ids in place on every merge.
+    const hit = hitAt(event);
+    if (hit === null) return;
+    selectRecordAndShowDetails(hit.record.id);
+    setCursorLane(hit.lane);
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!ready || event.ctrlKey || event.metaKey || event.altKey) return;
+    setKeyboardMode(true);
+    if (event.key === "Escape") {
+      // A pending selection is cancelled and the key is spent, so the workspace's Escape (which
+      // clears the applied range) steps aside. With nothing pending the key passes up to it.
+      if (drag !== null || (key !== null && key.anchor !== null)) {
+        event.preventDefault();
+        endGesture();
+        setKeys(key === null ? null : { cursor: key.cursor, anchor: null });
+      }
+      return;
+    }
+    if (drag !== null) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const state = key ?? { cursor, anchor: null };
+      const span = spanToApply(state);
+      const axis = view.axis;
+      endGesture();
+      setKeys({ cursor: state.cursor, anchor: null });
+      setTimeRange(rangeAfterActivate(axis, timeRange, span));
+      return;
+    }
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      event.preventDefault();
+      setCursorLane(Math.min(Math.max(0, laneCount - 1), Math.max(0, laneIndex + (event.key === "ArrowDown" ? 1 : -1))));
+      return;
+    }
+    if (event.key === " ") {
+      // The keyboard's click: the most severe event in the cell under the cursor, in Details.
+      event.preventDefault();
+      const row = view.lanes[laneIndex];
+      const bucket = view.axis.buckets[cursor];
+      const record = row && bucket ? topEventInCell(row, bucket.startMs, bucket.endMs) : null;
+      if (record !== null) selectRecordAndShowDetails(record.id);
+      return;
+    }
+    if (BRUSH_KEYS.includes(event.key)) {
+      event.preventDefault();
+      const state = key ?? { cursor, anchor: null };
+      const next = reduceBrushKey(state, event.key as BrushKey, event.shiftKey, count, appliedSpan);
+      setKeys(next);
+      if (next.anchor !== null && state.anchor === null) setFrozen(scene);
+      if (next.anchor === null) setFrozen(null);
+    }
+  };
+
+  // The floating tooltip is for the pointer only: at the keyboard cursor it would sit over the lanes
+  // for as long as focus stays on the plot, and nothing dismisses it (Escape clears the range). The
+  // cursor cell's text is shown inline in the caption line instead, which is persistent content, and
+  // the slider's value text carries it for assistive technology.
+  const tip = ready && drag === null ? hover : null;
+  const cellLane = view.lanes[laneIndex] ?? null;
+  const cellBucket = ready && cursor < count ? view.axis.buckets[cursor] : null;
+  const cellText =
+    cellLane !== null && cellBucket !== null
+      ? describeLaneCell(cellLane, cellBucket.startMs, cellBucket.endMs, timeZoneMode, view.axis.showYear)
+      : null;
+  const cursorText = focused && keyboardMode ? cellText : null;
+  const valueText = (() => {
+    if (!ready || cellText === null) return undefined;
+    if (draft !== null) {
+      const range = rangeOfSpan(view.axis, draft);
+      return `${cellText}, selecting ${formatTimeRange(range.startMs, range.endMs, timeZoneMode, view.axis.showYear)}`;
+    }
+    if (timeRange !== null) {
+      return `${cellText}, time range ${formatTimeRange(timeRange.startMs, timeRange.endMs, timeZoneMode, view.axis.showYear)} applied`;
+    }
+    return cellText;
+  })();
+
+  const edge = (fraction: number, dashed: boolean, side: string) => (
     <div
       key={side}
       aria-hidden="true"
@@ -444,7 +754,7 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
         left: `${fraction * 100}%`,
         marginLeft: "-1px",
         pointerEvents: "none",
-        borderLeft: `2px solid ${tokens.colorNeutralStrokeAccessible}`,
+        borderLeft: `2px ${dashed ? "dashed" : "solid"} ${tokens.colorNeutralStrokeAccessible}`,
       }}
     />
   );
@@ -550,17 +860,76 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
             <div className={styles.plotBox}>
               <div
                 ref={plotRef}
-                className={mergeClasses(styles.plot, ready && styles.interactive)}
+                className={mergeClasses(styles.plot, ready && styles.interactive, tip !== null && styles.overDot)}
                 style={{ height: `${stackHeight}px` }}
+                {...(ready
+                  ? {
+                      role: "slider",
+                      tabIndex: 0,
+                      "aria-label": "Time range, by lane",
+                      "aria-orientation": "horizontal" as const,
+                      "aria-valuemin": 0,
+                      "aria-valuemax": count - 1,
+                      "aria-valuenow": cursor,
+                      "aria-valuetext": valueText,
+                      "aria-describedby": descriptionId,
+                      "aria-keyshortcuts":
+                        "ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Home End Enter Space Escape",
+                    }
+                  : loading || catchingUp
+                    ? // The same element stays focusable while a load runs, so focus is not thrown to the body
+                      // and is where it was when the load ends; it just says it cannot be used now.
+                      {
+                        role: "slider",
+                        tabIndex: 0,
+                        "aria-label": "Time range, by lane",
+                        "aria-orientation": "horizontal" as const,
+                        "aria-disabled": true,
+                        "aria-valuemin": 0,
+                        "aria-valuemax": 0,
+                        "aria-valuenow": 0,
+                        "aria-valuetext": "Loading events",
+                      }
+                    : {})}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={() => {
+                  pressRef.current = false;
+                  gestureRef.current = null;
+                  endGesture();
+                }}
+                onLostPointerCapture={() => {
+                  if (drag !== null) endGesture();
+                }}
+                onPointerLeave={() => {
+                  pressRef.current = false;
+                  setHover(null);
+                }}
+                onKeyDown={onKeyDown}
+                // The cursor is not stored on focus: with no keys held it is derived from the scene, so
+                // focus that arrives during a load does not pin it to an empty chart's first bucket.
+                onFocus={() => {
+                  setFocused(true);
+                  if (!pressRef.current) setKeyboardMode(true);
+                }}
+                onBlur={() => {
+                  pressRef.current = false;
+                  setFocused(false);
+                  setKeyboardMode(false);
+                  setKeys(null);
+                  if (drag === null) setFrozen(null);
+                }}
               >
-                {ready && appliedOnPlot !== null && (
+                {ready && shownRange !== null && (
                   <div
                     aria-hidden="true"
                     data-evtx-layer="wash"
+                    data-evtx-draft={draftOnPlot !== null}
                     className={mergeClasses(styles.layer, styles.wash)}
                     style={{
-                      left: `${appliedOnPlot.left * 100}%`,
-                      right: `${(1 - appliedOnPlot.right) * 100}%`,
+                      left: `${shownRange.left * 100}%`,
+                      right: `${(1 - shownRange.right) * 100}%`,
                       backgroundColor: tokens.colorNeutralBackground1Selected,
                       opacity: washOpacity,
                     }}
@@ -579,9 +948,81 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
                     }}
                   />
                 )}
-                {ready && appliedOnPlot !== null && !appliedOnPlot.clippedLeft && edge(appliedOnPlot.left, "start")}
-                {ready && appliedOnPlot !== null && !appliedOnPlot.clippedRight && edge(appliedOnPlot.right, "end")}
+                {ready &&
+                  shownRange !== null &&
+                  !shownRange.clippedLeft &&
+                  edge(shownRange.left, draftOnPlot !== null, "start")}
+                {ready &&
+                  shownRange !== null &&
+                  !shownRange.clippedRight &&
+                  edge(shownRange.right, draftOnPlot !== null, "end")}
+                {selectedAt !== null && (
+                  <div
+                    aria-hidden="true"
+                    data-evtx-layer="selected"
+                    style={ringStyle(
+                      `${view.lanes[selectedAt.lane].fractions[selectedAt.dot] * 100}%`,
+                      selectedAt.lane * laneHeight + laneHeight / 2,
+                      DOT_MARKS[HISTOGRAM_STACK_ORDER[view.lanes[selectedAt.lane].levels[selectedAt.dot]]].size + 6,
+                      `2px solid ${visual.selection.foreground}`,
+                    )}
+                  />
+                )}
+                {tip !== null && (
+                  <div
+                    aria-hidden="true"
+                    data-evtx-layer="hover"
+                    style={ringStyle(
+                      `${tip.x - PLOT_INSET_PX}px`,
+                      tip.y,
+                      DOT_MARKS[tip.level].size + 4,
+                      `1px solid ${tokens.colorNeutralForeground1}`,
+                    )}
+                  />
+                )}
+                {ready && focused && cellBucket !== null && laneCount > 0 && (
+                  <div
+                    aria-hidden="true"
+                    data-evtx-layer="cursor"
+                    style={{
+                      position: "absolute",
+                      top: `${laneIndex * laneHeight}px`,
+                      height: `${laneHeight}px`,
+                      left: `${(cursor / count) * 100}%`,
+                      width: `${100 / count}%`,
+                      boxSizing: "border-box",
+                      pointerEvents: "none",
+                      outline: `2px solid ${tokens.colorNeutralForeground1}`,
+                      outlineOffset: "-2px",
+                    }}
+                  />
+                )}
+                {tip !== null && (
+                  <div
+                    aria-hidden="true"
+                    data-evtx-tooltip
+                    className={styles.tooltip}
+                    style={{
+                      left: `${tip.x - PLOT_INSET_PX}px`,
+                      top: `${tip.y}px`,
+                      transform: tooltipTransform(tip, plotWidth, laneHeight),
+                      fontSize: `${Math.max(10, fontSize - 2)}px`,
+                    }}
+                  >
+                    {describeDot(tip.record, timeZoneMode, tip.more)}
+                  </div>
+                )}
               </div>
+              {ready && (
+                <span id={descriptionId} className={styles.visuallyHidden}>
+                  Left and right arrow keys move between intervals, and up and down arrow keys move between
+                  lanes. Hold Shift to select a range, or to move an end of the applied range from the interval
+                  at that end. Home and End jump to the first and last interval. Enter applies the selection,
+                  or clears the range when it is the one interval already applied. Space selects the most
+                  severe event in the lane at that interval and shows it in Details. Escape cancels a pending
+                  selection, then clears the time range. The Table view lists every event.
+                </span>
+              )}
               {message !== null && (
                 <div
                   role="status"
@@ -646,7 +1087,16 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
             overflow: "hidden",
             textOverflow: "ellipsis",
           }}
-        />
+        >
+          {cursorText !== null && (
+            <span
+              data-evtx-cursor-text={cursor}
+              style={{ fontFamily: tokens.fontFamilyNumeric, fontVariantNumeric: "tabular-nums" }}
+            >
+              {cursorText}
+            </span>
+          )}
+        </div>
       </figcaption>
 
       {ready && (
