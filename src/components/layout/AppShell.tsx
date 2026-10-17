@@ -33,6 +33,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { useLogStore } from "../../stores/log-store";
 import { useRegistryStore } from "../../stores/registry-store";
 import { useFilterStore } from "../../stores/filter-store";
+import { TAB_SWITCH_TRIGGER } from "../../lib/log-load-triggers";
 import { switchToTab } from "../../lib/log-source";
 import { WorkspaceErrorBoundary } from "./WorkspaceErrorBoundary";
 import { useFileWatcher } from "../../hooks/use-file-watcher";
@@ -324,7 +325,7 @@ export function AppShell() {
     const { openTabs, activeTabIndex } = useUiStore.getState();
     const tab = openTabs[activeTabIndex];
     if (!tab) return;
-    useUiStore.getState().ensureLogViewVisible("tab-switch");
+    useUiStore.getState().ensureLogViewVisible(TAB_SWITCH_TRIGGER);
     switchToTab(tab.filePath, tab.sourceContext).catch((err) => {
       console.error("[tab-switch] failed to load", tab.filePath, err);
     });

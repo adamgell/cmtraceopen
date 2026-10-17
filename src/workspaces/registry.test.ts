@@ -44,6 +44,7 @@ import {
 import { eventLogWorkspace } from "./event-log";
 import { logWorkspace } from "./log";
 import { sccmWorkspace } from "./sccm";
+import { MULTI_FILE_OPEN_TRIGGER, TAB_SWITCH_TRIGGER } from "../lib/log-load-triggers";
 import { getAvailableWorkspaces, getWorkspace, workspaceRegistry } from "./registry";
 import type { WorkspaceDefinition } from "./types";
 
@@ -260,6 +261,12 @@ describe("registry-driven shell chrome", () => {
       .map((workspace) => workspace.id)
       .sort();
     expect(keepers).toEqual(["event-log", "macos-jamf"]);
+    // JAMF keeps its view for every trigger; Event Logs only for the two its add flow produces.
+    expect(workspaceRegistry.get("macos-jamf")?.capabilities?.keepsViewOnLogLoad).toBe(true);
+    expect(eventLogWorkspace.capabilities?.keepsViewOnLogLoad).toEqual([
+      TAB_SWITCH_TRIGGER,
+      MULTI_FILE_OPEN_TRIGGER,
+    ]);
   });
 
   it("renders lazy toolbar and status slots while preserving legacy fallback chrome", async () => {

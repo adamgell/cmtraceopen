@@ -18,6 +18,7 @@ import {
   type AccessDeniedClassification,
 } from "./source-error";
 import { useUiStore, type TabSourceContext } from "../stores/ui-store";
+import { MULTI_FILE_OPEN_TRIGGER } from "./log-load-triggers";
 import { useFilterStore } from "../stores/filter-store";
 import type {
   AggregateSourceFile,
@@ -1025,7 +1026,7 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<boolean> {
     state.selectEntry(null);
     state.setFolderLoadProgress(null);
 
-    useUiStore.getState().ensureLogViewVisible("multi-file-open");
+    useUiStore.getState().ensureLogViewVisible(MULTI_FILE_OPEN_TRIGGER);
 
     state.setSourceStatus({
       kind: "loaded",
