@@ -511,9 +511,11 @@ describe("colors are tokens, never literals", () => {
 
 /**
  * Contrast in all seven themes (spec 10). Each pair is measured on resolved theme colors; the DOM
- * half pins the painted element to the same token, so a measured pair cannot differ from the
- * drawn one. The 55% fill is not measured: it is the one thing that fades, and the full-strength
- * ring beside it is what is measured (this is the deviation from the spec's whole-marker fade).
+ * half compares the painted element's own color (stroke, ring, outline, label text) with the same
+ * token. The surface the pair sits on (the plot's background) is not read back from the DOM, so a
+ * change to that token alone would not fail here. The 55% fill is not measured: it is the one
+ * thing that fades, and the full-strength ring beside it is what is measured (this is the
+ * deviation from the spec's whole-marker fade).
  */
 describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
   "lane plot contrast in the %s theme",

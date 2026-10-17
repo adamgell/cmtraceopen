@@ -213,7 +213,7 @@ function generateEvents(): GeneratedEvent[] {
 }
 
 /**
- * A GUID-shaped identifier that cannot be a real one (the groups spell words, not random bits).
+ * A GUID-shaped identifier made of words, not random bits, so that it is recognizably invented.
  *
  * It holds no run of four decimal digits on purpose. The diagnosis scans every record's text, raw
  * XML included, for error codes, and reads `-4000` or `-0001` as a signed decimal one. A
@@ -337,8 +337,8 @@ function toRecord(e: GeneratedEvent): EvtxRecord {
     userSid: null,
     keywords: null,
     mapped: [],
-    // The identity the engine correlates on. Absent (not null) for every other record, so their
-    // JSON, and with it the committed engine input, is unchanged.
+    // The identity the engine correlates on. Absent (not null) for every other record, so the
+    // JSON of every other record is unchanged.
     ...(identity?.activityId === undefined ? {} : { activityId: identity.activityId }),
     ...(identity?.sessionId === undefined ? {} : { sessionId: identity.sessionId }),
   };
