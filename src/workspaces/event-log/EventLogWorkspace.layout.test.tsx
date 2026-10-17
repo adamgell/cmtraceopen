@@ -202,7 +202,7 @@ describe("EventLogWorkspace three-column shell", () => {
     }
   });
 
-  it("renders the Grouped view in the tabpanel, and its Show all returns to the table filtered", () => {
+  it("renders the Grouped view, selects an expanded event, and Show all returns to the table filtered", () => {
     // jsdom does no layout; the virtualized list needs a viewport height to render rows.
     const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
     Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
@@ -217,16 +217,26 @@ describe("EventLogWorkspace three-column shell", () => {
     render(<EventLogWorkspace />);
     fireEvent.click(screen.getByRole("tab", { name: "Grouped" }));
     const panel = screen.getByRole("tabpanel");
-    const grouped = within(panel).getByRole("table", { name: /^Grouped events, 1 group by Event ID$/ });
+    const grouped = within(panel).getByRole("grid", { name: /^Grouped events, 1 group by Event ID$/ });
     expect(grouped).toBeVisible();
     expect(screen.getByTestId("records-table")).not.toBeVisible();
     expect(screen.queryByText("Grouped view")).toBeNull();
 
     fireEvent.click(within(grouped).getByRole("button", { name: /^Event ID 42,/ }));
+    // Selecting an expanded event selects the record for every view (spec 9).
+    const event = requireElement(
+      grouped.querySelector<HTMLElement>('[data-evtx-grouped-row="item"]'),
+      "the expanded event row",
+    );
+    fireEvent.click(event);
+    expect(useEvtxStore.getState().selectedRecordId).toBe(RECORD.id);
+    expect(event).toHaveAttribute("aria-selected", "true");
     fireEvent.click(within(grouped).getByRole("button", { name: "Show all 1 in table" }));
     expect(useEvtxStore.getState().filterEventIds).toBe("42");
     expect(screen.getByRole("tab", { name: "Table" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByTestId("records-table")).toBeVisible();
+    // The selection made in the Grouped view is still the selection in the table.
+    expect(useEvtxStore.getState().selectedRecordId).toBe(RECORD.id);
   });
 
   it("shows a placeholder for views that are not built yet, behind the same tablist", () => {

@@ -99,6 +99,8 @@ interface TableProps {
   theme?: CMTraceTheme;
   onShowAll?: (eventId: number) => void;
   linkedRecordIds?: ReadonlySet<number>;
+  selectedRecordId?: number | null;
+  onSelectRecord?: (id: number) => void;
 }
 
 function renderTable({
@@ -107,6 +109,8 @@ function renderTable({
   theme = getAllThemes()[0],
   onShowAll,
   linkedRecordIds,
+  selectedRecordId,
+  onSelectRecord,
 }: TableProps = {}) {
   return render(
     <div style={{ height: "600px", display: "flex", flexDirection: "column" }}>
@@ -118,6 +122,8 @@ function renderTable({
         theme={theme}
         onShowAll={onShowAll}
         linkedRecordIds={linkedRecordIds}
+        selectedRecordId={selectedRecordId}
+        onSelectRecord={onSelectRecord}
       />
     </div>,
   );
@@ -164,7 +170,7 @@ const styleOf = (element: Element) => (element as HTMLElement).style;
 describe("EvtxGroupedTable: summary table (spec 8.8)", () => {
   it("labels the columns in the spec's order, the trend after the window", () => {
     renderTable();
-    const table = screen.getByRole("table", { name: /Grouped events/ });
+    const table = screen.getByRole("grid", { name: /Grouped events/ });
     const headers = within(table)
       .getAllByRole("columnheader")
       .map((header) => header.textContent);
@@ -273,7 +279,7 @@ describe("EvtxGroupedTable: summary table (spec 8.8)", () => {
 });
 
 describe("EvtxGroupedTable: keyboard", () => {
-  it("moves between groups with the arrow keys and expands and collapses with Right and Left", () => {
+  it("moves through groups, events and Show all with the arrow keys, Right and Left expand and collapse", () => {
     renderTable({ onShowAll: () => undefined });
     const first = disclosure(/^Event ID 1000/);
     expect(first).toHaveAttribute("tabindex", "0");
@@ -282,16 +288,24 @@ describe("EvtxGroupedTable: keyboard", () => {
 
     fireEvent.keyDown(first, { key: "ArrowRight" });
     expect(disclosure(/^Event ID 1000/)).toHaveAttribute("aria-expanded", "true");
-    // Down from an expanded group reaches its Show all button, then the next group.
+    // Down from an expanded group reaches its events, then its Show all button, then the next group.
+    const [newest, older] = [...itemRows()];
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(newest);
+    expect(newest).toHaveAttribute("tabindex", "0");
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(older);
     fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Show all 2 in table" }));
     fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
     expect(document.activeElement).toBe(disclosure(/^Event ID 4625/));
     expect(disclosure(/^Event ID 4625/)).toHaveAttribute("tabindex", "0");
 
+    // Left from an event or from Show all returns to its group, and Left again collapses it.
     fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(older);
     fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
-    // Left from Show all returns to its group, and Left again collapses it.
     expect(document.activeElement).toBe(disclosure(/^Event ID 1000/));
     fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
     expect(disclosure(/^Event ID 1000/)).toHaveAttribute("aria-expanded", "false");
@@ -300,6 +314,59 @@ describe("EvtxGroupedTable: keyboard", () => {
     expect(document.activeElement).toBe(disclosure(/^Event ID 7036/));
     fireEvent.keyDown(document.activeElement!, { key: "Home" });
     expect(document.activeElement).toBe(disclosure(/^Event ID 1000/));
+  });
+});
+
+describe("EvtxGroupedTable: selecting an expanded event (spec 9)", () => {
+  function expandedErrors(onSelectRecord = vi.fn(), selectedRecordId: number | null = null) {
+    const records = sampleRecords();
+    const errors = records
+      .filter((record) => record.eventId === 1000)
+      .sort((a, b) => b.timestampEpoch - a.timestampEpoch);
+    const view = renderTable({ result: summaries(records), onSelectRecord, selectedRecordId });
+    fireEvent.click(disclosure(/^Event ID 1000/));
+    return { errors, onSelectRecord, view };
+  }
+
+  it("selects an event when its row is clicked", () => {
+    const { errors, onSelectRecord } = expandedErrors();
+    fireEvent.click(itemRows()[1]);
+    expect(onSelectRecord).toHaveBeenCalledWith(errors[1].id);
+    expect(itemRows()[1]).toHaveAttribute("tabindex", "0");
+  });
+
+  it("selects the focused event with Enter or Space, and leaves the buttons' own keys alone", () => {
+    const { errors, onSelectRecord } = expandedErrors();
+    disclosure(/^Event ID 1000/).focus();
+    fireEvent.keyDown(document.activeElement!, { key: "Enter" });
+    // Enter on the disclosure button is the button's own: no record is selected.
+    expect(onSelectRecord).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    fireEvent.keyDown(document.activeElement!, { key: "Enter" });
+    expect(onSelectRecord).toHaveBeenLastCalledWith(errors[0].id);
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    fireEvent.keyDown(document.activeElement!, { key: " " });
+    expect(onSelectRecord).toHaveBeenLastCalledWith(errors[1].id);
+    expect(onSelectRecord).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the selected event with the selection triplet and aria-selected", () => {
+    const theme = getAllThemes()[0];
+    const visual = buildEvtxVisualTokens(theme);
+    const records = sampleRecords();
+    const selected = records.find((record) => record.eventId === 1000)!;
+    renderTable({ result: summaries(records), selectedRecordId: selected.id, theme });
+    fireEvent.click(disclosure(/^Event ID 1000/));
+    const rows = [...itemRows()];
+    const row = rows.find((r) => r.getAttribute("aria-selected") === "true")!;
+    expect(rows.filter((r) => r.getAttribute("aria-selected") === "true")).toHaveLength(1);
+    expect(within(row).getByTestId("evtx-grouped-item-message")).toHaveTextContent(selected.message);
+    expect(row.style.backgroundColor).toBe(visual.selection.background);
+    expect(row.style.color).toBe(visual.selection.foreground);
+    expect(row.style.boxShadow).toBe(`inset 3px 0 0 ${visual.selection.border}`);
+    const other = rows.find((r) => r !== row)!;
+    expect(other).toHaveAttribute("aria-selected", "false");
+    expect(other.style.boxShadow).toBe("");
   });
 });
 
@@ -473,7 +540,15 @@ describe.each(THEMES)("contrast in the %s theme", (_id, theme) => {
   function measure(expanded: boolean) {
     const result = everyLevel();
     const linked = new Set(result.summaries.flatMap((summary) => summary.recent.map((r) => r.id)));
-    renderTable({ result, theme, onShowAll: () => undefined, linkedRecordIds: linked });
+    // One expanded event is selected, so its text is measured on the selection background too.
+    const selected = result.summaries.find((summary) => summary.level === "Error")!.recent[0];
+    renderTable({
+      result,
+      theme,
+      onShowAll: () => undefined,
+      linkedRecordIds: linked,
+      selectedRecordId: selected.id,
+    });
     if (expanded) {
       for (const summary of result.summaries) {
         fireEvent.click(disclosure(new RegExp(`^Event ID ${summary.value}`)));
@@ -514,6 +589,7 @@ describe.each(THEMES)("contrast in the %s theme", (_id, theme) => {
       check(`header ${text.textContent}`, text, colorOf(text, theme), 4.5);
     }
     expect(itemRows().length).toBeGreaterThan(0);
+    expect([...itemRows()].filter((row) => row.getAttribute("aria-selected") === "true")).toHaveLength(1);
     for (const row of itemRows()) {
       for (const text of row.querySelectorAll<HTMLElement>("[data-evtx-grouped-text]")) {
         check(`item ${text.dataset.evtxGroupedText}`, text, colorOf(text, theme), 4.5);
@@ -615,7 +691,7 @@ describe("EvtxGroupedView", () => {
       act(() => vi.advanceTimersByTime(30));
       // 80 ms after the first change: the newest value has applied, although the stream went on.
       expect(groupRows()).toHaveLength(3);
-      expect(screen.getByRole("table")).toHaveAccessibleName(/^Grouped events, 3 groups/);
+      expect(screen.getByRole("grid")).toHaveAccessibleName(/^Grouped events, 3 groups/);
     } finally {
       vi.useRealTimers();
     }

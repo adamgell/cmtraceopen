@@ -386,7 +386,7 @@ test.describe("event-logs screenshots", () => {
   // action. The fixture has no correlation edges, so no event carries the Linked badge.
   test("event-logs grouped view", async ({ page }) => {
     await page.getByRole("tab", { name: "Grouped" }).click();
-    const grouped = page.getByRole("table", { name: /^Grouped events, [\d,]+ groups by Event ID$/ });
+    const grouped = page.getByRole("grid", { name: /^Grouped events, [\d,]+ groups by Event ID$/ });
     await expect(grouped).toBeVisible();
     // The fixture is a file set, so the time window is All and the trend spans the loaded events.
     await expect(grouped.getByRole("columnheader", { name: "All loaded trend" })).toBeVisible();

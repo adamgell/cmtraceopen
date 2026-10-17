@@ -139,8 +139,6 @@ function rowHeight(row: GroupedRow, heights: GroupedRowHeights): number {
   }
 }
 
-const isFocusable = (row: GroupedRow) => row.kind !== "item";
-
 /** Text colors for one surface: primary text and secondary text, both at 4.5:1 or better. */
 export interface GroupedSurface {
   background: string;
@@ -223,6 +221,14 @@ const useStyles = makeStyles({
       outlineStyle: "solid",
       outlineWidth: "2px",
       outlineColor: tokens.colorStrokeFocus2,
+    },
+  },
+  itemRow: {
+    ":focus-visible": {
+      outlineStyle: "solid",
+      outlineWidth: "2px",
+      outlineColor: tokens.colorStrokeFocus2,
+      outlineOffset: "-2px",
     },
   },
   showAll: {
@@ -360,6 +366,10 @@ export interface EvtxGroupedTableProps {
    * from a prefix would leave linked events unmarked. Omitted, no event is badged.
    */
   linkedRecordIds?: ReadonlySet<number>;
+  /** The selected record (the store's `selectedRecordId`, shared by every view). */
+  selectedRecordId?: number | null;
+  /** Selects an expanded event: clicking its row, or Enter or Space on it (spec 9). */
+  onSelectRecord?: (id: number) => void;
 }
 
 export function EvtxGroupedTable({
@@ -370,6 +380,8 @@ export function EvtxGroupedTable({
   theme,
   onShowAll,
   linkedRecordIds,
+  selectedRecordId = null,
+  onSelectRecord,
 }: EvtxGroupedTableProps) {
   const styles = useStyles();
   const visual = useMemo(() => buildEvtxVisualTokens(theme), [theme]);
@@ -438,13 +450,22 @@ export function EvtxGroupedTable({
     overscan: GROUPED_OVERSCAN,
   });
 
-  // The roving tab stop: the active control's row, else the first control.
+  // The roving tab stop: the active row, else the first row.
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const activeIndex = useMemo(() => {
     const index = activeKey === null ? undefined : indexByKey.get(activeKey);
-    if (index !== undefined && rows[index] && isFocusable(rows[index])) return index;
-    return rows.findIndex(isFocusable);
+    if (index !== undefined && rows[index]) return index;
+    return rows.length > 0 ? 0 : -1;
   }, [activeKey, indexByKey, rows]);
+
+  // What takes focus in a row: an expanded event's row itself, otherwise the row's button.
+  const focusTarget = useCallback((index: number): HTMLElement | null => {
+    const element = scrollerRef.current?.querySelector<HTMLElement>(`[data-index="${index}"]`);
+    if (!element) return null;
+    return element.dataset.evtxGroupedRow === "item"
+      ? element
+      : element.querySelector<HTMLElement>("button");
+  }, []);
 
   const focusRow = useCallback(
     (index: number) => {
@@ -452,16 +473,19 @@ export function EvtxGroupedTable({
       if (key === undefined) return;
       setActiveKey(key);
       virtualizer.scrollToIndex(index, { align: "auto" });
-      const focus = () =>
-        scrollerRef.current
-          ?.querySelector<HTMLElement>(`[data-index="${index}"] button`)
-          ?.focus();
-      const element = scrollerRef.current?.querySelector(`[data-index="${index}"] button`);
-      if (element) focus();
-      else if (typeof requestAnimationFrame === "function") requestAnimationFrame(focus);
+      const element = focusTarget(index);
+      if (element) element.focus();
+      else if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => focusTarget(index)?.focus());
+      }
     },
-    [rowKeys, virtualizer],
+    [focusTarget, rowKeys, virtualizer],
   );
+
+  const selectRecord = (index: number, id: number) => {
+    setActiveKey(rowKeys[index]);
+    onSelectRecord?.(id);
+  };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const rowElement =
@@ -471,34 +495,35 @@ export function EvtxGroupedTable({
     const current = rowElement ? Number(rowElement.dataset.index) : activeIndex;
     const row = rows[current];
     if (!row) return;
-    const step = (from: number, direction: 1 | -1): number => {
-      for (let index = from + direction; index >= 0 && index < rows.length; index += direction) {
-        if (isFocusable(rows[index])) return index;
-      }
-      return from;
-    };
     let target: number | null = null;
     switch (event.key) {
       case "ArrowDown":
-        target = step(current, 1);
+        target = Math.min(rows.length - 1, current + 1);
         break;
       case "ArrowUp":
-        target = step(current, -1);
+        target = Math.max(0, current - 1);
         break;
       case "Home":
-        target = rows.findIndex(isFocusable);
+        target = 0;
         break;
       case "End":
-        target = step(rows.length, -1);
+        target = rows.length - 1;
         break;
       case "ArrowRight":
         if (row.kind === "group" && !row.expanded) toggle(row.summary.key, true);
         break;
       case "ArrowLeft":
-        if (row.kind === "group" && row.expanded) toggle(row.summary.key, false);
-        else if (row.kind === "more") {
+        if (row.kind === "group") {
+          if (row.expanded) toggle(row.summary.key, false);
+        } else {
           target = indexByKey.get(`group:${row.summary.key}`) ?? null;
         }
+        break;
+      case "Enter":
+      case " ":
+        // A button's own Enter and Space click it; an expanded event's row selects its record.
+        if (row.kind !== "item") return;
+        selectRecord(current, row.record.id);
         break;
       default:
         return;
@@ -515,12 +540,11 @@ export function EvtxGroupedTable({
   const keyLabel = keyColumnLabel(field);
   const zoneLabel = timeZoneLabel(timeZoneMode);
   const virtualRows = virtualizer.getVirtualItems();
-  // The one tab stop must be in the DOM. When the active control has scrolled out of the rendered
-  // window, the first rendered control takes it, so Tab never skips the view.
+  // The one tab stop must be in the DOM. When the active row has scrolled out of the rendered
+  // window, the first rendered row takes it, so Tab never skips the view.
   const tabStop = virtualRows.some((virtualRow) => virtualRow.index === activeIndex)
     ? activeIndex
-    : (virtualRows.find((virtualRow) => rows[virtualRow.index] && isFocusable(rows[virtualRow.index]))
-        ?.index ?? activeIndex);
+    : (virtualRows[0]?.index ?? activeIndex);
 
   const headerCell = (label: string, width: number | null, hidden = false, alignEnd = false) => (
     <div
@@ -570,7 +594,7 @@ export function EvtxGroupedTable({
           cursor: "pointer",
         }}
       >
-        <div role="cell" style={{ width: `${COLUMN.chevron}px`, flexShrink: 0 }}>
+        <div role="gridcell" style={{ width: `${COLUMN.chevron}px`, flexShrink: 0 }}>
           <button
             type="button"
             className={styles.disclosure}
@@ -587,7 +611,7 @@ export function EvtxGroupedTable({
           </button>
         </div>
         <div
-          role="cell"
+          role="gridcell"
           style={{ width: `${COLUMN.level}px`, flexShrink: 0, display: "flex", justifyContent: "center" }}
         >
           <span
@@ -599,7 +623,7 @@ export function EvtxGroupedTable({
           </span>
         </div>
         <div
-          role="cell"
+          role="gridcell"
           data-evtx-grouped-text="id"
           style={{
             ...numeric,
@@ -613,7 +637,7 @@ export function EvtxGroupedTable({
           {idColumnValue(summary)}
         </div>
         <div
-          role="cell"
+          role="gridcell"
           data-evtx-grouped-text="key"
           title={keyColumnValue(summary)}
           style={{
@@ -626,7 +650,7 @@ export function EvtxGroupedTable({
           {keyColumnValue(summary)}
         </div>
         <div
-          role="cell"
+          role="gridcell"
           data-evtx-grouped-message=""
           data-evtx-grouped-text={summary.typicalMessage ? "message" : "no message"}
           title={summary.typicalMessage || undefined}
@@ -640,7 +664,7 @@ export function EvtxGroupedTable({
           {summary.typicalMessage || "(no message)"}
         </div>
         <div
-          role="cell"
+          role="gridcell"
           data-evtx-grouped-text="count"
           style={{
             ...numeric,
@@ -653,7 +677,7 @@ export function EvtxGroupedTable({
           {summary.count.toLocaleString()}
         </div>
         <div
-          role="cell"
+          role="gridcell"
           style={{ width: `${COLUMN.trend}px`, flexShrink: 0, position: "relative" }}
         >
           <TrendSparkline
@@ -664,7 +688,7 @@ export function EvtxGroupedTable({
           <span style={visuallyHidden}>{trendDescription(summary, windowLabel)}</span>
         </div>
         <div
-          role="cell"
+          role="gridcell"
           data-evtx-grouped-last-seen=""
           data-evtx-grouped-text="last seen"
           title={
@@ -695,41 +719,57 @@ export function EvtxGroupedTable({
     first: boolean,
     last: boolean,
     content: ReactNode,
-  ) => (
-    <div
-      key={rowKeys[index]}
-      role="row"
-      aria-rowindex={index + 2}
-      data-index={index}
-      data-evtx-grouped-row={row.kind}
-      data-group-value={row.summary.value}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        height: `${rowHeight(row, heights)}px`,
-        boxSizing: "border-box",
-        // Spec 8.8: the container's padding is 4px 0 6px 56px.
-        padding: `${first ? ITEMS_PADDING_TOP : 0}px 0 ${last ? ITEMS_PADDING_BOTTOM : 0}px ${ITEMS_INDENT}px`,
-        borderBottom: last ? `1px solid ${tokens.colorNeutralStroke2}` : undefined,
-        backgroundColor: palette.items.background,
-        color: palette.items.ink,
-        fontSize: `${rowFontSize}px`,
-        lineHeight: `${metrics.rowLineHeight}px`,
-      }}
-    >
+  ) => {
+    const item = row.kind === "item" ? row : null;
+    const selected = item !== null && item.record.id === selectedRecordId;
+    return (
       <div
-        role="cell"
-        aria-colspan={8}
-        style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%", minWidth: 0 }}
+        key={rowKeys[index]}
+        role="row"
+        aria-rowindex={index + 2}
+        // An expanded event is a selectable row (spec 9); it takes focus itself, as the table's do.
+        aria-selected={item === null ? undefined : selected}
+        tabIndex={item === null ? undefined : index === tabStop ? 0 : -1}
+        className={item === null ? undefined : styles.itemRow}
+        onFocus={item === null ? undefined : () => setActiveKey(rowKeys[index])}
+        onClick={item === null ? undefined : () => selectRecord(index, item.record.id)}
+        data-index={index}
+        data-evtx-grouped-row={row.kind}
+        data-group-value={row.summary.value}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          height: `${rowHeight(row, heights)}px`,
+          boxSizing: "border-box",
+          // Spec 8.8: the container's padding is 4px 0 6px 56px.
+          padding: `${first ? ITEMS_PADDING_TOP : 0}px 0 ${last ? ITEMS_PADDING_BOTTOM : 0}px ${ITEMS_INDENT}px`,
+          borderBottom: last ? `1px solid ${tokens.colorNeutralStroke2}` : undefined,
+          // Spec 6.2 / Q-1: a selected row takes the selection triplet, as the table's does.
+          backgroundColor: selected ? visual.selection.background : palette.items.background,
+          boxShadow: selected ? `inset 3px 0 0 ${visual.selection.border}` : undefined,
+          color: selected ? visual.selection.foreground : palette.items.ink,
+          cursor: item === null ? undefined : "pointer",
+          fontSize: `${rowFontSize}px`,
+          lineHeight: `${metrics.rowLineHeight}px`,
+        }}
       >
-        {content}
+        <div
+          role="gridcell"
+          aria-colspan={8}
+          style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%", minWidth: 0 }}
+        >
+          {content}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderItem = (row: Extract<GroupedRow, { kind: "item" }>, index: number) => {
     const { record } = row;
     const linked = linkedRecordIds?.has(record.id) ?? false;
+    const selected = record.id === selectedRecordId;
+    const ink = selected ? visual.selection.foreground : palette.items.ink;
+    const secondary = selected ? visual.selection.foreground : palette.items.secondary;
     return containerRow(
       row,
       index,
@@ -742,7 +782,7 @@ export function EvtxGroupedTable({
             ...numeric,
             flexShrink: 0,
             whiteSpace: "nowrap",
-            color: palette.items.secondary,
+            color: secondary,
           }}
         >
           {record.timestampEpoch > 0
@@ -757,7 +797,7 @@ export function EvtxGroupedTable({
             ...ellipsis,
             flex: "1 1 auto",
             fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            color: record.message.trim() ? palette.items.ink : palette.items.secondary,
+            color: record.message.trim() ? ink : secondary,
           }}
         >
           {record.message.trim() ? record.message : "(no message)"}
@@ -808,7 +848,7 @@ export function EvtxGroupedTable({
 
   return (
     <div
-      role="table"
+      role="grid"
       aria-label={`Grouped events, ${plural(summaries.length, "group", "groups")} by ${EVTX_GROUP_LABELS[field]}`}
       aria-rowcount={rows.length + 1}
       onKeyDown={onKeyDown}
@@ -930,6 +970,8 @@ export function EvtxGroupedView({ records, nowEpoch }: EvtxGroupedViewProps) {
   const coverageGaps = useEvtxStore((s) => s.coverageGaps);
   const tailCoverageGaps = useEvtxStore((s) => s.tailCoverageGaps);
   const setFilterEventIds = useEvtxStore((s) => s.setFilterEventIds);
+  const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
+  const setSelectedRecordId = useEvtxStore((s) => s.setSelectedRecordId);
   const setActiveView = useEvtxLayoutStore((s) => s.setActiveView);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
@@ -1010,6 +1052,8 @@ export function EvtxGroupedView({ records, nowEpoch }: EvtxGroupedViewProps) {
       metrics={metrics}
       theme={theme}
       onShowAll={showAll}
+      selectedRecordId={selectedRecordId}
+      onSelectRecord={setSelectedRecordId}
     />
   );
 }
