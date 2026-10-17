@@ -51,9 +51,6 @@ interface EvtxInsightsRailProps {
 /** Tabs the rail can show today, in order. Phase 10c adds "chains" between the two. */
 const RAIL_TABS: readonly EvtxRailTabId[] = ["insights", "details"];
 
-/** Record summaries publish at most once per this long (spec section 11, the 75 ms precedent). */
-export const INSIGHTS_DEBOUNCE_MS = DERIVATION_THROTTLE_MS;
-
 /**
  * The one event ID a quick filter is showing, or null: the applied filter is in Event IDs mode, shows
  * what matches, and names exactly one ID (a range or a list names more, and an invalid one none).
@@ -163,7 +160,7 @@ export function EvtxInsightsRail({
   // Record-derived cards are skipped while the rail cannot be seen. Everything derived from the
   // records (cards, Details order, Same ID series) follows the debounced set (spec section 11).
   const insightsActive = railVisible && activeTab === "insights";
-  const debouncedRecords = useThrottledValue(records, INSIGHTS_DEBOUNCE_MS);
+  const debouncedRecords = useThrottledValue(records, DERIVATION_THROTTLE_MS);
   const cardRecords = insightsActive ? debouncedRecords : NO_RECORDS;
 
   // A finding from the previous build is not evidence for the records now shown, so the Details
