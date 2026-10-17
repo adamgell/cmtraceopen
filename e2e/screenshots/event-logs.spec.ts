@@ -252,8 +252,10 @@ test.describe("event-logs screenshots", () => {
     // pump a subset the captured engine replies cannot answer (see the stale-capture guard above).
     const histogram = page.locator('[data-evtx-region="histogram"]');
     await expect(histogram).toBeVisible();
+    // The store's default zone mode is local and this file pins the browser's zone to UTC, so the zone
+    // reads as the offset the app prints for local time, "UTC+00:00", not the word "UTC".
     await expect(histogram).toHaveAccessibleName(
-      /^Events per 20 minutes over Oct 6 10:20.Oct 7 10:20 \(UTC\), stacked by level$/,
+      /^Events per 20 minutes over Oct 6 10:20.Oct 7 10:20 \(UTC\+00:00\), stacked by level$/,
     );
     await expect(histogram.locator("[data-evtx-bucket]")).toHaveCount(72);
     const plotBox = await histogram.getByRole("slider", { name: "Time range" }).boundingBox();

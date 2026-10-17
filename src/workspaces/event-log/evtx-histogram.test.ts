@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isWithinTimeRange } from "./evtx-filter";
 import {
   HISTOGRAM_BAR_AREA_PX,
@@ -544,6 +544,20 @@ describe("text", () => {
     expect(describeFigure(histogram, "utc")).toBe(
       `Events per 20 minutes over Oct 6 10:20${TIME_RANGE_SEPARATOR}Oct 7 10:20 (UTC), stacked by level`,
     );
+  });
+
+  it("reads a zero-offset local zone as UTC+00:00, which is what the capture's figure name must match", () => {
+    // The screenshot spec leaves the store in local mode and pins the browser zone to UTC (e2e
+    // event-logs.spec.ts), so the figure's name ends with the offset form, not the word UTC.
+    const spy = vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(0);
+    try {
+      const histogram = buildHistogram([rec(utc(10, 6, 10, 20, 47)), rec(utc(10, 7, 10, 19, 59))], "local");
+      expect(describeFigure(histogram, "local")).toMatch(/ \(UTC\+00:00\), stacked by level$/);
+      expect(describeFigure(histogram, "local")).not.toMatch(/\(UTC\)/);
+      expect(describeFigure(buildHistogram([rec(utc(10, 6, 10, 20, 47))], "utc"), "utc")).toMatch(/ \(UTC\), stacked by level$/);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("writes the untimed and coverage notes, singular for one", () => {
