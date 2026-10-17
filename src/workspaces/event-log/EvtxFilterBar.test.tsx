@@ -704,6 +704,44 @@ describe("More filters", () => {
     fireEvent.change(quick, { target: { value: "1000" } });
     expect(popover.queryByRole("alert")).toBeNull();
   });
+
+  it("offers the Field query grammar and says politely why a field query shows nothing", async () => {
+    seed();
+    render(<EvtxFilterBar nowEpoch={0} />);
+    const popover = within(await openPopover());
+    const warning = buildEvtxVisualTokens(
+      getAllThemes().find((theme) => theme.id === useUiStore.getState().themeId)!,
+    ).levels.Warning.textColor;
+
+    fireEvent.click(popover.getByRole("combobox", { name: "Quick filter matching grammar" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Field query" }));
+    expect(useEvtxStore.getState().quickFilter.mode).toBe("fieldQuery");
+
+    const query = popover.getByRole("textbox", { name: "Quick filter query" });
+    expect(query).toHaveAttribute("placeholder", "Field query (e.g. id:76 level:error)");
+    // Mounted empty before there is anything to say, so the message is announced when it appears.
+    const status = popover.getByRole("status");
+    expect(status).toBeEmptyDOMElement();
+    expect(query).toHaveAttribute("aria-invalid", "false");
+    expect(query).not.toHaveAccessibleDescription();
+
+    fireEvent.change(query, { target: { value: "level:erro" } });
+    const message =
+      'level: takes critical, error, warning, info, information or verbose, not "erro".';
+    // The operator's text stays as typed.
+    expect(useEvtxStore.getState().quickFilter.query).toBe("level:erro");
+    expect(query).toHaveAttribute("aria-invalid", "true");
+    expect(query).toHaveAccessibleDescription(message);
+    expect(popover.getByRole("status")).toBe(status);
+    expect(status).toHaveTextContent(message);
+    expect(status.style.color).toBe(hexToRgb(warning));
+    // Polite, not an assertive alert that would interrupt on every key.
+    expect(popover.queryByRole("alert")).toBeNull();
+
+    fireEvent.change(query, { target: { value: "level:error" } });
+    expect(status).toBeEmptyDOMElement();
+    expect(query).toHaveAttribute("aria-invalid", "false");
+  });
 });
 
 function hexToRgb(hex: string): string {

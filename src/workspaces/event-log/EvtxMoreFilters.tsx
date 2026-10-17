@@ -23,6 +23,7 @@ import {
   EVTX_QUICK_FILTER_ACTIONS,
   EVTX_QUICK_FILTER_MODES,
   EVTX_QUICK_FILTER_SCOPES,
+  fieldQueryError,
   parseEventIdSelectors,
   type EvtxQuickFilterAction,
   type EvtxQuickFilterMode,
@@ -47,8 +48,7 @@ const SORT_FIELD_LABELS: Record<EvtxSortField, string> = {
 
 const SORT_FIELDS: EvtxSortField[] = ["time", "eventId", "level", "provider", "channel"];
 
-// Records, so a mode added later (the field grammar in Phase 5b, #833) fails to compile until it
-// has a label here.
+// Records, so a mode added later fails to compile until it has a label here.
 const QUICK_FILTER_MODE_LABELS: Record<EvtxQuickFilterMode, string> = {
   oneString: "One string",
   multipleWords: "Any words",
@@ -56,7 +56,18 @@ const QUICK_FILTER_MODE_LABELS: Record<EvtxQuickFilterMode, string> = {
   allWords: "All words",
   allStrings: "All strings",
   eventIds: "Event IDs",
+  fieldQuery: "Field query",
 };
+const QUICK_FILTER_PLACEHOLDERS: Record<EvtxQuickFilterMode, string> = {
+  oneString: "Quick filter...",
+  multipleWords: "Quick filter...",
+  multipleStrings: "Quick filter...",
+  allWords: "Quick filter...",
+  allStrings: "Quick filter...",
+  eventIds: "Quick IDs (e.g. 4624-4626)",
+  fieldQuery: "Field query (e.g. id:76 level:error)",
+};
+const QUICK_FIELD_QUERY_ERROR_ID = "quick-field-query-error";
 const QUICK_FILTER_SCOPE_LABELS: Record<EvtxQuickFilterScope, string> = {
   allColumns: "All columns",
   visibleColumns: "Visible columns",
@@ -116,6 +127,13 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
     () => quickFilter.mode === "eventIds" && parseEventIdSelectors(quickFilter.query).invalid,
     [quickFilter.mode, quickFilter.query],
   );
+  // A field query that does not parse shows no events (evtx-filter.ts), so the reason is shown
+  // beside the query, and the query is left as the operator typed it.
+  const quickFieldQueryError = useMemo(
+    () => (quickFilter.mode === "fieldQuery" ? fieldQueryError(quickFilter.query) : null),
+    [quickFilter.mode, quickFilter.query],
+  );
+  const quickQueryInvalid = quickEventIdInputInvalid || quickFieldQueryError !== null;
   const activeCount = moreFiltersActiveCount(useFilterChips().chips);
 
   const savedFilters = useSavedFilterStore((s) => s.savedFilters);
@@ -248,17 +266,21 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
               input={{ style: { fontSize: controlFontSize } }}
               value={quickFilter.query}
               onChange={(_, data) => setQuickFilter({ ...quickFilter, query: data.value })}
-              placeholder={
-                quickFilter.mode === "eventIds" ? "Quick IDs (e.g. 4624-4626)" : "Quick filter..."
-              }
+              placeholder={QUICK_FILTER_PLACEHOLDERS[quickFilter.mode]}
               aria-label="Quick filter query"
-              aria-invalid={quickEventIdInputInvalid}
-              aria-describedby={quickEventIdInputInvalid ? "quick-event-id-filter-error" : undefined}
+              aria-invalid={quickQueryInvalid}
+              aria-describedby={
+                quickEventIdInputInvalid
+                  ? "quick-event-id-filter-error"
+                  : quickFieldQueryError
+                    ? QUICK_FIELD_QUERY_ERROR_ID
+                    : undefined
+              }
               title={quickEventIdInputInvalid ? EVENT_ID_VALIDATION_HELP : undefined}
               size="small"
               style={{
                 width: "200px",
-                borderColor: quickEventIdInputInvalid ? invalidColor : undefined,
+                borderColor: quickQueryInvalid ? invalidColor : undefined,
               }}
             />
             {quickEventIdInputInvalid && (
@@ -270,6 +292,16 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
                 style={invalidStyle}
               >
                 Invalid quick Event IDs
+              </span>
+            )}
+            {/*
+              Mounted for the whole time the mode is Field query, and empty while the query parses,
+              so the message is announced politely when it appears. Its text changes as the
+              operator types, which an assertive alert would interrupt with on every key.
+            */}
+            {quickFilter.mode === "fieldQuery" && (
+              <span id={QUICK_FIELD_QUERY_ERROR_ID} role="status" style={invalidStyle}>
+                {quickFieldQueryError?.message ?? ""}
               </span>
             )}
           </span>

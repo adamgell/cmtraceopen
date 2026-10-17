@@ -18,6 +18,11 @@ import {
   type EvtxColumnId,
 } from "./evtx-columns";
 import { eventDateKey, type EvtxTimeZoneMode } from "./evtx-time";
+import {
+  parseFieldQuery,
+  type EvtxQueryError,
+  type EvtxQueryField,
+} from "./evtx-query-grammar";
 
 export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";
 export type EvtxSortDirection = "asc" | "desc";
@@ -121,14 +126,18 @@ export function sortRecords(
   });
 }
 
-/** The six quick-filter grammars supported by the event viewer. */
+/**
+ * The quick-filter grammars supported by the event viewer. `fieldQuery` is the field-scoped search
+ * grammar (`evtx-query-grammar.ts`), the same one the search box speaks.
+ */
 export type EvtxQuickFilterMode =
   | "oneString"
   | "multipleWords"
   | "multipleStrings"
   | "allWords"
   | "allStrings"
-  | "eventIds";
+  | "eventIds"
+  | "fieldQuery";
 
 /** Which rendered event columns a quick filter searches. */
 export type EvtxQuickFilterScope = "allColumns" | "visibleColumns";
@@ -143,6 +152,7 @@ export const EVTX_QUICK_FILTER_MODES: readonly EvtxQuickFilterMode[] = [
   "allWords",
   "allStrings",
   "eventIds",
+  "fieldQuery",
 ];
 export const EVTX_QUICK_FILTER_SCOPES: readonly EvtxQuickFilterScope[] = [
   "allColumns",
@@ -280,6 +290,7 @@ export interface VisibleRecordsInput {
   selectedChannels: Set<string>;
   filterLevels: Set<EvtxLevel>;
   filterEventIds: string;
+  /** The search box's text, read as a field query (`compileFieldQuery`). */
   filterSearch: string;
   quickFilter?: EvtxQuickFilter;
   /** The ordered column ids currently shown by the grid. */
@@ -323,6 +334,187 @@ function searchableValues(
   return values.map((value) => normalizeText(value, caseSensitive)).filter(Boolean);
 }
 
+/** The fields whose term is a substring of one record property. */
+type EvtxQueryTextField = Exclude<EvtxQueryField, "id" | "level">;
+
+function queryFieldText(record: EvtxRecord, field: EvtxQueryTextField): string {
+  switch (field) {
+    case "provider":
+      return record.provider;
+    case "channel":
+      return record.channel;
+    case "computer":
+      return record.computer;
+    case "source":
+      return record.sourceLabel;
+  }
+}
+
+/** One field-query term with its value checked, and its text normalized for the case rule. */
+type EvtxCompiledTerm = { negated: boolean } & (
+  | { kind: "text"; needle: string }
+  | { kind: "id"; selectors: EvtxEventIdSelectorParseResult }
+  | { kind: "level"; levels: ReadonlySet<EvtxLevel> }
+  | { kind: "textField"; field: EvtxQueryTextField; needle: string }
+  /** `name` is lower case: EventData names match case-insensitively, like the field names. */
+  | { kind: "data"; name: string; needle: string }
+);
+
+/** A field query ready to test records with: every clause must match, any one term in a clause. */
+export interface EvtxCompiledFieldQuery {
+  clauses: EvtxCompiledTerm[][];
+  caseSensitive: boolean;
+}
+
+export type EvtxFieldQueryResult =
+  | { ok: true; query: EvtxCompiledFieldQuery }
+  | { ok: false; error: EvtxQueryError };
+
+/** Each level by name, case-insensitively, and "info", the label the filter row's toggle shows. */
+function levelForQueryName(name: string): EvtxLevel | undefined {
+  const lower = name.toLowerCase();
+  if (lower === "info") return "Information";
+  return EVTX_LEVELS.find((level) => level.toLowerCase() === lower);
+}
+
+/**
+ * Gives each term of a field query its meaning and checks its value.
+ *
+ * - `id:` reads its value with the Event ID grammar (`parseEventIdSelectors`): a comma list of IDs
+ *   and inclusive ranges, matched exactly, as the Event IDs quick-filter mode does.
+ * - `level:` takes a comma list of level names, mapped through `EVTX_LEVELS`.
+ * - `provider:`, `channel:`, `computer:`, `source:` (the record's source label) and
+ *   `data.<Name>:` (the record's EventData field of that name) match a substring, case-insensitive
+ *   unless `caseSensitive`, as the quick filter's text modes do.
+ * - Free text is a substring too; which values it searches is the caller's (`matchesFieldQuery`).
+ *
+ * The first malformed term fails the whole query: an invalid query never filters on what is left.
+ */
+export function compileFieldQuery(text: string, caseSensitive: boolean): EvtxFieldQueryResult {
+  const parsed = parseFieldQuery(text);
+  if (!parsed.ok) return parsed;
+  const clauses: EvtxCompiledTerm[][] = [];
+  for (const clause of parsed.query.clauses) {
+    const compiled: EvtxCompiledTerm[] = [];
+    for (const term of clause) {
+      const { negated, value } = term;
+      if (term.kind === "text") {
+        compiled.push({ kind: "text", negated, needle: normalizeText(value, caseSensitive) });
+      } else if (term.kind === "data") {
+        compiled.push({
+          kind: "data",
+          negated,
+          name: term.name.toLowerCase(),
+          needle: normalizeText(value, caseSensitive),
+        });
+      } else if (term.field === "id") {
+        const selectors = parseEventIdSelectors(value);
+        if (selectors.invalid || selectors.selectors.length === 0) {
+          return {
+            ok: false,
+            error: {
+              position: term.valuePosition,
+              message: `id: takes Event IDs and ranges from 0 to ${MAX_EVENT_ID}, as in id:4624,4625 or id:4624-4634, not "${value}".`,
+            },
+          };
+        }
+        compiled.push({ kind: "id", negated, selectors });
+      } else if (term.field === "level") {
+        const levels = new Set<EvtxLevel>();
+        let offset = 0;
+        for (const entry of value.split(",")) {
+          const name = entry.trim();
+          const entryPosition = term.valuePosition + offset + (entry.length - entry.trimStart().length);
+          offset += entry.length + 1;
+          if (!name) continue;
+          const level = levelForQueryName(name);
+          if (!level) {
+            return {
+              ok: false,
+              error: {
+                position: entryPosition,
+                message: `level: takes critical, error, warning, info, information or verbose, not "${name}".`,
+              },
+            };
+          }
+          levels.add(level);
+        }
+        if (levels.size === 0) {
+          return { ok: false, error: { position: term.position, message: "level: needs a value." } };
+        }
+        compiled.push({ kind: "level", negated, levels });
+      } else {
+        compiled.push({
+          kind: "textField",
+          negated,
+          field: term.field,
+          needle: normalizeText(value, caseSensitive),
+        });
+      }
+    }
+    clauses.push(compiled);
+  }
+  return { ok: true, query: { clauses, caseSensitive } };
+}
+
+/** The first problem in a field query for the operator to read, or null when there is none. */
+export function fieldQueryError(text: string): EvtxQueryError | null {
+  if (!text.trim()) return null;
+  const result = compileFieldQuery(text, false);
+  return result.ok ? null : result.error;
+}
+
+function termMatches(
+  record: EvtxRecord,
+  term: EvtxCompiledTerm,
+  caseSensitive: boolean,
+  matchesText: (needle: string) => boolean
+): boolean {
+  switch (term.kind) {
+    case "text":
+      return matchesText(term.needle);
+    case "id":
+      return eventIdMatchesSelectors(record.eventId, term.selectors);
+    case "level":
+      return term.levels.has(record.level);
+    case "textField":
+      return normalizeText(queryFieldText(record, term.field), caseSensitive).includes(term.needle);
+    case "data":
+      // A record without the field does not match, so a negated term keeps it.
+      return record.eventData.some(
+        (field) =>
+          field.name.toLowerCase() === term.name &&
+          normalizeText(field.value, caseSensitive).includes(term.needle)
+      );
+  }
+}
+
+/** Tests a record against a compiled field query; `matchesText` decides what free text searches. */
+function matchesFieldQuery(
+  record: EvtxRecord,
+  query: EvtxCompiledFieldQuery,
+  matchesText: (needle: string) => boolean
+): boolean {
+  return query.clauses.every((clause) =>
+    clause.some((term) => {
+      const matched = termMatches(record, term, query.caseSensitive, matchesText);
+      return term.negated ? !matched : matched;
+    })
+  );
+}
+
+/**
+ * The search box's free text: a case-insensitive substring of the message or the provider, the
+ * rule the box had before it spoke the field grammar. Lowered once per record, on first use.
+ */
+function searchBoxText(record: EvtxRecord): (needle: string) => boolean {
+  let message: string | undefined;
+  let provider: string | undefined;
+  return (needle) =>
+    (message ??= record.message.toLocaleLowerCase()).includes(needle) ||
+    (provider ??= record.provider.toLocaleLowerCase()).includes(needle);
+}
+
 /** True when a record's quick-filter grammar matches at least one searched value. */
 export function matchesQuickFilter(
   record: EvtxRecord,
@@ -330,7 +522,8 @@ export function matchesQuickFilter(
   visibleColumns?: readonly EvtxColumnId[],
   timeZoneMode: EvtxTimeZoneMode = "local",
   parsedEventIdSelectors?: EvtxEventIdSelectorParseResult,
-  discoveredColumns?: readonly EvtxColumnId[]
+  discoveredColumns?: readonly EvtxColumnId[],
+  compiledFieldQuery?: EvtxFieldQueryResult
 ): boolean {
   const query = quickFilter.query.trim();
   if (!query) return false;
@@ -340,6 +533,25 @@ export function matchesQuickFilter(
       record.eventId,
       parsedEventIdSelectors ?? parseEventIdSelectors(query)
     );
+  }
+
+  if (quickFilter.mode === "fieldQuery") {
+    const compiled = compiledFieldQuery ?? compileFieldQuery(query, quickFilter.caseSensitive);
+    if (!compiled.ok) return false;
+    // Free text searches what the other text modes search: the scoped columns, plus EventData
+    // for all columns. A field term names its field, so the scope does not apply to it.
+    let values: string[] | undefined;
+    return matchesFieldQuery(record, compiled.query, (needle) => {
+      values ??= searchableValues(
+        record,
+        quickFilter.scope,
+        visibleColumns,
+        quickFilter.caseSensitive,
+        timeZoneMode,
+        discoveredColumns
+      );
+      return values.some((value) => value.includes(needle));
+    });
   }
 
   const values = searchableValues(
@@ -395,6 +607,10 @@ export function recordMatchesVisibleFilter(
     eventIdSelectors?: EvtxEventIdSelectorParseResult;
     quickEventIdSelectors?: EvtxEventIdSelectorParseResult;
     quickFilterColumns?: readonly EvtxColumnId[];
+    /** `filterSearch` compiled once by selectVisibleRecords for the whole pass. */
+    searchQuery?: EvtxFieldQueryResult;
+    /** A `fieldQuery` quick filter compiled once by selectVisibleRecords for the whole pass. */
+    quickFieldQuery?: EvtxFieldQueryResult;
     timeWindow?: EvtxTimeWindow;
     timeZoneMode?: EvtxTimeZoneMode;
     nowEpoch?: number;
@@ -416,13 +632,14 @@ export function recordMatchesVisibleFilter(
   ) {
     return false;
   }
-  const search = input.filterSearch.trim().toLocaleLowerCase();
-  if (
-    search &&
-    !record.message.toLocaleLowerCase().includes(search) &&
-    !record.provider.toLocaleLowerCase().includes(search)
-  ) {
-    return false;
+  const search =
+    input.searchQuery ??
+    (input.filterSearch.trim() ? compileFieldQuery(input.filterSearch, false) : undefined);
+  if (search) {
+    // An invalid search matches nothing, and the search box says why. Dropping the bad term and
+    // filtering on the rest would present a partial filter as the operator's.
+    if (!search.ok) return false;
+    if (!matchesFieldQuery(record, search.query, searchBoxText(record))) return false;
   }
   const quickFilter = input.quickFilter;
   if (!quickFilter || !quickFilter.query.trim()) return true;
@@ -435,13 +652,21 @@ export function recordMatchesVisibleFilter(
   ) {
     return quickFilter.action === "hide";
   }
+  const quickFieldQuery =
+    quickFilter.mode === "fieldQuery"
+      ? input.quickFieldQuery ?? compileFieldQuery(quickFilter.query, quickFilter.caseSensitive)
+      : undefined;
+  // An invalid field query shows nothing, for a hide rule as well: hiding nothing would show every
+  // record under an exclusion that never applied, which reads as a complete result.
+  if (quickFieldQuery && !quickFieldQuery.ok) return false;
   const matched = matchesQuickFilter(
     record,
     quickFilter,
     input.visibleColumns,
     input.timeZoneMode,
     input.quickEventIdSelectors,
-    input.quickFilterColumns
+    input.quickFilterColumns,
+    quickFieldQuery
   );
   return quickFilter.action === "hide" ? !matched : matched;
 }
@@ -471,6 +696,13 @@ export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
         ? parseEventIdSelectors(input.quickFilter.query)
         : undefined,
     quickFilterColumns,
+    searchQuery: input.filterSearch.trim()
+      ? compileFieldQuery(input.filterSearch, false)
+      : undefined,
+    quickFieldQuery:
+      input.quickFilter?.mode === "fieldQuery" && input.quickFilter.query.trim()
+        ? compileFieldQuery(input.quickFilter.query, input.quickFilter.caseSensitive)
+        : undefined,
   };
   return input.records.filter((record) => recordMatchesVisibleFilter(record, predicateInput));
 }
