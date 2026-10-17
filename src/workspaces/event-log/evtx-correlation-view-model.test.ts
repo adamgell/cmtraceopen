@@ -33,6 +33,8 @@ import {
   reconcileSelection,
   spanText,
   whyRows,
+  NOT_LINKED_LABEL,
+  NO_LOADED_LINK_LABEL,
   UNLOADED_ENTRY,
   UNPLACED_ENTRY,
   UNTITLED_CHAIN,
@@ -51,6 +53,8 @@ import {
 } from "./unified-timeline";
 
 const rid = (n: number) => `source4:Live|machine10:DESKTOP-01|channel6:System|record${n}`;
+/** Edges complete and nothing narrowed: the only state in which "Not linked" may be said. */
+const VIEW = { edgeInputComplete: true, narrowed: false };
 /** What no string may say unless the entry is proven unplaced (the scan finished, on a complete list). */
 const NO_UNPROVEN_CLAIM = /not placed|no timeline position|without a timeline position|no timestamp/i;
 
@@ -392,7 +396,7 @@ describe("buildChainPlot", () => {
   it("draws a real exact pair as two markers on one lane joined by one exact connector backed by evidence", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 6_000)];
     const chain = chainOf(fixtureEdges("exactPair"), items);
-    const plot = buildChainPlot({ chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
     expect(plot.members.map((m) => m.id)).toEqual([rid(1), rid(2)]);
     expect(plot.lanes).toHaveLength(1);
     expect(plot.connectors).toHaveLength(1);
@@ -412,7 +416,7 @@ describe("buildChainPlot", () => {
     ];
     const chain = chainOf(edges, items);
     expect(chain.strength).toBe("candidate");
-    const plot = buildChainPlot({ chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
     expect(plot.connectors.map((c) => `${c.left}>${c.right}:${c.strength}`)).toEqual([
       `${rid(1)}>${rid(2)}:exact`,
       `${rid(2)}>${rid(3)}:candidate`,
@@ -423,7 +427,7 @@ describe("buildChainPlot", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 1_000)];
     const chain = chainOf(fixtureEdges("secondaryPair"), items);
     expect(chain.strength).toBe("candidate");
-    const plot = buildChainPlot({ chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
     expect(plot.connectors.map((c) => c.strength)).toEqual(["candidate"]);
     expect(plot.connectors[0]!.evidence.length).toBeGreaterThan(0);
   });
@@ -432,7 +436,7 @@ describe("buildChainPlot", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 1_000), eventItem(3, T0 + 2_000)];
     const chain = chainOf(fixtureEdges("group3"), items);
     expect(chain.strength).toBe("ambiguous");
-    const plot = buildChainPlot({ chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
     expect(plot.members).toHaveLength(3);
     expect(plot.connectors).toEqual([]);
     expect(plot.undrawnEdges).toEqual([]);
@@ -442,7 +446,7 @@ describe("buildChainPlot", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 1_000)];
     const chain = chainOf(fixtureEdges("gappedPair"), items);
     expect(chain.strength).toBe("coverageBlocked");
-    const plot = buildChainPlot({ chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
     expect(plot.members).toHaveLength(2);
     expect(plot.connectors).toEqual([]);
   });
@@ -450,7 +454,7 @@ describe("buildChainPlot", () => {
   it("does not draw an exact edge that has no evidence row, and says so", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 1_000)];
     const chain = chainOf([synthetic("e1", rid(1), rid(2), "exact", { evidence: [] })], items);
-    const plot = buildChainPlot({ chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
     expect(plot.connectors).toEqual([]);
     expect(plot.undrawnEdges).toEqual([
       { left: rid(1), right: rid(2), strength: "exact", reason: "noEvidence" },
@@ -470,7 +474,7 @@ describe("buildChainPlot", () => {
       ],
       items,
     );
-    const plot = buildChainPlot({ chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
     expect(plot.connectors).toEqual([]);
     expect(plot.undrawnEdges[0]?.reason).toBe("noEvidence");
   });
@@ -478,7 +482,7 @@ describe("buildChainPlot", () => {
   it("gives a member with no item no position and no connector, and counts it", () => {
     const items = [eventItem(1, T0)];
     const chain = chainOf([synthetic("e1", rid(1), rid(2), "exact")], items);
-    const plot = buildChainPlot({ chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
     expect(plot.members.map((m) => m.id)).toEqual([rid(1)]);
     expect(plot.connectors).toEqual([]);
     expect(plot.undrawnEdges).toEqual([
@@ -489,7 +493,7 @@ describe("buildChainPlot", () => {
 
   it("draws an empty plot, with the members counted, when no member is placed", () => {
     const chain = chainOf(fixtureEdges("exactPair"), []);
-    const plot = buildChainPlot({ chain, itemsById: new Map() });
+    const plot = buildChainPlot({ ...VIEW, chain, itemsById: new Map() });
     expect(plot.window).toBeNull();
     expect(plot.members).toEqual([]);
     expect(plot.lanes).toEqual([]);
@@ -502,7 +506,7 @@ describe("buildChainPlot", () => {
     const items = [eventItem(1, T0, "info", { eventId: 76 }), eventItem(2, T0 + 60_000, "info", { eventId: 72 })];
     const chain = chainOf(fixtureEdges("exactPair"), items);
     const window = { startMs: T0 + 3_000, endMs: T0 + 50_000 };
-    const plot = buildChainPlot({ chain, itemsById: mapOf(items), window });
+    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items), window });
     const [before, after] = plot.members;
     expect(before).toMatchObject({ id: rid(1) });
     expect(before!.placement).toEqual({ x: 0, pinned: "before", outsideMs: 3_000 });
@@ -515,7 +519,7 @@ describe("buildChainPlot", () => {
 
   it("gives an inside member no pin label", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 6_000)];
-    const plot = buildChainPlot({ chain: chainOf(fixtureEdges("exactPair"), items), itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...VIEW, chain: chainOf(fixtureEdges("exactPair"), items), itemsById: mapOf(items) });
     for (const marker of plot.members) {
       expect(marker.pinLabel).toBeNull();
       expect(marker.placement.pinned).toBeNull();
@@ -524,7 +528,7 @@ describe("buildChainPlot", () => {
 
   it("uses the default window and its five ticks", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 100_000)];
-    const plot = buildChainPlot({ chain: chainOf(fixtureEdges("exactPair"), items), itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...VIEW, chain: chainOf(fixtureEdges("exactPair"), items), itemsById: mapOf(items) });
     expect(plot.window).toEqual({ startMs: T0 - 25_000, endMs: T0 + 125_000 });
     expect(plot.ticks).toHaveLength(5);
     expect(plot.ticks[0]).toBe(T0 - 25_000);
@@ -542,7 +546,7 @@ describe("buildChainPlot", () => {
 
     it("draws the first markers in time order and counts the rest", () => {
       const { items, chain } = manyMembers(CORRELATION_MARKER_CAP + 30);
-      const plot = buildChainPlot({ chain, itemsById: mapOf(items) });
+      const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
       expect(plot.members).toHaveLength(CORRELATION_MARKER_CAP);
       expect(plot.omittedMarkers).toBe(30);
       expect(plot.members.map((m) => m.sequenceIndex)).toEqual(
@@ -552,7 +556,7 @@ describe("buildChainPlot", () => {
 
     it("does not draw a connector to a marker the cap left out, and reports why", () => {
       const { items, chain } = manyMembers(5);
-      const plot = buildChainPlot({ chain, itemsById: mapOf(items), markerCap: 3 });
+      const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items), markerCap: 3 });
       expect(plot.members).toHaveLength(3);
       expect(plot.connectors).toHaveLength(2);
       expect(plot.undrawnEdges.map((edge) => edge.reason)).toEqual(["beyondMarkerCap", "beyondMarkerCap"]);
@@ -560,7 +564,7 @@ describe("buildChainPlot", () => {
 
     it("counts the connectors the connector cap left out", () => {
       const { items, chain } = manyMembers(6);
-      const plot = buildChainPlot({ chain, itemsById: mapOf(items), connectorCap: 2 });
+      const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items), connectorCap: 2 });
       expect(plot.connectors).toHaveLength(2);
       expect(plot.omittedConnectors).toBe(3);
     });
@@ -572,14 +576,14 @@ describe("buildChainPlot", () => {
     const stray = eventItem(9, T0 + 3_000, "warning");
 
     it("draws nothing extra when given none, which is what production passes", () => {
-      const plot = buildChainPlot({ chain: chain(), itemsById: mapOf(items), nearby: [] });
+      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [] });
       expect(plot.nearby).toEqual([]);
       expect(plot.showsNotLinkedLegend).toBe(false);
-      expect(buildChainPlot({ chain: chain(), itemsById: mapOf(items) }).nearby).toEqual([]);
+      expect(buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items) }).nearby).toEqual([]);
     });
 
     it("draws a context entry as a marker with no connector, kept apart from the members, and shows the legend", () => {
-      const plot = buildChainPlot({ chain: chain(), itemsById: mapOf(items), nearby: [stray] });
+      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray] });
       expect(plot.nearby).toHaveLength(1);
       expect(plot.nearby[0]).toMatchObject({ id: rid(9), role: "nearby", sequenceIndex: null });
       expect(plot.members.map((m) => m.role)).toEqual(["member", "member"]);
@@ -592,30 +596,52 @@ describe("buildChainPlot", () => {
     });
 
     it("counts a context entry in no member, connector or chain figure", () => {
-      const withContext = buildChainPlot({ chain: chain(), itemsById: mapOf(items), nearby: [stray] });
-      const without = buildChainPlot({ chain: chain(), itemsById: mapOf(items) });
+      const withContext = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray] });
+      const without = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items) });
       expect(withContext.members).toEqual(without.members);
       expect(withContext.connectors).toEqual(without.connectors);
       expect(withContext.membersWithoutItem).toBe(without.membersWithoutItem);
     });
 
     it("never draws a member twice, and never marks one as not linked", () => {
-      const plot = buildChainPlot({ chain: chain(), itemsById: mapOf(items), nearby: [items[0]!, stray] });
+      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [items[0]!, stray] });
       expect(plot.nearby.map((m) => m.id)).toEqual([rid(9)]);
     });
 
     it("puts a context entry on its own lane and counts the ones past the cap", () => {
       const other = eventItem(8, T0 + 2_000, "info", { channel: "Application" });
-      const plot = buildChainPlot({ chain: chain(), itemsById: mapOf(items), nearby: [stray, other], markerCap: 1 });
+      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, other], markerCap: 1 });
       expect(plot.omittedNearby).toBe(1);
-      const plotAll = buildChainPlot({ chain: chain(), itemsById: mapOf(items), nearby: [stray, other] });
+      const plotAll = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, other] });
       expect(plotAll.lanes.map((lane) => lane.label)).toEqual(["Application", "System"]);
+    });
+
+    it.each([
+      ["edges and events are all there", { edgeInputComplete: true, narrowed: false }, NOT_LINKED_LABEL],
+      ["edges were not all loaded", { edgeInputComplete: false, narrowed: false }, NO_LOADED_LINK_LABEL],
+      ["the view is narrowed", { edgeInputComplete: true, narrowed: true }, NO_LOADED_LINK_LABEL],
+      ["both", { edgeInputComplete: false, narrowed: true }, NO_LOADED_LINK_LABEL],
+    ])("labels a context marker and the legend by what is known: %s", (_why, state, label) => {
+      const plot = buildChainPlot({ chain: chain(), itemsById: mapOf(items), nearby: [stray], ...state });
+      expect(plot.nearby[0]?.linkLabel).toBe(label);
+      expect(plot.notLinkedLabel).toBe(label);
+      expect(plot.showsNotLinkedLegend).toBe(true);
+      // The label changes the words and nothing else: still no connector, still not a member.
+      expect(plot.connectors).toHaveLength(1);
+      expect(plot.members.map((m) => m.linkLabel)).toEqual([null, null]);
+    });
+
+    it("gives the legend its words even when no marker is drawn, and never reads Not linked on an unknown state", () => {
+      const plot = buildChainPlot({ chain: chain(), itemsById: mapOf(items), edgeInputComplete: false, narrowed: false });
+      expect(plot.showsNotLinkedLegend).toBe(false);
+      expect(plot.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
+      expect(NO_LOADED_LINK_LABEL).not.toBe(NOT_LINKED_LABEL);
     });
 
     it("draws the same whatever order the context entries arrive in", () => {
       const a = eventItem(8, T0 + 2_000);
-      const forward = buildChainPlot({ chain: chain(), itemsById: mapOf(items), nearby: [a, stray] });
-      const reversed = buildChainPlot({ chain: chain(), itemsById: mapOf(items), nearby: [stray, a] });
+      const forward = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [a, stray] });
+      const reversed = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, a] });
       expect(forward).toEqual(reversed);
     });
   });
@@ -626,7 +652,7 @@ describe("buildChainPlot", () => {
     const items = [first, second];
     const ids = items.map((item) => timelineOriginId(item.origin));
     const chain = chainOf([synthetic("e1", ids[0]!, ids[1]!, "exact")], items);
-    const plot = buildChainPlot({ chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
     // Two files, one shared source: two lanes.
     expect(plot.lanes.map((lane) => lane.label)).toEqual(["AppDiscovery.log", "AppEnforce.log"]);
     expect(plot.members.map((m) => m.entry)).toEqual([
@@ -639,8 +665,8 @@ describe("buildChainPlot", () => {
   it("is the same on every build of the same input", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 6_000), eventItem(3, T0 + 7_000, "error")];
     const chain = chainOf(fixtureEdges("exactPair"), items);
-    expect(buildChainPlot({ chain, itemsById: mapOf(items) })).toEqual(
-      buildChainPlot({ chain, itemsById: mapOf([...items].reverse()) }),
+    expect(buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) })).toEqual(
+      buildChainPlot({ ...VIEW, chain, itemsById: mapOf([...items].reverse()) }),
     );
   });
 });
@@ -686,7 +712,7 @@ describe("whyRows", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 1_000), eventItem(3, T0 + 2_000)];
     const edges = [synthetic("e1", rid(1), rid(2), "exact"), synthetic("e2", rid(2), rid(3), "candidate")];
     const chain = chainOf(edges, items);
-    const plot = buildChainPlot({ chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
     const rows = whyRows(chain, mapOf(items));
     expect(plot.connectors.length).toBeGreaterThan(0);
     for (const connector of plot.connectors) {

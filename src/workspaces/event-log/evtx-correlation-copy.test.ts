@@ -26,6 +26,8 @@ import {
 import * as copyExports from "./evtx-correlation-copy";
 import * as viewModelExports from "./evtx-correlation-view-model";
 import {
+  NOT_LINKED_LABEL,
+  NO_LOADED_LINK_LABEL,
   UNLOADED_ENTRY,
   UNTITLED_CHAIN,
   buildChainPlot,
@@ -424,6 +426,8 @@ describe("no string claims an entry is unplaced without proof", () => {
     "whyHeading",
     "whyStatement",
     // evtx-correlation-view-model.ts
+    "NOT_LINKED_LABEL",
+    "NO_LOADED_LINK_LABEL",
     "UNLOADED_ENTRY",
     "UNPLACED_ENTRY",
     "UNTITLED_CHAIN",
@@ -487,7 +491,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     const itemsById = mapOf(read);
     const narrowed = scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 });
     const incomplete = { edgeInputComplete: false, unloadedEdgeCount: 9 };
-    const plot = buildChainPlot({ chain, itemsById });
+    const plot = buildChainPlot({ chain, itemsById, edgeInputComplete: true, narrowed: false });
     return [
       unresolvedNotice(chain, evidence) ?? "",
       chainCopyText({
@@ -504,6 +508,8 @@ describe("no string claims an entry is unplaced without proof", () => {
       chainAccessibleName(chain),
       UNTITLED_CHAIN,
       UNLOADED_ENTRY,
+      NOT_LINKED_LABEL,
+      NO_LOADED_LINK_LABEL,
       entriesText(chain.memberCount),
       whyHeading(chain.strength),
       whyStatement(chain),

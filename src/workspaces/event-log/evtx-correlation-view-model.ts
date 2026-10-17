@@ -300,6 +300,14 @@ export function evidenceForEdge(
 
 // ---- the plot -----------------------------------------------------------------------------------
 
+/** What a context marker and the legend say when edges are complete and nothing is narrowed. */
+export const NOT_LINKED_LABEL = "Not linked";
+/**
+ * What they say otherwise. An edge that was never loaded, or an event the view left out, may link
+ * the entry; the absence of a loaded link is a coverage state, not evidence of no link.
+ */
+export const NO_LOADED_LINK_LABEL = "No loaded link";
+
 export interface PlotMarker {
   id: string;
   laneKey: string;
@@ -316,6 +324,11 @@ export interface PlotMarker {
   pinLabel: string | null;
   /** Position among the chain's placed members in time order; null for a nearby marker. */
   sequenceIndex: number | null;
+  /**
+   * For a nearby marker, "Not linked" or "No loaded link" (see `ChainPlotInput`); null for a
+   * member, which is linked or is a row that is not.
+   */
+  linkLabel: string | null;
 }
 
 export interface PlotLane extends LaneInfo {
@@ -357,13 +370,25 @@ export interface ChainPlot {
   omittedConnectors: number;
   /** Members with no item to draw: listed, never given a position. Why they have none is not said here. */
   membersWithoutItem: number;
-  /** The legend shows the dotted "not linked" entry only when such a marker is drawn. */
+  /** The legend shows the dotted entry only when such a marker is drawn. */
   showsNotLinkedLegend: boolean;
+  /** The words for that legend entry and for every nearby marker. */
+  notLinkedLabel: string;
 }
 
 export interface ChainPlotInput {
   chain: CorrelationChain;
   itemsById: ReadonlyMap<string, TimelineItem>;
+  /**
+   * Every timeline edge of the session was loaded (`CorrelationChainModel.edgeInputComplete`).
+   * Required, with no default: a caller that does not know must say so (false).
+   */
+  edgeInputComplete: boolean;
+  /**
+   * The view is narrowed (visible events fewer than loaded events), so an event outside it may
+   * link an entry shown here. Required for the same reason.
+   */
+  narrowed: boolean;
   /** Overrides the default window (the zoom band, a later phase). */
   window?: TimeWindow | null;
   /** Context entries to draw as "Not linked" markers. Production passes none (decision A). */
@@ -378,6 +403,9 @@ function isLinkingStrength(strength: CorrelationChainStrength): strength is "exa
 
 export function buildChainPlot(input: ChainPlotInput): ChainPlot {
   const { chain, itemsById } = input;
+  // "Not linked" is a claim about the whole session; it needs every edge and every event.
+  const notLinkedLabel =
+    input.edgeInputComplete && !input.narrowed ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
   const markerCap = input.markerCap ?? CORRELATION_MARKER_CAP;
   const connectorCap = input.connectorCap ?? CORRELATION_CONNECTOR_CAP;
   const placed = chain.memberIds.flatMap((id) => {
@@ -405,6 +433,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     omittedConnectors: 0,
     membersWithoutItem,
     showsNotLinkedLegend: false,
+    notLinkedLabel,
   };
   if (window === null) return empty;
 
@@ -447,6 +476,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
           ? null
           : `${shortEntryId(item, lane)} · ${formatDelta(placement.outsideMs)} ${placement.pinned === "before" ? "earlier" : "later"}`,
       sequenceIndex,
+      linkLabel: role === "nearby" ? notLinkedLabel : null,
     };
   };
 
@@ -501,6 +531,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     omittedConnectors,
     membersWithoutItem,
     showsNotLinkedLegend: nearby.length > 0,
+    notLinkedLabel,
   };
 }
 
