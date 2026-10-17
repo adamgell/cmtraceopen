@@ -52,7 +52,7 @@ import {
   type TrendBin,
 } from "./evtx-group-summaries";
 import { useEvtxLayoutStore } from "./evtx-layout-store";
-import { useEvtxStore } from "./evtx-store";
+import { isNewestOnlyGapReason, useEvtxStore } from "./evtx-store";
 import { formatEventTime, timeZoneLabel, type EvtxTimeZoneMode } from "./evtx-time";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import type { EvtxRecord } from "./types";
@@ -946,6 +946,7 @@ export function EvtxGroupedView({ records, nowEpoch }: EvtxGroupedViewProps) {
         manifestCoverage: sourceManifest?.coverage ?? [],
         legacyCoverage: coverageGaps,
         tailCoverage: tailCoverageGaps,
+        isNewestOnlyReason: isNewestOnlyGapReason,
       }),
     [remoteMachine, channels, coverageDetails, sourceManifest, coverageGaps, tailCoverageGaps],
   );

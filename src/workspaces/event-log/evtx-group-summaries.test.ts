@@ -396,6 +396,11 @@ describe("buildGroupSummaries: a trend never draws an unread span as zero (soul.
 });
 
 describe("classifyChannelReads", () => {
+  /**
+   * A stand-in for the store's `isNewestOnlyGapReason`: this module takes the predicate as input,
+   * so the store's wording is not repeated here. The store path is tested in EvtxGroupedView.test.
+   */
+  const CAP = "kept the newest events only";
   const base = {
     remoteMachine: null,
     channels: [],
@@ -403,16 +408,17 @@ describe("classifyChannelReads", () => {
     manifestCoverage: [],
     legacyCoverage: [],
     tailCoverage: [],
+    isNewestOnlyReason: (reason: string) => reason === CAP,
   };
 
   it("calls a channel with no gap complete", () => {
     expect(classifyChannelReads(base)("System")).toBe("complete");
   });
 
-  it("recognizes the auto-load cap the store writes as a newest-only read", () => {
+  it("calls a channel newest-only when its gap is the bound the predicate recognizes", () => {
     const read = classifyChannelReads({
       ...base,
-      legacyCoverage: ["Security: newest 2000 events shown (the channel may hold more)"],
+      legacyCoverage: [`Security: ${CAP}`],
     });
     expect(read("Security")).toBe("newestOnly");
     expect(read("System")).toBe("complete");
@@ -431,7 +437,7 @@ describe("classifyChannelReads", () => {
     const read = classifyChannelReads({
       ...base,
       legacyCoverage: [
-        "System: newest 2000 events shown (the channel may hold more)",
+        `System: ${CAP}`,
         "System: 4 of 2000 events did not reach the view",
       ],
     });

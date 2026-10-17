@@ -2460,6 +2460,20 @@ function waitForStreamReconciliation(channel: string, requestId: string): Promis
   return new Promise<void>((resolve) => pending.waiters.push(resolve));
 }
 
+/**
+ * The reason `reconcileStreamedResult` gives when a channel's read stopped at its bound. The query
+ * reads newest first, so the channel was read from its oldest kept event onward and not before.
+ */
+export function newestOnlyGapReason(cappedAt: number): string {
+  return `newest ${cappedAt} events shown (the channel may hold more)`;
+}
+
+/** True for a gap reason `newestOnlyGapReason` wrote, whatever its bound. */
+export function isNewestOnlyGapReason(reason: string): boolean {
+  const bound = /\d+/.exec(reason);
+  return bound !== null && reason === newestOnlyGapReason(Number(bound[0]));
+}
+
 type StreamReconciliation = {
   checked: ReturnType<typeof assertParseResultShape>;
   result: EvtxParseResult;
@@ -2512,7 +2526,7 @@ function reconcileStreamedResult(
     // A channel that came back at the bound may hold more, and this side cannot tell: the read
     // stopped at the bound rather than counting the channel. Saying what was not read is the
     // difference between a partial view and a view that claims to be whole.
-    gaps.push(`${context}: newest ${cappedAt} events shown (the channel may hold more)`);
+    gaps.push(`${context}: ${newestOnlyGapReason(cappedAt)}`);
   }
   return {
     checked,

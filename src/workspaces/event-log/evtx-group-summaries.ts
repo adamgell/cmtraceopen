@@ -95,17 +95,16 @@ export interface ChannelReadInput {
   legacyCoverage: readonly string[];
   /** The live tail's gap strings (`tailCoverageGaps`), "source: reason". */
   tailCoverage: readonly string[];
+  /**
+   * True for the reason a load gives when it stopped at its bound and kept the newest events
+   * (`isNewestOnlyGapReason` in `evtx-store.ts`, beside the code that writes it). Passed in, so
+   * this module stays free of the store and the wording lives in one place.
+   */
+  isNewestOnlyReason: (reason: string) => boolean;
 }
 
 /** Kinds that leave every event in place: an unformatted message, or a source that holds none. */
 const COMPLETE_DESPITE_KINDS: ReadonlySet<EvtxCoverageGapKind> = new Set(["provider", "empty"]);
-
-/**
- * The bound `reconcileStreamedResult` in `evtx-store.ts` writes when the automatic load stops at
- * `AUTO_LOAD_MAX_EVENTS`: "<channel>: newest <n> events shown (the channel may hold more)". The
- * query returns newest first, so everything after the oldest loaded event was read.
- */
-const NEWEST_ONLY_REASON = /^newest \d+ events shown \(the channel may hold more\)$/;
 
 /**
  * Gap strings that do not mean an event was lost: a tail that could not start or fell back to
@@ -181,7 +180,7 @@ export function classifyChannelReads(input: ChannelReadInput): (channel: string)
     let kind: ChannelReadKind | null;
     if (gap.kind !== null) {
       kind = COMPLETE_DESPITE_KINDS.has(gap.kind) ? null : "incomplete";
-    } else if (NEWEST_ONLY_REASON.test(gap.reason)) {
+    } else if (input.isNewestOnlyReason(gap.reason)) {
       kind = "newestOnly";
     } else {
       kind = NEUTRAL_REASON.test(gap.reason) ? null : "incomplete";

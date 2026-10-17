@@ -2,9 +2,17 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { tokens } from "@fluentui/react-components";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// The store subscribes to backend events at module scope. Capturing the handlers lets a test
+// deliver a channel's batch and its terminal marker exactly as the backend would.
+const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => undefined),
+  listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
+    listeners.set(name, handler);
+    return Promise.resolve(() => undefined);
+  }),
 }));
+
+import { invoke } from "@tauri-apps/api/core";
 
 import { contrastRatio, parseHex } from "../../lib/color-contrast";
 import { getLogListMetrics, LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
@@ -611,5 +619,101 @@ describe("EvtxGroupedView", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The store's own bound note reaches the trend: driven through the real load and reconcile path.
+// ---------------------------------------------------------------------------------------------
+
+describe("a channel the store loaded only up to its bound", () => {
+  /** The automatic load's per-channel bound (`AUTO_LOAD_MAX_EVENTS` in evtx-store.ts). */
+  const BOUND = 2_000;
+
+  /**
+   * Security events in hourly bins 17 to 19 and 21 to 23 of the 24 h window ending NOW, none in
+   * bin 20. Bin 20 is what tells a read from its oldest kept event (0 there) from a read with a
+   * loss at no known time (unknown there).
+   */
+  function securityEvents(count: number): EvtxRecord[] {
+    const windowStart = NOW - 24 * HOUR;
+    const half = Math.ceil(count / 2);
+    return Array.from({ length: count }, (_, i) => {
+      const [from, to, index, size] =
+        i < half ? [17.5, 19.9, i, half] : [21.1, 23.9, i - half, count - half];
+      return rec({
+        eventId: 4624,
+        channel: "Security",
+        provider: "Microsoft-Windows-Security-Auditing",
+        at: windowStart + Math.round((from + ((to - from) * index) / size) * HOUR),
+      });
+    });
+  }
+
+  /** Refreshes the loaded Security channel, the backend replying with `rows` as one batch. */
+  async function loadSecurity(rows: EvtxRecord[]): Promise<void> {
+    vi.mocked(invoke).mockImplementation(async (_command: string, args?: unknown) => {
+      const { channels, requestId } = (args ?? {}) as { channels?: string[]; requestId?: string };
+      const channel = channels?.[0] ?? "";
+      listeners.get("evtx-record-batch")?.({
+        payload: { requestId, channel, sequence: 0, records: rows },
+      });
+      listeners.get("evtx-record-stream-complete")?.({
+        payload: { requestId, channel, sequenceCount: 1, totalRecords: rows.length },
+      });
+      return {
+        records: [],
+        channels: [{ name: channel, eventCount: rows.length, sourceType: "live" }],
+        totalRecords: rows.length,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    });
+    useEvtxStore.setState({
+      sourceMode: "live",
+      channels: [{ name: "Security", eventCount: 0, sourceType: "live" }],
+      loadedChannels: new Set(["Security"]),
+      selectedChannels: new Set(["Security"]),
+      timeWindow: "24h",
+    });
+    await useEvtxStore.getState().refreshLoadedChannels();
+  }
+
+  beforeEach(() => {
+    useEvtxStore.getState().reset();
+    vi.mocked(invoke).mockReset();
+  });
+
+  afterEach(() => {
+    vi.mocked(invoke).mockReset();
+    useEvtxStore.getState().reset();
+  });
+
+  it("treats a channel that came back at the bound as read from its oldest kept event only", async () => {
+    await loadSecurity(securityEvents(BOUND));
+    const state = useEvtxStore.getState();
+    expect(state.records).toHaveLength(BOUND);
+    expect(state.coverageGaps.some((gap) => gap.startsWith("Security: "))).toBe(true);
+
+    render(<EvtxGroupedView records={state.records} nowEpoch={NOW} />);
+    // The oldest kept event is in bin 17: bins 0 to 16 were not read, and bin 20, after it, was
+    // read and is empty.
+    expect(
+      screen.getByText(/^24 h trend: 6 of 24 intervals had events, busiest \d+; 17 intervals not read$/),
+    ).toBeInTheDocument();
+    expect(document.querySelector('[data-trend-zero][data-bin="20"]')).not.toBeNull();
+  });
+
+  it("treats a channel that came back under the bound as read across the whole window", async () => {
+    await loadSecurity(securityEvents(BOUND - 1));
+    const state = useEvtxStore.getState();
+    expect(state.records).toHaveLength(BOUND - 1);
+    expect(state.coverageGaps).toEqual([]);
+
+    render(<EvtxGroupedView records={state.records} nowEpoch={NOW} />);
+    expect(
+      screen.getByText(/^24 h trend: 6 of 24 intervals had events, busiest \d+$/),
+    ).toBeInTheDocument();
+    expect(document.querySelector('[data-trend-zero][data-bin="0"]')).not.toBeNull();
   });
 });
