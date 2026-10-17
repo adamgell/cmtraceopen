@@ -258,8 +258,13 @@ where
     let member_count = archive.len();
 
     'members: for index in bounded_member_indices(member_count) {
-        let mut entry = match archive.by_index(index) {
-            Ok(entry) => entry,
+        // A member whose name cannot be decoded is as unreadable as one that cannot be opened.
+        let opened = archive.by_index(index).and_then(|entry| {
+            let raw_name = entry.name()?.into_owned();
+            Ok((entry, raw_name))
+        });
+        let (mut entry, raw_name) = match opened {
+            Ok(opened) => opened,
             Err(error) => {
                 push_metadata(
                     &mut result,
@@ -277,7 +282,6 @@ where
                 continue;
             }
         };
-        let raw_name = entry.name().to_string();
         let member_label = if raw_name.chars().any(is_unsafe_member_character) {
             format!("{source}::member-{index}")
         } else {

@@ -22,6 +22,14 @@
 # * glib 0.18 (RUSTSEC-2024-0429) is fixed in glib 0.20, but Tauri v2 pins the
 #   gtk-rs 0.18 stack on Linux (gtk 0.18 requires glib ^0.18); it clears only
 #   once Tauri adopts gtk-rs 0.20.
+# * zip 4.6.1 (RUSTSEC-2026-0367, 0368 and 0369) comes in only via
+#   tauri-plugin-updater; the app's own zip is 9.0.4, which is patched. No
+#   updater 2.x release takes zip >= 9 (2.10 through 2.14 require ^4) and no
+#   patched 4.x exists. In the updater, zip is a Windows-only dependency used
+#   only by extract_zip on zipped Tauri v1 bundles, the bytes are
+#   minisign-verified before install, and this app's latest.json serves
+#   -setup.exe, .AppImage and .app.tar.gz, never a zip. Remove the three
+#   entries when the updater moves to zip >= 9.
 #
 # RUSTSEC-2026-0009 is not ignored. time now resolves from crates.io at >= 0.3.47,
 # which carries the upstream recursion limit (and the GHSA-r6v5-fh4h-64xc stack
@@ -34,4 +42,7 @@ ignore = [
     "RUSTSEC-2024-0429", # glib: VariantStrIter unsoundness, fixed in glib 0.20; blocked by Tauri's gtk-rs 0.18 pin (Tauri Linux)
     "RUSTSEC-2026-0194", # quick-xml <0.41: duplicate-attribute O(n^2) CPU DoS; reachable via evtx_parser Reader/attributes on untrusted .evtx XML but bounded by 512KB per-record, legal-XML-char prefilter, 64-level nesting, 256-attribute per-element cap, and 50k-entry / 32MB-batch caps (also plist/Tauri, wayland-scanner)
     "RUSTSEC-2026-0195", # quick-xml <0.41: NsReader allocation DoS; evtx_parser uses Reader, never NsReader, so no reachable path (also plist/Tauri, wayland-scanner)
+    "RUSTSEC-2026-0367", # zip <9: SUID/SGID kept by extract; only tauri-plugin-updater's zip 4.6.1 (no updater 2.x takes zip >= 9): Windows-only, extract_zip on zipped v1 bundles, minisign-verified bytes, our manifest never serves a zip; remove when the updater moves to zip >= 9
+    "RUSTSEC-2026-0368", # zip <9: extract symlink escape; only tauri-plugin-updater's zip 4.6.1 (no updater 2.x takes zip >= 9): Windows-only, extract_zip on zipped v1 bundles, minisign-verified bytes, our manifest never serves a zip; remove when the updater moves to zip >= 9
+    "RUSTSEC-2026-0369", # zip <9.0.1: extract permissions through symlinks; only tauri-plugin-updater's zip 4.6.1 (no updater 2.x takes zip >= 9): Windows-only, extract_zip on zipped v1 bundles, minisign-verified bytes, our manifest never serves a zip; remove when the updater moves to zip >= 9
 ]

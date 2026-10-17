@@ -278,8 +278,15 @@ fn extract_zip(
                 format: ArchiveFormat::Zip,
                 detail: error.to_string(),
             })?;
+        let path = entry
+            .name()
+            .map_err(|error| ArchiveError::InvalidArchive {
+                format: ArchiveFormat::Zip,
+                detail: error.to_string(),
+            })?
+            .into_owned();
         metadata.push(ArchiveEntryMetadata {
-            path: entry.name().to_string(),
+            path,
             uncompressed_size: entry.size(),
             kind: zip_entry_kind(&entry),
         });
