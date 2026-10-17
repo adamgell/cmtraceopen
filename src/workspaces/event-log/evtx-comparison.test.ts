@@ -1443,6 +1443,9 @@ describe("a live comparison", () => {
     if (outcome.status !== "partial") return;
     expect(outcome.result.counts.channels.has("System")).toBe(false);
     expect(outcome.result.counts.channels.get("Application")).toBe(0);
+    // The untimed event may belong to the period on either side, so the current side withholds
+    // its zero for the channel too.
+    expect(outcome.result.channelsWithGaps).toEqual(["System"]);
   });
 
   it("does not call a channel 0 when its reply reported a hole, though events arrived", () => {

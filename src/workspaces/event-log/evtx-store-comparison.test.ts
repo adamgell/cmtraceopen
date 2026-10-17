@@ -1708,7 +1708,7 @@ describe("a channel delivered by subscriptions", () => {
     expect(outcome.status).toBe("complete");
     if (outcome.status === "complete") {
       expect(outcome.result.notes).toEqual([
-        "ForwardedEvents is delivered by subscriptions; events written to it after the read are not counted, so the current period can be low against the prior period.",
+        "ForwardedEvents is delivered by subscriptions; events written to it after the read are not counted, so the current period can be low against the previous period.",
       ]);
       expect(outcome.result.gaps).toEqual([]);
     }

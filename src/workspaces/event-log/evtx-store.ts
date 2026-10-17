@@ -3010,7 +3010,7 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
   // own late arrivals, so the current side can be low against it.
   if (channels.some((channel) => channel.toLowerCase() === "forwardedevents")) {
     notes.push(
-      "ForwardedEvents is delivered by subscriptions; events written to it after the read are not counted, so the current period can be low against the prior period."
+      "ForwardedEvents is delivered by subscriptions; events written to it after the read are not counted, so the current period can be low against the previous period."
     );
   }
 
