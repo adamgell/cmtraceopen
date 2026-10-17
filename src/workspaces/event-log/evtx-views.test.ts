@@ -586,12 +586,15 @@ describe("sanitizeStoredViews", () => {
     }
   });
 
+  const ID_A = "0b3d3a58-6a34-4c8e-9f0b-2c1d7e5a9b01";
+  const ID_B = "f4a1c2d3-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+
   it("keeps readable views in order with their ids, and counts the rest", () => {
     const { views, skipped } = sanitizeStoredViews(
-      [{ id: "a", ...plain(body({ name: "One" })) }, "junk", { id: "b", ...plain(body({ name: "Two" })) }, { name: "" }],
+      [{ id: ID_A, ...plain(body({ name: "One" })) }, "junk", { id: ID_B, ...plain(body({ name: "Two" })) }, { name: "" }],
       makeId,
     );
-    expect(views.map((v) => [v.id, v.name])).toEqual([["a", "One"], ["b", "Two"]]);
+    expect(views.map((v) => [v.id, v.name])).toEqual([[ID_A, "One"], [ID_B, "Two"]]);
     expect(skipped).toBe(2);
   });
 
@@ -599,8 +602,8 @@ describe("sanitizeStoredViews", () => {
     const { views } = sanitizeStoredViews(
       [
         plain(body({ name: "A" })),
-        { id: "dup", ...plain(body({ name: "B" })) },
-        { id: "dup", ...plain(body({ name: "C" })) },
+        { id: ID_A, ...plain(body({ name: "B" })) },
+        { id: ID_A, ...plain(body({ name: "C" })) },
         { id: ENROLLMENT_TRIAGE_ID, ...plain(body({ name: "D" })) },
       ],
       makeId,
@@ -608,7 +611,34 @@ describe("sanitizeStoredViews", () => {
     const ids = views.map((v) => v.id);
     expect(new Set(ids).size).toBe(4);
     expect(ids).not.toContain(ENROLLMENT_TRIAGE_ID);
-    expect(ids[1]).toBe("dup");
+    expect(ids[1]).toBe(ID_A);
+    expect(ids[2]).not.toBe(ID_A);
+  });
+
+  describe("a stored id is kept only in the shape the library makes (T9)", () => {
+    const stored = (id: unknown) => sanitizeStoredViews([{ id, ...plain(body({ name: "Mine" })) }], makeId).views[0].id;
+
+    it("keeps a UUID, in either case", () => {
+      expect(stored(ID_A)).toBe(ID_A);
+      expect(stored(ID_A.toUpperCase())).toBe(ID_A.toUpperCase());
+    });
+
+    it.each<[string, unknown]>([
+      ["an id with a space", "a b"],
+      ["an id with a space inside a UUID's shape", "0b3d3a58-6a34-4c8e-9f0b-2c1d7e5a9b0 "],
+      ["a short id", "a"],
+      ["an id that is a UUID plus a suffix", `${ID_A}x`],
+      ["an id with a quote and a space, as would break aria-describedby", 'x" y'],
+      ["a number", 5],
+      ["an empty id", ""],
+      ["an id of one megabyte", "x".repeat(1_048_576)],
+      ["a UUID-shaped id of a megabyte of leading text", `${"x".repeat(1_048_576)}${ID_A}`],
+    ])("makes an id anew for %s", (_label, id) => {
+      const kept = stored(id);
+      expect(kept).not.toBe(id);
+      expect(kept).toMatch(/^made-\d+$/);
+      expect(kept.length).toBeLessThan(40);
+    });
   });
 
   it("makes a repeated name, or a built-in's, unique", () => {

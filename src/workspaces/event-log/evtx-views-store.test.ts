@@ -20,6 +20,7 @@ import {
 import { EVTX_VIEWS_STORAGE_KEY, useEvtxViewStore } from "./evtx-views-store";
 
 const TRANSIENT = /timeRange|startMs|endMs|recordScope|scopeRecord/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const CRITERIA = sanitizeCriteria({
   beforeLoad: { levels: ["Error"], eventIds: "41", timeWindow: "7d", selectedChannels: ["System"] },
@@ -150,6 +151,33 @@ describe("the view library", () => {
       expect(listViews(state().views).filter((v) => v.builtIn)).toHaveLength(1);
       expect(JSON.stringify(state().views)).not.toMatch(TRANSIENT);
       expect(JSON.stringify(state().views)).not.toMatch(/builtIn/);
+    });
+
+    it("makes ids anew from storage unless they have the shape the library makes", async () => {
+      const uuid = "0b3d3a58-6a34-4c8e-9f0b-2c1d7e5a9b01";
+      const view = { name: "Fine", criteria: CRITERIA, layout: null };
+      await rehydrateFrom({
+        views: [
+          { id: uuid, ...view },
+          { id: "a b", ...view, name: "Space" },
+          { id: "x".repeat(1_048_576), ...view, name: "Huge" },
+        ],
+      });
+      expect(state().views.map((v) => v.name)).toEqual(["Fine", "Space", "Huge"]);
+      expect(state().views[0].id).toBe(uuid);
+      for (const view of state().views.slice(1)) expect(view.id).toMatch(UUID);
+      // The next write does not carry the megabyte.
+      state().create("Another", CRITERIA, null);
+      expect(localStorage.getItem(EVTX_VIEWS_STORAGE_KEY)!.length).toBeLessThan(20_000);
+    });
+
+    it("gives every view the library makes a UUID", () => {
+      const made = state().create("One", CRITERIA, null);
+      const copy = state().duplicate(state().views[0]);
+      const merged = state().importViews([{ name: "Two", criteria: CRITERIA, layout: null }]);
+      expect(made.ok && made.view.id).toMatch(UUID);
+      expect(copy.ok && copy.view.id).toMatch(UUID);
+      expect(merged.views.every((v) => UUID.test(v.id))).toBe(true);
     });
 
     it("keeps at most the limit from storage", async () => {

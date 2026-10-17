@@ -72,6 +72,13 @@ export type EvtxView =
   | (EvtxStoredView & { builtIn: false })
   | (EvtxStoredView & { builtIn: true; subtitle: string; description: string });
 
+/**
+ * The shape of an id the library makes (`crypto.randomUUID`). A stored id of any other shape, or of
+ * any length, is made anew on read: ids become DOM ids and `aria-describedby` references, and
+ * storage is an untrusted boundary.
+ */
+const VIEW_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const ALL_PANELS = Object.keys(EVTX_PANELS_AVAILABLE) as EvtxPanelId[];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -330,8 +337,8 @@ export function sanitizeViewBody(input: unknown): EvtxViewBody | null {
 }
 
 /**
- * Reads the persisted list. Entries that cannot be read are skipped; an id that is missing, taken
- * or one of ours is made anew, and a name that is taken is made unique. At most `MAX_CUSTOM_VIEWS`.
+ * Reads the persisted list. Entries that cannot be read are skipped; an id that is missing, not a
+ * UUID, taken or one of ours is made anew, and a name that is taken is made unique. At most `MAX_CUSTOM_VIEWS`.
  */
 export function sanitizeStoredViews(
   input: unknown,
@@ -348,7 +355,7 @@ export function sanitizeStoredViews(
       continue;
     }
     const wanted = isRecord(entry) && typeof entry.id === "string" ? entry.id : "";
-    const id = wanted && !ids.has(wanted) ? wanted : makeId();
+    const id = VIEW_ID_PATTERN.test(wanted) && !ids.has(wanted) ? wanted : makeId();
     ids.add(id);
     views.push({ id, ...body, name: uniqueViewName(body.name, views) });
   }
