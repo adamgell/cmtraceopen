@@ -4,6 +4,7 @@ import {
   EVTX_STRING_QUERY_SEPARATOR,
   type EvtxQuickFilter,
 } from "./evtx-filter";
+import { parseFieldQuery } from "./evtx-query-grammar";
 import type { EvtxRecord } from "./types";
 
 export const DEFAULT_EVTX_QUICK_FILTER: EvtxQuickFilter = {
@@ -270,5 +271,25 @@ export function evtxQuickFilterTerms(
       .map((part) => part.trim())
       .filter(Boolean);
   }
+  if (quickFilter.mode === "fieldQuery") return fieldQueryHighlightTerms(query);
   return [query];
+}
+
+/**
+ * The text a field query searches for: free text, bare or quoted, and the values of the substring
+ * fields (provider, channel, computer, source, data.<Name>). An `id:` or `level:` value is not
+ * text the row contains as typed, and a negated term names what a matching row lacks, so neither
+ * is marked. A query that does not parse marks nothing.
+ */
+function fieldQueryHighlightTerms(query: string): string[] {
+  const parsed = parseFieldQuery(query);
+  if (!parsed.ok) return [];
+  return parsed.query.clauses
+    .flat()
+    .filter(
+      (term) =>
+        !term.negated &&
+        (term.kind !== "field" || (term.field !== "id" && term.field !== "level")),
+    )
+    .map((term) => term.value);
 }

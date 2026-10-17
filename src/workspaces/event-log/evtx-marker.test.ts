@@ -509,4 +509,31 @@ describe("EVTX marker identity adapter", () => {
       ).toEqual(["Boot", "completed"]);
     },
   );
+
+  it("marks a field query's free text and substring-field values, not IDs, levels or exclusions", () => {
+    expect(
+      evtxQuickFilterTerms({
+        ...DEFAULT_EVTX_QUICK_FILTER,
+        mode: "fieldQuery",
+        query:
+          'token "broker error" provider:AAD channel:Operational computer:PC-01 source:dm.evtx ' +
+          "data.ErrorCode:0x8018 id:1098 level:error -provider:Kernel OR -noise",
+        highlight: true,
+      }),
+    ).toEqual([
+      "token",
+      "broker error",
+      "AAD",
+      "Operational",
+      "PC-01",
+      "dm.evtx",
+      "0x8018",
+    ]);
+  });
+
+  it("marks nothing for a field query that does not parse", () => {
+    expect(
+      evtxQuickFilterTerms({ ...DEFAULT_EVTX_QUICK_FILTER, mode: "fieldQuery", query: 'token "open' }),
+    ).toEqual([]);
+  });
 });
