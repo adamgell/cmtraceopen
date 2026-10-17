@@ -556,7 +556,7 @@ describe("no string claims an entry is unplaced without proof", () => {
       spanText(chain.startMs, chain.endMs, "utc") ?? "",
       spanText(null, null, "utc") ?? "",
       spanText(null, null, "local") ?? "",
-      ...[0, 1, 850, 3_300, 60_000, 125_000, 3_840_000, 97_200_000, -5_000].map(formatDelta),
+      ...[0, 1, 850, 3_300, 60_000, 125_000, 3_840_000, 97_200_000, -5_000].map((ms) => formatDelta(ms)),
       middleTruncate("{3b7e9c1a-5d24-4f8e-a0c6-1e2b3d4f5a6b}"),
       ...chainSequence(chain, itemsById).entries.flatMap((entry) => [entry.entry, entry.laneLabel]),
     ];
@@ -574,34 +574,20 @@ describe("no string claims an entry is unplaced without proof", () => {
     expect(pinned.members.map((marker) => marker.pinLabel)).toEqual(["72 \u00b7 1 ms earlier", "76 \u00b7 6 s later"]);
   });
 
-  it("calls every string-producing export of the view model, by name, in the helper", () => {
-    // The manifest proves each export is classified; this proves the ones classified as producing
-    // text are really called by the audit, so an edit to one of them is audited too.
+  it("calls every string-producing export, by name, in the helper", () => {
+    // The manifest proves each export is classified; this proves every one classified as producing
+    // text is really called by the audit, so an edit to one of them is audited too. The list is
+    // the manifest itself, so an export added to it and never called here fails. Only
+    // UNPLACED_ENTRY is left out: it is the one string that may say "not placed", and only with
+    // proof, so the audit cannot print it without defeating its own purpose.
     const called = everyString.toString();
-    for (const name of [
-      "spanText",
-      "formatDelta",
-      "shortEntryId",
-      "entryLabel",
-      "middleTruncate",
-      "keyHeader",
-      "whyRows",
-      "chainSequence",
-      "chainTitle",
-      "chainAccessibleName",
-      "entriesText",
-      "buildChainPlot",
-      "unresolvedNotice",
-      "chainCopyText",
-      "edgeInputNotice",
-      "renderCapNotice",
-      "plotOmissionNotice",
-      "scopeDisclosure",
-      "whyHeading",
-      "whyStatement",
-      "keyKindLabel",
-    ]) {
-      expect(called, name).toContain(name);
+    const producers = [...STRING_EXPORTS].filter((name) => name !== "UNPLACED_ENTRY");
+    expect(producers.length).toBeGreaterThan(20);
+    for (const name of producers) {
+      // A function must be called, not merely named; a constant must be read. The test runner
+      // rewrites an imported call to `(0, import.name)(...)`, hence the optional ")".
+      const isConstant = /^[A-Z][A-Z0-9_]*$/.test(name);
+      expect(called, name).toMatch(new RegExp(isConstant ? `\\b${name}\\b` : `\\b${name}\\)?\\(`));
     }
   });
 
