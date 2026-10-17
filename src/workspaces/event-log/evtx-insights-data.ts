@@ -6,7 +6,7 @@
  */
 import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
 import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
-import { countByLevel, EVTX_LEVELS } from "./evtx-filter";
+import { countByLevel, EVTX_LEVELS, hasUsableTimestamp } from "./evtx-filter";
 import type {
   DiagnosisEventEvidence,
   DiagnosisFinding,
@@ -55,11 +55,6 @@ export function summarizeRecords(records: readonly EvtxRecord[]): RecordSummary 
     .sort((a, b) => b.count - a.count || a.eventId - b.eventId)
     .slice(0, TOP_EVENT_ID_COUNT);
   return { total: records.length, levelMix, topEventIds };
-}
-
-/** A timestamp the sparkline may bin: finite and after the epoch origin. */
-export function hasUsableTimestamp(record: EvtxRecord): boolean {
-  return Number.isFinite(record.timestampEpoch) && record.timestampEpoch > 0;
 }
 
 export interface SameIdSeries {

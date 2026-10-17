@@ -207,6 +207,75 @@ export interface EvtxFilterModel {
   afterLoad: EvtxAfterLoadCriteria;
 }
 
+/**
+ * A span of event time, half open: `startMs` is inside it and `endMs` is not, so the span of one
+ * histogram bucket and the span of the next never share an event. Both are epoch milliseconds.
+ */
+export interface EvtxTimeRange {
+  startMs: number;
+  endMs: number;
+}
+
+/** What a record scope was made from. */
+export type EvtxRecordScopeKind = "finding" | "chain";
+
+/**
+ * What did not make it into a record scope, kept apart so the interface can say each one. A scope
+ * never claims to be the whole of what it was built from.
+ */
+export interface EvtxRecordScopeCounts {
+  /** References whose identity is usable but which name no loaded record. */
+  notLoaded: number;
+  /** References with no usable identity (a fallback hash, or none), which can never match. */
+  noUsableIdentity: number;
+  /** References that name more than one loaded record. Every candidate is in the scope. */
+  ambiguous: number;
+  /** The source may have cited more events than it sent (the engine bounds a finding's evidence). */
+  bounded: boolean;
+}
+
+/**
+ * Records the operator narrowed the view to, from a finding (or, later, a chain).
+ *
+ * Held by record OBJECT: `EvtxRecord.id` is an index the store reassigns on every merge, so a set
+ * of ids would point at other events after one live-tail batch. A merge keeps the objects it
+ * already holds, so this set follows its events through a renumber.
+ */
+export interface EvtxRecordScope {
+  kind: EvtxRecordScopeKind;
+  /** The finding's or chain's title, captured when the scope was applied: a rebuilt diagnosis may drop it. */
+  title: string;
+  records: ReadonlySet<EvtxRecord>;
+  counts: EvtxRecordScopeCounts;
+}
+
+/**
+ * Criteria that live only in the current view: not read from the service, never saved. They are
+ * deliberately NOT part of `EvtxFilterModel`, whose shape is what a saved filter stores; a field
+ * added there would be serialized. A load or a change of source clears them.
+ */
+export interface EvtxTransientCriteria {
+  timeRange: EvtxTimeRange | null;
+  recordScope: EvtxRecordScope | null;
+}
+
+/** A timestamp a time range can place: finite and after the epoch origin. */
+export function hasUsableTimestamp(record: EvtxRecord): boolean {
+  return Number.isFinite(record.timestampEpoch) && record.timestampEpoch > 0;
+}
+
+/**
+ * Whether a record lies inside the range. A record with no usable timestamp lies in no range: it
+ * cannot be shown to be inside one.
+ */
+export function isWithinTimeRange(record: EvtxRecord, range: EvtxTimeRange): boolean {
+  return (
+    hasUsableTimestamp(record) &&
+    record.timestampEpoch >= range.startMs &&
+    record.timestampEpoch < range.endMs
+  );
+}
+
 export const DEFAULT_QUICK_FILTER: EvtxQuickFilter = {
   mode: "oneString",
   query: "",
@@ -312,6 +381,13 @@ export interface VisibleRecordsInput {
   nowEpoch?: number;
   /** Parsed once by selectVisibleRecords for the whole visible-record pass. */
   eventIdSelectors?: EvtxEventIdSelectorParseResult;
+  /** The transient time range, or null for none. */
+  timeRange?: EvtxTimeRange | null;
+  /**
+   * The records of the transient record scope, or null for none. An empty set is a scope of
+   * nothing and shows nothing; it is not the same as null.
+   */
+  scopeRecords?: ReadonlySet<EvtxRecord> | null;
 }
 
 function normalizeText(value: string, caseSensitive: boolean): string {
@@ -633,7 +709,12 @@ export function recordMatchesVisibleFilter(
   record: EvtxRecord,
   input: Pick<
     VisibleRecordsInput,
-    "filterEventIds" | "filterSearch" | "filterLevels" | "selectedChannels"
+    | "filterEventIds"
+    | "filterSearch"
+    | "filterLevels"
+    | "selectedChannels"
+    | "timeRange"
+    | "scopeRecords"
   > & {
     quickFilter?: EvtxQuickFilter;
     visibleColumns?: readonly EvtxColumnId[];
@@ -650,6 +731,9 @@ export function recordMatchesVisibleFilter(
   }
 ): boolean {
   if (!input.selectedChannels.has(record.channel)) return false;
+  // The transient criteria first: a set lookup and two comparisons, cheaper than any text match.
+  if (input.scopeRecords && !input.scopeRecords.has(record)) return false;
+  if (input.timeRange && !isWithinTimeRange(record, input.timeRange)) return false;
   if (
     input.timeWindow &&
     !isWithinTimeWindow(record.timestampEpoch, input.timeWindow, input.nowEpoch)
@@ -737,6 +821,19 @@ export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
         : undefined,
   };
   return input.records.filter((record) => recordMatchesVisibleFilter(record, predicateInput));
+}
+
+/**
+ * How many events a time range hides only because they have no usable timestamp: the events every
+ * other criterion shows, which the range cannot place. Zero without a range.
+ */
+export function countHiddenForWantOfTimestamp(input: VisibleRecordsInput): number {
+  if (!input.timeRange) return 0;
+  let count = 0;
+  for (const record of selectVisibleRecords({ ...input, timeRange: null })) {
+    if (!hasUsableTimestamp(record)) count += 1;
+  }
+  return count;
 }
 
 /** A field the event list can group by. */

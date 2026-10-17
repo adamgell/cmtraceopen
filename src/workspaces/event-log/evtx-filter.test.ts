@@ -2,10 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   compileFieldQuery,
   countByLevel,
+  countHiddenForWantOfTimestamp,
   EVTX_LEVELS,
   EVTX_LEVEL_RANK,
   EVTX_RAW_LEVEL,
   fieldQueryError,
+  hasUsableTimestamp,
+  isWithinTimeRange,
   isWithinTimeWindow,
   levelsAfterToggle,
   levelsFilteredAtSource,
@@ -790,5 +793,152 @@ describe("source: matches the grid record's source label", () => {
     expect(matching("source:evidence.zip::")).toEqual([22]);
     expect(matching("source:live")).toEqual([23]);
     expect(matching('source:"Remote: PC-07"')).toEqual([24]);
+  });
+});
+
+describe("transient criteria in selectVisibleRecords", () => {
+  const at = (id: number, timestampEpoch: number, overrides: Partial<EvtxRecord> = {}) =>
+    record({ id, eventRecordId: id, timestampEpoch, ...overrides });
+  const base = (records: EvtxRecord[]) => ({
+    records,
+    selectedChannels: new Set(["Application", "System"]),
+    filterLevels: new Set(EVTX_LEVELS),
+    filterEventIds: "",
+    filterSearch: "",
+  });
+  const ids = (list: EvtxRecord[]) => list.map((r) => r.id);
+
+  describe("the time range", () => {
+    const records = [at(1, 99), at(2, 100), at(3, 200), at(4, 299), at(5, 300), at(6, 301)];
+    const range = { startMs: 100, endMs: 300 };
+
+    it("is half open: the start is inside it and the end is not", () => {
+      expect(ids(selectVisibleRecords({ ...base(records), timeRange: range }))).toEqual([2, 3, 4]);
+      expect(isWithinTimeRange(at(1, 100), range)).toBe(true);
+      expect(isWithinTimeRange(at(1, 300), range)).toBe(false);
+    });
+
+    it("lets two adjacent ranges share no event", () => {
+      const left = selectVisibleRecords({ ...base(records), timeRange: { startMs: 100, endMs: 200 } });
+      const right = selectVisibleRecords({ ...base(records), timeRange: { startMs: 200, endMs: 300 } });
+      expect(ids(left)).toEqual([2]);
+      expect(ids(right)).toEqual([3, 4]);
+    });
+
+    it("places no record without a usable timestamp, even in a range that holds zero", () => {
+      const untimed = [at(1, 0), at(2, Number.NaN), at(3, -5), at(4, 150)];
+      expect(ids(selectVisibleRecords({ ...base(untimed), timeRange: { startMs: -10, endMs: 1000 } }))).toEqual([4]);
+      expect([0, Number.NaN, -5, Infinity].map((t) => hasUsableTimestamp(at(1, t)))).toEqual([
+        false,
+        false,
+        false,
+        false,
+      ]);
+      expect(hasUsableTimestamp(at(1, 1))).toBe(true);
+    });
+
+    it("changes nothing when it is null or left out", () => {
+      expect(selectVisibleRecords({ ...base(records), timeRange: null })).toEqual(records);
+      expect(selectVisibleRecords(base(records))).toEqual(records);
+    });
+  });
+
+  describe("the record scope", () => {
+    const records = [at(1, 10), at(2, 20), at(3, 30), at(4, 40)];
+
+    it("keeps only the scoped records, and nothing for an empty scope", () => {
+      expect(ids(selectVisibleRecords({ ...base(records), scopeRecords: new Set([records[1], records[3]]) }))).toEqual([
+        2, 4,
+      ]);
+      expect(selectVisibleRecords({ ...base(records), scopeRecords: new Set() })).toEqual([]);
+    });
+
+    it("changes nothing when it is null or left out", () => {
+      expect(selectVisibleRecords({ ...base(records), scopeRecords: null })).toEqual(records);
+    });
+
+    it("holds records by object, so a record that merely looks the same is not in the scope", () => {
+      const twin = { ...records[1] };
+      expect(selectVisibleRecords({ ...base(records), scopeRecords: new Set([twin]) })).toEqual([]);
+    });
+
+    it("keeps its records when the store renumbers their ids in place", () => {
+      const scope = new Set([records[0], records[2]]);
+      // A merge sorts the list again and rewrites every id; the objects stay.
+      const renumbered = [at(0, 5), ...records];
+      renumbered.forEach((r, index) => {
+        r.id = index;
+      });
+      expect(selectVisibleRecords({ ...base(renumbered), scopeRecords: scope })).toEqual([
+        records[0],
+        records[2],
+      ]);
+      expect(ids(selectVisibleRecords({ ...base(renumbered), scopeRecords: scope }))).toEqual([1, 3]);
+    });
+  });
+
+  describe("with every other criterion", () => {
+    const records = [
+      at(1, 100, { level: "Error", channel: "System", message: "disk failure" }),
+      at(2, 110, { level: "Error", channel: "Application", message: "disk failure" }),
+      at(3, 120, { level: "Warning", channel: "System", message: "disk failure" }),
+      at(4, 130, { level: "Error", channel: "System", message: "network down" }),
+      at(5, 500, { level: "Error", channel: "System", message: "disk failure" }),
+    ];
+    const everything = {
+      ...base(records),
+      selectedChannels: new Set(["System"]),
+      filterLevels: new Set<EvtxLevel>(["Error"]),
+      filterSearch: "disk",
+      timeRange: { startMs: 100, endMs: 200 },
+      scopeRecords: new Set(records),
+    };
+
+    it("ANDs the range and the scope with channels, levels and the search", () => {
+      expect(ids(selectVisibleRecords(everything))).toEqual([1]);
+    });
+
+    it("lets each one narrow what the rest leave", () => {
+      expect(ids(selectVisibleRecords({ ...everything, timeRange: null }))).toEqual([1, 5]);
+      expect(ids(selectVisibleRecords({ ...everything, scopeRecords: new Set([records[4]]) }))).toEqual([]);
+      expect(ids(selectVisibleRecords({ ...everything, scopeRecords: new Set([records[0], records[3]]) }))).toEqual([1]);
+    });
+
+    it("ANDs them with a hide rule", () => {
+      // Hiding "disk" leaves record 4, which the range and the scope still allow.
+      const hide = quick({ query: "disk", action: "hide" });
+      expect(ids(selectVisibleRecords({ ...everything, filterSearch: "", quickFilter: hide }))).toEqual([4]);
+    });
+
+    it("ANDs them with the time window", () => {
+      const hour = 60 * 60 * 1000;
+      // The window's lower edge is 100 ms: record 1 sits on it and stays, one ms later it does not.
+      expect(ids(selectVisibleRecords({ ...everything, timeWindow: "1h", nowEpoch: 100 + hour }))).toEqual([1]);
+      expect(ids(selectVisibleRecords({ ...everything, timeWindow: "1h", nowEpoch: 101 + hour }))).toEqual([]);
+    });
+  });
+
+  describe("countHiddenForWantOfTimestamp", () => {
+    const records = [
+      at(1, 150),
+      at(2, 0, { message: "no clock" }),
+      at(3, Number.NaN, { message: "no clock either" }),
+      at(4, 0, { channel: "Elsewhere" }),
+      at(5, 0, { level: "Verbose" }),
+    ];
+    const input = {
+      ...base(records),
+      filterLevels: new Set<EvtxLevel>(["Error", "Information"]),
+      timeRange: { startMs: 100, endMs: 200 },
+    };
+
+    it("counts the events the other criteria show and the range cannot place", () => {
+      // Record 4 is in a channel that is not selected and record 5 is a level that is not.
+      expect(countHiddenForWantOfTimestamp(input)).toBe(2);
+    });
+
+    it("is zero without a range", () => {
+      expect(countHiddenForWantOfTimestamp({ ...input, timeRange: null })).toBe(0);
+    });
   });
 });
