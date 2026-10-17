@@ -33,7 +33,12 @@ import {
   reconcileSelection,
   spanText,
   whyRows,
+  UNLOADED_ENTRY,
+  UNPLACED_ENTRY,
   UNTITLED_CHAIN,
+  chainAccessibleName,
+  isProvenUnplaced,
+  partitionUnplaced,
 } from "./evtx-correlation-view-model";
 import { TIME_RANGE_SEPARATOR } from "./evtx-time";
 import {
@@ -46,6 +51,8 @@ import {
 } from "./unified-timeline";
 
 const rid = (n: number) => `source4:Live|machine10:DESKTOP-01|channel6:System|record${n}`;
+/** What no string may say unless the entry is proven unplaced (the scan finished, on a complete list). */
+const NO_UNPROVEN_CLAIM = /not placed|no timeline position|without a timeline position|no timestamp/i;
 
 function fixtureEdges(name: string): TimelineCorrelationEdge[] {
   const scenarios = fixtureDocument.scenarios as unknown as Record<
@@ -393,7 +400,7 @@ describe("buildChainPlot", () => {
     expect(connector).toMatchObject({ left: rid(1), right: rid(2), strength: "exact" });
     expect(connector.evidence.map((row) => row.originId).sort()).toEqual([rid(1), rid(2)]);
     expect(plot.undrawnEdges).toEqual([]);
-    expect(plot.unplacedMembers).toBe(0);
+    expect(plot.membersWithoutItem).toBe(0);
     expect(plot.showsNotLinkedLegend).toBe(false);
   });
 
@@ -475,9 +482,9 @@ describe("buildChainPlot", () => {
     expect(plot.members.map((m) => m.id)).toEqual([rid(1)]);
     expect(plot.connectors).toEqual([]);
     expect(plot.undrawnEdges).toEqual([
-      { left: rid(1), right: rid(2), strength: "exact", reason: "unplacedEndpoint" },
+      { left: rid(1), right: rid(2), strength: "exact", reason: "endpointWithoutItem" },
     ]);
-    expect(plot.unplacedMembers).toBe(1);
+    expect(plot.membersWithoutItem).toBe(1);
   });
 
   it("draws an empty plot, with the members counted, when no member is placed", () => {
@@ -487,7 +494,7 @@ describe("buildChainPlot", () => {
     expect(plot.members).toEqual([]);
     expect(plot.lanes).toEqual([]);
     expect(plot.ticks).toEqual([]);
-    expect(plot.unplacedMembers).toBe(2);
+    expect(plot.membersWithoutItem).toBe(2);
     expect(plot.omittedMarkers).toBe(0);
   });
 
@@ -589,7 +596,7 @@ describe("buildChainPlot", () => {
       const without = buildChainPlot({ chain: chain(), itemsById: mapOf(items) });
       expect(withContext.members).toEqual(without.members);
       expect(withContext.connectors).toEqual(without.connectors);
-      expect(withContext.unplacedMembers).toBe(without.unplacedMembers);
+      expect(withContext.membersWithoutItem).toBe(without.membersWithoutItem);
     });
 
     it("never draws a member twice, and never marks one as not linked", () => {
@@ -652,16 +659,27 @@ describe("whyRows", () => {
     expect(rows.every((row) => row.placed)).toBe(true);
   });
 
-  it("names an entry with no item by a fixed phrase and keeps its id, last", () => {
+  it("names an entry with no item by a neutral phrase and keeps its id, last", () => {
     const items = [eventItem(1, T0)];
     const chain = chainOf(fixtureEdges("exactPair"), items);
     const rows = whyRows(chain, mapOf(items));
     expect(rows).toHaveLength(2);
-    expect(rows[1]).toMatchObject({
-      entry: "Entry without a timeline position",
-      placed: false,
-      originId: rid(2),
-    });
+    expect(rows[1]).toMatchObject({ entry: UNLOADED_ENTRY, placed: false, originId: rid(2) });
+    expect(UNLOADED_ENTRY).not.toMatch(NO_UNPROVEN_CLAIM);
+  });
+
+  it("calls an entry with no item 'without a timeline position' only when it is proven unplaced", () => {
+    const items = [eventItem(1, T0)];
+    const chain = chainOf(fixtureEdges("exactPair"), items);
+    const proof = { scanComplete: true, unplacedListComplete: true, unplacedIds: new Set([rid(2)]) };
+    expect(whyRows(chain, mapOf(items), proof)[1]?.entry).toBe(UNPLACED_ENTRY);
+    for (const weaker of [
+      { ...proof, scanComplete: false },
+      { ...proof, unplacedListComplete: false },
+      { ...proof, unplacedIds: new Set<string>() },
+    ]) {
+      expect(whyRows(chain, mapOf(items), weaker)[1]?.entry).toBe(UNLOADED_ENTRY);
+    }
   });
 
   it("covers every connector: each drawn edge has at least one row for each of its endpoints", () => {
@@ -696,7 +714,7 @@ describe("chainSequence", () => {
     expect(sequence.entries.map((e) => e.offsetMs)).toEqual([0, 3_300, 9_000]);
     expect(sequence.entries.map((e) => e.highestSeverity)).toEqual([false, true, false]);
     expect(sequence.entries.map((e) => e.level)).toEqual(["Information", "Error", "Warning"]);
-    expect(sequence.unplacedIds).toEqual([]);
+    expect(sequence.itemlessIds).toEqual([]);
   });
 
   it("breaks a severity tie by the earliest time, as the title does", () => {
@@ -717,7 +735,7 @@ describe("chainSequence", () => {
     const items = [eventItem(1, T0)];
     const sequence = chainSequence(chainOf(fixtureEdges("exactPair"), items), mapOf(items));
     expect(sequence.entries).toHaveLength(1);
-    expect(sequence.unplacedIds).toEqual([rid(2)]);
+    expect(sequence.itemlessIds).toEqual([rid(2)]);
   });
 });
 
@@ -755,9 +773,28 @@ describe("text helpers", () => {
     expect(entriesText(0)).toBe("0 entries");
   });
 
-  it("titles a row with no placed member by a plain statement, not a made-up name", () => {
-    expect(chainTitle({ title: null })).toBe(UNTITLED_CHAIN);
+  it("titles a row with no derived title by a neutral fallback that says nothing about positions", () => {
+    expect(chainTitle({ title: null })).toBe("Untitled chain");
+    expect(UNTITLED_CHAIN).toBe("Untitled chain");
+    expect(UNTITLED_CHAIN).not.toMatch(NO_UNPROVEN_CLAIM);
     expect(chainTitle({ title: "76 · Failed" })).toBe("76 · Failed");
+  });
+
+  it("keeps the chain id in the accessible name of an untitled row, so two such rows differ", () => {
+    expect(chainAccessibleName({ title: null, id: "chain|a" })).toBe("Untitled chain chain|a");
+    expect(chainAccessibleName({ title: null, id: "chain|b" })).not.toBe(
+      chainAccessibleName({ title: null, id: "chain|a" }),
+    );
+    expect(chainAccessibleName({ title: "76 · Failed", id: "chain|a" })).toBe("76 · Failed");
+  });
+
+  it("proves an entry unplaced only with the scan finished, a complete list, and the id on it", () => {
+    const proof = { scanComplete: true, unplacedListComplete: true, unplacedIds: new Set(["a"]) };
+    expect(isProvenUnplaced("a", proof)).toBe(true);
+    expect(isProvenUnplaced("b", proof)).toBe(false);
+    expect(isProvenUnplaced("a", { ...proof, scanComplete: false })).toBe(false);
+    expect(isProvenUnplaced("a", { ...proof, unplacedListComplete: false })).toBe(false);
+    expect(partitionUnplaced(["a", "b", "a"], proof)).toEqual({ proven: ["a", "a"], unknown: ["b"] });
   });
 
   it("calls a chain partial whenever a member has no position", () => {

@@ -21,7 +21,21 @@ import {
   whyHeading,
   whyStatement,
   type ChainCopyInput,
+  type UnplacedEvidence,
 } from "./evtx-correlation-copy";
+import * as copyExports from "./evtx-correlation-copy";
+import * as viewModelExports from "./evtx-correlation-view-model";
+import {
+  UNLOADED_ENTRY,
+  UNTITLED_CHAIN,
+  buildChainPlot,
+  chainAccessibleName,
+  chainSequence,
+  chainTitle,
+  entriesText,
+  keyHeader,
+  whyRows,
+} from "./evtx-correlation-view-model";
 import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
 import { getAllThemes } from "../../lib/themes";
 import {
@@ -91,6 +105,8 @@ const mapOf = (items: TimelineItem[]) =>
   new Map(items.map((item) => [timelineOriginId(item.origin), item]));
 
 const COMPLETE = { edgeInputComplete: true, unloadedEdgeCount: 0 };
+/** What no string may say unless the entry is proven unplaced (the scan finished, on a complete list). */
+const NO_UNPROVEN_CLAIM = /not placed|no timeline position|without a timeline position|no timestamp/i;
 const PROVEN = { scanComplete: true, unplacedListComplete: true, unplacedIds: new Set<string>() };
 
 function copyInput(chain: CorrelationChain, items: TimelineItem[], overrides: Partial<ChainCopyInput> = {}): ChainCopyInput {
@@ -212,7 +228,7 @@ describe("unresolvedNotice", () => {
     ["one is not on the list", { scanComplete: true, unplacedListComplete: true, unplacedIds: new Set<string>() }],
   ])("only says no position was loaded when %s", (_why, evidence) => {
     const text = unresolvedNotice(chain(["a"]), evidence);
-    expect(text).toBe("1 of 5 entries have no loaded timeline position, so they are not placed on the plot.");
+    expect(text).toBe("1 of 5 entries have no loaded timeline position, so they are not drawn on the plot.");
     expect(text).not.toContain("timestamp");
   });
 });
@@ -309,7 +325,7 @@ describe("chainCopyText", () => {
     expect(text).toContain("Key: activityId x");
     expect(text).toContain("Time zone: UTC");
     expect(text).toContain("Span: 2026-10-06 10:20:00.000 to 2026-10-06 10:20:06.000");
-    expect(text).toContain("Entries: 2 (2 placed, 0 not placed)");
+    expect(text).toContain("Entries: 2 (2 placed)");
     expect(text).toContain("1. 2026-10-06 10:20:00.000  Information  72 · System  [System]  Auto MDM Enroll: started");
     expect(text).toContain("2. +6 s  Error  76 · System  [System]  Auto MDM Enroll: Failed\n      status 0x80192ee7");
     expect(text).toContain("Why these are linked\nOne ActivityId value matches across 2 entries on one machine.");
@@ -339,8 +355,10 @@ describe("chainCopyText", () => {
     expect(text).toContain("Text logs are not scoped.");
     expect(text).toContain("Correlation details are paged and bounded: 7 correlation edges were not loaded");
     expect(text).toContain("1 of 2 entries have no loaded timeline position");
-    expect(text).toContain("Entries: 2 (1 placed, 1 not placed)");
-    expect(text).toContain("Entries without a timeline position:");
+    // The scan did not finish, so nothing is proven unplaced: none of it may say so.
+    expect(text).toContain("Entries: 2 (1 placed, 1 with no loaded position)");
+    expect(text).toContain("Entries with no loaded timeline position:");
+    expect(text).not.toMatch(NO_UNPROVEN_CLAIM);
     expect(text).toContain(rid(2));
   });
 
@@ -379,8 +397,183 @@ describe("chainCopyText", () => {
 
   it("says plainly when no entry has a position, without inventing a span", () => {
     const text = chainCopyText(copyInput(chainFor("exactPair", []), []));
-    expect(text).toContain("Span: not known, no entry of this chain has a timeline position");
-    expect(text).toContain("No entry has a timeline position.");
-    expect(text).toContain("Entries: 2 (0 placed, 2 not placed)");
+    expect(text).toContain("Span: not known, no entry of this chain has a loaded timeline position");
+    expect(text).toContain("No entry has a loaded timeline position.");
+    expect(text).toContain("Entries: 2 (0 placed, 2 with no loaded position)");
+    expect(text).not.toMatch(NO_UNPROVEN_CLAIM);
+  });
+});
+
+/**
+ * G2: no string may say an entry is not placed, has no timeline position or no timestamp unless the
+ * scan finished and the id is on a complete unplaced list. Every string-producing export is run
+ * over each way the proof can fail; the manifest below makes a new export fail this file until it
+ * is classified, so a new string cannot slip past the audit.
+ */
+describe("no string claims an entry is unplaced without proof", () => {
+  const STRING_EXPORTS = new Set([
+    // evtx-correlation-copy.ts
+    "STRENGTH_LABELS",
+    "chainCopyText",
+    "edgeInputNotice",
+    "keyKindLabel",
+    "plotOmissionNotice",
+    "renderCapNotice",
+    "scopeDisclosure",
+    "unresolvedNotice",
+    "whyHeading",
+    "whyStatement",
+    // evtx-correlation-view-model.ts
+    "UNLOADED_ENTRY",
+    "UNPLACED_ENTRY",
+    "UNTITLED_CHAIN",
+    "buildChainPlot",
+    "chainAccessibleName",
+    "chainSequence",
+    "chainTitle",
+    "entriesText",
+    "entryLabel",
+    "formatDelta",
+    "keyHeader",
+    "middleTruncate",
+    "shortEntryId",
+    "spanText",
+    "whyRows",
+  ]);
+  const NOT_STRINGS = new Set([
+    "CORRELATION_AXIS_TICKS",
+    "CORRELATION_CONNECTOR_CAP",
+    "CORRELATION_MARKER_CAP",
+    "CORRELATION_MIN_WINDOW_MS",
+    "CORRELATION_SEQUENCE_INITIAL",
+    "CORRELATION_WINDOW_PAD_RATIO",
+    "KEY_VALUE_DISPLAY_CHARS",
+    "axisTicks",
+    "defaultLaneWindow",
+    "describeLanes",
+    "evidenceForEdge",
+    "isPartialChain",
+    "isProvenUnplaced",
+    "laneKeyOf",
+    "levelOfSeverity",
+    "memberLinkSummary",
+    "partitionUnplaced",
+    "placeInWindow",
+    "reconcileSelection",
+  ]);
+
+  it("classifies every runtime export of both modules, so a new string is audited", () => {
+    const exported = [...Object.keys(copyExports), ...Object.keys(viewModelExports)];
+    const unclassified = exported.filter((name) => !STRING_EXPORTS.has(name) && !NOT_STRINGS.has(name));
+    expect(unclassified).toEqual([]);
+  });
+
+  const items = [eventItem(1, T0, "info", "started", 72), eventItem(2, T0 + 6_000, "error", "failed", 76)];
+  const everyId = new Set([rid(1), rid(2), rid(3), "x"]);
+  const weakEvidence: [string, UnplacedEvidence][] = [
+    ["the scan did not finish", { scanComplete: false, unplacedListComplete: true, unplacedIds: everyId }],
+    ["the unplaced list is cut", { scanComplete: true, unplacedListComplete: false, unplacedIds: everyId }],
+    ["the id is not on the list", { scanComplete: true, unplacedListComplete: true, unplacedIds: new Set() }],
+    ["neither is known", { scanComplete: false, unplacedListComplete: false, unplacedIds: new Set() }],
+  ];
+  const shapes: [string, CorrelationChain, TimelineItem[]][] = [
+    ["a pair with one item read", chainFor("exactPair", [items[0]!]), [items[0]!]],
+    ["a pair with no item read", chainFor("exactPair", []), []],
+    ["an ambiguous group with one item read", chainFor("group3", [items[0]!]), [items[0]!]],
+    ["a coverage blocked pair with no item read", chainFor("gappedPair", []), []],
+  ];
+
+  function everyString(chain: CorrelationChain, read: TimelineItem[], evidence: UnplacedEvidence): string[] {
+    const itemsById = mapOf(read);
+    const narrowed = scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 });
+    const incomplete = { edgeInputComplete: false, unloadedEdgeCount: 9 };
+    const plot = buildChainPlot({ chain, itemsById });
+    return [
+      unresolvedNotice(chain, evidence) ?? "",
+      chainCopyText({
+        chain,
+        itemsById,
+        timeZoneMode: "utc",
+        scope: narrowed,
+        edgeInput: incomplete,
+        unplaced: evidence,
+      }),
+      ...whyRows(chain, itemsById, evidence).map((row) => row.entry),
+      ...whyRows(chain, itemsById).map((row) => row.entry),
+      chainTitle(chain),
+      chainAccessibleName(chain),
+      UNTITLED_CHAIN,
+      UNLOADED_ENTRY,
+      entriesText(chain.memberCount),
+      whyHeading(chain.strength),
+      whyStatement(chain),
+      STRENGTH_LABELS[chain.strength],
+      edgeInputNotice(incomplete) ?? "",
+      edgeInputNotice({ edgeInputComplete: false, unloadedEdgeCount: 0 }) ?? "",
+      renderCapNotice({ shown: 100, totalCount: 120, omittedCount: 20 }) ?? "",
+      plotOmissionNotice({ omittedMarkers: 4, omittedConnectors: 2 }) ?? "",
+      narrowed?.strengthNote ?? "",
+      narrowed?.textLogNote ?? "",
+      keyKindLabel("activityId"),
+      keyHeader(chain.keys)?.shortValue ?? "",
+      ...plot.members.flatMap((marker) => [marker.entry, marker.pinLabel ?? ""]),
+      ...chainSequence(chain, itemsById).entries.flatMap((entry) => [entry.entry, entry.laneLabel]),
+    ];
+  }
+
+  for (const [shapeName, chain, read] of shapes) {
+    it.each(weakEvidence)(`says nothing unproven for ${shapeName} when %s`, (_why, evidence) => {
+      for (const text of everyString(chain, read, evidence)) {
+        expect(text).not.toMatch(NO_UNPROVEN_CLAIM);
+      }
+    });
+  }
+
+  it("still says it, in the places that may, once the proof holds", () => {
+    const chain = chainFor("exactPair", [items[0]!]);
+    const proof: UnplacedEvidence = {
+      scanComplete: true,
+      unplacedListComplete: true,
+      unplacedIds: new Set([rid(2)]),
+    };
+    expect(unresolvedNotice(chain, proof)).toBe(
+      "1 of 2 entries carry no timestamp, so they are not placed on the plot.",
+    );
+    const text = chainCopyText({
+      chain,
+      itemsById: mapOf([items[0]!]),
+      timeZoneMode: "utc",
+      scope: null,
+      edgeInput: COMPLETE,
+      unplaced: proof,
+    });
+    expect(text).toContain("Entries: 2 (1 placed, 1 not placed)");
+    expect(text).toContain("Entries without a timeline position:");
+    expect(text).toContain("Entry without a timeline position: activityId = x");
+  });
+
+  it("splits a chain's itemless entries into the proven and the unknown when only some are proven", () => {
+    const edges = [rid(5), rid(6), rid(7)].map((to, i) => ({
+      ...fixtureEdges("exactPair")[0]!,
+      id: `e${i}`,
+      fromId: rid(4),
+      toId: to,
+      evidence: [],
+    }));
+    const model = buildCorrelationChains({
+      items: [],
+      timelineEdges: edges,
+      totalTimelineEdges: edges.length,
+      findings: [],
+    });
+    const chain = model.chains[0]!;
+    const text = chainCopyText(
+      copyInput(chain, [], {
+        unplaced: { scanComplete: true, unplacedListComplete: true, unplacedIds: new Set([rid(5), rid(6)]) },
+      }),
+    );
+    expect(text).toContain("Entries: 4 (0 placed, 2 not placed, 2 with no loaded position)");
+    expect(text).toMatch(/Entries without a timeline position:\n {4}.*record5\n {4}.*record6/);
+    expect(text).toMatch(/Entries with no loaded timeline position:\n {4}.*record4\n {4}.*record7/);
   });
 });

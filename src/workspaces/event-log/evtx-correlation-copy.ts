@@ -3,8 +3,12 @@
  * block (spec 8.11). Pure: strings from the chain model and its view model, nothing else.
  *
  * Evidence first (soul.md): every sentence here is either a count the model holds or a statement
- * of what was NOT loaded, scoped or placed. None says one entry caused, followed or explains
- * another: a sequence is ordered by recorded time and says so.
+ * of what was NOT loaded, scoped or read. None says one entry caused, followed or explains another:
+ * a sequence is ordered by recorded time and says so.
+ *
+ * No string says an entry is "not placed", "without a timeline position" or carries no timestamp
+ * unless `isProvenUnplaced` proves it (the scan finished and the id is on a complete unplaced
+ * list). Anything else says "no loaded position", which is true whatever the reason.
  */
 import type {
   CorrelationChain,
@@ -15,10 +19,15 @@ import {
   chainTitle,
   entriesText,
   formatDelta,
+  isProvenUnplaced,
+  partitionUnplaced,
   whyRows,
+  type UnplacedEvidence,
 } from "./evtx-correlation-view-model";
 import { formatEventTime, timeZoneLabel, type EvtxTimeZoneMode } from "./evtx-time";
 import type { TimelineItem } from "./unified-timeline";
+
+export type { UnplacedEvidence };
 
 /** The strength words. They equal `strengths.<s>.label` in evtx-visual-tokens.ts; a test pins that. */
 export const STRENGTH_LABELS: Record<CorrelationChainStrength, string> = {
@@ -111,19 +120,10 @@ export function renderCapNotice(input: {
     : null;
 }
 
-/** What is known about entries that have no item: the scan and the unplaced list. */
-export interface UnplacedEvidence {
-  /** Every timeline page was read (`LoadedLinkedItems.complete`). */
-  scanComplete: boolean;
-  /** The unplaced preview holds every unplaced item (preview length equals the session's count). */
-  unplacedListComplete: boolean;
-  unplacedIds: ReadonlySet<string>;
-}
-
 /**
  * Why a chain has members that are not on the plot, or null when all are. "No timestamp" is said
- * only when it is PROVEN: the scan finished, the unplaced list is complete, and every such member
- * is on it. Otherwise the sentence says only that no position was loaded.
+ * only when it is PROVEN for every one of them (`isProvenUnplaced`). Otherwise the sentence says
+ * only that no position was loaded, and that they are not drawn.
  */
 export function unresolvedNotice(
   chain: Pick<CorrelationChain, "unresolvedMemberIds" | "memberCount">,
@@ -131,13 +131,10 @@ export function unresolvedNotice(
 ): string | null {
   const missing = chain.unresolvedMemberIds.length;
   if (missing === 0) return null;
-  const proven =
-    evidence.scanComplete &&
-    evidence.unplacedListComplete &&
-    chain.unresolvedMemberIds.every((id) => evidence.unplacedIds.has(id));
+  const proven = chain.unresolvedMemberIds.every((id) => isProvenUnplaced(id, evidence));
   return proven
     ? `${count(missing)} of ${count(chain.memberCount)} entries carry no timestamp, so they are not placed on the plot.`
-    : `${count(missing)} of ${count(chain.memberCount)} entries have no loaded timeline position, so they are not placed on the plot.`;
+    : `${count(missing)} of ${count(chain.memberCount)} entries have no loaded timeline position, so they are not drawn on the plot.`;
 }
 
 /** The line after the plot when a cap left entries or connectors undrawn. Null when none was. */
@@ -232,12 +229,19 @@ export function chainCopyText(input: ChainCopyInput): string {
   lines.push(`Time zone: ${timeZoneLabel(timeZoneMode, chain.startMs ?? Date.now())}`);
   lines.push(
     chain.startMs === null || chain.endMs === null
-      ? "Span: not known, no entry of this chain has a timeline position"
+      ? "Span: not known, no entry of this chain has a loaded timeline position"
       : `Span: ${formatEventTime(chain.startMs, timeZoneMode)} to ${formatEventTime(chain.endMs, timeZoneMode)}`,
   );
   const sequence = chainSequence(chain, itemsById);
+  const parts = partitionUnplaced(sequence.itemlessIds, input.unplaced);
   lines.push(
-    `Entries: ${count(chain.memberCount)} (${count(sequence.entries.length)} placed, ${count(chain.memberCount - sequence.entries.length)} not placed)`,
+    `Entries: ${count(chain.memberCount)} (${[
+      `${count(sequence.entries.length)} placed`,
+      ...(parts.proven.length > 0 ? [`${count(parts.proven.length)} not placed`] : []),
+      ...(parts.unknown.length > 0
+        ? [`${count(parts.unknown.length)} with no loaded position`]
+        : []),
+    ].join(", ")})`,
   );
   for (const note of [
     input.scope?.strengthNote ?? null,
@@ -249,7 +253,7 @@ export function chainCopyText(input: ChainCopyInput): string {
   }
 
   lines.push("", "Sequence (ordered by recorded time; order is not evidence of cause)");
-  if (sequence.entries.length === 0) lines.push("  No entry has a timeline position.");
+  if (sequence.entries.length === 0) lines.push("  No entry has a loaded timeline position.");
   for (const entry of sequence.entries) {
     const when =
       entry.index === 0
@@ -262,15 +266,20 @@ export function chainCopyText(input: ChainCopyInput): string {
       lines.push("      same timestamp as the entry above; their order is not established");
     }
   }
-  if (sequence.unplacedIds.length > 0) {
-    lines.push("  Entries without a timeline position:");
-    for (const id of sequence.unplacedIds.slice(0, UNPLACED_IDS_LISTED)) lines.push(`    ${id}`);
-    const more = sequence.unplacedIds.length - UNPLACED_IDS_LISTED;
-    if (more > 0) lines.push(`    and ${count(more)} more`);
+  for (const [heading, ids] of [
+    ["Entries without a timeline position:", parts.proven],
+    ["Entries with no loaded timeline position:", parts.unknown],
+  ] as const) {
+    if (ids.length === 0) continue;
+    lines.push(`  ${heading}`);
+    for (const id of ids.slice(0, UNPLACED_IDS_LISTED)) lines.push(`    ${id}`);
+    if (ids.length > UNPLACED_IDS_LISTED) {
+      lines.push(`    and ${count(ids.length - UNPLACED_IDS_LISTED)} more`);
+    }
   }
 
   lines.push("", whyHeading(chain.strength), whyStatement(chain));
-  const rows = whyRows(chain, itemsById);
+  const rows = whyRows(chain, itemsById, input.unplaced);
   if (rows.length === 0) lines.push("  No evidence row was loaded for this row.");
   for (const row of rows) lines.push(`  ${row.entry}: ${row.field} = ${row.value}`);
   return lines.join("\n");

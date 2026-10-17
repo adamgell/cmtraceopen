@@ -330,7 +330,7 @@ export interface PlotConnector {
   evidence: CorrelationEvidenceRow[];
 }
 
-export type UndrawnReason = "unplacedEndpoint" | "noEvidence" | "beyondMarkerCap";
+export type UndrawnReason = "endpointWithoutItem" | "noEvidence" | "beyondMarkerCap";
 
 export interface UndrawnEdge {
   left: string;
@@ -355,8 +355,8 @@ export interface ChainPlot {
   omittedNearby: number;
   /** Drawable edges not drawn because of the connector cap. */
   omittedConnectors: number;
-  /** Members with no timeline position: listed, never given one. */
-  unplacedMembers: number;
+  /** Members with no item to draw: listed, never given a position. Why they have none is not said here. */
+  membersWithoutItem: number;
   /** The legend shows the dotted "not linked" entry only when such a marker is drawn. */
   showsNotLinkedLegend: boolean;
 }
@@ -384,7 +384,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     const item = itemsById.get(id);
     return item === undefined ? [] : [{ id, item }];
   });
-  const unplacedMembers =
+  const membersWithoutItem =
     chain.unresolvedMemberIds.length + (chain.memberIds.length - placed.length);
   const window =
     input.window !== undefined
@@ -403,7 +403,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     omittedMarkers: placed.length,
     omittedNearby: 0,
     omittedConnectors: 0,
-    unplacedMembers,
+    membersWithoutItem,
     showsNotLinkedLegend: false,
   };
   if (window === null) return empty;
@@ -464,7 +464,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     if (edge.right === null || !isLinkingStrength(edge.strength)) continue;
     const base = { left: edge.left, right: edge.right, strength: edge.strength };
     if (!memberIds.has(edge.left) || !memberIds.has(edge.right)) {
-      undrawnEdges.push({ ...base, reason: "unplacedEndpoint" });
+      undrawnEdges.push({ ...base, reason: "endpointWithoutItem" });
       continue;
     }
     if (!drawnIds.has(edge.left) || !drawnIds.has(edge.right)) {
@@ -499,9 +499,41 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     omittedMarkers: placed.length - members.length,
     omittedNearby: context.length - nearby.length,
     omittedConnectors,
-    unplacedMembers,
+    membersWithoutItem,
     showsNotLinkedLegend: nearby.length > 0,
   };
+}
+
+// ---- what is known about members with no item ----------------------------------------------------
+
+/** What is known about entries that have no item: the scan and the unplaced list. */
+export interface UnplacedEvidence {
+  /** Every timeline page was read (`LoadedLinkedItems.complete`). */
+  scanComplete: boolean;
+  /** The unplaced preview holds every unplaced item (preview length equals the session's count). */
+  unplacedListComplete: boolean;
+  unplacedIds: ReadonlySet<string>;
+}
+
+/**
+ * Whether an entry is PROVEN to carry no timestamp: the scan finished, the unplaced list is
+ * complete, and the id is on it. This is the one proof behind every string that says an entry is
+ * "not placed" or "without a timeline position". Without it the most that can be said is that no
+ * position was loaded, which is true whatever the reason.
+ */
+export function isProvenUnplaced(id: string, evidence: UnplacedEvidence): boolean {
+  return evidence.scanComplete && evidence.unplacedListComplete && evidence.unplacedIds.has(id);
+}
+
+/** `ids` split by `isProvenUnplaced`, each part in the order given. */
+export function partitionUnplaced(
+  ids: readonly string[],
+  evidence: UnplacedEvidence,
+): { proven: string[]; unknown: string[] } {
+  const proven: string[] = [];
+  const unknown: string[] = [];
+  for (const id of ids) (isProvenUnplaced(id, evidence) ? proven : unknown).push(id);
+  return { proven, unknown };
 }
 
 // ---- tables and lists ---------------------------------------------------------------------------
@@ -516,15 +548,21 @@ export interface WhyRow {
   value: string;
 }
 
-const UNPLACED_ENTRY = "Entry without a timeline position";
+/** The Entry text for an entry with no item, once it is proven to carry no timestamp. */
+export const UNPLACED_ENTRY = "Entry without a timeline position";
+/** The Entry text for any other entry with no item: true whatever the reason. */
+export const UNLOADED_ENTRY = "Entry with no loaded timeline position";
 
 /**
  * The "Why these are linked" rows: one per evidence row of the chain, grouped by entry in the
- * chain's time order (entries without a position last), then by field and value.
+ * chain's time order (entries with no item last), then by field and value. An entry with no item
+ * is called "without a timeline position" only when `unplaced` proves it; with no evidence given,
+ * or none that proves it, the text says only that no position was loaded.
  */
 export function whyRows(
   chain: CorrelationChain,
   itemsById: ReadonlyMap<string, TimelineItem>,
+  unplaced?: UnplacedEvidence,
 ): WhyRow[] {
   const lanes = new Map(
     describeLanes(
@@ -550,7 +588,9 @@ export function whyRows(
         originId: row.originId,
         entry:
           item === undefined
-            ? UNPLACED_ENTRY
+            ? unplaced !== undefined && isProvenUnplaced(row.originId, unplaced)
+              ? UNPLACED_ENTRY
+              : UNLOADED_ENTRY
             : entryLabel(item, lanes.get(laneKeyOf(item.origin))),
         placed: item !== undefined,
         field: row.field,
@@ -577,8 +617,8 @@ export interface SequenceEntry {
 
 export interface ChainSequence {
   entries: SequenceEntry[];
-  /** Members with no timeline position, by id. Never given a place in the order. */
-  unplacedIds: string[];
+  /** Members with no item, by id. Never given a place in the order. Whether they are unplaced is `isProvenUnplaced`'s to say. */
+  itemlessIds: string[];
 }
 
 /** The chain's members in time order, with offsets from the first. */
@@ -629,7 +669,7 @@ export function chainSequence(
   });
   return {
     entries,
-    unplacedIds: [
+    itemlessIds: [
       ...chain.unresolvedMemberIds,
       ...chain.memberIds.filter((id) => !itemsById.has(id)),
     ].sort(compareStrings),
@@ -678,11 +718,23 @@ export function entriesText(memberCount: number): string {
   return `${memberCount.toLocaleString()} ${memberCount === 1 ? "entry" : "entries"}`;
 }
 
-export const UNTITLED_CHAIN = "No entry of this chain has a timeline position";
+/**
+ * The title of a row with none. It claims nothing: a chain has no title until an item is read for
+ * one of its members, which says nothing about whether any member has a position.
+ */
+export const UNTITLED_CHAIN = "Untitled chain";
 
-/** The row title: the derived title, or a plain statement when no member is placed. */
+/** The row title: the derived title, or a neutral fallback. */
 export function chainTitle(chain: Pick<CorrelationChain, "title">): string {
   return chain.title ?? UNTITLED_CHAIN;
+}
+
+/**
+ * The accessible name of a row. A titled row is named by its title; an untitled one keeps its id,
+ * so two untitled rows are still told apart by a screen reader.
+ */
+export function chainAccessibleName(chain: Pick<CorrelationChain, "title" | "id">): string {
+  return chain.title ?? `${UNTITLED_CHAIN} ${chain.id}`;
 }
 
 // ---- selection ----------------------------------------------------------------------------------
