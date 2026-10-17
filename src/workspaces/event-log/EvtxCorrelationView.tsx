@@ -31,6 +31,7 @@ import {
   edgeErrorNotice,
   edgeInputNotice,
   keyKindLabel,
+  pastCapNotice,
   plotOmissionNotice,
   renderCapNotice,
   scanNotice,
@@ -55,10 +56,12 @@ import {
   formatDelta,
   isPartialChain,
   keyHeader,
+  listedRows,
   memberLinkSummary,
   reconcileSelection,
   spanText,
   whyRows,
+  type ListedRows,
   type PlotMarker,
 } from "./evtx-correlation-view-model";
 import { useEvtxCorrelationData } from "./useEvtxCorrelation";
@@ -87,6 +90,7 @@ interface ActionMessage {
 /** Message heads in the Sequence list; the full message is in the copied text. */
 const MESSAGE_HEAD_CHARS = 140;
 const NO_NEARBY: readonly TimelineItem[] = [];
+const NO_LISTED_ROWS: ListedRows = { rows: [], pastCapId: null };
 
 export interface EvtxCorrelationViewProps {
   /**
@@ -343,13 +347,19 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
 
   // One snapshot: all of these were stored together with the model.
   const { model, itemsById, origins, gaps, scan, unplaced, edges, hasItems } = data;
-  const reconciled = useMemo(
-    () => reconcileSelection(model?.chains ?? [], selectedChainId),
+  // The rows the list shows: the model's capped rows, and the selected row after them when the cap
+  // dropped it (the dock and the rail open a row by id, and it can be one of thousands).
+  const listed = useMemo(
+    () => (model === null ? NO_LISTED_ROWS : listedRows(model, selectedChainId)),
     [model, selectedChainId],
   );
+  const reconciled = useMemo(
+    () => reconcileSelection(listed.rows, selectedChainId),
+    [listed, selectedChainId],
+  );
   const chain = useMemo(
-    () => model?.chains.find((row) => row.id === reconciled.selectedId) ?? null,
-    [model, reconciled.selectedId],
+    () => listed.rows.find((row) => row.id === reconciled.selectedId) ?? null,
+    [listed, reconciled.selectedId],
   );
   // A selection that no longer exists is replaced, not kept: a stale id would reappear if a chain
   // with that id came back. Only once the model is current, so a rebuild does not lose the choice.
@@ -437,7 +447,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
 
   const optionId = (index: number) => `${uid}-chain-${index}`;
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const chains = model?.chains ?? [];
+    const chains = listed.rows;
     const current = chains.findIndex((row) => row.id === reconciled.selectedId);
     const go = (index: number) => {
       const target = chains[Math.min(Math.max(index, 0), chains.length - 1)];
@@ -626,8 +636,9 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
       totalCount: model.totalCount,
       omittedCount: model.omittedCount,
     }),
+    listed.pastCapId === null ? null : pastCapNotice(model.chains.length),
   ].filter((text): text is string => text !== null);
-  const selectedIndex = model.chains.findIndex((row) => row.id === chain?.id);
+  const selectedIndex = listed.rows.findIndex((row) => row.id === chain?.id);
   const header = chain === null ? null : keyHeader(chain.keys);
   const visibleSequence = sequence === null ? [] : showAllSequence ? sequence.entries : sequence.entries.slice(0, CORRELATION_SEQUENCE_INITIAL);
   const visibleWhy = showAllWhy ? why : why.slice(0, CORRELATION_SEQUENCE_INITIAL);
@@ -681,7 +692,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
             onKeyDown={onListKeyDown}
             style={{ overflowY: "auto", flex: 1, minHeight: 0 }}
           >
-            {model.chains.map((row, index) => (
+            {listed.rows.map((row, index) => (
               <ChainRow
                 key={row.id}
                 chain={row}

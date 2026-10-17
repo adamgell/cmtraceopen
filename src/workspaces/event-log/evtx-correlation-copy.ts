@@ -171,6 +171,15 @@ export function renderCapNotice(input: {
 }
 
 /**
+ * The line when the selected row is past the render cap and is listed after the rows the cap kept
+ * (`listedRows`). `shown` is the number of rows the cap kept. Without it a row opened from the dock
+ * or the rail would appear below the cap with nothing saying why it is there.
+ */
+export function pastCapNotice(shown: number): string {
+  return `The selected chain is past the first ${count(shown)} rows, so it is listed after them.`;
+}
+
+/**
  * Why a chain has members that are not on the plot, or null when all are. "No timestamp" is said
  * only when it is PROVEN for every one of them (`isProvenUnplaced`). Otherwise the sentence says
  * only that no position was loaded, and that they are not drawn.

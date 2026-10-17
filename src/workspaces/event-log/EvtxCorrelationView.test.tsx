@@ -252,6 +252,74 @@ describe("the chain list (spec 8.11)", () => {
     expect(notices).not.toMatch(/paged and bounded/);
   });
 
+  describe("a selected row the cap dropped (#842, ruling 3)", () => {
+    function manyData() {
+      const edges: TimelineCorrelationEdge[] = [];
+      const items: TimelineItem[] = [];
+      for (let i = 0; i < 120; i += 1) {
+        edges.push(synthetic(`e${i}`, rid(1 + i * 2), rid(2 + i * 2)));
+        items.push(eventItem(1 + i * 2, T0 + i * 1_000), eventItem(2 + i * 2, T0 + i * 1_000 + 500));
+      }
+      const data = makeData({ items, edges });
+      const shown = new Set((data.model?.chains ?? []).map((row) => row.id));
+      const pastCap = [...(data.model?.rowsByMember.values() ?? [])]
+        .map((list) => list[0]!)
+        .find((row) => !shown.has(row.id))!;
+      return { data, pastCap };
+    }
+    const notes = () => screen.getByTestId("correlation-notices").textContent ?? "";
+
+    it("lists it after the 100, selected, and says why it is there", () => {
+      const { data, pastCap } = manyData();
+      useEvtxCorrelationStore.setState({ selectedChainId: pastCap.id });
+      show(data);
+      expect(rows()).toHaveLength(101);
+      const last = rows()[100]!;
+      expect(last).toHaveAttribute("data-chain-id", pastCap.id);
+      expect(last).toHaveAttribute("aria-selected", "true");
+      expect(rows().filter((row) => row.getAttribute("aria-selected") === "true")).toHaveLength(1);
+      expect(notes()).toContain("The selected chain is past the first 100 rows, so it is listed after them.");
+      expect(notes()).toContain("Showing the first 100 of 120; 20 omitted.");
+      // Not read as lost: no loss notice, and the store still holds the id it was given.
+      expect(notes()).not.toContain("no longer present");
+      expect(useEvtxCorrelationStore.getState().selectedChainId).toBe(pastCap.id);
+      expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(pastCap.title ?? "");
+    });
+
+    it("leaves the first 100 rows where they were", () => {
+      const { data, pastCap } = manyData();
+      show(data);
+      const before = rowTitles();
+      cleanup();
+      useEvtxCorrelationStore.setState({ selectedChainId: pastCap.id });
+      show(data);
+      expect(rowTitles().slice(0, 100)).toEqual(before.slice(0, 100));
+    });
+
+    it("drops the extra row again when the selection moves back among the 100", () => {
+      const { data, pastCap } = manyData();
+      useEvtxCorrelationStore.setState({ selectedChainId: pastCap.id });
+      show(data);
+      fireEvent.keyDown(screen.getByRole("listbox"), { key: "ArrowUp" });
+      expect(rows()).toHaveLength(100);
+      expect(rows()[99]).toHaveAttribute("aria-selected", "true");
+      expect(notes()).not.toContain("past the first");
+    });
+
+    it("says nothing about it when the selection is among the 100, or an id no row has is selected", () => {
+      const { data } = manyData();
+      useEvtxCorrelationStore.setState({ selectedChainId: data.model!.chains[5]!.id });
+      show(data);
+      expect(rows()).toHaveLength(100);
+      expect(notes()).not.toContain("past the first");
+      cleanup();
+      useEvtxCorrelationStore.setState({ selectedChainId: "chain-that-never-was" });
+      show(data);
+      expect(rows()).toHaveLength(100);
+      expect(notes()).not.toContain("past the first");
+    });
+  });
+
   it("keeps the cap line and the paged-and-bounded line apart when both apply", () => {
     const edges: TimelineCorrelationEdge[] = [];
     const items: TimelineItem[] = [];

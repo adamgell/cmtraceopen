@@ -17,6 +17,7 @@ import {
   edgeErrorNotice,
   edgeInputNotice,
   keyKindLabel,
+  pastCapNotice,
   plotOmissionNotice,
   renderCapNotice,
   scanNotice,
@@ -227,6 +228,17 @@ describe("renderCapNotice", () => {
 
   it("is silent when nothing was dropped", () => {
     expect(renderCapNotice({ shown: 12, totalCount: 12, omittedCount: 0 })).toBeNull();
+  });
+});
+
+describe("pastCapNotice", () => {
+  it("says the selected row is listed after the rows the cap kept, with the number it kept", () => {
+    expect(pastCapNotice(100)).toBe("The selected chain is past the first 100 rows, so it is listed after them.");
+    expect(pastCapNotice(1_000)).toContain("first 1,000 rows");
+  });
+
+  it("is not the cap line and claims nothing about edges", () => {
+    expect(pastCapNotice(100)).not.toMatch(/omitted|paged|bounded|edges/);
   });
 });
 
@@ -507,6 +519,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "edgeErrorNotice",
     "edgeInputNotice",
     "keyKindLabel",
+    "pastCapNotice",
     "plotOmissionNotice",
     "renderCapNotice",
     "scanNotice",
@@ -626,6 +639,7 @@ describe("no string claims an entry is unplaced without proof", () => {
       edgeInputNotice(incomplete) ?? "",
       edgeInputNotice({ edgeInputComplete: false, unloadedEdgeCount: 0 }) ?? "",
       renderCapNotice({ shown: 100, totalCount: 120, omittedCount: 20 }) ?? "",
+      pastCapNotice(100),
       plotOmissionNotice({ omittedMarkers: 4, omittedConnectors: 2 }) ?? "",
       coverageGapNotice({ originIds: new Set(), global: true, previewCut: true }) ?? "",
       coverageGapNotice({ originIds: new Set(), global: true, previewCut: false }) ?? "",
