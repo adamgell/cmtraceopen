@@ -629,6 +629,11 @@ export async function loadSelectedLogFile(
   // batch load), skip the IPC call entirely and apply from cache.
   const cached = getCachedTabSnapshot(filePath);
   if (cached) {
+    // A cache hit that claimed its own generation supersedes any load still in flight, and that
+    // load's finally clears the flag only while its generation is current, so it never will. Clear
+    // it here, as switchToTab does. Nothing the superseded load can still do writes entries, the
+    // active source or the open mode: each write follows an isCurrentTabSwitch check.
+    if (switchGeneration === undefined) state.setLoading(false);
     // Registry files from cache — load via the registry pipeline
     if (cached.parserSelection?.parser === "registry") {
       console.info("[log-source] loadSelectedLogFile registry from cache", { filePath });

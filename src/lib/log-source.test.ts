@@ -1022,6 +1022,65 @@ describe("source loading progress ownership", () => {
     await expect(staleFolderLoad).resolves.toBeNull();
   });
 
+  it("leaves the loading flag false when a cached file takes over from a folder load", async () => {
+    // The sidebar's click: loadSelectedLogFile with no generation of its own, so it claims one
+    // and supersedes the folder load. That load's finally clears the flag only while it is still
+    // current, so the cache hit has to leave it false itself.
+    const cachedPath = sourceEntries[0].path;
+    setCachedTabSnapshot(cachedPath, snapshotFor(cachedPath, "cached line"));
+    const pendingBatch = deferred<ParseResult[]>();
+    commands.parseFilesBatch.mockReturnValueOnce(pendingBatch.promise);
+
+    const staleFolderLoad = loadLogSource(folderSource);
+    await vi.waitFor(() => expect(commands.parseFilesBatch).toHaveBeenCalled());
+    expect(useLogStore.getState().isLoading).toBe(true);
+
+    await loadSelectedLogFile(cachedPath, folderSource);
+
+    expect(useLogStore.getState().isLoading).toBe(false);
+    expect(useLogStore.getState().entries[0]?.message).toBe("cached line");
+    const afterTakeover = {
+      entries: useLogStore.getState().entries,
+      activeSource: useLogStore.getState().activeSource,
+      sourceOpenMode: useLogStore.getState().sourceOpenMode,
+    };
+
+    // The superseded load finishes with a parse of its own and writes none of it: not the
+    // entries, not the source, not the mode, and it does not touch the flag.
+    pendingBatch.resolve([
+      {
+        ...parseResult,
+        filePath: cachedPath,
+        entries: [makeEntry(7, cachedPath, "stale folder line")],
+      },
+    ]);
+    await expect(staleFolderLoad).resolves.toBeNull();
+
+    expect(useLogStore.getState().isLoading).toBe(false);
+    expect(useLogStore.getState().entries).toBe(afterTakeover.entries);
+    expect(useLogStore.getState().activeSource).toBe(afterTakeover.activeSource);
+    expect(useLogStore.getState().sourceOpenMode).toBe(afterTakeover.sourceOpenMode);
+  });
+
+  it("leaves the loading flag false when a cached file takes over from a multi-file load", async () => {
+    const cachedPath = sourceEntries[0].path;
+    setCachedTabSnapshot(cachedPath, snapshotFor(cachedPath, "cached line"));
+    const pendingBatch = deferred<ParseResult[]>();
+    commands.parseFilesBatch.mockReturnValueOnce(pendingBatch.promise);
+
+    const staleLoad = loadFilesAsLogSource(["C:/a/one.log", "C:/b/two.log"]);
+    await vi.waitFor(() => expect(commands.parseFilesBatch).toHaveBeenCalled());
+    expect(useLogStore.getState().isLoading).toBe(true);
+
+    await loadSelectedLogFile(cachedPath, folderSource);
+    expect(useLogStore.getState().isLoading).toBe(false);
+
+    pendingBatch.resolve([]);
+    await expect(staleLoad).resolves.toBe(false);
+    expect(useLogStore.getState().isLoading).toBe(false);
+    expect(useLogStore.getState().entries[0]?.message).toBe("cached line");
+  });
+
   it("falls back to the folder lane after a current file load fails", async () => {
     commands.inspectPathKind.mockResolvedValue("file");
     commands.openLogSourceFile.mockRejectedValueOnce(new Error("is a directory"));
