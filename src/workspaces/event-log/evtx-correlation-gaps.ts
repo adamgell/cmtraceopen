@@ -18,6 +18,12 @@
  *   budget and the gap-limit marker (mod.rs:655, :997, :1073, :1136);
  * - `"timeline-correlation-projection"`, for the input limit that dropped origins from correlation
  *   altogether (event_log/timeline.rs:19, :541);
+ * - `"timeline-transport-projection"`, for rows whose identity or derived fields were omitted by
+ *   the transport budget, which "may limit correlation" (event_log/analysis_session.rs:51,
+ *   :433-443);
+ * - `"event-record-identity"`, for records with a malformed EventRecordID, which the engine
+ *   strips of every identity field so they are never correlated (analysis_session.rs:444-451,
+ *   :830-845);
  * - `"timeline-item-projection"` and `"timeline-message-projection"`, for list-view compaction.
  *   They are about display, not correlation (timeline.rs:25-26).
  *
@@ -26,10 +32,16 @@
  */
 import type { TimelineCoverageGap } from "./unified-timeline";
 
-/** Sources of gaps about the whole correlation, not one origin. Each means origins went uncorrelated. */
+/**
+ * Sources of gaps about the whole correlation, not one origin. Each means origins went
+ * uncorrelated. evtx-correlation-gaps-engine.test.ts reads the engine's Rust source, so a source
+ * the engine adds fails there until it is classified here.
+ */
 export const GLOBAL_CORRELATION_GAP_SOURCES: ReadonlySet<string> = new Set([
   "correlation",
   "timeline-correlation-projection",
+  "timeline-transport-projection",
+  "event-record-identity",
 ]);
 
 /** Sources of gaps about list-view compaction. They say nothing about correlation. */

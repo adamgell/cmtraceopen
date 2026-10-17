@@ -38,8 +38,13 @@ describe("classifyCoverageGaps", () => {
     expect(gapsClearCompleteness(classified)).toBe(false);
   });
 
-  it("sees a global limit by its source: the input limit and the reducer's truncation", () => {
-    for (const source of ["timeline-correlation-projection", "correlation"]) {
+  it("sees a global limit by its source: the input limit, the reducer's truncation, and the session's own losses", () => {
+    for (const source of [
+      "timeline-correlation-projection",
+      "correlation",
+      "timeline-transport-projection",
+      "event-record-identity",
+    ]) {
       const classified = classifyCoverageGaps([{ source, reason: "anything" }], 1);
       expect(classified.global, source).toBe(true);
       expect(classified.originIds.size, source).toBe(0);
@@ -47,8 +52,39 @@ describe("classifyCoverageGaps", () => {
     }
     expect([...GLOBAL_CORRELATION_GAP_SOURCES].sort()).toEqual([
       "correlation",
+      "event-record-identity",
       "timeline-correlation-projection",
+      "timeline-transport-projection",
     ]);
+  });
+
+  it("reads the session-level losses as global however the engine words them (L1)", () => {
+    // The wording the engine writes today (analysis_session.rs:437-441).
+    const transport = classifyCoverageGaps(
+      [
+        {
+          source: "timeline-transport-projection",
+          reason:
+            "timeline transport projection affected 3 rows totaling 900 original serialized bytes and 300 retained bytes; omitted identity or derived fields may limit correlation while full records remain in the event grid or log view",
+        },
+      ],
+      1,
+    );
+    expect(transport).toEqual({ originIds: new Set(), global: true, previewCut: false });
+    // grouped_identity_gap_detail (analysis_session.rs:936-944; the text after "because" is the
+    // engine's per-case detail and is illustrative here); the record keeps its timeline row
+    // but sanitize_malformed_timeline_record (:828-845) strips every key that could link it.
+    const identity = classifyCoverageGaps(
+      [
+        {
+          source: "event-record-identity",
+          reason:
+            "1 event record was excluded from diagnosis because its EventRecordID is malformed; timeline rows were retained.",
+        },
+      ],
+      1,
+    );
+    expect(identity).toEqual({ originIds: new Set(), global: true, previewCut: false });
   });
 
   it("decides by the source and never by the reason text", () => {

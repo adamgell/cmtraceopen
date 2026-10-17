@@ -643,6 +643,16 @@ describe("buildChainPlot", () => {
       it.each([
         ["the correlation input limit", [{ source: "timeline-correlation-projection", reason: "limit" }], 1],
         ["the reducer's truncation", [{ source: "correlation", reason: "edge budget" }], 1],
+        [
+          "the transport projection that omitted identity fields (L1)",
+          [{ source: "timeline-transport-projection", reason: "omitted identity or derived fields may limit correlation" }],
+          1,
+        ],
+        [
+          "records whose malformed EventRecordID had every identity key stripped (L1)",
+          [{ source: "event-record-identity", reason: "1 event record was excluded from diagnosis" }],
+          1,
+        ],
         ["a gap preview that does not show every gap", [originGap(rid(70))], 40],
         ["a gap count that is not known", [], null],
       ])("reads 'No loaded link' for every marker and the legend under %s", (_why, preview, total) => {
