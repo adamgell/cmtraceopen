@@ -685,6 +685,31 @@ describe("export and import", () => {
       expect(merged.views[0].layout).toBeNull();
     });
 
+    it("makes a duplicate within one file unique: it is added, never a replacement, and the first entry survives", () => {
+      const a = body({ name: "A", criteria: sanitizeCriteria({ beforeLoad: { levels: ["Error"], timeWindow: "1h" } }) });
+      const lower = body({ name: "a", criteria: sanitizeCriteria({ beforeLoad: { levels: ["Warning"], timeWindow: "7d" } }) });
+      const merged = mergeViews([], [a, lower], makeId);
+      expect(merged).toMatchObject({ added: 2, replaced: 0, skipped: 0 });
+      expect(merged.views.map((v) => v.name)).toEqual(["A", "a (2)"]);
+      expect(merged.views[0].criteria).toEqual(a.criteria);
+      expect(merged.views[1].criteria).toEqual(lower.criteria);
+    });
+
+    it("replaces a library view once, and adds the file's later entry of that name under a unique one", () => {
+      const merged = mergeViews(library, [body({ name: "Mine", layout: null }), body({ name: "MINE" })], makeId);
+      expect(merged).toMatchObject({ added: 1, replaced: 1, skipped: 0 });
+      expect(merged.views.map((v) => v.name)).toEqual(["Mine", "MINE (2)"]);
+      expect(merged.views[0].id).toBe("mine-1");
+      expect(merged.views[0].layout).toBeNull();
+      expect(merged.views[1].layout).not.toBeNull();
+    });
+
+    it("counts a duplicate within a file that does not fit as skipped, not as replaced", () => {
+      const full: EvtxStoredView[] = Array.from({ length: MAX_CUSTOM_VIEWS }, (_, i) => ({ id: `f${i}`, ...body({ name: `F${i}` }) }));
+      const merged = mergeViews(full, [body({ name: "New" }), body({ name: "new" })], makeId);
+      expect(merged).toMatchObject({ added: 0, replaced: 0, skipped: 2 });
+    });
+
     it("can neither replace nor pose as a built-in", () => {
       const merged = mergeViews(library, [body({ name: "Enrollment triage" }), body({ name: "enrollment TRIAGE" })], makeId);
       expect(merged.views.map((v) => v.name)).toEqual(["Mine", "Enrollment triage (2)", "enrollment TRIAGE (3)"]);

@@ -402,9 +402,12 @@ export interface EvtxViewMerge {
 }
 
 /**
- * Adds imported views to the library. A same-named custom view is replaced (the operator chose to
- * import it) and keeps its id; a name that is a built-in's is made unique, so an import can neither
- * replace nor pose as a built-in. Ids from the file are never used.
+ * Adds imported views to the library. An entry whose name matches a custom view ALREADY in the
+ * library, ignoring case, replaces it (the operator chose to import it) and keeps its id. An entry
+ * whose name matches an earlier entry of the same file never replaces it: it is added under a
+ * unique name, as `sanitizeStoredViews` makes duplicates unique, and counts as added. A name that is
+ * a built-in's is made unique too, so an import can neither replace nor pose as a built-in. Ids from
+ * the file are never used.
  */
 export function mergeViews(
   existing: readonly EvtxStoredView[],
@@ -412,11 +415,18 @@ export function mergeViews(
   makeId: () => string,
 ): EvtxViewMerge {
   const views = [...existing];
+  // The names this file has already used, lower case: a later entry of the same name is not a
+  // replacement of the library's view, and not of the earlier entry either.
+  const usedByFile = new Set<string>();
   let added = 0;
   let replaced = 0;
   let skipped = 0;
   for (const body of imported) {
-    const at = views.findIndex((view) => sameName(view.name, body.name));
+    const key = body.name.toLowerCase();
+    const at = usedByFile.has(key)
+      ? -1
+      : existing.findIndex((view) => sameName(view.name, body.name));
+    usedByFile.add(key);
     if (at >= 0) {
       views[at] = { ...body, id: views[at].id };
       replaced += 1;
