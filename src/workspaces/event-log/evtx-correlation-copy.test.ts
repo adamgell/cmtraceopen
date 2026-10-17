@@ -32,6 +32,8 @@ import * as copyExports from "./evtx-correlation-copy";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import * as viewModelExports from "./evtx-correlation-view-model";
 import {
+  IN_ANOTHER_CHAIN_LABEL,
+  NOT_IN_THIS_CHAIN_LABEL,
   NOT_LINKED_LABEL,
   NO_LOADED_LINK_LABEL,
   UNLOADED_ENTRY,
@@ -528,6 +530,8 @@ describe("no string claims an entry is unplaced without proof", () => {
     "whyHeading",
     "whyStatement",
     // evtx-correlation-view-model.ts
+    "IN_ANOTHER_CHAIN_LABEL",
+    "NOT_IN_THIS_CHAIN_LABEL",
     "NOT_LINKED_LABEL",
     "NO_LOADED_LINK_LABEL",
     "UNLOADED_ENTRY",
@@ -632,6 +636,8 @@ describe("no string claims an entry is unplaced without proof", () => {
       UNLOADED_ENTRY,
       NOT_LINKED_LABEL,
       NO_LOADED_LINK_LABEL,
+      IN_ANOTHER_CHAIN_LABEL,
+      NOT_IN_THIS_CHAIN_LABEL,
       entriesText(chain.memberCount),
       whyHeading(chain.strength),
       whyStatement(chain),

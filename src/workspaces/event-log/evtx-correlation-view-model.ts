@@ -314,12 +314,23 @@ export const NOT_LINKED_LABEL = "Not linked";
  * state, not evidence of no link.
  */
 export const NO_LOADED_LINK_LABEL = "No loaded link";
+/**
+ * What a context marker says of an entry that HAS a loaded exact or candidate partner, so it is in
+ * another chain. It is a fact the edges gave, true whatever else is incomplete, and it is not
+ * "Not linked": the entry is linked, to something this chain does not hold.
+ */
+export const IN_ANOTHER_CHAIN_LABEL = "In another chain";
+/**
+ * The one legend word for the dotted marker when any marker it stands for is in another chain: what
+ * every such marker has in common is that it is not part of this chain, and nothing more.
+ */
+export const NOT_IN_THIS_CHAIN_LABEL = "Not in this chain";
 
 export interface PlotMarker {
   id: string;
   laneKey: string;
   kind: "event" | "log";
-  /** `member`: a placed entry of the chain. `nearby`: a "Not linked" context marker (the seam). */
+  /** `member`: a placed entry of the chain. `nearby`: a dotted context marker, drawn for an entry that is not in the chain. */
   role: "member" | "nearby";
   timestampMs: number;
   severity: TimelineSeverity;
@@ -332,8 +343,8 @@ export interface PlotMarker {
   /** Position among the chain's placed members in time order; null for a nearby marker. */
   sequenceIndex: number | null;
   /**
-   * For a nearby marker, "Not linked" or "No loaded link" (see `ChainPlotInput`); null for a
-   * member, which is linked or is a row that is not.
+   * For a nearby marker, "In another chain", "Not linked" or "No loaded link" (see
+   * `ChainPlotInput`); null for a member, which is linked or is a row that is not.
    */
   linkLabel: string | null;
 }
@@ -383,8 +394,17 @@ export interface ChainPlot {
   notLinkedLabel: string;
 }
 
+/**
+ * What the plot reads of a row. A row from the model is one; so is the dock's view of a row that
+ * holds only the members inside its window, or of an entry that is in no row at all.
+ */
+export type PlotChain = Pick<
+  CorrelationChain,
+  "memberIds" | "unresolvedMemberIds" | "edges" | "evidence" | "startMs" | "endMs"
+>;
+
 export interface ChainPlotInput {
-  chain: CorrelationChain;
+  chain: PlotChain;
   itemsById: ReadonlyMap<string, TimelineItem>;
   /**
    * Every timeline edge of the session was loaded (`CorrelationChainModel.edgeInputComplete`).
@@ -405,8 +425,18 @@ export interface ChainPlotInput {
   gaps: CorrelationGaps;
   /** Overrides the default window (the zoom band, a later phase). */
   window?: TimeWindow | null;
-  /** Context entries to draw as "Not linked" markers. Production passes none (decision A). */
+  /**
+   * Context entries to draw as dotted markers: entries that are not in the chain. The Correlation
+   * view passes none; the dock passes the other items of its window (a time-proximity read, never a
+   * relation: they get no connector, no chain and no count).
+   */
   nearby?: readonly TimelineItem[];
+  /**
+   * Distinct exact and candidate partners per origin id (`linkPartnerCounts`), so a context entry
+   * that is linked elsewhere is called "In another chain" and never "Not linked". Optional: without
+   * it no entry is known to be linked and the labels are the other two.
+   */
+  linkPartners?: ReadonlyMap<string, number>;
   markerCap?: number;
   connectorCap?: number;
 }
@@ -431,8 +461,11 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     !input.narrowed &&
     !gapsClearCompleteness(input.gaps) &&
     !memberHasGap;
-  const labelFor = (originId: string) =>
-    chainClear && !input.gaps.originIds.has(originId) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
+  const labelFor = (originId: string) => {
+    // A loaded partner is a fact, whatever else is incomplete: say it first.
+    if ((input.linkPartners?.get(originId) ?? 0) > 0) return IN_ANOTHER_CHAIN_LABEL;
+    return chainClear && !input.gaps.originIds.has(originId) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
+  };
   const markerCap = input.markerCap ?? CORRELATION_MARKER_CAP;
   const connectorCap = input.connectorCap ?? CORRELATION_CONNECTOR_CAP;
   const placed = chain.memberIds.flatMap((id) => {
@@ -559,9 +592,11 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     membersWithoutItem,
     showsNotLinkedLegend: nearby.length > 0,
     // One legend entry for the dotted marker: it says "Not linked" only if every marker it stands
-    // for may be called that.
-    notLinkedLabel:
-      chainClear && nearby.every((marker) => marker.linkLabel === NOT_LINKED_LABEL)
+    // for may be called that, and it drops to "Not in this chain" when any of them is linked
+    // elsewhere, which is all that they then have in common.
+    notLinkedLabel: nearby.some((marker) => marker.linkLabel === IN_ANOTHER_CHAIN_LABEL)
+      ? NOT_IN_THIS_CHAIN_LABEL
+      : chainClear && nearby.every((marker) => marker.linkLabel === NOT_LINKED_LABEL)
         ? NOT_LINKED_LABEL
         : NO_LOADED_LINK_LABEL,
   };
