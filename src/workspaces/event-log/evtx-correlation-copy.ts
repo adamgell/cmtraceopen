@@ -14,6 +14,7 @@ import type {
   CorrelationChain,
   CorrelationChainStrength,
 } from "./evtx-correlation-chains";
+import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
 import {
   chainSequence,
   chainTitle,
@@ -107,6 +108,46 @@ export function edgeInputNotice(state: EdgeInputState): string | null {
   return state.unloadedEdgeCount > 0
     ? `Correlation details are paged and bounded: ${count(state.unloadedEdgeCount)} correlation edges were not loaded, so chains may be incomplete.`
     : "Correlation details are paged and bounded: the number of correlation edges in this session is not known, so chains may be incomplete.";
+}
+
+/**
+ * The notice for the engine's correlation coverage gaps (`gapsClearCompleteness`), or null when
+ * nothing about them stops the view from being whole. A missing link is a coverage state, not
+ * proof of no link, so the notice says only that some entries may not have been correlated.
+ */
+export function coverageGapNotice(gaps: CorrelationGaps): string | null {
+  if (!gapsClearCompleteness(gaps)) return null;
+  const tail = "so some entries may not have been correlated and chains may be incomplete.";
+  if (gaps.global && gaps.previewCut) {
+    return `The engine limited correlation and may report more coverage gaps than are listed, ${tail}`;
+  }
+  if (gaps.global) return `The engine limited correlation, ${tail}`;
+  return `More coverage gaps may exist than are listed, ${tail}`;
+}
+
+export interface ScanNoticeInput {
+  state: "idle" | "running" | "complete" | "incomplete";
+  stoppedBy: "budget" | "error" | null;
+  error: string | null;
+}
+
+/**
+ * Why some entries have no loaded position when reading the timeline stopped early, or null when it
+ * did not. It says what stopped the read and never claims the entries have no timestamp.
+ */
+export function scanNotice(scan: ScanNoticeInput): string | null {
+  if (scan.state !== "incomplete") return null;
+  const tail = "so some entries have no loaded timeline position.";
+  if (scan.stoppedBy === "budget") return `Reading the timeline stopped at its memory limit, ${tail}`;
+  if (scan.stoppedBy === "error") {
+    return `Reading the timeline stopped on an error${scan.error === null ? "" : ` (${scan.error})`}, ${tail}`;
+  }
+  return `Reading the timeline did not finish, ${tail}`;
+}
+
+/** The failure of an edge page, or null. Its consequence (fewer edges) is `edgeInputNotice`'s. */
+export function edgeErrorNotice(error: string | null): string | null {
+  return error === null ? null : `Loading correlation edges stopped on an error (${error}).`;
 }
 
 /** The 100-row cap line (spec 8.11), or null when no row was dropped by the cap. */

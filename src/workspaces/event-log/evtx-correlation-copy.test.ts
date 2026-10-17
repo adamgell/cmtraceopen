@@ -12,10 +12,13 @@ import {
 import {
   STRENGTH_LABELS,
   chainCopyText,
+  coverageGapNotice,
+  edgeErrorNotice,
   edgeInputNotice,
   keyKindLabel,
   plotOmissionNotice,
   renderCapNotice,
+  scanNotice,
   scopeDisclosure,
   unresolvedNotice,
   whyHeading,
@@ -257,6 +260,58 @@ describe("plotOmissionNotice", () => {
   });
 });
 
+describe("coverageGapNotice", () => {
+  const gaps = (global: boolean, previewCut: boolean) => ({ originIds: new Set<string>(), global, previewCut });
+
+  it("says nothing when no gap stops the view from being whole", () => {
+    expect(coverageGapNotice(gaps(false, false))).toBeNull();
+    // A gap that names one origin is attributed to that origin, not to the whole view.
+    expect(coverageGapNotice({ originIds: new Set(["a"]), global: false, previewCut: false })).toBeNull();
+  });
+
+  it("states each cause in its own words, and always as a coverage state, never as no link", () => {
+    expect(coverageGapNotice(gaps(true, false))).toBe(
+      "The engine limited correlation, so some entries may not have been correlated and chains may be incomplete.",
+    );
+    expect(coverageGapNotice(gaps(false, true))).toBe(
+      "More coverage gaps may exist than are listed, so some entries may not have been correlated and chains may be incomplete.",
+    );
+    expect(coverageGapNotice(gaps(true, true))).toMatch(/limited correlation and may report more coverage gaps/);
+    for (const [global, cut] of [[true, false], [false, true], [true, true]] as const) {
+      expect(coverageGapNotice(gaps(global, cut))).not.toMatch(/no link|not linked/i);
+    }
+  });
+
+  it("is on for the safe value of an unknown session", () => {
+    expect(coverageGapNotice({ originIds: new Set(), global: false, previewCut: true })).not.toBeNull();
+  });
+});
+
+describe("scanNotice and edgeErrorNotice", () => {
+  it("say nothing unless reading the timeline stopped early", () => {
+    for (const state of ["idle", "running", "complete"] as const) {
+      expect(scanNotice({ state, stoppedBy: null, error: null }), state).toBeNull();
+    }
+    expect(edgeErrorNotice(null)).toBeNull();
+  });
+
+  it("name what stopped the read, and only claim that no position was loaded", () => {
+    expect(scanNotice({ state: "incomplete", stoppedBy: "budget", error: null })).toBe(
+      "Reading the timeline stopped at its memory limit, so some entries have no loaded timeline position.",
+    );
+    expect(scanNotice({ state: "incomplete", stoppedBy: "error", error: "timeline down" })).toBe(
+      "Reading the timeline stopped on an error (timeline down), so some entries have no loaded timeline position.",
+    );
+    expect(scanNotice({ state: "incomplete", stoppedBy: "error", error: null })).toBe(
+      "Reading the timeline stopped on an error, so some entries have no loaded timeline position.",
+    );
+    expect(scanNotice({ state: "incomplete", stoppedBy: null, error: null })).toBe(
+      "Reading the timeline did not finish, so some entries have no loaded timeline position.",
+    );
+    expect(edgeErrorNotice("edges down")).toBe("Loading correlation edges stopped on an error (edges down).");
+  });
+});
+
 describe("whyHeading and whyStatement", () => {
   const items = [eventItem(1, T0), eventItem(2, T0 + 6_000)];
 
@@ -424,10 +479,13 @@ describe("no string claims an entry is unplaced without proof", () => {
     // evtx-correlation-copy.ts
     "STRENGTH_LABELS",
     "chainCopyText",
+    "coverageGapNotice",
+    "edgeErrorNotice",
     "edgeInputNotice",
     "keyKindLabel",
     "plotOmissionNotice",
     "renderCapNotice",
+    "scanNotice",
     "scopeDisclosure",
     "unresolvedNotice",
     "whyHeading",
@@ -544,6 +602,13 @@ describe("no string claims an entry is unplaced without proof", () => {
       edgeInputNotice({ edgeInputComplete: false, unloadedEdgeCount: 0 }) ?? "",
       renderCapNotice({ shown: 100, totalCount: 120, omittedCount: 20 }) ?? "",
       plotOmissionNotice({ omittedMarkers: 4, omittedConnectors: 2 }) ?? "",
+      coverageGapNotice({ originIds: new Set(), global: true, previewCut: true }) ?? "",
+      coverageGapNotice({ originIds: new Set(), global: true, previewCut: false }) ?? "",
+      coverageGapNotice({ originIds: new Set(), global: false, previewCut: true }) ?? "",
+      scanNotice({ state: "incomplete", stoppedBy: "budget", error: null }) ?? "",
+      scanNotice({ state: "incomplete", stoppedBy: "error", error: "timeline down" }) ?? "",
+      scanNotice({ state: "incomplete", stoppedBy: null, error: null }) ?? "",
+      edgeErrorNotice("edges down") ?? "",
       narrowed?.strengthNote ?? "",
       narrowed?.textLogNote ?? "",
       keyKindLabel("activityId"),
