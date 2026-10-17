@@ -412,21 +412,73 @@ describe("buildGroupSummaries: every channel in the visible scope must be read",
     expect(application.trend.filter((bin) => bin === null)).toHaveLength(GROUP_TREND_BINS - 1);
   });
 
-  it("leaves every empty bin unknown when a selected channel holds no records, read or not", () => {
-    // A denied Security in an unelevated load, or a loaded channel with nothing in the window.
-    const records = [rec({ channel: "Application", at: DAY_START + 3 * HOUR })];
-    for (const readThrough of [
-      new Map([["Application", NOW]]),
-      new Map([
-        ["Application", NOW],
-        ["Security", NOW],
-      ]),
-    ]) {
-      const [summary] = buildGroupSummaries(
-        input({ records, scopeChannels: ["Application", "Security"], readThrough }),
-      ).summaries;
-      expect(summary.trend.filter((bin) => bin === null)).toHaveLength(GROUP_TREND_BINS - 1);
-    }
+  describe("a selected channel that returned no events", () => {
+    /** Application holds events from 01:00; Setup holds none. */
+    const records = [
+      rec({ eventId: 1000, channel: "Application", at: DAY_START + 3 * HOUR }),
+      rec({ eventId: 1001, channel: "Application", at: DAY_START + 1 * HOUR }),
+    ];
+    const applicationTrend = (overrides: Partial<GroupSummariesInput>) =>
+      buildGroupSummaries(
+        input({ records, scopeChannels: ["Application", "Setup"], ...overrides }),
+      ).summaries.find((summary) => summary.value === "1000")!.trend;
+    const bothRead = new Map([
+      ["Application", NOW],
+      ["Setup", NOW],
+    ]);
+
+    it("an empty, complete, stamped Setup proves its span and blanks no other group", () => {
+      const trend = applicationTrend({ readThrough: bothRead });
+      expect(trend[0]).toBeNull();
+      expect(trend[3]).toBe(1);
+      expect(bins(trend, 1, 23).filter((bin) => bin !== 1).every((bin) => bin === 0)).toBe(true);
+    });
+
+    it("its proof ends at its read time", () => {
+      const trend = applicationTrend({
+        readThrough: new Map([
+          ["Application", NOW],
+          ["Setup", DAY_START + 20 * HOUR],
+        ]),
+      });
+      expect(trend[19]).toBe(0);
+      expect(bins(trend, 20, 23).every((bin) => bin === null)).toBe(true);
+    });
+
+    it("with no window it proves the whole binned range", () => {
+      const trend = applicationTrend({ readThrough: bothRead, timeWindow: "all" });
+      expect(trend.filter((bin) => bin === null)).toHaveLength(0);
+    });
+
+    it("an empty Setup that carries a loss gap still blanks every empty bin", () => {
+      const trend = applicationTrend({
+        readThrough: bothRead,
+        channelReads: reads({ Setup: "incomplete" }),
+      });
+      expect(trend.filter((bin) => bin === null)).toHaveLength(GROUP_TREND_BINS - 1);
+    });
+
+    it("an empty Setup with no read time (a denied or failed load) still blanks every empty bin", () => {
+      const trend = applicationTrend({ readThrough: new Map([["Application", NOW]]) });
+      expect(trend.filter((bin) => bin === null)).toHaveLength(GROUP_TREND_BINS - 1);
+    });
+
+    it("an empty file proves nothing: files mode is unchanged", () => {
+      const trend = applicationTrend({ sourceMode: "files", timeWindow: "all" });
+      expect(trend.filter((bin) => bin === null)).toHaveLength(GROUP_TREND_BINS - 1);
+    });
+
+    it("tail events after an empty read do not undo its proof", () => {
+      const trend = applicationTrend({
+        records: [...records, rec({ eventId: 1, channel: "Setup", at: DAY_START + 22 * HOUR })],
+        readThrough: new Map([
+          ["Application", NOW],
+          ["Setup", DAY_START + 21 * HOUR],
+        ]),
+      });
+      expect(trend[5]).toBe(0);
+      expect(trend[22]).toBeNull();
+    });
   });
 
   it("leaves every empty bin unknown when a channel in scope has no read time", () => {

@@ -1316,6 +1316,18 @@ describe("a selected channel whose load did not finish", () => {
     expect(errorZeros()).toBe(0);
   });
 
+  it("the automatic load with an empty Setup: Setup proves its span and blanks no trend", async () => {
+    backend({ Application: ok(applicationRows()), Setup: ok([]) }, ["Application", "Setup"]);
+    await useEvtxStore.getState().enumerateChannels();
+    useEvtxStore.setState({ groupBy: ["level"] });
+    const state = useEvtxStore.getState();
+    expect(state.selectedChannels.has("Setup")).toBe(true);
+    expect(state.loadedChannels.has("Setup")).toBe(true);
+    expect(state.channelReadThrough.has("Setup")).toBe(true);
+    expect(state.records.some((record) => record.channel === "Setup")).toBe(false);
+    expect(errorZeros()).toBeGreaterThan(0);
+  });
+
   it("a denied selected channel with no records: every empty bin is unknown", async () => {
     applicationLoaded({ channels: ["Application", "Security"], selected: ["Application", "Security"] });
     backend({

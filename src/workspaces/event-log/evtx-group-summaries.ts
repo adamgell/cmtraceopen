@@ -368,15 +368,15 @@ function union(intervals: Iterable<Interval>): Interval[] {
  * The times each channel was read across, or null where nothing about its empty bins is known.
  * Only what the loaded records and the recorded read times prove is claimed.
  *
- * No read starts before the channel's oldest kept event, never at the window's start: a log keeps
- * only what its size allows, and a wrapped log answers a whole-window query with no gap although
- * its older events were overwritten. A channel with no kept event proves no span at all.
+ * A read that returned events starts at the channel's oldest kept event, never at the window's
+ * start: a log keeps only what its size allows, and a wrapped log answers a whole-window query
+ * with no gap although its older events were overwritten.
  *
- * Live: one interval, from the oldest kept event to where the channel's current load read through
- * (`readThrough`), never to a record, so live-tail records never extend it. A channel with no
- * read time (a cancelled or failed load, a channel never loaded) proves nothing, even when some of
- * its records are on screen: that is the stricter of ending at its newest record or knowing
- * nothing.
+ * Live: one interval ending where the channel's current load read through (`readThrough`), never
+ * at a record, so live-tail records never extend it. A channel with no read time (a cancelled or
+ * failed load, a channel never loaded) proves nothing, even when some of its records are on
+ * screen: that is the stricter of ending at its newest record or knowing nothing. A complete
+ * read that returned no event proves the whole binned range up to its read time (see below).
  *
  * Files: a file holds a contiguous run of events and nothing either side of it, so each file
  * covers its own oldest to newest event, and a channel read from several files covers the union
@@ -384,6 +384,7 @@ function union(intervals: Iterable<Interval>): Interval[] {
  */
 function channelReadSpans(
   input: GroupSummariesInput,
+  span: TrendSpan,
 ): (channel: string) => readonly Interval[] | null {
   const live = input.sourceMode === "live";
   const oldest = new Map<string, number>();
@@ -413,9 +414,19 @@ function channelReadSpans(
       const byFile = files.get(channel);
       return byFile === undefined ? null : union(byFile.values());
     }
-    const start = oldest.get(channel);
     const end = input.readThrough.get(channel);
-    return start === undefined || end === undefined ? null : [{ startMs: start, endMs: end }];
+    if (end === undefined) return null;
+    const start = oldest.get(channel);
+    if (start === undefined || start > end) {
+      // An empty complete read proves its whole span: the window's start to its read time, or
+      // the whole binned range when the window is All. A log overwrites its oldest events first,
+      // so an event in the window could only have been overwritten by newer ones, which would be
+      // in the window too and would have been returned. (Records newer than the read time are a
+      // later tail's, not this read's.) Residual: a log an administrator cleared also returns
+      // nothing, and no coverage gap reports a clear.
+      return [{ startMs: span.startMs, endMs: end }];
+    }
+    return [{ startMs: start, endMs: end }];
   };
   return (channel) => {
     if (!cache.has(channel)) cache.set(channel, spansOf(channel));
@@ -597,7 +608,7 @@ export function buildGroupSummaries(input: GroupSummariesInput): GroupSummariesR
   const span = trendSpan(input);
   let readBins: ReadBins | null = null;
   if (span !== null) {
-    const spansOf = channelReadSpans(input);
+    const spansOf = channelReadSpans(input, span);
     const scope = new Set(input.scopeChannels);
     const none = input.channelReads.unattributedLoss;
     readBins = {
