@@ -7,10 +7,12 @@
  *
  * What it promises:
  *
- * - A level is never told apart by colour alone. Each of the five has its own size and shape
- *   (`DOT_MARKS`): the spec's size ladder (10, 9, 7, 5 px, "larger = more severe"), a diamond for
- *   Critical because 10 and 9 px are one pixel apart, and a hollow ring for Verbose, the shape of
- *   its icon. The legend is drawn from the same table, so it cannot drift from the canvas.
+ * - A level is never told apart by colour alone, and every mark is circular (spec D21: "Level
+ *   and marker dots stay circular"). The channels are the spec's size ladder (10, 9, 7, 5 px,
+ *   "larger = more severe"), Verbose's hollow ring (the shape of its icon), the knockout ring and
+ *   the paint order, and the text carriers (tooltip, value text, hidden table, Details). Critical
+ *   and Error differ by one pixel of size. The legend is drawn from the same table, so it cannot
+ *   drift from the canvas.
  * - Severity is on top: levels are painted from Verbose to Critical (`HISTOGRAM_STACK_ORDER`).
  *   Every level except Information gets a 1 px ring that is a KNOCKOUT (it clears what is under
  *   the dot) rather than a stroke in the surface colour: outside a brush that reads exactly the
@@ -28,11 +30,11 @@ import { HIT_SLOP_PX, LEVEL_SLOT, type SwimlaneScene } from "./evtx-swimlanes";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import type { EvtxLevel, EvtxRecord } from "./types";
 
-export type DotShape = "circle" | "diamond" | "ring";
+export type DotShape = "circle" | "ring";
 
 export interface DotMark {
   shape: DotShape;
-  /** Diameter, or the width of the diamond, in CSS pixels. */
+  /** Outer diameter in CSS pixels. */
   size: number;
   /** Information is drawn at 55% (spec 8.9); every other level is solid. */
   opacity: number;
@@ -48,7 +50,7 @@ export interface DotMark {
  * 1.75:1 on the light wash (Information is the one level exempt from the 3:1 floor).
  */
 export const DOT_MARKS: Readonly<Record<EvtxLevel, DotMark>> = {
-  Critical: { shape: "diamond", size: 10, opacity: 1, knockout: true, strokePx: 0 },
+  Critical: { shape: "circle", size: 10, opacity: 1, knockout: true, strokePx: 0 },
   Error: { shape: "circle", size: 9, opacity: 1, knockout: true, strokePx: 0 },
   Warning: { shape: "circle", size: 7, opacity: 1, knockout: true, strokePx: 0 },
   Information: { shape: "circle", size: 5, opacity: 0.55, knockout: false, strokePx: 0 },
@@ -201,17 +203,9 @@ export function planPaint(scene: SwimlaneScene, geometry: LaneGeometry): PaintPl
   };
 }
 
-function addMark(ctx: Paint2D, shape: DotShape, cx: number, cy: number, extent: number): void {
+/** A circle of diameter `extent` in the current path: arcs of one winding fill as their union. */
+function addCircle(ctx: Paint2D, cx: number, cy: number, extent: number): void {
   const radius = extent / 2;
-  if (shape === "diamond") {
-    // Same winding as an arc, so a batch of marks in one path fills as their union.
-    ctx.moveTo(cx - radius, cy);
-    ctx.lineTo(cx, cy - radius);
-    ctx.lineTo(cx + radius, cy);
-    ctx.lineTo(cx, cy + radius);
-    ctx.closePath();
-    return;
-  }
   ctx.moveTo(cx + radius, cy);
   ctx.arc(cx, cy, radius, 0, TAU);
 }
@@ -263,7 +257,7 @@ export function paintSwimlanes(
       ctx.fillStyle = "#000000";
       ctx.beginPath();
       for (let index = 0; index < xs.length; index += 1) {
-        addMark(ctx, mark.shape === "ring" ? "circle" : mark.shape, xs[index], ys[index], mark.size + 2 * KNOCKOUT_PX);
+        addCircle(ctx, xs[index], ys[index], mark.size + 2 * KNOCKOUT_PX);
       }
       ctx.fill();
       ctx.globalCompositeOperation = "source-over";
@@ -274,12 +268,12 @@ export function paintSwimlanes(
       ctx.strokeStyle = colors.dots[level];
       ctx.lineWidth = mark.strokePx;
       for (let index = 0; index < xs.length; index += 1) {
-        addMark(ctx, "circle", xs[index], ys[index], mark.size - mark.strokePx);
+        addCircle(ctx, xs[index], ys[index], mark.size - mark.strokePx);
       }
       ctx.stroke();
     } else {
       ctx.fillStyle = colors.dots[level];
-      for (let index = 0; index < xs.length; index += 1) addMark(ctx, mark.shape, xs[index], ys[index], mark.size);
+      for (let index = 0; index < xs.length; index += 1) addCircle(ctx, xs[index], ys[index], mark.size);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
@@ -288,7 +282,7 @@ export function paintSwimlanes(
       ctx.lineWidth = 1;
       ctx.beginPath();
       for (let index = 0; index < xs.length; index += 1) {
-        addMark(ctx, mark.shape === "ring" ? "circle" : mark.shape, xs[index], ys[index], mark.size + 1);
+        addCircle(ctx, xs[index], ys[index], mark.size + 1);
       }
       ctx.stroke();
     }
@@ -326,7 +320,11 @@ function lowerBoundFraction(fractions: Float64Array, value: number): number {
   return low;
 }
 
-/** Radius a mark has for the hit test: half its size, which a diamond's corners reach. */
+/**
+ * Radius a mark has for the hit test: half its outer diameter. Every mark is a circle (a ring's
+ * outer edge is `size / 2` too: its path radius is smaller by half the stroke, which the stroke
+ * gives back), and a test holds this equal to the radius the painter draws.
+ */
 export function hitRadiusOf(level: EvtxLevel): number {
   return DOT_MARKS[level].size / 2;
 }

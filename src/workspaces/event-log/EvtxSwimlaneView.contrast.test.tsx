@@ -116,8 +116,8 @@ function resolved(value: string, themeId: string): string {
 
 /** The level a mark call drew, told by its shape and size alone (never by its colour). */
 function levelOfCall(call: MarkSummary): EvtxLevel | null {
-  if (call.shape === "diamond" && call.extent === 10) return "Critical";
   if (call.shape === "circle" && call.action === "fill") {
+    if (call.extent === 10) return "Critical";
     if (call.extent === 9) return "Error";
     if (call.extent === 7) return "Warning";
     if (call.extent === 5) return "Information";

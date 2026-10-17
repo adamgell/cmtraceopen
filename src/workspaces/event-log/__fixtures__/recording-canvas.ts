@@ -103,9 +103,9 @@ export interface MarkSummary {
   alpha: number;
   composite: string;
   lineWidth: number;
-  /** `circle` (arcs), `diamond` (four-cornered closed paths) or `lines` (baselines and edges). */
-  shape: "circle" | "diamond" | "lines" | "none";
-  /** Diameter of a circle, width of a diamond; null for lines. */
+  /** `circle` (arcs) or `lines` (baselines and edges). */
+  shape: "circle" | "lines" | "none";
+  /** Diameter of a circle (of its path: a stroke adds half its width on each side); null for lines. */
   extent: number | null;
   centers: [number, number][];
 }
@@ -119,17 +119,6 @@ export function summarizeCall(call: PaintCall): MarkSummary {
     shape = "circle";
     extent = arcs[0].radius * 2;
     for (const arc of arcs) centers.push([arc.x, arc.y]);
-  } else if (call.path.some((item) => item.kind === "close")) {
-    shape = "diamond";
-    for (let index = 0; index + 5 <= call.path.length; ) {
-      const start = call.path[index];
-      const top = call.path[index + 1];
-      if (start?.kind !== "move" || top?.kind !== "line") break;
-      const radius = top.x - start.x;
-      extent = radius * 2;
-      centers.push([top.x, start.y]);
-      index += 5;
-    }
   } else if (call.path.length > 0) {
     shape = "lines";
   }
@@ -147,7 +136,7 @@ export function summarizeCall(call: PaintCall): MarkSummary {
 
 /** Every call that drew marks (not the baselines and lane edges), summarized, in paint order. */
 export function markCalls(context: RecordingContext): MarkSummary[] {
-  return context.calls.map(summarizeCall).filter((summary) => summary.shape === "circle" || summary.shape === "diamond");
+  return context.calls.map(summarizeCall).filter((summary) => summary.shape === "circle");
 }
 
 /** The calls that drew lines: lane baselines, then lane edges. */

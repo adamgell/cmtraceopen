@@ -106,7 +106,7 @@ const py = (lane: number) => yOfLane(lane, GEOMETRY.laneHeight);
 describe("the marks", () => {
   it("are the spec's ladder of 10, 9, 7 and 5 px for Critical down to Information, and a 5 px ring for Verbose", () => {
     expect(LEVELS.map((level) => [level, DOT_MARKS[level].shape, DOT_MARKS[level].size])).toEqual([
-      ["Critical", "diamond", 10],
+      ["Critical", "circle", 10],
       ["Error", "circle", 9],
       ["Warning", "circle", 7],
       ["Information", "circle", 5],
@@ -130,9 +130,13 @@ describe("the marks", () => {
     expect(new Set(signatures).size).toBe(LEVELS.length);
   });
 
-  it("keep Critical and Error apart by shape, since their sizes are one pixel apart", () => {
+  it("are all circles (spec D21: level dots stay circular), so Critical and Error differ by one pixel of size", () => {
+    for (const level of LEVELS) expect(["circle", "ring"], level).toContain(DOT_MARKS[level].shape);
+    // Said plainly: the two most severe levels are told apart without colour by 1 px (10 against 9),
+    // by paint order, and by the text carriers. The spec's ladder is the non-colour channel; no shape
+    // is added to widen it.
     expect(DOT_MARKS.Critical.size - DOT_MARKS.Error.size).toBe(1);
-    expect(DOT_MARKS.Critical.shape).not.toBe(DOT_MARKS.Error.shape);
+    expect(DOT_MARKS.Critical.shape).toBe(DOT_MARKS.Error.shape);
   });
 
   it("have a largest radius the plot inset and the hit reach are built on", () => {
@@ -290,7 +294,7 @@ describe("painting", () => {
         .filter((call) => call.composite === "source-over")
         .map((call) => [call.color, call]),
     );
-    expect(byColor[COLORS.dots.Critical]).toMatchObject({ shape: "diamond", extent: 10, action: "fill", alpha: 1 });
+    expect(byColor[COLORS.dots.Critical]).toMatchObject({ shape: "circle", extent: 10, action: "fill", alpha: 1 });
     expect(byColor[COLORS.dots.Error]).toMatchObject({ shape: "circle", extent: 9, action: "fill", alpha: 1 });
     expect(byColor[COLORS.dots.Warning]).toMatchObject({ shape: "circle", extent: 7, action: "fill", alpha: 1 });
     expect(byColor[COLORS.dots.Information]).toMatchObject({ shape: "circle", extent: 5, action: "fill", alpha: 0.55 });
@@ -306,7 +310,7 @@ describe("painting", () => {
       ["circle", 7], // Verbose: 5 + 2
       ["circle", 9], // Warning: 7 + 2
       ["circle", 11], // Error
-      ["diamond", 12], // Critical
+      ["circle", 12], // Critical
     ]);
     // Each knockout is directly before the call that draws its level.
     calls.forEach((call, index) => {
@@ -319,10 +323,13 @@ describe("painting", () => {
 
   it("puts a mark's knockout on the mark's own centres", () => {
     const calls = markCalls(paint());
-    const critical = calls.filter((call) => call.shape === "diamond");
-    expect(critical).toHaveLength(2);
-    expect(critical[0].centers).toEqual(critical[1].centers);
-    expect(critical[0].centers).toEqual([[px(0.5), py(0)]]);
+    // Critical's fill is the only 10 px mark and its knockout the only 12 px one.
+    const fill = calls.filter((call) => call.extent === 10);
+    const knockout = calls.filter((call) => call.extent === 12);
+    expect(fill).toHaveLength(1);
+    expect(knockout).toHaveLength(1);
+    expect(fill[0].centers).toEqual(knockout[0].centers);
+    expect(fill[0].centers).toEqual([[px(0.5), py(0)]]);
   });
 
   it("leaves the context as it found it: opaque and compositing normally", () => {
@@ -352,7 +359,7 @@ describe("painting", () => {
       ["circle", 6], // Information
       ["circle", 8], // Warning
       ["circle", 10], // Error
-      ["diamond", 11], // Critical
+      ["circle", 11], // Critical
     ]);
   });
 
@@ -365,15 +372,37 @@ describe("painting", () => {
     paintSwimlanes(context, plan(), same, null);
     const signatures = context.calls
       .map(summarizeCall)
-      .filter((call) => (call.shape === "circle" || call.shape === "diamond") && call.composite === "source-over")
+      .filter((call) => call.shape === "circle" && call.composite === "source-over")
       .map((call) => `${call.shape}/${call.extent}/${call.alpha}/${call.action}`);
     expect(new Set(signatures).size).toBe(5);
   });
 });
 
+/**
+ * The outer radius each level is DRAWN at, read from the calls the painter makes for one dot of it:
+ * the path radius of a fill, and half a stroke more for a ring. Neither `DOT_MARKS` nor `hitRadiusOf`
+ * is consulted, so a test built on it checks the hit geometry against the pixels, not against itself.
+ */
+function drawnOuterRadii(): Record<EvtxLevel, number> {
+  const radii = {} as Record<EvtxLevel, number>;
+  for (const level of LEVELS) {
+    const context = createRecordingContext();
+    paintSwimlanes(context, planPaint(sceneOf([[{ f: 0.5, level }]]), GEOMETRY), COLORS, null);
+    const mark = markCalls(context).find((call) => call.composite === "source-over")!;
+    radii[level] = mark.extent! / 2 + (mark.action === "stroke" ? mark.lineWidth / 2 : 0);
+  }
+  return radii;
+}
+const DRAWN = drawnOuterRadii();
+
 describe("hit-testing", () => {
   it("allows 4 CSS pixels (spec 8.9, acceptance)", () => {
     expect(HIT_SLOP_PX).toBe(4);
+  });
+
+  it("uses, for every level, the radius the painter draws: the hit geometry is the pixels' geometry", () => {
+    expect(DRAWN).toEqual({ Critical: 5, Error: 4.5, Warning: 3.5, Information: 2.5, Verbose: 2.5 });
+    for (const level of LEVELS) expect(hitRadiusOf(level), level).toBe(DRAWN[level]);
   });
 
   it("hits a dot's centre", () => {
@@ -389,7 +418,7 @@ describe("hit-testing", () => {
     (level) => {
       const scene = sceneOf([[{ f: 0.5, level }]]);
       // The spec's number, written out: the constant is not what the acceptance item names.
-      const reach = hitRadiusOf(level) + 4;
+      const reach = DRAWN[level] + 4;
       expect(hitTest(scene, GEOMETRY, px(0.5) + reach, py(0))).not.toBeNull();
       expect(hitTest(scene, GEOMETRY, px(0.5) - reach, py(0))).not.toBeNull();
       expect(hitTest(scene, GEOMETRY, px(0.5) + reach + 0.01, py(0))).toBeNull();
@@ -397,6 +426,47 @@ describe("hit-testing", () => {
       expect(hitTest(scene, GEOMETRY, px(0.5), py(0) - reach)).not.toBeNull();
     },
   );
+
+  it.each(LEVELS.map((level) => [level] as const))(
+    "hits 4 px from the edge of a %s dot at any angle, and misses just beyond: the disc is round",
+    (level) => {
+      const scene = sceneOf([[{ f: 0.5, level }]]);
+      const reach = DRAWN[level] + 4;
+      for (const degrees of [0, 20, 30, 45, 60, 90, 135, 180, 225, 270, 315, 340]) {
+        const angle = (degrees * Math.PI) / 180;
+        const at = (distance: number) => [
+          px(0.5) + distance * Math.cos(angle),
+          py(0) + distance * Math.sin(angle),
+        ];
+        const [hitX, hitY] = at(reach - 1e-6);
+        expect(hitTest(scene, GEOMETRY, hitX, hitY), `${level} ${degrees} deg just inside`).not.toBeNull();
+        const [missX, missY] = at(reach + 0.01);
+        expect(hitTest(scene, GEOMETRY, missX, missY), `${level} ${degrees} deg just outside`).toBeNull();
+      }
+    },
+  );
+
+  it("takes a diagonal point on the rim of the largest dot, where a corner-pointed shape would not reach", () => {
+    // 45 degrees, 4.9 px from the centre of the 10 px dot: inside its disc. A diamond of the same
+    // width reaches only 3.54 px along this line.
+    const scene = sceneOf([[{ f: 0.5, level: "Critical" }]]);
+    const offset = 4.9 * Math.SQRT1_2;
+    const hit = hitTest(scene, GEOMETRY, px(0.5) + offset, py(0) + offset);
+    expect(hit).not.toBeNull();
+    expect(hit!.distance).toBe(0);
+  });
+
+  it("gives an overlap to the dot drawn on top: a point on both discs selects the more severe", () => {
+    // Critical at canvas x 100, Error at 106, the pointer at (103.2, 21.2) in lane 0 (centre y 18):
+    // 4.53 px from the first and 4.25 px from the second, so on both visible discs.
+    const scene = sceneOf([[{ f: 0, level: "Critical", tag: "critical" }, { f: 6 / 1000, level: "Error", tag: "error" }]]);
+    const x = px(0) + 3.2;
+    const y = py(0) + 3.2;
+    expect(hitTest(scene, GEOMETRY, x, y)!.record.message).toBe("critical");
+    // Off the Critical disc and on the Error one, the visible dot is the one selected.
+    const onlyError = hitTest(scene, GEOMETRY, px(0) + 6 + 3.0, py(0) + 3.2);
+    expect(onlyError!.record.message).toBe("error");
+  });
 
   it("hits anywhere on the visible disc, rim included: the edge is the measure, not the centre", () => {
     const scene = sceneOf([[{ f: 0.5, level: "Critical" }]]);
@@ -554,7 +624,7 @@ describe("hit-testing", () => {
       for (let dot = 0; dot < lane.count; dot += 1) {
         const level = HISTOGRAM_STACK_ORDER[lane.levels[dot]];
         const center = Math.hypot(x - px(lane.fractions[dot]), y - cy);
-        const distance = Math.max(0, center - hitRadiusOf(level));
+        const distance = Math.max(0, center - DRAWN[level]);
         if (distance <= HIT_SLOP_PX) {
           found.push({ dot, distance, center, slot: lane.levels[dot], epoch: lane.epochs[dot] });
         }
