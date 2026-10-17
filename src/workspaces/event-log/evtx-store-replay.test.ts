@@ -814,6 +814,116 @@ describe("an explicit Load's replay also reads the channels that hold partial re
     expect(security.some((r) => r.eventRecordId === 100_000)).toBe(false);
     expect(security).toHaveLength(AUTO_LOAD_MAX_EVENTS);
   });
+
+  /**
+   * Security cut by a Stop, deselected; Application and System loaded for 24 hours; a Load of Setup
+   * is then started. `reads` decides what each read does, by channel and by how many reads of that
+   * channel there have been; Security's re-read can fail.
+   */
+  async function partialSecurityThenLoadSetup(options: {
+    holdSetup: Array<ReturnType<typeof deferred<void>>>;
+    securityRereadFails?: boolean;
+  }) {
+    const stopped = deferred<void>();
+    const setupReads = { count: 0 };
+    let securityLoaded = false;
+    invoke.mockImplementation(async (name: string, args: QueryArgs) => {
+      if (name === "evtx_cancel_channel_query") {
+        stopped.resolve();
+        return undefined;
+      }
+      if (name !== "evtx_query_channels") return undefined;
+      const channel = args.channels[0];
+      if (channel === "Security" && !securityLoaded) {
+        securityLoaded = true;
+        const reply = finished(args, { cancelled: true });
+        await stopped.promise;
+        return reply;
+      }
+      if (channel === "Security" && options.securityRereadFails) {
+        throw new Error("the service refused the read");
+      }
+      if (channel === "Setup") {
+        const hold = options.holdSetup[setupReads.count];
+        setupReads.count += 1;
+        const reply = finished(args);
+        if (hold) await hold.promise;
+        return reply;
+      }
+      return finished(args);
+    });
+    seedLive(["Application", "System"], ["Application", "System", "Security", "Setup"]);
+    const securityLoad = useEvtxStore.getState().queryChannels(["Security"]);
+    await vi.waitFor(() => expect(queries()).toHaveLength(1));
+    void cancelActiveLoad();
+    await securityLoad;
+    useEvtxStore.getState().setSelectedChannels(new Set(["Application", "System", "Setup"]));
+    // Wrapped, so awaiting this function does not wait for the Load it starts.
+    return { setupLoad: useEvtxStore.getState().queryChannels(["Setup"]) };
+  }
+
+  it("keeps the bound on a replay of a replay, for the channel the first replay read bounded", async () => {
+    const [firstHold, secondHold] = [deferred<void>(), deferred<void>()];
+    const { setupLoad } = await partialSecurityThenLoadSetup({ holdSetup: [firstHold, secondHold] });
+    await vi.waitFor(() => expect(queries()).toHaveLength(2));
+    useEvtxStore.getState().setTimeWindow("7d");
+
+    // The first replay starts when the Load ends: Security is read to the bound, the rest as asked.
+    firstHold.resolve();
+    await setupLoad;
+    await vi.waitFor(() => expect(queries()).toHaveLength(6));
+    expect(useEvtxStore.getState().isLoading).toBe(true);
+
+    // A second change is queued while that replay runs (the Time window stays enabled).
+    useEvtxStore.getState().setTimeWindow("30d");
+    secondHold.resolve();
+    await vi.waitFor(() => expect(queries()).toHaveLength(10));
+    await settle();
+
+    // Security is loaded by now, no longer an extra of the second replay, and must stay bounded.
+    const second = queries().slice(6);
+    expect(queries()).toHaveLength(10);
+    expect(second.map((args) => args.channels[0]).sort()).toEqual([
+      "Application",
+      "Security",
+      "Setup",
+      "System",
+    ]);
+    for (const args of second) {
+      expect(args.filter.time).toEqual({ kind: "last", milliseconds: 30 * 24 * 60 * 60 * 1000 });
+      expect(args.maxEvents).toBe(args.channels[0] === "Security" ? AUTO_LOAD_MAX_EVENTS : null);
+    }
+  });
+
+  it("clears the extra's old gaps and details even when its re-read fails", async () => {
+    const hold = deferred<void>();
+    const { setupLoad } = await partialSecurityThenLoadSetup({
+      holdSetup: [hold],
+      securityRereadFails: true,
+    });
+    // The Stop left Security a cancelled gap, in the banner text and as a structured detail.
+    expect(gapsText()).toContain("operator stopped the load");
+    expect(
+      useEvtxStore.getState().coverageDetails.some((detail) => detail.source === "Security"),
+    ).toBe(true);
+    await vi.waitFor(() => expect(queries()).toHaveLength(2));
+    useEvtxStore.getState().setTimeWindow("7d");
+
+    hold.resolve();
+    await setupLoad;
+    await vi.waitFor(() => expect(queries()).toHaveLength(6));
+    await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+    await settle();
+
+    // The re-read failed, so nothing from it removes Security's old gaps afterwards: the clear that
+    // ran before the re-read is the only thing that can. A stale "stopped" line or detail beside the
+    // new failure would describe a read that no longer exists.
+    expect(gapsText()).toContain("Security: not read");
+    expect(gapsText()).not.toContain("operator stopped the load");
+    expect(
+      useEvtxStore.getState().coverageDetails.filter((detail) => detail.source === "Security"),
+    ).toEqual([]);
+  });
 });
 
 describe("an operator change while idle on a source that is not live", () => {

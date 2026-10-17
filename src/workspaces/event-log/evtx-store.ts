@@ -994,8 +994,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
    * The one rule for a before-load change made while a load ran (`refreshRequested`), applied where
    * every kind of load ends: the channel refetch, the explicit Load and the first live load. The
    * invariant it keeps is literal: after every load end, either the criteria the controls show equal
-   * the criteria the loaded data was read with, or exactly one replay runs. A window, level list or
-   * Event ID list is never shown over data read with another one.
+   * the criteria the loaded data was read with, or exactly one replay runs, so at every load end a
+   * window, level list or Event ID list is not left over data read with another one. The one state
+   * outside a load end is a source that is not live, holding fragments, with a criterion changed while
+   * idle: nothing is read there, by the ruling that only a live source is read.
    *
    * `settleQueuedChange` is the restore half: for every queued change that will not be replayed it
    * returns the criteria the load read with, to be written in the same `set` that clears `isLoading`
@@ -1846,11 +1848,19 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       // Channels that hold records this Load neither queried nor has loaded: partial reads an earlier
       // Stop or failure left behind. They are read again with the Load's channels, to the refetch
       // bound and not to the Load's own, so their records are never shown under a window they were
-      // not read with and a read the operator stopped is not restarted unbounded.
+      // not read with and a read the operator stopped is not restarted unbounded. The bound chains:
+      // a replay of a replay keeps it for the channels this call read bounded (they are loaded or
+      // queried by now, so they no longer look like extras), and adds the extras it finds itself.
       const extras = [...new Set(get().records.map((record) => record.channel))].filter(
         (channel) => !replayChannels.includes(channel)
       );
       const reread = [...replayChannels, ...extras];
+      const bounded = [
+        ...new Set([
+          ...(boundedChannels ?? []).filter((channel) => reread.includes(channel)),
+          ...extras,
+        ]),
+      ];
       set((s) => ({
         records: s.records.filter((record) => !reread.includes(record.channel)),
         loadedChannels: new Set(
@@ -1868,7 +1878,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             )
         ),
       }));
-      void get().queryChannels(reread, maxEvents, extras);
+      void get().queryChannels(reread, maxEvents, bounded);
     }
   },
   loadSelectedChannels: async () => {
