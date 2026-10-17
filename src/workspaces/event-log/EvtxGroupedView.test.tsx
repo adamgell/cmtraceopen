@@ -1025,3 +1025,308 @@ describe("a selection made in the Grouped view with the table mounted", () => {
     expect(useEvtxStore.getState().selectedRecordId).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// The view's scope wiring: every selected channel, in live mode and in files mode.
+// ---------------------------------------------------------------------------------------------
+
+describe("the visible scope the view passes to the trend", () => {
+  /** The Grouped view over the store's visible records, as the workspace renders it. */
+  function GroupedFromStore() {
+    const state = useEvtxStore();
+    const visible = selectVisibleRecords({
+      records: state.records,
+      selectedChannels: state.selectedChannels,
+      filterLevels: state.filterLevels,
+      filterEventIds: state.filterEventIds,
+      filterSearch: state.filterSearch,
+      quickFilter: state.quickFilter,
+      visibleColumns: state.columnConfig.order,
+      timeZoneMode: state.timeZoneMode,
+      timeWindow: state.timeWindow,
+      nowEpoch: NOW,
+    });
+    return <EvtxGroupedView records={visible} nowEpoch={NOW} />;
+  }
+
+  /** The trend marks drawn on the Error group's row. */
+  function errorRowMarks() {
+    const row = document.querySelector('[data-evtx-grouped-row="group"][data-group-value="Error"]');
+    if (row === null) throw new Error("no Error group row");
+    const binsOf = (selector: string) =>
+      [...row.querySelectorAll(selector)].map((mark) => Number(mark.getAttribute("data-bin")));
+    return { zeros: binsOf("[data-trend-zero]"), bars: binsOf("[data-trend-bar]") };
+  }
+
+  /** Application Errors at 03:00, 09:00 and 20:00; its oldest kept event is at 01:00. */
+  const application = () => [
+    rec({ eventId: 1001, channel: "Application", sourceLabel: "/f/Application.evtx", at: DAY_START + 1 * HOUR }),
+    rec({ eventId: 1000, level: "Error", channel: "Application", sourceLabel: "/f/Application.evtx", at: DAY_START + 3 * HOUR }),
+    rec({ eventId: 1000, level: "Error", channel: "Application", sourceLabel: "/f/Application.evtx", at: DAY_START + 9 * HOUR }),
+    rec({ eventId: 1000, level: "Error", channel: "Application", sourceLabel: "/f/Application.evtx", at: DAY_START + 20 * HOUR }),
+    rec({ eventId: 1001, channel: "Application", sourceLabel: "/f/Application.evtx", at: DAY_START + 23.5 * HOUR }),
+  ];
+  /** System Information from 12:00 to 23:00, the newest at 23:00. */
+  const system = () =>
+    Array.from({ length: 12 }, (_, i) =>
+      rec({ eventId: 7036, channel: "System", sourceLabel: "/f/System.evtx", at: DAY_START + (12 + i) * HOUR }),
+    );
+  const live = (name: string) => ({ name, eventCount: 0, sourceType: "live" as const });
+
+  beforeEach(() => {
+    useEvtxStore.getState().reset();
+    vi.mocked(invoke).mockReset();
+  });
+  afterEach(() => {
+    vi.mocked(invoke).mockReset();
+    useEvtxStore.getState().reset();
+  });
+
+  it("live: a second selected loaded channel narrows a group whose events are all in the first", () => {
+    useEvtxStore.setState({
+      sourceMode: "live",
+      timeWindow: "24h",
+      groupBy: ["level"],
+      records: [...application(), ...system()],
+      // Setup is listed but not selected: it is outside the scope and must not blank the trend.
+      channels: [live("Application"), live("System"), live("Setup")],
+      selectedChannels: new Set(["Application", "System"]),
+      loadedChannels: new Set(["Application", "System"]),
+      channelReadThrough: new Map([
+        ["Application", NOW],
+        ["System", NOW],
+      ]),
+    });
+    render(<GroupedFromStore />);
+    const { zeros, bars } = errorRowMarks();
+    expect(bars).toEqual([3, 9, 20]);
+    // System proves 12:00 onward only, so nothing before it is drawn as read.
+    expect(zeros.every((bin) => bin >= 12)).toBe(true);
+    expect(zeros).toContain(12);
+    expect(zeros).toContain(22);
+  });
+
+  it("live: a selected channel that holds records but is not loaded leaves every empty bin unknown", () => {
+    useEvtxStore.setState({
+      sourceMode: "live",
+      timeWindow: "24h",
+      groupBy: ["level"],
+      records: [...application(), ...system()],
+      channels: [live("Application"), live("System")],
+      selectedChannels: new Set(["Application", "System"]),
+      // System's load was cancelled: its records are on screen, it is not loaded, it has no stamp.
+      loadedChannels: new Set(["Application"]),
+      channelReadThrough: new Map([["Application", NOW]]),
+    });
+    render(<GroupedFromStore />);
+    expect(errorRowMarks().zeros).toEqual([]);
+  });
+
+  it("files: a second selected file narrows a group whose events are all in the first", () => {
+    const day = 24 * HOUR;
+    useEvtxStore.setState({
+      sourceMode: "files",
+      timeWindow: "all",
+      groupBy: ["level"],
+      // Application from 10-01 to 10-10; System from 10-08 to 10-10.
+      records: [
+        rec({ eventId: 1000, level: "Error", channel: "Application", sourceLabel: "/f/Application.evtx", at: DAY_START }),
+        rec({ eventId: 1000, level: "Error", channel: "Application", sourceLabel: "/f/Application.evtx", at: DAY_START + 9 * day }),
+        rec({ channel: "System", sourceLabel: "/f/System.evtx", at: DAY_START + 7 * day }),
+        rec({ channel: "System", sourceLabel: "/f/System.evtx", at: DAY_START + 9 * day }),
+      ],
+      channels: [
+        { name: "Application", eventCount: 2, sourceType: { file: { path: "/f/Application.evtx" } } },
+        { name: "System", eventCount: 2, sourceType: { file: { path: "/f/System.evtx" } } },
+      ],
+      selectedChannels: new Set(["Application", "System"]),
+    });
+    render(<GroupedFromStore />);
+    const { zeros, bars } = errorRowMarks();
+    expect(bars).toEqual([0, 23]);
+    // Nine days in 24 bins of 9 hours: System's file starts in bin 18, so only 19 to 22 are read.
+    expect(zeros).toEqual([19, 20, 21, 22]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Store paths that leave a selected channel's records on screen without loading it.
+// ---------------------------------------------------------------------------------------------
+
+describe("a selected channel whose load did not finish", () => {
+  type Reply = (args: { channels?: string[]; requestId?: string }) => unknown;
+
+  /** System events from 18:00 to 21:00. */
+  const systemRows = () =>
+    [18, 19, 20, 21].map((hour) => rec({ eventId: 7036, channel: "System", at: DAY_START + hour * HOUR }));
+  /** Application Errors at 03:00 and 09:00 and its newest event at 23:00. */
+  const applicationRows = () => [
+    rec({ eventId: 1000, level: "Error", channel: "Application", at: DAY_START + 3 * HOUR }),
+    rec({ eventId: 1000, level: "Error", channel: "Application", at: DAY_START + 9 * HOUR }),
+    rec({ eventId: 1001, channel: "Application", at: DAY_START + 23 * HOUR }),
+  ];
+
+  /** Delivers `rows` for the asked channel the way the backend streams them. */
+  function stream(args: { channels?: string[]; requestId?: string }, rows: EvtxRecord[], complete: boolean) {
+    const channel = args.channels?.[0] ?? "";
+    if (rows.length > 0) {
+      listeners.get("evtx-record-batch")?.({
+        payload: { requestId: args.requestId, channel, sequence: 0, records: rows },
+      });
+    }
+    if (complete) {
+      listeners.get("evtx-record-stream-complete")?.({
+        payload: { requestId: args.requestId, channel, sequenceCount: rows.length > 0 ? 1 : 0, totalRecords: rows.length },
+      });
+    }
+  }
+  const ok =
+    (rows: EvtxRecord[]): Reply =>
+    (args) => {
+      stream(args, rows, true);
+      const channel = args.channels?.[0] ?? "";
+      return { records: [], channels: [{ name: channel, eventCount: rows.length, sourceType: "live" }], totalRecords: rows.length, parseErrors: 0, errorMessages: [] };
+    };
+
+  function backend(replies: Record<string, Reply>, enumerate: string[] = []) {
+    vi.mocked(invoke).mockImplementation(async (command: string, raw?: unknown) => {
+      if (command === "evtx_enumerate_channels") {
+        return enumerate.map((name) => ({ name, eventCount: 0, sourceType: "live", enabledState: "enabled" }));
+      }
+      const args = (raw ?? {}) as { channels?: string[]; requestId?: string };
+      const reply = replies[args.channels?.[0] ?? ""];
+      if (!reply) throw new Error(`no reply for ${command}`);
+      return reply(args);
+    });
+  }
+
+  /** Application loaded and read through NOW, as the automatic load leaves it. */
+  function applicationLoaded(extra: { channels: string[]; selected: string[] }) {
+    useEvtxStore.setState({
+      sourceMode: "live",
+      timeWindow: "24h",
+      groupBy: ["level"],
+      records: applicationRows(),
+      channels: extra.channels.map((name) => ({ name, eventCount: 0, sourceType: "live" as const })),
+      selectedChannels: new Set(extra.selected),
+      loadedChannels: new Set(["Application"]),
+      channelReadThrough: new Map([["Application", NOW]]),
+    });
+  }
+
+  function errorZeros() {
+    const state = useEvtxStore.getState();
+    const visible = state.records.filter((record) => state.selectedChannels.has(record.channel));
+    render(<EvtxGroupedView records={visible} nowEpoch={NOW} />);
+    const row = document.querySelector('[data-evtx-grouped-row="group"][data-group-value="Error"]')!;
+    return row.querySelectorAll("[data-trend-zero]").length;
+  }
+
+  beforeEach(() => {
+    useEvtxStore.getState().reset();
+    vi.mocked(invoke).mockReset();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.mocked(invoke).mockReset();
+    useEvtxStore.getState().reset();
+  });
+
+  it("with System deselected, Application's own read draws its empty bins as 0", () => {
+    applicationLoaded({ channels: ["Application", "System"], selected: ["Application"] });
+    expect(errorZeros()).toBeGreaterThan(0);
+  });
+
+  it("a cancelled Load: System's records stay, it is not loaded, every empty bin is unknown", async () => {
+    applicationLoaded({ channels: ["Application", "System"], selected: ["Application", "System"] });
+    backend({
+      System: (args) => {
+        stream(args, systemRows(), true);
+        return {
+          records: [],
+          channels: [{ name: "System", eventCount: 4, sourceType: "live" }],
+          totalRecords: 4,
+          parseErrors: 0,
+          errorMessages: [],
+          coverageGaps: [{ source: "System", kind: "cancelled", reason: "the operator stopped the load" }],
+        };
+      },
+    });
+    await useEvtxStore.getState().queryChannels(["System"]);
+    const state = useEvtxStore.getState();
+    expect(state.loadedChannels.has("System")).toBe(false);
+    expect(state.records.some((record) => record.channel === "System")).toBe(true);
+    expect(errorZeros()).toBe(0);
+  });
+
+  it("a failed first Load: System's delivered records stay, every empty bin is unknown", async () => {
+    applicationLoaded({ channels: ["Application", "System"], selected: ["Application", "System"] });
+    backend({
+      System: (args) => {
+        stream(args, systemRows(), false);
+        throw new Error("RPC server unavailable");
+      },
+    });
+    await useEvtxStore.getState().queryChannels(["System"]);
+    const state = useEvtxStore.getState();
+    expect(state.loadedChannels.has("System")).toBe(false);
+    expect(state.records.some((record) => record.channel === "System")).toBe(true);
+    expect(errorZeros()).toBe(0);
+  });
+
+  it("a failed refresh: System's delivered records stay, every empty bin is unknown", async () => {
+    applicationLoaded({ channels: ["Application", "System"], selected: ["Application", "System"] });
+    useEvtxStore.setState({ loadedChannels: new Set(["Application", "System"]) });
+    backend({
+      Application: ok(applicationRows()),
+      System: (args) => {
+        stream(args, systemRows(), false);
+        throw new Error("RPC server unavailable");
+      },
+    });
+    await useEvtxStore.getState().refreshLoadedChannels();
+    const state = useEvtxStore.getState();
+    expect(state.loadedChannels.has("Application")).toBe(true);
+    expect(state.loadedChannels.has("System")).toBe(false);
+    expect(state.records.some((record) => record.channel === "System")).toBe(true);
+    expect(errorZeros()).toBe(0);
+  });
+
+  it("the automatic load's unusable channel: its records stay, every empty bin is unknown", async () => {
+    backend(
+      {
+        Application: ok(applicationRows()),
+        // The reply counts more events than reached the view, so System is unusable.
+        System: (args) => {
+          stream(args, systemRows(), false);
+          listeners.get("evtx-record-stream-complete")?.({
+            payload: { requestId: args.requestId, channel: "System", sequenceCount: 1, totalRecords: 9 },
+          });
+          return { records: [], channels: [{ name: "System", eventCount: 9, sourceType: "live" }], totalRecords: 9, parseErrors: 0, errorMessages: [] };
+        },
+      },
+      ["Application", "System"],
+    );
+    await useEvtxStore.getState().enumerateChannels();
+    useEvtxStore.setState({ groupBy: ["level"] });
+    const state = useEvtxStore.getState();
+    expect(state.selectedChannels.has("System")).toBe(true);
+    expect(state.loadedChannels.has("System")).toBe(false);
+    expect(state.records.some((record) => record.channel === "System")).toBe(true);
+    expect(errorZeros()).toBe(0);
+  });
+
+  it("a denied selected channel with no records: every empty bin is unknown", async () => {
+    applicationLoaded({ channels: ["Application", "Security"], selected: ["Application", "Security"] });
+    backend({
+      Security: () => {
+        throw new Error("EvtQuery(Security): Access is denied. (0x80070005)");
+      },
+    });
+    await useEvtxStore.getState().queryChannels(["Security"]);
+    const state = useEvtxStore.getState();
+    expect(state.loadedChannels.has("Security")).toBe(false);
+    expect(state.records.some((record) => record.channel === "Security")).toBe(false);
+    expect(errorZeros()).toBe(0);
+  });
+});

@@ -970,7 +970,6 @@ export function EvtxGroupedView({ records, nowEpoch }: EvtxGroupedViewProps) {
   const coverageGaps = useEvtxStore((s) => s.coverageGaps);
   const tailCoverageGaps = useEvtxStore((s) => s.tailCoverageGaps);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
-  const loadedChannels = useEvtxStore((s) => s.loadedChannels);
   const channelReadThrough = useEvtxStore((s) => s.channelReadThrough);
   const setFilterEventIds = useEvtxStore((s) => s.setFilterEventIds);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
@@ -995,15 +994,9 @@ export function EvtxGroupedView({ records, nowEpoch }: EvtxGroupedViewProps) {
       }),
     [remoteMachine, channels, coverageDetails, sourceManifest, coverageGaps, tailCoverageGaps],
   );
-  // The channels the visible records can come from: selected and loaded in live mode; a file set
-  // is read as it is opened, so there every selected channel.
-  const scopeChannels = useMemo(
-    () =>
-      sourceMode === "live"
-        ? [...selectedChannels].filter((channel) => loadedChannels.has(channel))
-        : [...selectedChannels],
-    [sourceMode, selectedChannels, loadedChannels],
-  );
+  // The channels the visible records can come from: every selected channel, loaded or not. A
+  // cancelled or failed load leaves a selected channel's records on screen without loading it.
+  const scopeChannels = useMemo(() => [...selectedChannels], [selectedChannels]);
   const field = groupedViewField(groupBy);
   const input = useMemo<GroupSummariesInput>(
     () => ({
