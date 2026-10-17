@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   eventDateKey,
   formatClock,
+  formatDayClock,
   formatEventTime,
   formatTimeRange,
   TIME_RANGE_SEPARATOR,
@@ -133,6 +134,32 @@ describe("formatTimeRange", () => {
     const end = utc(16, 9, 45);
     expect(formatTimeRange(start, end, "local")).toBe(
       `${formatClock(start, "local")}${SEP}${formatClock(end, "local")}`,
+    );
+  });
+});
+
+describe("formatDayClock", () => {
+  const utc = (day: number, hour: number, minute: number, second = 0) =>
+    Date.UTC(2026, 9, day, hour, minute, second);
+
+  it("puts the zone's month and day before the clock", () => {
+    expect(formatDayClock(utc(16, 22, 0), "utc")).toBe("Oct 16 22:00");
+    expect(formatDayClock(utc(3, 4, 5, 9), "utc", true)).toBe("Oct 3 04:05:09");
+  });
+
+  it("reads the day on the chosen clock, not the UTC one", () => {
+    const local = new Date(utc(16, 22, 0));
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    expect(formatDayClock(utc(16, 22, 0), "local")).toBe(
+      `${months[local.getMonth()]} ${local.getDate()} ${formatClock(utc(16, 22, 0), "local")}`,
+    );
+  });
+
+  it("is the form a range label uses for each end when the range crosses a day", () => {
+    const start = utc(16, 22, 0);
+    const end = utc(17, 3, 0);
+    expect(formatTimeRange(start, end, "utc")).toBe(
+      `${formatDayClock(start, "utc")}${TIME_RANGE_SEPARATOR}${formatDayClock(end, "utc")}`,
     );
   });
 });

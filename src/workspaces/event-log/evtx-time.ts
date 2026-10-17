@@ -127,6 +127,15 @@ export function formatClock(epochMs: number, mode: EvtxTimeZoneMode, withSeconds
   return withSeconds ? `${hhmm}:${pad(clock.seconds)}` : hhmm;
 }
 
+/**
+ * A clock reading with its day, `Oct 16 22:00` (`Oct 16 22:00:05` with `withSeconds`), in the chosen
+ * zone. For labels that sit on a span longer than a day, where a bare `22:00` would not say which one.
+ */
+export function formatDayClock(epochMs: number, mode: EvtxTimeZoneMode, withSeconds = false): string {
+  const { month, day } = wallClock(epochMs, mode);
+  return `${MONTH_ABBREVIATIONS[month]} ${day} ${formatClock(epochMs, mode, withSeconds)}`;
+}
+
 /** Between the two times of a range label: an en dash, the spec's glyph (section 8.4). */
 export const TIME_RANGE_SEPARATOR = "\u2013";
 
@@ -142,11 +151,8 @@ const SECONDS_BELOW_MS = 2 * 60 * 1000;
 export function formatTimeRange(startMs: number, endMs: number, mode: EvtxTimeZoneMode): string {
   const withSeconds = endMs - startMs < SECONDS_BELOW_MS;
   const crossesDays = eventDateKey(startMs, mode) !== eventDateKey(Math.max(startMs, endMs - 1), mode);
-  const end = (epochMs: number) => {
-    const { month, day } = wallClock(epochMs, mode);
-    const clock = formatClock(epochMs, mode, withSeconds);
-    return crossesDays ? `${MONTH_ABBREVIATIONS[month]} ${day} ${clock}` : clock;
-  };
+  const end = (epochMs: number) =>
+    crossesDays ? formatDayClock(epochMs, mode, withSeconds) : formatClock(epochMs, mode, withSeconds);
   return `${end(startMs)}${TIME_RANGE_SEPARATOR}${end(endMs)}`;
 }
 
