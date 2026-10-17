@@ -126,15 +126,23 @@ export function neighborRecordId(
   return ordered[index + step]?.id ?? null;
 }
 
-/** True when `value` is a real EventRecordID text: present and not the parser's zero placeholder. */
+/**
+ * True when `value` is present and is not the parser's single "0" placeholder. This is a DISPLAY
+ * test: any other text, "000" included, is the record's own text and is shown as written. Whether
+ * two things are the same record is decided elsewhere, by `engineRecordIdentity`, which ignores
+ * all-zero text.
+ */
 function hasRecordIdText(value: string | null | undefined): value is string {
   return typeof value === "string" && value.length > 0 && value !== "0";
 }
 
 /**
- * How an evidence reference names its record, following the engine's `stable_id` order: a
- * non-zero `recordIdText`, then `fallbackIdentity`, then a non-zero `recordId`. A record the
- * provider never numbered says so; it is never printed as "record 0".
+ * How an evidence reference NAMES its record for display, following the engine's `stable_id`
+ * order: a `recordIdText` that is present and not the single "0" placeholder (shown as written,
+ * so "000" reads "record 000"), then `fallbackIdentity`, then a non-zero `recordId`. A record the
+ * provider never numbered says so; it is never printed as "record 0". This is a label, not an
+ * identity claim: matching evidence to a loaded record uses `engineRecordIdentity`, under which
+ * all-zero text names nothing.
  */
 export function eventRecordIdentity(evidence: DiagnosisEventEvidence): string {
   if (hasRecordIdText(evidence.recordIdText)) return `record ${evidence.recordIdText}`;
