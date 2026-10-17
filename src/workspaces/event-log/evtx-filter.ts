@@ -381,13 +381,16 @@ export interface VisibleRecordsInput {
   nowEpoch?: number;
   /** Parsed once by selectVisibleRecords for the whole visible-record pass. */
   eventIdSelectors?: EvtxEventIdSelectorParseResult;
-  /** The transient time range, or null for none. */
-  timeRange?: EvtxTimeRange | null;
   /**
-   * The records of the transient record scope, or null for none. An empty set is a scope of
-   * nothing and shows nothing; it is not the same as null.
+   * The transient time range, or null for none. Required rather than optional: `tsc` then lists
+   * every caller of the selector, and a caller that left it out would show a set the others do not.
    */
-  scopeRecords?: ReadonlySet<EvtxRecord> | null;
+  timeRange: EvtxTimeRange | null;
+  /**
+   * The records of the transient record scope, or null for none. Required for the same reason as
+   * `timeRange`. An empty set is a scope of nothing and shows nothing; it is not the same as null.
+   */
+  scopeRecords: ReadonlySet<EvtxRecord> | null;
 }
 
 function normalizeText(value: string, caseSensitive: boolean): string {
@@ -732,8 +735,8 @@ export function recordMatchesVisibleFilter(
 ): boolean {
   if (!input.selectedChannels.has(record.channel)) return false;
   // The transient criteria first: a set lookup and two comparisons, cheaper than any text match.
-  if (input.scopeRecords && !input.scopeRecords.has(record)) return false;
-  if (input.timeRange && !isWithinTimeRange(record, input.timeRange)) return false;
+  if (input.scopeRecords !== null && !input.scopeRecords.has(record)) return false;
+  if (input.timeRange !== null && !isWithinTimeRange(record, input.timeRange)) return false;
   if (
     input.timeWindow &&
     !isWithinTimeWindow(record.timestampEpoch, input.timeWindow, input.nowEpoch)
@@ -828,7 +831,7 @@ export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
  * other criterion shows, which the range cannot place. Zero without a range.
  */
 export function countHiddenForWantOfTimestamp(input: VisibleRecordsInput): number {
-  if (!input.timeRange) return 0;
+  if (input.timeRange === null) return 0;
   let count = 0;
   for (const record of selectVisibleRecords({ ...input, timeRange: null })) {
     if (!hasUsableTimestamp(record)) count += 1;

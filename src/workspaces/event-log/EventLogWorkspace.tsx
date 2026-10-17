@@ -214,6 +214,8 @@ export function EventLogWorkspace() {
   const filterEventIds = useEvtxStore((s) => s.filterEventIds);
   const filterSearch = useEvtxStore((s) => s.filterSearch);
   const quickFilter = useEvtxStore((s) => s.quickFilter);
+  const timeRange = useEvtxStore((s) => s.timeRange);
+  const recordScope = useEvtxStore((s) => s.recordScope);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const columnOrder = useEvtxStore((s) => s.columnConfig.order);
   const nowEpoch = useMemo(
@@ -225,6 +227,8 @@ export function EventLogWorkspace() {
       filterEventIds,
       filterSearch,
       quickFilter,
+      timeRange,
+      recordScope,
       columnOrder,
       timeZoneMode,
       timeWindow,
@@ -246,6 +250,8 @@ export function EventLogWorkspace() {
             visibleColumns: columnOrder,
             timeZoneMode,
             timeWindow,
+            timeRange,
+            scopeRecords: recordScope?.records ?? null,
           }),
     [
       isLoading,
@@ -258,6 +264,8 @@ export function EventLogWorkspace() {
       columnOrder,
       timeZoneMode,
       timeWindow,
+      timeRange,
+      recordScope,
       nowEpoch,
     ],
   );

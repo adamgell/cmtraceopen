@@ -49,6 +49,9 @@ const record = (overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
   ...overrides,
 });
 
+/** The two transient criteria off: every call of the selector states them (they are required). */
+const NO_TRANSIENT = { timeRange: null, scopeRecords: null } as const;
+
 const quick = (overrides: Partial<EvtxQuickFilter> = {}): EvtxQuickFilter => ({
   mode: "oneString",
   query: "",
@@ -64,6 +67,7 @@ const visible = (
   records: EvtxRecord[] = [record()]
 ) =>
   selectVisibleRecords({
+    ...NO_TRANSIENT,
     records,
     selectedChannels: new Set(["Application"]),
     filterLevels: new Set(EVTX_LEVELS),
@@ -189,6 +193,7 @@ describe("quick filter semantics", () => {
     const providerOnly = record({ provider: "ProviderOnly", message: "Other message" });
     expect(
       selectVisibleRecords({
+        ...NO_TRANSIENT,
         records: [providerOnly],
         selectedChannels: new Set(["Application"]),
         filterLevels: new Set(["Information"]),
@@ -223,6 +228,7 @@ describe("ordinary Event ID invalid input", () => {
   it.each(["4294967296", "-1", "not-an-id"])("matches no records for %s", (filterEventIds) => {
     expect(
       selectVisibleRecords({
+        ...NO_TRANSIENT,
         records: [record()],
         selectedChannels: new Set(["Application"]),
         filterLevels: new Set(["Information"]),
@@ -235,6 +241,7 @@ describe("ordinary Event ID invalid input", () => {
 it("excludes records outside the selected level set", () => {
   expect(
     selectVisibleRecords({
+      ...NO_TRANSIENT,
       records: [record({ level: "Error" })],
       selectedChannels: new Set(["Application"]),
       filterLevels: new Set(["Information"]),
@@ -253,6 +260,7 @@ describe("event id range matching", () => {
     );
     expect(
       selectVisibleRecords({
+        ...NO_TRANSIENT,
         records,
         selectedChannels: new Set(["Application"]),
         filterLevels: new Set(["Information"]),
@@ -274,6 +282,7 @@ describe("time-window boundaries", () => {
     const inWindow = record({ timestampEpoch: now - 60 * 60 * 1000 });
     const old = record({ timestampEpoch: now - 60 * 60 * 1000 - 1 });
     const visibleRecords = selectVisibleRecords({
+      ...NO_TRANSIENT,
       records: [inWindow, old],
       selectedChannels: new Set(["Application"]),
       filterLevels: new Set(["Information"]),
@@ -474,6 +483,7 @@ const names = (records: EvtxRecord[]) =>
 const searched = (filterSearch: string, quickFilter?: EvtxQuickFilter) =>
   names(
     selectVisibleRecords({
+      ...NO_TRANSIENT,
       records: allFieldRecords,
       selectedChannels: fieldChannels,
       filterLevels: new Set(EVTX_LEVELS),
@@ -778,6 +788,7 @@ describe("source: matches the grid record's source label", () => {
   const sources = [evtxFile, archiveText, live, remote];
   const matching = (query: string) =>
     selectVisibleRecords({
+      ...NO_TRANSIENT,
       records: sources,
       selectedChannels: new Set(sources.map((entry) => entry.channel)),
       filterLevels: new Set(EVTX_LEVELS),
@@ -805,6 +816,7 @@ describe("transient criteria in selectVisibleRecords", () => {
     filterLevels: new Set(EVTX_LEVELS),
     filterEventIds: "",
     filterSearch: "",
+    ...NO_TRANSIENT,
   });
   const ids = (list: EvtxRecord[]) => list.map((r) => r.id);
 
@@ -837,9 +849,8 @@ describe("transient criteria in selectVisibleRecords", () => {
       expect(hasUsableTimestamp(at(1, 1))).toBe(true);
     });
 
-    it("changes nothing when it is null or left out", () => {
+    it("changes nothing when it is null", () => {
       expect(selectVisibleRecords({ ...base(records), timeRange: null })).toEqual(records);
-      expect(selectVisibleRecords(base(records))).toEqual(records);
     });
   });
 
@@ -853,7 +864,7 @@ describe("transient criteria in selectVisibleRecords", () => {
       expect(selectVisibleRecords({ ...base(records), scopeRecords: new Set() })).toEqual([]);
     });
 
-    it("changes nothing when it is null or left out", () => {
+    it("changes nothing when it is null", () => {
       expect(selectVisibleRecords({ ...base(records), scopeRecords: null })).toEqual(records);
     });
 

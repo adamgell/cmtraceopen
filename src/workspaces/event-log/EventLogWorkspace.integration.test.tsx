@@ -158,6 +158,77 @@ describe("EventLogWorkspace backend-owned analysis wiring", () => {
     );
   });
 
+  describe("with a transient time range or record scope", () => {
+    const timed = (n: number): EvtxRecord => ({
+      ...RECORD,
+      id: n,
+      eventRecordId: 100 + n,
+      timestampEpoch: n * 1_000,
+      message: `event ${n}`,
+    });
+    const scopeOf = (...records: EvtxRecord[]) => ({
+      kind: "finding" as const,
+      title: "A finding",
+      records: new Set(records),
+      counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+    });
+
+    it("builds the first session from only the events in the time range", async () => {
+      const events = [1, 2, 3, 4].map(timed);
+      seed(events);
+      useEvtxStore.getState().setTimeRange({ startMs: 2_000, endMs: 4_000 });
+      render(<EventLogWorkspace />);
+
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+      expect(mocks.buildAnalysis).toHaveBeenCalledWith(
+        expect.objectContaining({ records: [events[1], events[2]] }),
+      );
+    });
+
+    it("builds the first session from only the scoped events", async () => {
+      const events = [1, 2, 3, 4].map(timed);
+      seed(events);
+      useEvtxStore.getState().setRecordScope(scopeOf(events[0], events[3]));
+      render(<EventLogWorkspace />);
+
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+      expect(mocks.buildAnalysis).toHaveBeenCalledWith(
+        expect.objectContaining({ records: [events[0], events[3]] }),
+      );
+    });
+
+    it("rebuilds the session when a range or a scope is set or cleared afterwards", async () => {
+      const events = [1, 2, 3, 4].map(timed);
+      seed(events);
+      render(<EventLogWorkspace />);
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+      expect(mocks.buildAnalysis).toHaveBeenLastCalledWith(expect.objectContaining({ records: events }));
+
+      act(() => {
+        useEvtxStore.getState().setTimeRange({ startMs: 1_000, endMs: 3_000 });
+      });
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(2));
+      expect(mocks.buildAnalysis).toHaveBeenLastCalledWith(
+        expect.objectContaining({ records: [events[0], events[1]] }),
+      );
+
+      act(() => {
+        useEvtxStore.getState().setRecordScope(scopeOf(events[1], events[3]));
+      });
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(3));
+      expect(mocks.buildAnalysis).toHaveBeenLastCalledWith(
+        expect.objectContaining({ records: [events[1]] }),
+      );
+
+      act(() => {
+        useEvtxStore.getState().setTimeRange(null);
+        useEvtxStore.getState().setRecordScope(null);
+      });
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(4));
+      expect(mocks.buildAnalysis).toHaveBeenLastCalledWith(expect.objectContaining({ records: events }));
+    });
+  });
+
   it("coalesces a burst of record changes into one session build", async () => {
     const newer = { ...RECORD, id: 2, eventRecordId: 102 };
     const newest = { ...RECORD, id: 3, eventRecordId: 103 };

@@ -317,6 +317,7 @@ describe("a live-tail merge", () => {
       filterLevels: new Set(EVTX_LEVELS),
       filterEventIds: "",
       filterSearch: "",
+      timeRange: null,
       scopeRecords: after.recordScope?.records ?? null,
     });
     expect(visible).toEqual(scoped);
