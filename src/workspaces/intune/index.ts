@@ -112,9 +112,10 @@ export const intuneWorkspace: WorkspaceDefinition = {
     placeholder: "Open Intune source...",
   },
   capabilities: {
-    // The handler loads a file source through the log store before it analyzes it, so a restore
-    // through the handler reopens the text log too.
-    reopensTextLogs: true,
+    // The handler loads a file source (or a known source that is one file) through the log store
+    // before it analyzes it, so a restore through the handler reopens that text log too. A folder
+    // is only analyzed (shouldSyncSourceBeforeIntuneAnalysis), so it does not count.
+    reopensTextLogFiles: true,
   },
   onOpenSource: createIntuneOnOpenSource("intune"),
 };

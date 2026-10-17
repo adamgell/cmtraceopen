@@ -126,7 +126,7 @@ describe("textLogRestoreWorkspace", () => {
     expect(
       textLogRestoreWorkspace("intune", {
         onOpenSource: handler,
-        capabilities: { reopensTextLogs: true },
+        capabilities: { reopensTextLogFiles: true },
       }),
     ).toBe("intune");
   });
@@ -136,7 +136,7 @@ describe("textLogRestoreWorkspace", () => {
     expect(
       textLogRestoreWorkspace("event-log", {
         onOpenSource: handler,
-        capabilities: { reopensTextLogs: false },
+        capabilities: { reopensTextLogFiles: false },
       }),
     ).toBe("log");
   });

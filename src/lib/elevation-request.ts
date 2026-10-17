@@ -85,7 +85,7 @@ export function textLogRestoreWorkspace(
   definition: Pick<WorkspaceDefinition, "onOpenSource" | "capabilities">,
 ): WorkspaceId {
   if (!definition.onOpenSource) return active;
-  return definition.capabilities?.reopensTextLogs === true ? active : "log";
+  return definition.capabilities?.reopensTextLogFiles === true ? active : "log";
 }
 
 export interface ElevationRequestContext {
