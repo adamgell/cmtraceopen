@@ -20,6 +20,7 @@
  *   column because there is no message to show (recorded deviation from 8.11a).
  */
 import { getBaseName } from "../../lib/file-paths";
+import type { SourceOpenMode } from "../../lib/tab-snapshot-cache";
 import { engineRecordIdentity } from "./evtx-insights-data";
 import {
   isEventOrigin,
@@ -204,32 +205,32 @@ export function unplacedCardLine(list: UnplacedListInput): string | null {
   return `At least ${count(list.items.length)} timeline ${list.items.length === 1 ? "item" : "items"} could not be placed: no timestamp. The total is not known.`;
 }
 
-/** What the Log Viewer holds: the file it has open and which lines of it are loaded. */
+/**
+ * What the Log Viewer holds: the log store's own mode, the file it has open and which lines of that
+ * file are loaded.
+ */
 export interface LogViewerLines {
   openFilePath: string | null;
+  /**
+   * The log store's `sourceOpenMode`. Only "single-file" means the entries are one file, in that
+   * file's order, shown by the list that consumes a scroll target. The other modes keep
+   * `openFilePath` and the entries in states that look like it and are not (see
+   * `openAtLineAvailability`), so the file and the lines alone cannot tell them apart.
+   */
+  sourceOpenMode: SourceOpenMode;
   /** The line numbers loaded for `openFilePath`. */
   lines: ReadonlySet<number>;
-  /**
-   * Lines of OTHER files are loaded too. `createMergedTab` (log-store.ts) replaces the entries with
-   * several files' lines and leaves `openFilePath` as it was, and the Log Viewer's consumer of a
-   * scroll target does not look at the file, so in that state a line number can select another
-   * file's line.
-   */
-  otherFilesLoaded: boolean;
 }
 
-/** The Log Viewer's open file and its loaded lines, in one pass over the entries. */
+/** The Log Viewer's mode, open file and that file's loaded lines, in one pass over the entries. */
 export function logViewerLines(
   openFilePath: string | null,
+  sourceOpenMode: SourceOpenMode,
   entries: readonly { filePath: string; lineNumber: number }[],
 ): LogViewerLines {
   const lines = new Set<number>();
-  let otherFilesLoaded = false;
-  for (const entry of entries) {
-    if (entry.filePath === openFilePath) lines.add(entry.lineNumber);
-    else otherFilesLoaded = true;
-  }
-  return { openFilePath, lines, otherFilesLoaded };
+  for (const entry of entries) if (entry.filePath === openFilePath) lines.add(entry.lineNumber);
+  return { openFilePath, sourceOpenMode, lines };
 }
 
 export interface OpenAtLine {
@@ -240,14 +241,31 @@ export interface OpenAtLine {
   name: string;
 }
 
+const NO_SINGLE_FILE = "The Log Viewer has no single file open, so this line cannot be opened there.";
+
+/** Why each mode other than "single-file" cannot open a line at its place. */
+const MODE_REASONS: Record<Exclude<SourceOpenMode, "single-file" | null>, string> = {
+  merged:
+    "The Log Viewer is showing a merged view of several files, which does not keep each file's lines in order.",
+  diff: "The Log Viewer is showing a comparison, not the file, so it cannot open this line there.",
+  "aggregate-folder":
+    "The Log Viewer is showing a folder of files, so it cannot open one line of one file there.",
+};
+
 /**
- * Whether "Open in Log Viewer" may be offered for a log line. The Log Viewer consumes the target
- * only for the one file it has open, and selects the first line it shows at or after the target
- * WITHOUT looking at the file, so it is enabled only when that file is exactly the line's file, holds
- * exactly that line, and no other file's lines are loaded beside it. Anything else is disabled with
- * its reason: a target that cannot be consumed would stay armed for a later load, and one that is
- * consumed among several files can select another file's line. The button is "near line n" because
- * a filter in the Log Viewer can hide the line itself.
+ * Whether "Open in Log Viewer" may be offered for a log line. The Log Viewer consumes the target in
+ * one place (LogListView), only when its open file is the target's, and selects the first line it
+ * SHOWS whose number is at or after the target, without looking at the file. That is the right line
+ * only when the entries are the one file in file order and that list is the one mounted. So it is
+ * enabled only when the log store is in "single-file" mode, its open file is exactly the line's
+ * file, and it holds exactly that line. Every other state is disabled with its reason:
+ * - merged: the entries are in timestamp order, untimed lines last, so with the other files hidden
+ *   the open file's line 7 is loaded and a click selects some other line; with them shown it can
+ *   select another file's line;
+ * - diff: the diff view is mounted instead of the list, so the target would never be consumed and
+ *   would fire when the diff closes;
+ * - aggregate-folder, and no mode (after the diff closes): there is no single file open.
+ * The button is "near line n" because a filter in the Log Viewer can hide the line itself.
  */
 export function openAtLineAvailability(
   viewer: LogViewerLines,
@@ -255,33 +273,20 @@ export function openAtLineAvailability(
   line: number,
 ): OpenAtLine {
   const name = `Open ${getBaseName(file)} in the Log Viewer near line ${count(line)}`;
-  if (viewer.openFilePath === null) {
-    return {
-      enabled: false,
-      reason: "The Log Viewer has no single file open, so this line cannot be opened there.",
-      name,
-    };
+  const no = (reason: string): OpenAtLine => ({ enabled: false, reason, name });
+  if (viewer.sourceOpenMode !== "single-file") {
+    return no(
+      viewer.sourceOpenMode === null
+        ? NO_SINGLE_FILE
+        : MODE_REASONS[viewer.sourceOpenMode],
+    );
   }
+  if (viewer.openFilePath === null) return no(NO_SINGLE_FILE);
   if (viewer.openFilePath !== file) {
-    return {
-      enabled: false,
-      reason: `The Log Viewer has a different file open. Open ${getBaseName(file)} there first.`,
-      name,
-    };
-  }
-  if (viewer.otherFilesLoaded) {
-    return {
-      enabled: false,
-      reason: "The Log Viewer has lines of several files loaded, so it cannot open this one at its place.",
-      name,
-    };
+    return no(`The Log Viewer has a different file open. Open ${getBaseName(file)} there first.`);
   }
   if (!viewer.lines.has(line)) {
-    return {
-      enabled: false,
-      reason: `Line ${count(line)} is not among the lines the Log Viewer has loaded.`,
-      name,
-    };
+    return no(`Line ${count(line)} is not among the lines the Log Viewer has loaded.`);
   }
   return { enabled: true, reason: null, name };
 }
