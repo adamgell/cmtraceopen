@@ -552,6 +552,37 @@ describe("a lane drag and a histogram drag over the same x set one criterion", (
     expect(viaLanes).not.toBeNull();
   });
 
+  // A drag over an applied range: the one place the commit differs from setting the dragged buckets.
+  // A drag that covers exactly the one bucket that is the whole applied range clears it (the second
+  // click on the sole active ID does the same); every other drag sets what it covers.
+  type AppliedCase = [string, [number, number], number, number, [number, number] | null];
+  const overApplied: AppliedCase[] = [
+    ["a single bucket applied, dragged within that bucket: clears it", [5, 5], x(5, 1), x(5, 8), null],
+    ["a single bucket applied, dragged within another bucket: sets that one", [5, 5], x(6, 1), x(6, 8), [6, 6]],
+    ["a single bucket applied, dragged over several buckets: sets them", [5, 5], x(3), x(7), [3, 7]],
+    ["a single bucket applied, dragged over it and its neighbours: sets them", [5, 5], x(4, 1), x(6, 8), [4, 6]],
+    ["several buckets applied, dragged over exactly them: keeps them", [10, 20], x(10, 1), x(20, 8), [10, 20]],
+    ["several buckets applied, dragged within one of them: sets that one", [10, 20], x(12, 1), x(12, 8), [12, 12]],
+    ["several buckets applied, dragged elsewhere: sets the dragged buckets", [10, 20], x(3), x(7), [3, 7]],
+  ];
+
+  it.each(overApplied)("%s", (_, applied, from, to, expected) => {
+    mount();
+    const dragOn = (target: Element) => {
+      seedRange(rangeOf(applied[0], applied[1]));
+      down(target, from);
+      move(target, (from + to) / 2);
+      move(target, to);
+      up(target, to);
+      return storeRange();
+    };
+    const { histogramSlider, laneSlider } = sliders();
+    const viaHistogram = dragOn(histogramSlider);
+    const viaLanes = dragOn(laneSlider);
+    expect(viaLanes).toEqual(viaHistogram);
+    expect(viaLanes).toEqual(expected === null ? null : rangeOf(expected[0], expected[1]));
+  });
+
   it.each([
     ["Shift selection", ["ArrowLeft", "ArrowLeft", "S:ArrowLeft", "S:ArrowLeft", "S:ArrowLeft", "Enter"]],
     ["Home, then Shift+End", ["Home", "S:End", "Enter"]],
