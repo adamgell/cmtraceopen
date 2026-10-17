@@ -6,6 +6,7 @@ import {
   formatEventTime,
   formatTimeRange,
   TIME_RANGE_SEPARATOR,
+  timeRangeNeedsYear,
   timeZoneLabel,
 } from "./evtx-time";
 
@@ -188,6 +189,67 @@ describe("the year in day labels", () => {
     );
     expect(formatTimeRange(utc(2026, 10, 16, 9), utc(2026, 10, 16, 9, 45), "utc")).toBe(
       `09:00${TIME_RANGE_SEPARATOR}09:45`,
+    );
+  });
+});
+
+describe("timeRangeNeedsYear", () => {
+  const utc = (year: number, month: number, day: number, hour = 0, minute = 0) =>
+    Date.UTC(year, month - 1, day, hour, minute);
+  const NOW = utc(2026, 10, 16, 12);
+  const needs = (start: number, end: number) => timeRangeNeedsYear(start, end, "utc", NOW);
+
+  it("leaves the year out of a range inside the current year", () => {
+    expect(needs(utc(2026, 10, 16, 9), utc(2026, 10, 16, 9, 45))).toBe(false);
+    expect(needs(utc(2026, 1, 2), utc(2026, 8, 30))).toBe(false);
+  });
+
+  it("names the year of a range in a past year or a future one", () => {
+    expect(needs(utc(2024, 3, 3), utc(2024, 4, 2))).toBe(true);
+    expect(needs(utc(2027, 1, 5), utc(2027, 1, 6))).toBe(true);
+  });
+
+  it("names the year of a range whose ends fall in different years, across New Year", () => {
+    expect(needs(utc(2025, 12, 31, 22), utc(2026, 1, 1, 3))).toBe(true);
+    expect(needs(utc(2026, 12, 31, 22), utc(2027, 1, 1, 3))).toBe(true);
+  });
+
+  it("names the year of a range of 365 days or more, even one inside the current year's dates", () => {
+    expect(needs(utc(2026, 1, 1), utc(2027, 1, 1))).toBe(true);
+    expect(needs(utc(2026, 1, 1), utc(2026, 12, 31))).toBe(false);
+  });
+
+  it("reads the year on the chosen clock, not the UTC one", () => {
+    // Built from the host's own calendar, so it holds in any zone: local New Year's Eve into the new year.
+    const eve = new Date(2026, 11, 31, 23, 0).getTime();
+    const newYear = new Date(2027, 0, 1, 1, 0).getTime();
+    const june = new Date(2026, 5, 15, 12, 0).getTime();
+    expect(timeRangeNeedsYear(eve, newYear, "local", june)).toBe(true);
+    expect(timeRangeNeedsYear(june - 3600_000, june, "local", june)).toBe(false);
+  });
+});
+
+describe("a range label never reads with its start equal to its end", () => {
+  const utc = (year: number, month: number, day: number, hour = 0, minute = 0, second = 0, ms = 0) =>
+    Date.UTC(year, month - 1, day, hour, minute, second, ms);
+
+  it("names the year for a range of 365 days or more even when the caller did not ask", () => {
+    const label = formatTimeRange(utc(2026, 2, 14), utc(2027, 2, 14), "utc");
+    const [start, end] = label.split(TIME_RANGE_SEPARATOR);
+    expect(start).not.toBe(end);
+    expect(label).toBe(`Feb 14 2026 00:00${TIME_RANGE_SEPARATOR}Feb 14 2027 00:00`);
+  });
+
+  it("adds milliseconds to a range shorter than a second, which seconds alone cannot tell apart", () => {
+    const label = formatTimeRange(utc(2026, 10, 16, 9, 0, 0, 0), utc(2026, 10, 16, 9, 0, 0, 500), "utc");
+    expect(label).toBe(`09:00:00.000${TIME_RANGE_SEPARATOR}09:00:00.500`);
+    const across = formatTimeRange(utc(2026, 10, 16, 23, 59, 59, 600), utc(2026, 10, 16, 23, 59, 59, 900), "utc");
+    expect(across).toBe(`23:59:59.600${TIME_RANGE_SEPARATOR}23:59:59.900`);
+  });
+
+  it("leaves a range that already reads apart alone", () => {
+    expect(formatTimeRange(utc(2026, 10, 16, 9, 0, 0, 0), utc(2026, 10, 16, 9, 0, 1, 500), "utc")).toBe(
+      `09:00:00${TIME_RANGE_SEPARATOR}09:00:01`,
     );
   });
 });

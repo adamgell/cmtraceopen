@@ -149,6 +149,9 @@ export function formatDayClock(
 /** Between the two times of a range label: an en dash, the spec's glyph (section 8.4). */
 export const TIME_RANGE_SEPARATOR = "\u2013";
 
+/** A range this long or longer always names the year in its label. */
+const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+
 /** A range shorter than this shows seconds, so its two ends do not read as the same minute. */
 const SECONDS_BELOW_MS = 2 * 60 * 1000;
 
@@ -165,15 +168,40 @@ export function formatTimeRange(
   withYear = false,
 ): string {
   const withSeconds = endMs - startMs < SECONDS_BELOW_MS;
-  // With the year, both ends always carry their day and year: a range a year wide would otherwise
-  // read the same at both ends.
+  // A range a year wide or more always names the year: its two ends would otherwise read alike.
+  const year = withYear || endMs - startMs >= YEAR_MS;
+  // With the year, both ends always carry their day and year.
   const crossesDays =
-    withYear || eventDateKey(startMs, mode) !== eventDateKey(Math.max(startMs, endMs - 1), mode);
+    year || eventDateKey(startMs, mode) !== eventDateKey(Math.max(startMs, endMs - 1), mode);
   const end = (epochMs: number) =>
     crossesDays
-      ? formatDayClock(epochMs, mode, withSeconds, withYear)
+      ? formatDayClock(epochMs, mode, withSeconds, year)
       : formatClock(epochMs, mode, withSeconds);
-  return `${end(startMs)}${TIME_RANGE_SEPARATOR}${end(endMs)}`;
+  const startText = end(startMs);
+  const endText = end(endMs);
+  if (startText !== endText) return `${startText}${TIME_RANGE_SEPARATOR}${endText}`;
+  // Under a second, even seconds read alike: the milliseconds tell the ends apart.
+  const milliseconds = (epochMs: number) => String(((epochMs % 1000) + 1000) % 1000).padStart(3, "0");
+  return `${startText}.${milliseconds(startMs)}${TIME_RANGE_SEPARATOR}${endText}.${milliseconds(endMs)}`;
+}
+
+/**
+ * Whether a range label must name the year: either end is not in the current year (`nowMs`, in the
+ * chosen zone), the two ends fall in different years, or the range is 365 days or longer. The Time
+ * chip uses it, so a range brushed on a multi-year chart reads as the chart's own labels do.
+ */
+export function timeRangeNeedsYear(
+  startMs: number,
+  endMs: number,
+  mode: EvtxTimeZoneMode,
+  nowMs: number,
+): boolean {
+  const current = wallClock(nowMs, mode).year;
+  return (
+    endMs - startMs >= YEAR_MS ||
+    wallClock(startMs, mode).year !== current ||
+    wallClock(endMs, mode).year !== current
+  );
 }
 
 /**
