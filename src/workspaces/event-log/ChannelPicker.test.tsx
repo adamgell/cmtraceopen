@@ -36,6 +36,7 @@ const { useEvtxStore } = await import("./evtx-store");
 const { ChannelPicker } = await import("./ChannelPicker");
 const { buildEvtxVisualTokens, resolveToken } = await import("./evtx-visual-tokens");
 const { orderChannelNames } = await import("./evtx-channel-order");
+const { WILDCARD_MISSING_REASON } = await import("./evtx-channel-stats");
 const { useLogStore } = await import("../../stores/log-store");
 const { useUiStore } = await import("../../stores/ui-store");
 
@@ -836,7 +837,7 @@ describe("gaps that reach no row", () => {
     useEvtxStore.setState({
       coverageDetails: [
         gapRecord("<coverage>", "limit", "4096 further coverage gaps were coalesced"),
-        gapRecord("C:\\logs\\Sys*.evtx", "missing", "no files matched the pattern"),
+        gapRecord("C:\\logs\\Sys*.evtx", "missing", WILDCARD_MISSING_REASON),
       ],
     });
     render(<ChannelPicker />);
@@ -846,7 +847,7 @@ describe("gaps that reach no row", () => {
     expect(screen.queryByText("1 of 1 read \u00B7 all-time activity")).not.toBeInTheDocument();
     const disclosure = screen.getByText(/2 gaps could not be attributed to a channel/);
     expect(disclosure).toHaveTextContent("<coverage>: 4096 further coverage gaps were coalesced");
-    expect(disclosure).toHaveTextContent("C:\\logs\\Sys*.evtx: no files matched the pattern");
+    expect(disclosure).toHaveTextContent(`C:\\logs\\Sys*.evtx: ${WILDCARD_MISSING_REASON}`);
     // The wildcard is not a row.
     expect(document.querySelectorAll("[data-channel-row]")).toHaveLength(1);
   });

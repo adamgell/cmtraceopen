@@ -489,26 +489,25 @@ function listChannel(listed: Map<string, ListedChannel>, channel: EvtxChannelInf
   }
 }
 
-/** `is_vss_path` in parser.rs: a shadow copy opened through its GLOBALROOT device path. */
-function isVssPath(path: string): boolean {
-  const prefix = "\\\\?\\globalroot\\device\\harddiskvolumeshadowcopy";
-  const normalized = path.replace(/\//g, "\\").toLowerCase();
-  if (!normalized.startsWith(prefix)) return false;
-  const rest = normalized.slice(prefix.length);
-  const digits = /^[0-9]*/.exec(rest)?.[0].length ?? 0;
-  return digits > 0 && (rest.length === digits || rest[digits] === "\\");
-}
+/**
+ * The reason the backend gives when a wildcard selection matched nothing (`parser.rs`, the
+ * `Missing` gap `build_source_manifest` adds for an unmatched pattern). It is matched in this one
+ * place. The expansion gives that gap no kind of its own yet, so #936 will replace this match with
+ * one.
+ */
+export const WILDCARD_MISSING_REASON = "wildcard did not match any filesystem path";
 
 /**
- * `is_wildcard_source` in parser.rs. A wildcard that matched nothing is reported under the pattern,
- * which is no file's path. A shadow copy is never a pattern, although its "\\?\" prefix holds a
- * "?": it is a file, and it can fail to open like any other. The "\\?\" long-path prefix is not
- * part of the pattern, and "[" is.
+ * A gap the expansion filed about a pattern, whose source is the pattern and no file's path: an
+ * unmatched wildcard, or a pattern the backend rejected. Nothing else says a source is a pattern.
+ * The backend asks `is_wildcard_source` only of an input selection that does not exist on disk, so
+ * a path found by a folder walk, a file whose name holds "[", "*" or "?", an archive member and a
+ * shadow copy are all files, whatever characters their path holds.
  */
-function isWildcardSource(source: string): boolean {
-  if (isVssPath(source)) return false;
-  const pattern = source.startsWith("\\\\?\\") ? source.slice(4) : source;
-  return /[*?[]/.test(pattern);
+function isPatternGap(gap: ChannelGap): boolean {
+  if (gap.kind === "invalidPattern") return true;
+  // A legacy string carries no kind, so for it the reason is all there is to go on.
+  return (gap.kind === "missing" || gap.kind === null) && gap.reason === WILDCARD_MISSING_REASON;
 }
 
 /**
@@ -608,7 +607,7 @@ export function buildChannelPaneModel(input: ChannelPaneInput): ChannelPaneModel
   const unattributed: ChannelGap[] = [];
   for (const [source, sourceGaps] of strays) {
     if (inventoryOnly.has(source)) continue;
-    const stem = isWildcardSource(source) ? null : evtxStem(source);
+    const stem = sourceGaps.some(isPatternGap) ? null : evtxStem(source);
     if (stem === null) {
       unattributed.push(...sourceGaps);
       continue;

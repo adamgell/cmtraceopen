@@ -7,6 +7,7 @@ import {
   recordTimestampMs,
   scaleActivityBars,
   summarizeLogSources,
+  WILDCARD_MISSING_REASON,
   type ChannelPaneInput,
 } from "./evtx-channel-stats";
 import type {
@@ -1137,15 +1138,15 @@ describe("sources no listed channel came from", () => {
     const built = buildChannelPaneModel(
       filesInput({
         manifestCoverage: [
-          { kind: "missing", path: "C:\\logs\\Sys*.evtx", reason: "no files matched the pattern" },
-          { kind: "missing", path: "C:\\logs\\Sec?rity.evtx", reason: "no files matched the pattern" },
+          { kind: "missing", path: "C:\\logs\\Sys*.evtx", reason: WILDCARD_MISSING_REASON },
+          { kind: "missing", path: "C:\\logs\\Sec?rity.evtx", reason: WILDCARD_MISSING_REASON },
         ],
       }),
     );
     expect(built.totalCount).toBe(1);
     expect(built.channels.map((channel) => channel.name)).toEqual(["System"]);
     expect(built.unattributed.count).toBe(2);
-    expect(built.unattributed.reasons[0]).toBe("C:\\logs\\Sys*.evtx: no files matched the pattern");
+    expect(built.unattributed.reasons[0]).toBe(`C:\\logs\\Sys*.evtx: ${WILDCARD_MISSING_REASON}`);
   });
 
   it("discloses a gap on a folder, a gap with no source and a gap from a source nobody listed", () => {
@@ -1234,46 +1235,79 @@ describe("sources the backend accepts, mirrored", () => {
     expect(built.totalCount).toBe(2);
   });
 
-  it("does not take a path that merely starts like a shadow copy for one", () => {
+  it("keeps a pattern the backend rejected, or that matched nothing, out of the rows", () => {
     const built = buildChannelPaneModel(
       filesInput({
-        coverageDetails: [
-          gap(
-            "\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopyX\\Logs\\Sys*.evtx",
-            "missing",
-            "no files matched the pattern",
-          ),
+        manifestCoverage: [
+          { kind: "invalidPattern", path: "C:\\logs\\Sys[t.evtx", reason: "the pattern is not valid" },
         ],
-      }),
-    );
-    expect(built.totalCount).toBe(1);
-    expect(built.unattributed.count).toBe(1);
-  });
-
-  it("strips the long-path prefix before looking for a wildcard", () => {
-    const built = buildChannelPaneModel(
-      filesInput({
-        coverageDetails: [
-          gap("\\\\?\\C:\\logs\\Security.evtx", "accessDenied", "denied"),
-          gap("\\\\?\\C:\\logs\\Sys*.evtx", "missing", "no files matched the pattern"),
-        ],
-      }),
-    );
-    expect(built.rows.get("Security")?.state).toBe("needsElevation");
-    expect(built.unattributed.reasons).toEqual([
-      "\\\\?\\C:\\logs\\Sys*.evtx: no files matched the pattern",
-    ]);
-  });
-
-  it("counts a bracket as a wildcard, as the backend does", () => {
-    const built = buildChannelPaneModel(
-      filesInput({
-        coverageDetails: [gap("C:\\logs\\Sys[t]em.evtx", "missing", "no files matched the pattern")],
+        coverageDetails: [gap("\\\\?\\C:\\logs\\Sys*.evtx", "missing", WILDCARD_MISSING_REASON)],
+        // A legacy string has no kind, so the reason is all there is to match.
+        legacyCoverage: [`C:\\logs\\Sec?rity.evtx: ${WILDCARD_MISSING_REASON}`],
       }),
     );
     expect(built.totalCount).toBe(1);
     expect(built.channels.map((channel) => channel.name)).toEqual(["System"]);
-    expect(built.unattributed.count).toBe(1);
+    expect(built.unattributed.count).toBe(3);
+  });
+
+  it("lists a file in a folder whose name holds brackets, which is a file and no pattern", () => {
+    // A case folder named after a ticket: the folder walk reports the corrupt file by its path.
+    const built = buildChannelPaneModel(
+      filesInput({
+        coverageDetails: [
+          gap("C:\\cases\\[INC0012345]\\Setup.evtx", "file", "the file could not be parsed"),
+          gap("C:\\cases\\[INC0012345]\\Security.evtx", "accessDenied", "access was denied"),
+        ],
+      }),
+    );
+    expect(built.rows.get("Setup")).toMatchObject({ state: "notRead", selectable: false });
+    expect(built.rows.get("Security")).toMatchObject({ state: "needsElevation", selectable: false });
+    expect(built.unattributed.count).toBe(0);
+    expect(built.totalCount).toBe(3);
+  });
+
+  it("lists a file that does not exist as not read: only the wildcard wording makes a missing gap a pattern", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        manifestCoverage: [
+          { kind: "missing", path: "C:\\logs\\Gone.evtx", reason: "source path does not exist" },
+        ],
+      }),
+    );
+    expect(built.rows.get("Gone")).toMatchObject({ state: "notRead", selectable: false });
+    expect(built.unattributed.count).toBe(0);
+  });
+
+  it("lists a shadow copy with a bracket in a later component", () => {
+    const path = `${VSS.slice(0, VSS.indexOf("\\Windows"))}\\Windows\\[old]\\Logs\\Security.evtx`;
+    const built = buildChannelPaneModel(
+      filesInput({ coverageDetails: [gap(path, "accessDenied", "VSS event-log sources require an elevated process")] }),
+    );
+    expect(built.rows.get("Security")?.state).toBe("needsElevation");
+    expect(built.unattributed.count).toBe(0);
+  });
+
+  it("lists a file whose own name holds a glob character, and an archive member's label", () => {
+    const built = buildChannelPaneModel(
+      filesInput({
+        coverageDetails: [
+          gap("C:\\logs\\Setup [copy].evtx", "file", "the file could not be parsed"),
+          gap("C:\\cases\\bundle.zip::logs/Odd?Name.evtx", "limit", "archive record budget was exhausted"),
+        ],
+      }),
+    );
+    expect(built.rows.get("Setup [copy]")?.state).toBe("notRead");
+    expect(built.rows.get("Odd?Name")?.state).toBe("notRead");
+    expect(built.unattributed.count).toBe(0);
+  });
+
+  it("reads a long-path prefix as part of no pattern: the file is a file", () => {
+    const built = buildChannelPaneModel(
+      filesInput({ coverageDetails: [gap("\\\\?\\C:\\logs\\Security.evtx", "accessDenied", "denied")] }),
+    );
+    expect(built.rows.get("Security")?.state).toBe("needsElevation");
+    expect(built.unattributed.count).toBe(0);
   });
 
   it("lists the other names the backend opens as event logs: .evtx~ and .evtx.bak", () => {
