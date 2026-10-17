@@ -188,6 +188,11 @@ test.describe("event-logs screenshots", () => {
       },
     );
 
+    // Day labels name the year when the chart is not within the current one, and the fixture is dated
+    // 6 and 7 Oct 2026. Without a fixed clock the figure's name, the axis ticks and so the PNGs would
+    // change on 1 Jan 2027. A fixed time keeps the timers running (the splash still goes). It must be
+    // set before the page loads, and it applies to every test here, each of which reaches the histogram.
+    await page.clock.setFixedTime(new Date("2026-10-16T12:00:00.000Z"));
     await page.goto("/");
     await dismissSplash(page);
 
@@ -253,7 +258,8 @@ test.describe("event-logs screenshots", () => {
     const histogram = page.locator('[data-evtx-region="histogram"]');
     await expect(histogram).toBeVisible();
     // The store's default zone mode is local and this file pins the browser's zone to UTC, so the zone
-    // reads as the offset the app prints for local time, "UTC+00:00", not the word "UTC".
+    // reads as the offset the app prints for local time, "UTC+00:00", not the word "UTC". The domain is
+    // in the page's fixed current year (2026), so no year is named.
     await expect(histogram).toHaveAccessibleName(
       /^Events per 20 minutes over Oct 6 10:20.Oct 7 10:20 \(UTC\+00:00\), stacked by level$/,
     );
