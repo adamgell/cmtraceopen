@@ -1251,8 +1251,14 @@ describe("event-log live operations", () => {
       expect(channelSelect).toHaveFocus();
     });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(document.querySelector('[role="status"]')).toBeNull();
-    expect(document.querySelector('[role="alert"]')).toBeNull();
+    // The Also correlating section keeps its own empty live regions mounted for the Add log source
+    // report, so the clear's regions are the ones outside it.
+    const outsideAlsoCorrelating = (role: string) =>
+      [...document.querySelectorAll(`[role="${role}"]`)].filter(
+        (element) => !element.closest('[aria-label="Also correlating"]'),
+      );
+    expect(outsideAlsoCorrelating("status")).toEqual([]);
+    expect(outsideAlsoCorrelating("alert")).toEqual([]);
   });
 
   it("does not steal focus when a background clear settles", async () => {

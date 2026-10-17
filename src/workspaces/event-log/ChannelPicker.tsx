@@ -1406,7 +1406,12 @@ function AlsoCorrelating({
           {`and ${omitted} more`}
         </div>
       )}
-      <AddLogSourceControl primaryText={primaryText} />
+      <AddLogSourceControl
+        primaryText={primaryText}
+        groupFontSize={metrics.groupFontSize}
+        captionFontSize={metrics.captionFontSize}
+        correlatedCount={sources.length}
+      />
     </section>
   );
 }

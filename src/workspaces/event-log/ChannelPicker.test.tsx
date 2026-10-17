@@ -854,34 +854,87 @@ describe("the Add log source link", () => {
     expect(link()).not.toHaveFocus();
   });
 
-  it.each([
-    ["failed", "Could not add b.log: The file is locked. No text log is now correlated."],
-    ["rejected", "Not added: x.reg is a registry file, which opens in the Log workspace. No text log is now correlated."],
-  ] as const)("shows a %s add as an alert that carries the helper's message", async (status, message) => {
-    addLogSourceMock.mockResolvedValue({ status, message });
-    render(<ChannelPicker />);
+  const section = () => screen.getByRole("region", { name: "Also correlating" });
+  const alertRegion = () => within(section()).getByRole("alert");
+  const statusRegion = () => within(section()).getByRole("status");
+  const addFile = async () => {
     openMenu();
     await act(async () => {
       fireEvent.click(screen.getByRole("menuitem", { name: "Add log file\u2026" }));
     });
+  };
 
-    expect(screen.getByRole("alert")).toHaveTextContent(message);
-    expect(link()).toHaveFocus();
+  describe("the report's live regions", () => {
+    it("are mounted before any add, empty, and Dismiss is not there yet", () => {
+      render(<ChannelPicker />);
+      expect(statusRegion()).toBeEmptyDOMElement();
+      expect(alertRegion()).toBeEmptyDOMElement();
+      expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+    });
 
-    // Dismissed, it is gone, and a new add starts from a clean slate.
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    it("are the same elements when the text arrives, so it is a change and not an insertion", async () => {
+      addLogSourceMock.mockResolvedValue({ status: "failed", message: "Could not add b.log: boom." });
+      render(<ChannelPicker />);
+      const alert = alertRegion();
+      const status = statusRegion();
+
+      await addFile();
+
+      expect(alertRegion()).toBe(alert);
+      expect(statusRegion()).toBe(status);
+      expect(alert).toHaveTextContent("Could not add b.log: boom.");
+    });
+
+    it("keep Dismiss outside, so it is not read out as part of the message", async () => {
+      addLogSourceMock.mockResolvedValue({ status: "failed", message: "Could not add b.log: boom." });
+      render(<ChannelPicker />);
+      await addFile();
+
+      const dismiss = screen.getByRole("button", { name: "Dismiss" });
+      expect(alertRegion()).not.toContainElement(dismiss);
+      expect(statusRegion()).not.toContainElement(dismiss);
+      expect(alertRegion()).not.toHaveTextContent("Dismiss");
+    });
+
+    it("are emptied by Dismiss, not removed, and focus returns to the link", async () => {
+      addLogSourceMock.mockResolvedValue({ status: "failed", message: "Could not add b.log: boom." });
+      render(<ChannelPicker />);
+      await addFile();
+      const alert = alertRegion();
+
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+      expect(alertRegion()).toBe(alert);
+      expect(alert).toBeEmptyDOMElement();
+      expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+      expect(link()).toHaveFocus();
+    });
   });
 
-  it("shows what a successful add could not read as a status, not an alert", async () => {
-    addLogSourceMock.mockResolvedValue({ status: "added", notice: "Not read: b.log." });
+  it.each([
+    ["failed", "Could not add b.log: The file is locked."],
+    ["rejected", "Not added: x.reg is a registry file, which opens in the Log workspace."],
+    ["notAdded", "Not added: b.log holds no entries."],
+  ] as const)("shows a %s add as an alert that ends with how many text logs are correlated", async (status, message) => {
+    addLogSourceMock.mockResolvedValue({ status, message });
     render(<ChannelPicker />);
-    openMenu();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("menuitem", { name: "Add log file\u2026" }));
-    });
-    expect(screen.getByRole("status")).toHaveTextContent("Not read: b.log.");
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await addFile();
+
+    expect(alertRegion()).toHaveTextContent(`${message} No text log is now correlated.`);
+    expect(statusRegion()).toBeEmptyDOMElement();
+    expect(link()).toHaveFocus();
+  });
+
+  it("shows what a successful add could not cover as a status, not an alert", async () => {
+    addLogSourceMock.mockResolvedValue({ status: "added", notice: "Not read: b.log." });
+    useLogStore.setState({ sourceOpenMode: "merged", entries: [textLog("C:\\logs\\a.log", 1)] });
+    render(<ChannelPicker />);
+
+    await addFile();
+
+    expect(statusRegion()).toHaveTextContent("Not read: b.log. 1 text log is now correlated.");
+    expect(alertRegion()).toBeEmptyDOMElement();
   });
 
   it.each([
@@ -890,22 +943,41 @@ describe("the Add log source link", () => {
   ])("says nothing for %o", async (outcome) => {
     addLogSourceMock.mockResolvedValue(outcome);
     render(<ChannelPicker />);
-    openMenu();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("menuitem", { name: "Add log file\u2026" }));
-    });
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    await addFile();
+
+    expect(alertRegion()).toBeEmptyDOMElement();
+    expect(statusRegion()).toBeEmptyDOMElement();
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the sentence true when the correlated set changes under a report that is still showing", async () => {
+    addLogSourceMock.mockResolvedValue({ status: "failed", message: "Could not add b.log: boom." });
+    render(<ChannelPicker />);
+    await addFile();
+    expect(alertRegion()).toHaveTextContent("Could not add b.log: boom. No text log is now correlated.");
+
+    act(() =>
+      useLogStore.setState({ sourceOpenMode: "merged", entries: [textLog("C:\\logs\\a.log", 1)] }),
+    );
+    expect(alertRegion()).toHaveTextContent("Could not add b.log: boom. 1 text log is now correlated.");
+
+    act(() =>
+      useLogStore.setState({
+        sourceOpenMode: "merged",
+        entries: [textLog("C:\\logs\\a.log", 1), textLog("C:\\logs\\c.log", 2)],
+      }),
+    );
+    expect(alertRegion()).toHaveTextContent("Could not add b.log: boom. 2 text logs are now correlated.");
+    // The historical part is not rewritten.
+    expect(alertRegion().textContent).toMatch(/^Could not add b\.log: boom\. /);
   });
 
   it("clears an earlier report when the next add starts", async () => {
-    addLogSourceMock.mockResolvedValueOnce({ status: "failed", message: "Could not add b.log: boom. No text log is now correlated." });
+    addLogSourceMock.mockResolvedValueOnce({ status: "failed", message: "Could not add b.log: boom." });
     render(<ChannelPicker />);
-    openMenu();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("menuitem", { name: "Add log file\u2026" }));
-    });
-    expect(screen.getByRole("alert")).toBeInTheDocument();
+    await addFile();
+    expect(alertRegion()).not.toBeEmptyDOMElement();
 
     const pending = deferred<{ status: "cancelled" }>();
     addLogSourceMock.mockReturnValue(pending.promise);
@@ -913,18 +985,25 @@ describe("the Add log source link", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("menuitem", { name: "Add log folder\u2026" }));
     });
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(alertRegion()).toBeEmptyDOMElement();
     await act(async () => {
       pending.resolve({ status: "cancelled" });
       await pending.promise;
     });
   });
 
-  it("takes its text sizes from the list font size", () => {
+  it("takes its text sizes from the pane, which takes them from the list font size", async () => {
+    addLogSourceMock.mockResolvedValue({ status: "failed", message: "Could not add b.log: boom." });
     useUiStore.setState({ logListFontSize: 20 });
     render(<ChannelPicker />);
-    const groupFontSize = Math.max(10, getLogListMetrics(20).fontSize - 2);
-    expect(link().style.fontSize).toBe(`${groupFontSize}px`);
+    await addFile();
+
+    const fontSize = getLogListMetrics(20).fontSize;
+    expect(link().style.fontSize).toBe(`${Math.max(10, fontSize - 2)}px`);
+    expect(alertRegion().style.fontSize).toBe(`${Math.max(10, fontSize - 3)}px`);
+    expect(screen.getByRole("button", { name: "Dismiss" }).style.fontSize).toBe(
+      `${Math.max(10, fontSize - 3)}px`,
+    );
   });
 });
 
@@ -1889,10 +1968,11 @@ describe("contrast of everything the pane renders", () => {
   it.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
     "meets the same floors for the Add log source link and a failed add's report in %s",
     async (_id, theme) => {
-      const message = "Could not add b.log: The file is locked. No text log is now correlated.";
+      const reported = "Could not add b.log: The file is locked.";
+      const message = `${reported} No text log is now correlated.`;
       resetPane({ channels: [channel("System", "enabled")] });
       useUiStore.setState({ themeId: theme.id });
-      addLogSourceMock.mockReset().mockResolvedValue({ status: "failed", message });
+      addLogSourceMock.mockReset().mockResolvedValue({ status: "failed", message: reported });
       const { container } = render(<ChannelPicker />);
       fireEvent.click(screen.getByRole("button", { name: "Add log source\u2026" }));
       await act(async () => {

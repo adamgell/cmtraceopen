@@ -201,8 +201,9 @@ test.describe("event-logs screenshots", () => {
     }, buildSourceSelections());
 
     // A guard failure above surfaces in the UI as the diagnosis-error alert. Report its text
-    // instead of letting the waits below time out blind.
-    const alert = page.getByRole("alert");
+    // instead of letting the waits below time out blind. The channel pane keeps an empty alert
+    // region mounted for the Add log source report, so only an alert with text is an error.
+    const alert = page.getByRole("alert").filter({ hasText: /\S/ });
     await expect(
       page.getByLabel("Operational diagnosis").or(alert).first(),
     ).toBeVisible({ timeout: 15_000 });
