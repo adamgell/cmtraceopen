@@ -346,6 +346,11 @@ function queryFieldText(record: EvtxRecord, field: EvtxQueryTextField): string {
     case "computer":
       return record.computer;
     case "source":
+      // The label the backend gives the record: an EVTX file's path, an archive member's
+      // "<archive>::<member>" label (text members too), or "Live" / "Remote: <machine>". For a
+      // text-log line that is the file it came from, the analysis session's origin.file, never
+      // the code file a CCM line names. The grid filters these records only; the text logs
+      // correlated from the Log workspace are not grid records.
       return record.sourceLabel;
   }
 }

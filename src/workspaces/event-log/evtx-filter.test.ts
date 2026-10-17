@@ -721,3 +721,43 @@ describe("saved filters carry the fieldQuery mode", () => {
     ]);
   });
 });
+
+describe("source: matches the grid record's source label", () => {
+  // The labels the backend gives grid records: an EVTX file's path, an archive member's
+  // "<archive>::<member>" label (text members too), and "Live" or "Remote: <machine>".
+  const evtxFile = record({
+    id: 21,
+    eventRecordId: 21,
+    sourceLabel: "C:\\logs\\System.evtx",
+    channel: "System",
+  });
+  const archiveText = record({
+    id: 22,
+    eventRecordId: 22,
+    originKind: "log",
+    sourceLabel: "evidence.zip::logs/AppIntent.log",
+    channel: "evidence.zip::logs/AppIntent.log",
+    provider: "AppIntentHandler",
+  });
+  const live = record({ id: 23, eventRecordId: 23, sourceLabel: "Live", channel: "Application" });
+  const remote = record({ id: 24, eventRecordId: 24, sourceLabel: "Remote: PC-07", channel: "Application" });
+  const sources = [evtxFile, archiveText, live, remote];
+  const matching = (query: string) =>
+    selectVisibleRecords({
+      records: sources,
+      selectedChannels: new Set(sources.map((entry) => entry.channel)),
+      filterLevels: new Set(EVTX_LEVELS),
+      filterEventIds: "",
+      filterSearch: query,
+    }).map((entry) => entry.id);
+
+  it("matches each kind of label by substring", () => {
+    expect(matching("source:System.evtx")).toEqual([21]);
+    // A text-log line from an evidence archive: its label is the file it came from, which is the
+    // origin.file the analysis session records for it, never the code file a CCM line names.
+    expect(matching("source:AppIntent.log")).toEqual([22]);
+    expect(matching("source:evidence.zip::")).toEqual([22]);
+    expect(matching("source:live")).toEqual([23]);
+    expect(matching('source:"Remote: PC-07"')).toEqual([24]);
+  });
+});
