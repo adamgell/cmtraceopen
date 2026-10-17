@@ -366,6 +366,76 @@ describe("EvtxHistogram", () => {
     expect(screen.getByRole("figure", { name: describeFigure(histogram, "local") })).toBeInTheDocument();
   });
 
+  describe("in forced-colors mode", () => {
+    // jsdom cannot apply forced colors, so this reads the rules Griffel wrote (the EvtxFilterBar precedent).
+    function forced(element: HTMLElement, property: string): string[] {
+      const selectors = Array.from(element.classList).map((name) => `.${name}`);
+      const values: string[] = [];
+      for (const sheet of Array.from(document.styleSheets)) {
+        for (const rule of Array.from(sheet.cssRules)) {
+          if (!(rule instanceof CSSMediaRule) || !rule.media.mediaText.includes("forced-colors: active")) continue;
+          for (const inner of Array.from(rule.cssRules)) {
+            if (inner instanceof CSSStyleRule && selectors.includes(inner.selectorText)) {
+              const value = inner.style.getPropertyValue(property).toLowerCase();
+              if (value) values.push(value);
+            }
+          }
+        }
+      }
+      return values;
+    }
+    /** What the element's classes set OUTSIDE the forced-colors media query. */
+    function base(element: HTMLElement, property: string): string[] {
+      const selectors = Array.from(element.classList).map((name) => `.${name}`);
+      const values: string[] = [];
+      for (const sheet of Array.from(document.styleSheets)) {
+        for (const rule of Array.from(sheet.cssRules)) {
+          if (rule instanceof CSSStyleRule && selectors.includes(rule.selectorText)) {
+            const value = rule.style.getPropertyValue(property).toLowerCase();
+            if (value) values.push(value);
+          }
+        }
+      }
+      return values;
+    }
+
+    function brushed() {
+      const records = dayOfEvents();
+      const histogram = buildHistogram(records, "utc");
+      const view = render(<EvtxHistogram records={records} loading={false} />);
+      act(() => {
+        useEvtxStore.setState({ timeRange: { startMs: histogram.edges[10], endMs: histogram.edges[30] } });
+      });
+      return view;
+    }
+
+    it("outlines every segment in CanvasText so a bar is told from Canvas, and keeps its own colour", () => {
+      const { container } = brushed();
+      const segments = container.querySelectorAll<HTMLElement>("[data-evtx-level]");
+      expect(segments.length).toBeGreaterThan(0);
+      for (const segment of segments) {
+        expect(forced(segment, "outline-color")).toEqual(["canvastext"]);
+        expect(forced(segment, "outline-style")).toEqual(["solid"]);
+        expect(forced(segment, "border-top-color")).toEqual(["canvastext"]);
+        // The outline is the forced-colors rule alone: nothing outside the query draws one.
+        expect(base(segment, "outline-style")).toEqual([]);
+      }
+      const bars = container.querySelector<HTMLElement>('[data-evtx-layer="bars"]')!;
+      expect(forced(bars, "forced-color-adjust")).toEqual(["none"]);
+    });
+
+    it("drops the wash, so the forced edge borders carry the range", () => {
+      const { container } = brushed();
+      const wash = container.querySelector<HTMLElement>('[data-evtx-layer="wash"]')!;
+      expect(forced(wash, "display")).toEqual(["none"]);
+      expect(base(wash, "display")).toEqual([]);
+      const edges = container.querySelectorAll<HTMLElement>('[data-evtx-layer="edge"]');
+      expect(edges).toHaveLength(2);
+      // Border colours are forced to a system colour, which stays visible; the edge is not opted out.
+      for (const edge of edges) expect(forced(edge, "forced-color-adjust")).toEqual([]);
+    });
+  });
+
   it("writes no colour literal: every colour is a token", () => {
     const code = histogramSource.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     expect(code).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);

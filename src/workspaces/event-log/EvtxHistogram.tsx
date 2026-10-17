@@ -127,9 +127,12 @@ const useStyles = makeStyles({
     fontFamily: tokens.fontFamilyNumeric,
     fontVariantNumeric: "tabular-nums",
   },
+  // Under forced colors the surface is forced to Canvas but the bars keep their own colours, so the
+  // wash's 3:1 proof (made on the theme's surface) no longer holds. The wash is dropped there and the
+  // edge borders, whose colour is forced to a system colour, carry the range.
   wash: {
     pointerEvents: "none",
-    [FORCED_COLORS]: { forcedColorAdjust: "none" },
+    [FORCED_COLORS]: { display: "none" },
   },
   layer: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 },
   // The level colors carry the meaning, so forced colors must not repaint them.
@@ -147,10 +150,18 @@ const useStyles = makeStyles({
     display: "flex",
     flexDirection: "column-reverse",
   },
+  // Every segment is outlined in CanvasText under forced colors (its separator included), so a bar
+  // is told from Canvas whatever the contrast theme's background is.
   segment: {
     flexShrink: 0,
     boxSizing: "border-box",
     borderTop: `1px solid ${tokens.colorNeutralBackground1}`,
+    [FORCED_COLORS]: {
+      borderTopColor: "CanvasText",
+      outlineStyle: "solid",
+      outlineWidth: "1px",
+      outlineColor: "CanvasText",
+    },
   },
   message: {
     display: "flex",
