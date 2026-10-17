@@ -2161,6 +2161,27 @@ describe("the view strip in the workspace (#848)", () => {
       expect(useEvtxStore.getState().timeRange).toBeNull();
     });
 
+    it("keeps the range when Escape is pressed on a menu item, where the focus is once the menu opens (T8)", async () => {
+      withRange();
+      fireEvent.contextMenu(triageCard());
+      const menu = await screen.findByRole("menu");
+      const first = within(menu).getAllByRole("menuitem")[0];
+      // Opening moves the focus to the first item, so this is where Escape normally arrives.
+      await waitFor(() => expect(first).toHaveFocus());
+      expect(useEvtxStore.getState().timeRange).not.toBeNull();
+
+      // The menu uses the key (default prevented), so the workspace's listener leaves the range.
+      expect(fireEvent.keyDown(first, { key: "Escape" })).toBe(false);
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+      expect(useEvtxStore.getState().timeRange).not.toBeNull();
+      expect(document.querySelector(RANGE_CHIP)).not.toBeNull();
+      await waitFor(() => expect(triageCard()).toHaveFocus());
+
+      // With no menu open the next Escape is the workspace's own.
+      expect(fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" })).toBe(false);
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+    });
+
     it("keeps the range when Escape cancels the New view dialog", async () => {
       withRange();
       fireEvent.click(screen.getByRole("button", { name: "New view" }));
