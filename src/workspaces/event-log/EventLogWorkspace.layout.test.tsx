@@ -190,7 +190,7 @@ describe("EventLogWorkspace three-column shell", () => {
 
   it("shows a placeholder for views that are not built yet, behind the same tablist", () => {
     render(<EventLogWorkspace />);
-    for (const name of ["Grouped", "Timeline", "Charts", "Correlation"]) {
+    for (const name of ["Grouped", "Charts", "Correlation"]) {
       fireEvent.click(screen.getByRole("tab", { name }));
       expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
       expect(screen.getByRole("tab", { name })).toHaveAttribute("aria-selected", "true");
