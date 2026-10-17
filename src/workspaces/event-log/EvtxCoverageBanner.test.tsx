@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { useState, type ReactNode } from "react";
 import { tokens } from "@fluentui/react-components";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,13 +14,12 @@ import {
   EvtxCoverageBanner,
   MAX_COVERAGE_NOTES,
   accessDeniedSources,
-  coverageBannerVisible,
   coverageNoteSubject,
   pickCoverageNoteColors,
-  type CoverageBannerGateInput,
 } from "./EvtxCoverageBanner";
+import { CoverageClaimsProvider, useCoverageClaim } from "./evtx-coverage-claims";
+import { formatCoverageGap } from "./evtx-coverage";
 import { useEvtxStore } from "./evtx-store";
-import { useEvtxLayoutStore, type EvtxRailTabId } from "./evtx-layout-store";
 import { resolveToken } from "./evtx-visual-tokens";
 import { RestartAsAdministratorDialog } from "../../components/dialogs/RestartAsAdministratorDialog";
 import { contrastRatio } from "../../lib/color-contrast";
@@ -81,9 +81,9 @@ async function settle(): Promise<void> {
   });
 }
 
-/** Renders the rail variant and lets the elevation probe answer. */
-async function renderRail(diagnosisFailed = false): Promise<void> {
-  render(<EvtxCoverageBanner variant="rail" diagnosisFailed={diagnosisFailed} />);
+/** Renders the rail variant (on screen unless told otherwise) and lets the probe answer. */
+async function renderRail(visible = true): Promise<void> {
+  render(<EvtxCoverageBanner variant="rail" visible={visible} />);
   await settle();
 }
 
@@ -95,8 +95,25 @@ function gridBanner(): HTMLElement | null {
   return document.querySelector<HTMLElement>("[data-coverage-banner]");
 }
 
-function setLayout(insights: boolean, railTab: EvtxRailTabId = "insights", channels = true): void {
-  useEvtxLayoutStore.setState({ panels: { channels, insights, dock: false }, railTab });
+/** A stand-in surface that claims the given gap keys while mounted. */
+function ClaimingSurface({ keys, archiveProvenance = false }: { keys: string[]; archiveProvenance?: boolean }) {
+  const [claim] = useState(() => ({ keys: new Set(keys), archiveProvenance }));
+  useCoverageClaim(claim);
+  return null;
+}
+
+/** The lines the banner lists, as shown. */
+function bannerLines(): string[] {
+  const banner = gridBanner();
+  return banner
+    ? Array.from(banner.querySelectorAll("li"))
+        .filter((item) => !item.closest("[data-archive-provenance]"))
+        .map((item) => item.textContent ?? "")
+    : [];
+}
+
+function withClaims(children: ReactNode) {
+  return <CoverageClaimsProvider>{children}</CoverageClaimsProvider>;
 }
 
 beforeEach(() => {
@@ -111,7 +128,6 @@ beforeEach(() => {
     sourceMode: "live",
     remoteMachine: null,
   });
-  setLayout(true);
   useUiStore.getState().setElevationPrompt(null);
   useUiStore.setState({ themeId: "light", logListFontSize: 13 });
 });
@@ -119,8 +135,6 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("EvtxCoverageBanner grid variant", () => {
-  beforeEach(() => setLayout(false));
-
   it("renders every archive member decision, including duplicate paths", () => {
     const member = {
       path: "bundle.zip::logs/Application.evtx",
@@ -192,154 +206,146 @@ describe("EvtxCoverageBanner grid variant", () => {
   });
 });
 
-describe("coverageBannerVisible", () => {
-  // Every combination, written out: [channelsPanel, insightsPanel, railTab, diagnosisFailed, shown].
-  const TABLE: [boolean, boolean, EvtxRailTabId, boolean, boolean][] = [
-    // The channel pane is shown and discloses coverage: never the banner.
-    [true, true, "insights", false, false],
-    [true, true, "insights", true, false],
-    [true, true, "chains", false, false],
-    [true, true, "chains", true, false],
-    [true, true, "details", false, false],
-    [true, true, "details", true, false],
-    [true, false, "insights", false, false],
-    [true, false, "insights", true, false],
-    [true, false, "chains", false, false],
-    [true, false, "chains", true, false],
-    [true, false, "details", false, false],
-    [true, false, "details", true, false],
-    // No channel pane: the banner unless the rail shows its Insights tab with a diagnosis.
-    [false, true, "insights", false, false],
-    [false, true, "insights", true, true],
-    [false, true, "chains", false, true],
-    [false, true, "chains", true, true],
-    [false, true, "details", false, true],
-    [false, true, "details", true, true],
-    [false, false, "insights", false, true],
-    [false, false, "insights", true, true],
-    [false, false, "chains", false, true],
-    [false, false, "chains", true, true],
-    [false, false, "details", false, true],
-    [false, false, "details", true, true],
-  ];
+describe("the grid banner lists only what no surface claims", () => {
+  const SYSTEM_LIMIT: EvtxCoverageGap = {
+    source: "System",
+    kind: "limitReached",
+    reason: "reader stopped at 10000 events; the source may contain more",
+  };
 
-  it("covers all 24 combinations", () => {
-    expect(new Set(TABLE.map((row) => row.slice(0, 4).join())).size).toBe(24);
-  });
-
-  it.each(TABLE)(
-    "channels %s, insights %s, tab %s, diagnosis failed %s: banner %s",
-    (channelsPanel, insightsPanel, railTab, diagnosisFailed, shown) => {
-      const input: CoverageBannerGateInput = {
-        channelsPanel,
-        insightsPanel,
-        railTab,
-        diagnosisFailed,
-      };
-      expect(coverageBannerVisible(input)).toBe(shown);
-    },
-  );
-});
-
-describe("the grid banner as wired in this stack", () => {
-  // Until #837 the channel pane carries no coverage, so it never counts as a disclosing surface.
   beforeEach(() => {
-    useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] });
+    useEvtxStore.setState({ coverageDetails: [liveDenied("Security"), SYSTEM_LIMIT] });
   });
 
-  it("lists every gap above the grid while the rail is hidden", () => {
-    setLayout(false);
-    render(<EvtxCoverageBanner />);
+  it("lists every gap when nothing claims one", () => {
+    render(withClaims(<EvtxCoverageBanner />));
+    expect(bannerLines()).toEqual([
+      `Security: ${LIVE_REFUSAL_5}`,
+      formatCoverageGap(SYSTEM_LIMIT),
+    ]);
+    expect(screen.getByText("2 gaps in this view")).toBeInTheDocument();
+  });
+
+  it("leaves out a claimed gap and counts only what it lists", () => {
+    render(
+      withClaims(
+        <>
+          <EvtxCoverageBanner />
+          <ClaimingSurface keys={[`Security: ${LIVE_REFUSAL_5}`]} />
+        </>,
+      ),
+    );
+    expect(bannerLines()).toEqual([formatCoverageGap(SYSTEM_LIMIT)]);
     expect(screen.getByText("1 gap in this view")).toBeInTheDocument();
-    expect(screen.getByText(`Security: ${LIVE_REFUSAL_5}`)).toBeInTheDocument();
   });
 
-  it("leaves the gaps to the rail while it shows its Insights tab", () => {
-    setLayout(true, "insights");
-    const { container } = render(<EvtxCoverageBanner />);
-    expect(container).toBeEmptyDOMElement();
-  });
-
-  it("comes back while the rail shows Details, since that hides the disclosure", () => {
-    setLayout(true, "insights");
-    render(<EvtxCoverageBanner />);
+  it("is not drawn when every gap is claimed, and comes back when the claim is released", () => {
+    function Toggle() {
+      const [claimed, setClaimed] = useState(true);
+      return (
+        <>
+          <EvtxCoverageBanner />
+          {claimed && (
+            <ClaimingSurface keys={[`Security: ${LIVE_REFUSAL_5}`, formatCoverageGap(SYSTEM_LIMIT)]} />
+          )}
+          <button type="button" onClick={() => setClaimed(false)}>
+            release
+          </button>
+        </>
+      );
+    }
+    render(withClaims(<Toggle />));
     expect(gridBanner()).toBeNull();
-    act(() => useEvtxLayoutStore.getState().setRailTab("details"));
-    expect(screen.getByText("1 gap in this view")).toBeInTheDocument();
-    act(() => useEvtxLayoutStore.getState().setRailTab("insights"));
+    fireEvent.click(screen.getByRole("button", { name: "release" }));
+    expect(bannerLines()).toHaveLength(2);
+  });
+
+  it("keys a legacy line and its structured gap as one", () => {
+    useEvtxStore.setState({
+      coverageGaps: [`Security: ${LIVE_REFUSAL_5}`, `  ${formatCoverageGap(SYSTEM_LIMIT)}  `],
+    });
+    render(
+      withClaims(
+        <>
+          <EvtxCoverageBanner />
+          <ClaimingSurface keys={[`Security: ${LIVE_REFUSAL_5}`]} />
+        </>,
+      ),
+    );
+    // The legacy copies dedupe against the structured gaps; the claimed one is gone from both.
+    expect(bannerLines()).toEqual([`  ${formatCoverageGap(SYSTEM_LIMIT)}  `]);
+  });
+
+  it("hands the archive provenance to the surface that claims it", () => {
+    useEvtxStore.setState({
+      coverageDetails: [],
+      archiveMembers: [
+        { path: "bundle.zip::logs/Application.evtx", kind: "evtx", outcome: "parsed" },
+      ],
+    });
+    const { rerender } = render(withClaims(<EvtxCoverageBanner />));
+    expect(screen.getByText("Archive member provenance (1)")).toBeInTheDocument();
+    rerender(
+      withClaims(
+        <>
+          <EvtxCoverageBanner />
+          <ClaimingSurface keys={[]} archiveProvenance />
+        </>,
+      ),
+    );
     expect(gridBanner()).toBeNull();
-  });
-
-  it("comes back when the rail is hidden again", () => {
-    setLayout(true);
-    render(<EvtxCoverageBanner />);
-    expect(gridBanner()).toBeNull();
-    act(() => useEvtxLayoutStore.getState().togglePanel("insights"));
-    expect(screen.getByText("1 gap in this view")).toBeInTheDocument();
-  });
-
-  it("stays while the rail is on Insights when the diagnosis that feeds its disclosure failed", () => {
-    setLayout(true);
-    render(<EvtxCoverageBanner diagnosisFailed />);
-    expect(screen.getByText("1 gap in this view")).toBeInTheDocument();
-  });
-
-  it("does not yet count the channel pane as a disclosing surface (#837)", () => {
-    setLayout(false, "insights", true);
-    render(<EvtxCoverageBanner />);
-    expect(gridBanner()).not.toBeNull();
   });
 });
 
 describe("a gap and the archive provenance appear in exactly one place", () => {
-  function renderBoth(diagnosisFailed: boolean) {
+  const SYSTEM_LIMIT: EvtxCoverageGap = {
+    source: "System",
+    kind: "limitReached",
+    reason: "reader stopped at 10000 events; the source may contain more",
+  };
+
+  function renderBoth(visible: boolean) {
     render(
-      <>
-        <EvtxCoverageBanner diagnosisFailed={diagnosisFailed} />
-        <EvtxCoverageBanner variant="rail" diagnosisFailed={diagnosisFailed} />
-      </>,
+      withClaims(
+        <>
+          <EvtxCoverageBanner />
+          {/* The rail panel is hidden, not unmounted, when it is off screen. */}
+          <div hidden={!visible}>
+            <EvtxCoverageBanner variant="rail" visible={visible} />
+          </div>
+        </>,
+      ),
     );
   }
 
   beforeEach(() => {
     answerElevation(OFFERABLE);
     useEvtxStore.setState({
-      coverageDetails: [liveDenied("Security")],
+      coverageDetails: [liveDenied("Security"), SYSTEM_LIMIT],
       archiveMembers: [
         { path: "bundle.zip::logs/Application.evtx", kind: "evtx", outcome: "parsed" },
       ],
     });
   });
 
-  it("diagnosis failed with the rail on Insights: the banner only", async () => {
-    setLayout(true, "insights");
+  it("rail on screen: the note and the provenance there, the rest in the banner", async () => {
     renderBoth(true);
     await settle();
 
-    expect(gridBanner()).not.toBeNull();
-    expect(notes()).toHaveLength(0);
-    expect(screen.queryByText(/channel not read/)).toBeNull();
-    expect(screen.getAllByText("Archive member provenance (1)")).toHaveLength(1);
-  });
-
-  it("rail on Insights with a diagnosis: the note only", async () => {
-    setLayout(true, "insights");
-    renderBoth(false);
-    await settle();
-
-    expect(gridBanner()).toBeNull();
     expect(notes()).toHaveLength(1);
-    expect(screen.getAllByText("Archive member provenance (1)")).toHaveLength(1);
+    expect(bannerLines()).toEqual([formatCoverageGap(SYSTEM_LIMIT)]);
+    const provenance = Array.from(document.querySelectorAll("[data-archive-provenance]"));
+    expect(provenance).toHaveLength(1);
+    expect(gridBanner()?.contains(provenance[0])).toBe(false);
   });
 
-  it("rail on Details: the banner only", async () => {
-    setLayout(true, "details");
+  it("rail off screen: everything in the banner, the note claiming nothing", async () => {
     renderBoth(false);
     await settle();
 
-    expect(gridBanner()).not.toBeNull();
-    expect(notes()).toHaveLength(0);
-    expect(screen.getAllByText("Archive member provenance (1)")).toHaveLength(1);
+    expect(bannerLines()).toEqual([`Security: ${LIVE_REFUSAL_5}`, formatCoverageGap(SYSTEM_LIMIT)]);
+    const banner = gridBanner();
+    expect(banner?.querySelectorAll("[data-archive-provenance]")).toHaveLength(1);
   });
 });
 
@@ -356,17 +362,22 @@ describe("accessDeniedSources", () => {
         [],
       ),
     ).toEqual([
-      { source: "Security", manifest: false },
-      { source: "System", manifest: false },
+      {
+        source: "Security",
+        manifest: false,
+        keys: [`Security: ${LIVE_REFUSAL_5}`, `Security: ${LIVE_REFUSAL_1314}`],
+      },
+      { source: "System", manifest: false, keys: [`System: ${LIVE_REFUSAL_1314}`] },
     ]);
   });
 
   it("merges the parser's gap and the manifest's coverage row for the same file into one", () => {
+    // Both rows carry the same line, so they share one key: the banner's own line for the file.
     expect(accessDeniedSources([FILE_GAP], FILE_MANIFEST.coverage)).toEqual([
-      { source: FILE_PATH, manifest: false },
+      { source: FILE_PATH, manifest: true, keys: [`${FILE_PATH}: ${FILE_REASON}`] },
     ]);
-    expect(accessDeniedSources([], FILE_MANIFEST.coverage)).toEqual([
-      { source: FILE_PATH, manifest: true },
+    expect(accessDeniedSources([FILE_GAP], [])).toEqual([
+      { source: FILE_PATH, manifest: false, keys: [`${FILE_PATH}: ${FILE_REASON}`] },
     ]);
   });
 
@@ -568,24 +579,41 @@ describe("EvtxCoverageBanner rail variant (coverage note)", () => {
       tailCoverageGaps: ["Security: live tail access denied"],
     });
 
-    const { container } = render(<EvtxCoverageBanner variant="rail" />);
+    const { container } = render(<EvtxCoverageBanner variant="rail" visible />);
     await settle();
 
     expect(container).toBeEmptyDOMElement();
     expect(elevationProbes()).toBe(0);
   });
 
-  it("is not drawn while the grid banner is (rail on Details)", async () => {
+  it("claims what it draws only while on screen, and keeps its probe answer meanwhile", async () => {
     answerElevation(OFFERABLE);
     useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] });
-    setLayout(true, "details");
+    function Harness() {
+      const [visible, setVisible] = useState(false);
+      return (
+        <>
+          <EvtxCoverageBanner />
+          <div hidden={!visible}>
+            <EvtxCoverageBanner variant="rail" visible={visible} />
+          </div>
+          <button type="button" onClick={() => setVisible((value) => !value)}>
+            toggle
+          </button>
+        </>
+      );
+    }
+    render(withClaims(<Harness />));
+    await settle();
+    expect(bannerLines()).toEqual([`Security: ${LIVE_REFUSAL_5}`]);
 
-    await renderRail();
-    expect(notes()).toHaveLength(0);
-
-    // Back on Insights it shows at once: the probe already answered, nothing remounted.
-    act(() => useEvtxLayoutStore.getState().setRailTab("insights"));
+    fireEvent.click(screen.getByRole("button", { name: "toggle" }));
+    expect(gridBanner()).toBeNull();
     expect(notes()).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "toggle" }));
+    expect(bannerLines()).toEqual([`Security: ${LIVE_REFUSAL_5}`]);
+    // The note stayed mounted while hidden: one probe for the whole sequence.
     expect(elevationProbes()).toBe(1);
   });
 
@@ -742,18 +770,10 @@ describe("coverage announcer", () => {
     return Array.from(announcer().children).map((line) => line.textContent ?? "");
   }
 
-  /** The workspace's coverage surfaces, as it mounts them. */
-  function renderSurfaces() {
-    render(
-      <>
-        <EvtxCoverageBanner variant="announcer" />
-        <EvtxCoverageBanner diagnosisFailed={false} />
-        <EvtxCoverageBanner variant="rail" diagnosisFailed={false} />
-      </>,
-    );
-  }
+  const SECURITY_LINE = `Security: ${LIVE_REFUSAL_5}`;
+  const SYSTEM_LINE = `System: ${LIVE_REFUSAL_1314}`;
 
-  it("is a visually hidden polite status region", () => {
+  it("is a visually hidden polite status region that starts empty", () => {
     render(<EvtxCoverageBanner variant="announcer" />);
     const region = announcer();
     expect(region).toHaveAttribute("role", "status");
@@ -764,15 +784,24 @@ describe("coverage announcer", () => {
 
   it("announces a gap that arrives after the first load once, with the rail on and the banner hidden", async () => {
     answerElevation(OFFERABLE);
-    setLayout(true, "insights");
     useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] });
-    renderSurfaces();
+    render(
+      withClaims(
+        <>
+          <EvtxCoverageBanner variant="announcer" />
+          <EvtxCoverageBanner />
+          <EvtxCoverageBanner variant="rail" visible />
+          {/* The rail's disclosure, covering both gaps once a summary has them. */}
+          <ClaimingSurface keys={[SECURITY_LINE, SYSTEM_LINE]} />
+        </>,
+      ),
+    );
     await settle();
 
     expect(gridBanner()).toBeNull();
-    expect(lines()).toEqual(["1 gap in this view", `Security: ${LIVE_REFUSAL_5}`]);
+    // Only the new lines: no count line, which would make the whole status region re-read.
+    expect(lines()).toEqual([SECURITY_LINE]);
 
-    const added = `System: ${LIVE_REFUSAL_1314}`;
     act(() =>
       useEvtxStore.setState({
         coverageDetails: [liveDenied("Security"), liveDenied("System", LIVE_REFUSAL_1314)],
@@ -780,37 +809,51 @@ describe("coverage announcer", () => {
     );
 
     expect(gridBanner()).toBeNull();
-    expect(lines()).toEqual(["2 gaps in this view", added]);
+    expect(lines()).toEqual([SYSTEM_LINE]);
     // Once across every live region in the document, not only the announcer.
     const texts = liveTexts();
     expect(texts).toHaveLength(1);
-    expect(texts[0].split(added)).toHaveLength(2);
+    expect(texts[0].split(SYSTEM_LINE)).toHaveLength(2);
+  });
 
-    // An update that adds nothing announces nothing new.
+  it("leaves nothing stale when the gaps shrink", async () => {
+    useEvtxStore.setState({
+      coverageDetails: [liveDenied("Security"), liveDenied("System", LIVE_REFUSAL_1314)],
+    });
+    render(<EvtxCoverageBanner variant="announcer" />);
+    await settle();
+    expect(lines()).toEqual([SECURITY_LINE, SYSTEM_LINE]);
+
+    // System is cleared: nothing is added, so the region empties rather than keep its line.
+    act(() => useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] }));
+    expect(announcer()).toBeEmptyDOMElement();
+    expect(liveTexts().join("")).not.toContain(SYSTEM_LINE);
+  });
+
+  it("announces a gap again when it is reported again after going away", async () => {
+    useEvtxStore.setState({
+      coverageDetails: [liveDenied("Security"), liveDenied("System", LIVE_REFUSAL_1314)],
+    });
+    render(<EvtxCoverageBanner variant="announcer" />);
+    await settle();
+
+    act(() => useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] }));
     act(() =>
       useEvtxStore.setState({
         coverageDetails: [liveDenied("Security"), liveDenied("System", LIVE_REFUSAL_1314)],
       }),
     );
-    expect(liveTexts()).toEqual(texts);
-
-    // The banner appearing (rail on Details) adds no live text.
-    act(() => useEvtxLayoutStore.getState().setRailTab("details"));
-    expect(gridBanner()).not.toBeNull();
-    expect(liveTexts()).toEqual(texts);
+    expect(lines()).toEqual([SYSTEM_LINE]);
   });
 
-  it("starts over when a new load clears the gaps", async () => {
+  it("announces nothing for an update that adds no gap", async () => {
     useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] });
     render(<EvtxCoverageBanner variant="announcer" />);
     await settle();
-    expect(announcer()).toHaveTextContent(`Security: ${LIVE_REFUSAL_5}`);
-
-    act(() => useEvtxStore.setState({ coverageDetails: [] }));
-    expect(announcer()).toBeEmptyDOMElement();
+    expect(lines()).toEqual([SECURITY_LINE]);
 
     act(() => useEvtxStore.setState({ coverageDetails: [liveDenied("Security")] }));
-    expect(announcer()).toHaveTextContent(`Security: ${LIVE_REFUSAL_5}`);
+    expect(announcer()).toBeEmptyDOMElement();
   });
 });
 

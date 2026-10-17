@@ -1,0 +1,121 @@
+/**
+ * Which coverage surface shows which load gap.
+ *
+ * The invariant: every current load gap is visible on exactly one rendered surface. A surface
+ * (the Insights rail today; the channel pane once Phase 8 adds its claim) claims the gaps it
+ * actually renders, while it renders them, keyed by the shared key in evtx-coverage.ts
+ * (`formatCoverageGap`, `legacyCoverageDisclosureKey`). The grid banner lists only what no surface
+ * claims, so nothing is shown twice and nothing is shown nowhere.
+ *
+ * Claims are registered in a layout effect and read through `useSyncExternalStore`, so the banner
+ * re-renders before the browser paints and never shows a frame of gaps a surface is about to claim.
+ * The registry lives in the workspace's provider, so claims reset with the workspace; without a
+ * provider every hook is a no-op and nothing is claimed.
+ */
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+
+export interface CoverageClaim {
+  /** Keys of the gaps the surface shows. */
+  keys: ReadonlySet<string>;
+  /** The surface shows the archive member provenance. */
+  archiveProvenance: boolean;
+}
+
+export type CoverageClaims = CoverageClaim;
+
+const NO_CLAIMS: CoverageClaims = { keys: new Set(), archiveProvenance: false };
+
+interface ClaimsRegistry {
+  set(owner: symbol, claim: CoverageClaim | null): void;
+  subscribe(listener: () => void): () => void;
+  snapshot(): CoverageClaims;
+}
+
+function isEmpty(claim: CoverageClaim | null): boolean {
+  return claim === null || (claim.keys.size === 0 && !claim.archiveProvenance);
+}
+
+function sameClaim(a: CoverageClaim, b: CoverageClaim): boolean {
+  if (a.archiveProvenance !== b.archiveProvenance || a.keys.size !== b.keys.size) return false;
+  for (const key of a.keys) if (!b.keys.has(key)) return false;
+  return true;
+}
+
+function createRegistry(): ClaimsRegistry {
+  const claims = new Map<symbol, CoverageClaim>();
+  const listeners = new Set<() => void>();
+  let snapshot = NO_CLAIMS;
+  return {
+    set(owner, claim) {
+      const previous = claims.get(owner);
+      if (isEmpty(claim)) {
+        if (previous === undefined) return;
+        claims.delete(owner);
+      } else {
+        // Callers build a new claim every render; only a change of content is news.
+        if (previous !== undefined && sameClaim(previous, claim!)) return;
+        claims.set(owner, claim!);
+      }
+      const keys = new Set<string>();
+      let archiveProvenance = false;
+      for (const held of claims.values()) {
+        for (const key of held.keys) keys.add(key);
+        archiveProvenance ||= held.archiveProvenance;
+      }
+      snapshot = { keys, archiveProvenance };
+      for (const listener of listeners) listener();
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    snapshot: () => snapshot,
+  };
+}
+
+const ClaimsContext = createContext<ClaimsRegistry | null>(null);
+
+/** Holds the claims of one workspace instance. */
+export function CoverageClaimsProvider({ children }: { children: ReactNode }) {
+  const [registry] = useState(createRegistry);
+  return <ClaimsContext.Provider value={registry}>{children}</ClaimsContext.Provider>;
+}
+
+/**
+ * Registers what the calling surface shows. Pass null (or an empty claim) while it shows nothing,
+ * for instance while it is hidden; the claim is also released when the surface unmounts.
+ */
+export function useCoverageClaim(claim: CoverageClaim | null): void {
+  const registry = useContext(ClaimsContext);
+  const [owner] = useState(() => Symbol("coverage-claim"));
+  useLayoutEffect(() => {
+    registry?.set(owner, claim);
+  }, [registry, owner, claim]);
+  useLayoutEffect(
+    () => () => {
+      registry?.set(owner, null);
+    },
+    [registry, owner],
+  );
+}
+
+const noSubscription = () => () => undefined;
+const noClaims = () => NO_CLAIMS;
+
+/** Everything claimed by every surface, as one union. */
+export function useCoverageClaims(): CoverageClaims {
+  const registry = useContext(ClaimsContext);
+  return useSyncExternalStore(
+    registry?.subscribe ?? noSubscription,
+    registry?.snapshot ?? noClaims,
+  );
+}

@@ -14,14 +14,19 @@
  * - "{n} nearby, not linked": Phase 10c (Chains tab data).
  *
  * The coverage note (item 2) comes from the loaded sources rather than the diagnosis, so it shows
- * while a first build is pending; `EvtxCoverageBanner` owns it. When a build failed there is no
- * coverage disclosure here, so the gaps move to the grid banner and the note steps aside.
+ * while a first build is pending and after one failed; `EvtxCoverageBanner` owns it. One keyed
+ * mount point in both branches keeps it mounted when the first summary lands.
+ *
+ * Coverage claims (evtx-coverage-claims.tsx): while the panel is on screen and its coverage
+ * disclosure renders, it claims the keys of the store gaps the shown summary was built from
+ * (`coverageKeys`). A gap that arrived after that summary stays with the grid banner.
  */
 import { memo, useId, useMemo, useState, type ReactNode } from "react";
 import { tokens } from "@fluentui/react-components";
 import { LOG_MONOSPACE_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
+import { useCoverageClaim } from "./evtx-coverage-claims";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 import { useRailTextColors } from "./evtx-rail-text";
 import {
@@ -93,7 +98,14 @@ interface EventDiagnosisPanelProps {
    * Defaults to `records.length`.
    */
   scopeCount?: number | null;
+  /** The panel is on screen (the rail is shown on its Insights panel). */
+  visible?: boolean;
+  /** Shared keys of the store gaps `summary` was built from: what its disclosure covers. */
+  coverageKeys?: ReadonlySet<string> | null;
 }
+
+/** The note's one mount point across the pending and summary branches. */
+const COVERAGE_NOTE_KEY = "coverage-note";
 
 interface GroupedCoverageGap {
   gap: DiagnosisCoverageGap;
@@ -808,7 +820,16 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
   updating = false,
   error = null,
   scopeCount,
+  visible = true,
+  coverageKeys = null,
 }: EventDiagnosisPanelProps) {
+  const disclosesCoverage =
+    visible && summary !== null && summary.overview.coverageGapCount > 0 && coverageKeys !== null;
+  const coverageClaim = useMemo(
+    () => (disclosesCoverage ? { keys: coverageKeys!, archiveProvenance: false } : null),
+    [disclosesCoverage, coverageKeys],
+  );
+  useCoverageClaim(coverageClaim);
   const sizes = useRailSizes();
   const railText = useRailTextColors();
   const visuals = useEvtxVisualTokens();
@@ -858,7 +879,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
         >
           {message}
         </div>
-        <EvtxCoverageBanner variant="rail" diagnosisFailed={Boolean(error)} />
+        <EvtxCoverageBanner key={COVERAGE_NOTE_KEY} variant="rail" visible={visible} />
         {recordCards}
       </section>
     );
@@ -926,7 +947,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
         </>
       )}
 
-      <EvtxCoverageBanner variant="rail" diagnosisFailed={Boolean(error)} />
+      <EvtxCoverageBanner key={COVERAGE_NOTE_KEY} variant="rail" visible={visible} />
 
       {summary.overview.coverageGapCount > 0 && (
         <Disclosure

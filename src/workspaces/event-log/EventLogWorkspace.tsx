@@ -41,7 +41,8 @@ import {
 } from "./evtx-layout-store";
 import { selectVisibleRecords } from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
-import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
+import { coverageDisclosureKeys, mergeDiagnosisCoverageGaps } from "./evtx-coverage";
+import { CoverageClaimsProvider } from "./evtx-coverage-claims";
 import type {
   DiagnosisSummary,
   EvtxCoverageGap,
@@ -278,6 +279,10 @@ export function EventLogWorkspace() {
   );
 
   const [diagnosis, setDiagnosis] = useState<DiagnosisSummary | null>(null);
+  // The shared keys of the gaps `diagnosis` was built from (its snapshot's input), set and cleared
+  // with it, so the rail claims what that summary covers and never a gap that arrived since.
+  const [diagnosisCoverageKeys, setDiagnosisCoverageKeys] =
+    useState<ReadonlySet<string> | null>(null);
   const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
   const [analysisStatus, setAnalysisStatus] =
     useState<EventLogAnalysisSessionStatus | null>(null);
@@ -344,6 +349,7 @@ export function EventLogWorkspace() {
     }
 
     setDiagnosis(null);
+    setDiagnosisCoverageKeys(null);
     setDiagnosisError(null);
     setAnalysisStatus(null);
     setInitialTimelinePage(null);
@@ -409,6 +415,7 @@ export function EventLogWorkspace() {
           setAnalysisStatus(result.status);
           setInitialTimelinePage(result.initialPage);
           setDiagnosis(result.diagnosis);
+          setDiagnosisCoverageKeys(coverageDisclosureKeys(snapshot.coverageGaps));
           setTimelinePending(false);
         })
         .catch((error: unknown) => {
@@ -423,6 +430,7 @@ export function EventLogWorkspace() {
             error instanceof Error ? error.message : String(error);
           setTimelinePending(false);
           setDiagnosis(null);
+          setDiagnosisCoverageKeys(null);
           setDiagnosisError(
             `Operational diagnosis could not be built: ${message}`,
           );
@@ -574,9 +582,9 @@ export function EventLogWorkspace() {
       {isLoading && <ProgressBar style={{ width: "100%", flexShrink: 0 }} />}
       <EvtxViewBar nowEpoch={nowEpoch} />
       <EvtxFilterBar nowEpoch={nowEpoch} />
-      {/* The gap list moved into the rail (the coverage note and the coverage disclosure). This
-          draws it here only while no visible surface shows it (`coverageBannerVisible`). */}
-      <EvtxCoverageBanner diagnosisFailed={diagnosisError !== null} />
+      {/* The gaps no other surface shows (evtx-coverage-claims.tsx): the rail claims what its
+          coverage note and its coverage disclosure render, while they are on screen. */}
+      <EvtxCoverageBanner />
 
       {timelineError && (
         <div
@@ -694,6 +702,7 @@ export function EventLogWorkspace() {
               records={analysisRecords}
               pending={timelinePending}
               error={diagnosisError}
+              summaryCoverageKeys={diagnosisCoverageKeys}
             />
           </div>
         </aside>
@@ -704,7 +713,7 @@ export function EventLogWorkspace() {
   return (
     <>
       {announcer}
-      {workspace}
+      <CoverageClaimsProvider>{workspace}</CoverageClaimsProvider>
     </>
   );
 }

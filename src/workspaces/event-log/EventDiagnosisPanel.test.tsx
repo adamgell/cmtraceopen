@@ -13,6 +13,8 @@ import { getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore } from "./evtx-store";
 import { useEvtxLayoutStore } from "./evtx-layout-store";
+import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
+import { CoverageClaimsProvider } from "./evtx-coverage-claims";
 import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
 import { DETAIL_RENDER_CAP, OUTCOME_LABELS, EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import type {
@@ -533,14 +535,64 @@ describe("EventDiagnosisPanel", () => {
       expect(screen.getByText(NOTE)).toBeTruthy();
     });
 
-    it("steps aside after a build failed, when the grid banner carries the gaps instead", async () => {
+    it("stays after a build failed: it draws, and claims, the refused channel", async () => {
       const { rerender } = render(<EventDiagnosisPanel summary={null} updating />);
       await settle();
       expect(screen.getByText(NOTE)).toBeTruthy();
 
       rerender(<EventDiagnosisPanel summary={null} error="engine unavailable" />);
       await settle();
-      expect(screen.queryByText(NOTE)).toBeNull();
+      expect(screen.getByText(NOTE)).toBeTruthy();
+    });
+
+    it("stays mounted when the first summary lands: one elevation probe", async () => {
+      const { rerender } = render(<EventDiagnosisPanel summary={null} updating />);
+      await settle();
+      const before = screen.getByText(NOTE);
+
+      rerender(<EventDiagnosisPanel summary={deniedSummary} />);
+      await settle();
+      expect(screen.getByText(NOTE)).toBe(before);
+      expect(
+        invoke.mock.calls.filter(([command]) => command === "get_app_elevation_state"),
+      ).toHaveLength(1);
+    });
+
+    describe("coverage claims", () => {
+      const KEY = `Security: ${deniedSecurity.reason}`;
+      const LATE = { source: "Setup", kind: "missing" as const, reason: "channel not found" };
+
+      function renderWithBanner(props: Partial<Parameters<typeof EventDiagnosisPanel>[0]>) {
+        return render(
+          <CoverageClaimsProvider>
+            <EvtxCoverageBanner />
+            <EventDiagnosisPanel summary={deniedSummary} coverageKeys={new Set([KEY])} {...props} />
+          </CoverageClaimsProvider>,
+        );
+      }
+
+      const banner = () => document.querySelector("[data-coverage-banner]");
+
+      it("claims the gaps its summary was built from while it is on screen", async () => {
+        renderWithBanner({});
+        await settle();
+        expect(banner()).toBeNull();
+      });
+
+      it("leaves a gap that arrived after its summary to the banner", async () => {
+        useEvtxStore.setState({ coverageDetails: [deniedSecurity, LATE] });
+        renderWithBanner({});
+        await settle();
+        expect(banner()).not.toBeNull();
+        expect(banner()?.querySelectorAll("li")).toHaveLength(1);
+        expect(banner()).toHaveTextContent("Setup: channel not found");
+      });
+
+      it("claims nothing while it is off screen", async () => {
+        renderWithBanner({ visible: false });
+        await settle();
+        expect(banner()).toHaveTextContent(KEY);
+      });
     });
 
     it("is not drawn without an accessDenied gap", async () => {

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { Button, Tooltip, tokens } from "@fluentui/react-components";
 import { LockClosed16Regular } from "@fluentui/react-icons";
 import { useEvtxStore, type EvtxSourceMode } from "./evtx-store";
-import { useEvtxLayoutStore, type EvtxRailTabId } from "./evtx-layout-store";
 import { useUiStore } from "../../stores/ui-store";
 import { LOG_UI_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
 import { readableOn } from "../../lib/color-contrast";
@@ -12,10 +11,16 @@ import { getThemeById } from "../../lib/themes";
 import type { CMTraceTheme } from "../../lib/themes/types";
 import { resolveToken } from "./evtx-visual-tokens";
 import { useRailTextColors } from "./evtx-rail-text";
-import { formatCoverageGap, summarizeCoverageGaps } from "./evtx-coverage";
+import {
+  formatCoverageGap,
+  legacyCoverageDisclosureKey,
+  summarizeCoverageGaps,
+} from "./evtx-coverage";
+import { useCoverageClaim, useCoverageClaims } from "./evtx-coverage-claims";
 import type { EventLogSourceCoverage, EvtxArchiveMember, EvtxCoverageGap } from "./types";
 
 const MAX_DISPLAYED_ARCHIVE_MEMBERS = 4_096;
+const NO_ARCHIVE_MEMBERS: readonly EvtxArchiveMember[] = [];
 const MAX_DISPLAYED_COVERAGE_GAPS = 100;
 /** Notes shown one per source in the rail; the rest are counted. */
 export const MAX_COVERAGE_NOTES = 3;
@@ -32,10 +37,14 @@ const VISUALLY_HIDDEN: CSSProperties = {
 
 type EvtxCoverageBannerProps =
   | {
-      /** The full gap list above the grid (the default), or the Insights tab's coverage note. */
-      variant?: "grid" | "rail";
-      /** The diagnosis could not be built, so the rail has no coverage disclosure to show. */
-      diagnosisFailed?: boolean;
+      /** The gap list above the grid: every current gap no other surface shows. */
+      variant?: "grid";
+    }
+  | {
+      /** The Insights tab's coverage note (spec 8.13, item 2) and the archive provenance. */
+      variant: "rail";
+      /** The Insights panel is on screen; the note claims what it draws only then. */
+      visible: boolean;
     }
   | {
       /** The workspace's one polite live region for newly reported gaps. */
@@ -53,65 +62,57 @@ type EvtxCoverageBannerProps =
  * It cannot be dismissed permanently, only collapsed. A gap stays true for as long as the data is
  * on screen, and letting it be dismissed would make the view claim completeness it does not have.
  *
- * Three variants, one export (the workspace tests replace this module with a single component):
- * - `grid`: the full list above the grid, drawn only while no visible surface discloses the gaps
- *   (`coverageBannerVisible`).
- * - `rail`: the Insights tab's coverage note (spec 8.13, item 2), one note per source the backend
- *   refused to read, plus the archive member provenance. Drawn only while the grid banner is not,
- *   so neither appears twice.
+ * Every current gap is shown on exactly one rendered surface (evtx-coverage-claims.tsx). Three
+ * variants, one export (the workspace tests replace this module with a single component):
+ * - `grid`: the gaps, and the archive provenance, that no surface claims. Not drawn when every one
+ *   is claimed.
+ * - `rail`: the Insights tab's coverage note, one note per source the backend refused to read, plus
+ *   the archive provenance. It claims what it draws while the Insights panel is on screen.
  * - `announcer`: a visually hidden polite live region, always mounted, that announces newly
  *   reported gaps whichever surface shows them.
+ *
+ * The channel pane (spec 8.6, Phase 8) will claim exactly the gaps its model attributes: its rows
+ * plus its disclosure of gaps it cannot attribute to a channel. Gaps it leaves out, such as
+ * inventory-only archive members, stay with the banner.
  */
 export function EvtxCoverageBanner(props: EvtxCoverageBannerProps) {
   if (props.variant === "announcer") return <CoverageAnnouncer />;
-  const diagnosisFailed = props.diagnosisFailed ?? false;
-  return props.variant === "rail" ? (
-    <CoverageNotes diagnosisFailed={diagnosisFailed} />
-  ) : (
-    <GridBanner diagnosisFailed={diagnosisFailed} />
-  );
+  if (props.variant === "rail") return <CoverageNotes visible={props.visible} />;
+  return <GridBanner />;
 }
 
-export interface CoverageBannerGateInput {
-  /** The channel pane is shown and discloses coverage (spec 8.6). */
-  channelsPanel: boolean;
-  /** The Insights rail is shown. */
-  insightsPanel: boolean;
-  /** The rail's tab; only "insights" shows the note and the coverage disclosure. */
-  railTab: EvtxRailTabId;
-  /** The diagnosis that feeds the coverage disclosure failed. */
-  diagnosisFailed: boolean;
+/** One current gap as the banner lists it: its shared key and the line shown for it. */
+interface CoverageEntry {
+  key: string;
+  text: string;
 }
 
 /**
- * Whether the grid banner is drawn: only when no visible surface discloses the load's gaps. The
- * channel pane does while it is shown; the rail does while it is shown on its Insights tab with a
- * diagnosis. A gap is never shown as complete, and never shown twice.
+ * Every current gap, once per shared key, in the banner's order: legacy strings, live-tail strings,
+ * then structured gaps. The first line seen for a key is the one shown.
  */
-export function coverageBannerVisible({
-  channelsPanel,
-  insightsPanel,
-  railTab,
-  diagnosisFailed,
-}: CoverageBannerGateInput): boolean {
-  return !channelsPanel && (!insightsPanel || railTab !== "insights" || diagnosisFailed);
-}
-
-/** The one place the gate's inputs are read, so the grid banner and the rail note always agree. */
-function useCoverageBannerVisible(diagnosisFailed: boolean): boolean {
-  const insightsPanel = useEvtxLayoutStore((s) => s.panels.insights);
-  const railTab = useEvtxLayoutStore((s) => s.railTab);
-  return coverageBannerVisible({
-    channelsPanel: false, // #837 (channel pane coverage) flips this to the real panels.channels.
-    insightsPanel,
-    railTab,
-    diagnosisFailed,
-  });
+function useCoverageEntries(): CoverageEntry[] {
+  const legacyGaps = useEvtxStore((s) => s.coverageGaps);
+  const structuredGaps = useEvtxStore((s) => s.coverageDetails);
+  const tailGaps = useEvtxStore((s) => s.tailCoverageGaps);
+  return useMemo(() => {
+    const entries = new Map<string, string>();
+    const add = (key: string, text: string) => {
+      if (!entries.has(key)) entries.set(key, text);
+    };
+    for (const gap of legacyGaps) add(legacyCoverageDisclosureKey(gap, "legacy"), gap);
+    for (const gap of tailGaps) add(legacyCoverageDisclosureKey(gap, "tail"), gap);
+    for (const gap of structuredGaps) {
+      const line = formatCoverageGap(gap);
+      add(line, line);
+    }
+    return [...entries].map(([key, text]) => ({ key, text }));
+  }, [legacyGaps, tailGaps, structuredGaps]);
 }
 
 /**
- * The sources whose coverage gap is `accessDenied`, in first-reported order, each once, by their
- * exact source.
+ * The sources whose coverage gap is `accessDenied`, in first-reported order, each once, with the
+ * shared keys of every such gap behind it.
  *
  * Reads the structured kinds only (the parser's gaps and the source manifest's coverage). Legacy
  * gap strings are left out on purpose: classifying them would mean matching their wording, and a
@@ -121,17 +122,31 @@ function useCoverageBannerVisible(diagnosisFailed: boolean): boolean {
 export function accessDeniedSources(
   coverageDetails: readonly EvtxCoverageGap[],
   manifestCoverage: readonly EventLogSourceCoverage[],
-): { source: string; manifest: boolean }[] {
-  const sources = new Map<string, boolean>();
+): { source: string; manifest: boolean; keys: string[] }[] {
+  const sources = new Map<string, { manifest: boolean; keys: Set<string> }>();
+  const note = (source: string, key: string, manifest: boolean) => {
+    const entry = sources.get(source) ?? { manifest: false, keys: new Set<string>() };
+    entry.manifest ||= manifest;
+    entry.keys.add(key);
+    sources.set(source, entry);
+  };
   for (const gap of coverageDetails) {
-    if (gap.kind === "accessDenied" && !sources.has(gap.source)) sources.set(gap.source, false);
+    if (gap.kind === "accessDenied") note(gap.source, formatCoverageGap(gap), false);
   }
   for (const coverage of manifestCoverage) {
-    if (coverage.kind === "accessDenied" && !sources.has(coverage.path)) {
-      sources.set(coverage.path, true);
+    if (coverage.kind === "accessDenied") {
+      note(
+        coverage.path,
+        formatCoverageGap({ source: coverage.path, kind: coverage.kind, reason: coverage.reason }),
+        true,
+      );
     }
   }
-  return [...sources].map(([source, manifest]) => ({ source, manifest }));
+  return [...sources].map(([source, { manifest, keys }]) => ({
+    source,
+    manifest,
+    keys: [...keys],
+  }));
 }
 
 /** How a note names its source. Display only: the `accessDenied` kind alone decides a note. */
@@ -256,17 +271,6 @@ function openElevationPrompt(): void {
   });
 }
 
-/** The banner's gap lines: legacy strings, live-tail strings and formatted structured gaps. */
-function useCoverageGapMessages(): string[] {
-  const legacyGaps = useEvtxStore((s) => s.coverageGaps);
-  const structuredGaps = useEvtxStore((s) => s.coverageDetails);
-  const tailGaps = useEvtxStore((s) => s.tailCoverageGaps);
-  return useMemo(
-    () => [...new Set([...legacyGaps, ...tailGaps, ...structuredGaps.map(formatCoverageGap)])],
-    [legacyGaps, tailGaps, structuredGaps],
-  );
-}
-
 function omittedGapsLine(omitted: number): string {
   return `<coverage gaps: ${omitted} omitted by display limit>`;
 }
@@ -298,41 +302,34 @@ function ArchiveMemberList({ messages }: { messages: readonly string[] }) {
 }
 
 /**
- * Announces gaps as they are reported, once each, with the banner's own wording: the count, then
- * each new gap line. It starts empty and fills after mounting, so the first gaps are announced too.
- * A new load that clears the gaps starts over.
+ * Announces gaps as they are reported, once each, as the lines the banner shows for them. Only the
+ * newly added lines are in the region (`role="status"` is read as a whole), and an update that adds
+ * nothing empties it, so nothing stale is left to be read. A gap that goes away is forgotten, so it
+ * is announced again if it is reported again. The region starts empty and fills after mounting, so
+ * the first gaps are announced too.
  */
 function CoverageAnnouncer() {
-  const gaps = useCoverageGapMessages();
+  const entries = useCoverageEntries();
   const announcedRef = useRef<ReadonlySet<string>>(new Set());
   const [fresh, setFresh] = useState<readonly string[]>([]);
 
   useEffect(() => {
-    if (gaps.length === 0) {
-      announcedRef.current = new Set();
-      setFresh([]);
-      return;
-    }
     const announced = announcedRef.current;
-    const added = gaps.filter((gap) => !announced.has(gap));
-    if (added.length === 0) return;
-    announcedRef.current = new Set([...announced, ...added]);
-    setFresh(added);
-  }, [gaps]);
+    const added = entries.filter((entry) => !announced.has(entry.key));
+    announcedRef.current = new Set(entries.map((entry) => entry.key));
+    setFresh((current) =>
+      added.length === 0 && current.length === 0 ? current : added.map((entry) => entry.text),
+    );
+  }, [entries]);
 
   const shown = fresh.slice(0, MAX_DISPLAYED_COVERAGE_GAPS);
   const omitted = fresh.length - shown.length;
   return (
     <div role="status" aria-live="polite" data-coverage-announcer="" style={VISUALLY_HIDDEN}>
-      {fresh.length > 0 && (
-        <>
-          <div>{summarizeCoverageGaps(gaps)}</div>
-          {shown.map((gap, index) => (
-            <div key={`${index}:${gap}`}>{gap}</div>
-          ))}
-          {omitted > 0 && <div>{omittedGapsLine(omitted)}</div>}
-        </>
-      )}
+      {shown.map((line, index) => (
+        <div key={`${index}:${line}`}>{line}</div>
+      ))}
+      {omitted > 0 && <div>{omittedGapsLine(omitted)}</div>}
     </div>
   );
 }
@@ -344,41 +341,64 @@ function CoverageAnnouncer() {
  * is decorative; the sentence carries the state. A local channel or a file gets an Elevate action
  * named for it, and is hidden where elevation cannot help (already elevated, or not Windows); a
  * remote channel's note has no action, since elevating here does not change the remote
- * credentials. Every hook runs before the gate, so the note does not remount (and re-probe) when
- * the gate changes. The gap itself stays listed in the coverage disclosure below.
+ * credentials. While the Insights panel is on screen it claims the gaps behind the notes it draws
+ * (not the "+N more" ones) and the provenance; the gap itself also stays in the coverage disclosure
+ * once a summary covers it.
  */
-function CoverageNotes({ diagnosisFailed }: { diagnosisFailed: boolean }) {
+function CoverageNotes({ visible }: { visible: boolean }) {
   const structuredGaps = useEvtxStore((s) => s.coverageDetails);
   const sourceManifest = useEvtxStore((s) => s.sourceManifest);
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const remoteMachine = useEvtxStore((s) => s.remoteMachine);
   const archiveMembers = useEvtxStore((s) => s.archiveMembers);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
-  const bannerVisible = useCoverageBannerVisible(diagnosisFailed);
   const colors = useCoverageNoteColors();
   const railText = useRailTextColors();
+  const sources = useMemo(
+    () => accessDeniedSources(structuredGaps, sourceManifest?.coverage ?? []),
+    [structuredGaps, sourceManifest],
+  );
   const subjects = useMemo(
     () =>
-      accessDeniedSources(structuredGaps, sourceManifest?.coverage ?? []).map((entry) =>
-        coverageNoteSubject(entry, { sourceMode, remoteMachine }),
-      ),
-    [structuredGaps, sourceManifest, sourceMode, remoteMachine],
+      sources.map((entry) => ({
+        subject: coverageNoteSubject(entry, { sourceMode, remoteMachine }),
+        keys: entry.keys,
+      })),
+    [sources, sourceMode, remoteMachine],
   );
-  const canElevate = useElevationOffer(subjects.some((subject) => subject.kind !== "remote"));
+  const canElevate = useElevationOffer(
+    subjects.some(({ subject }) => subject.kind !== "remote"),
+  );
   const archiveMemberMessages = useArchiveMemberMessages(archiveMembers);
   const fontSize = Math.max(10, getLogListMetrics(logListFontSize).fontSize - 2);
 
-  if (bannerVisible) return null;
-  const noted = subjects.filter((subject) => subject.kind === "remote" || canElevate);
-  const shown = noted.slice(0, MAX_COVERAGE_NOTES);
+  const noted = useMemo(
+    () => subjects.filter(({ subject }) => subject.kind === "remote" || canElevate),
+    [subjects, canElevate],
+  );
+  const shown = useMemo(() => noted.slice(0, MAX_COVERAGE_NOTES), [noted]);
   const omitted = noted.length - shown.length;
-  if (shown.length === 0 && archiveMembers.length === 0) return null;
+  const showsProvenance = archiveMembers.length > 0;
+
+  const claim = useMemo(
+    () =>
+      visible
+        ? {
+            keys: new Set(shown.flatMap(({ keys }) => keys)),
+            archiveProvenance: showsProvenance,
+          }
+        : null,
+    [visible, shown, showsProvenance],
+  );
+  useCoverageClaim(claim);
+
+  if (shown.length === 0 && !showsProvenance) return null;
 
   return (
     <div style={{ display: "grid", gap: "8px", fontFamily: LOG_UI_FONT_FAMILY, fontSize: `${fontSize}px` }}>
       {shown.length > 0 && (
         <section aria-label="Channels not read" style={{ display: "grid", gap: "6px" }}>
-          {shown.map((subject) => (
+          {shown.map(({ subject }) => (
             <div
               key={subject.source}
               data-coverage-note={subject.source}
@@ -412,8 +432,9 @@ function CoverageNotes({ diagnosisFailed }: { diagnosisFailed: boolean }) {
           )}
         </section>
       )}
-      {archiveMembers.length > 0 && (
+      {showsProvenance && (
         <details
+          data-archive-provenance=""
           style={{
             padding: "8px 12px",
             borderRadius: "6px",
@@ -474,28 +495,38 @@ function ElevateAction({
   );
 }
 
-/** The full list above the grid. Not a live region: the announcer speaks for every surface. */
-function GridBanner({ diagnosisFailed }: { diagnosisFailed: boolean }) {
-  const gaps = useCoverageGapMessages();
+/**
+ * The gaps, and the archive provenance, that no surface claims. Its count counts what it lists.
+ * Not a live region: the announcer speaks for every surface.
+ */
+function GridBanner() {
+  const entries = useCoverageEntries();
+  const claims = useCoverageClaims();
   const archiveMembers = useEvtxStore((s) => s.archiveMembers);
-  const bannerVisible = useCoverageBannerVisible(diagnosisFailed);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const [collapsed, setCollapsed] = useState(false);
 
+  const gaps = useMemo(
+    () => entries.filter((entry) => !claims.keys.has(entry.key)).map((entry) => entry.text),
+    [entries, claims],
+  );
   const displayedGaps = useMemo(
     () => gaps.slice(0, MAX_DISPLAYED_COVERAGE_GAPS),
     [gaps],
   );
   const omittedGaps = gaps.length - displayedGaps.length;
-  const archiveMemberMessages = useArchiveMemberMessages(archiveMembers);
+  const archiveMemberMessages = useArchiveMemberMessages(
+    claims.archiveProvenance ? NO_ARCHIVE_MEMBERS : archiveMembers,
+  );
+  const provenanceCount = claims.archiveProvenance ? 0 : archiveMembers.length;
 
-  if (!bannerVisible || (gaps.length === 0 && archiveMemberMessages.length === 0)) return null;
+  if (gaps.length === 0 && archiveMemberMessages.length === 0) return null;
 
   const { fontSize, rowLineHeight } = getLogListMetrics(logListFontSize);
   const summary =
     gaps.length > 0
       ? summarizeCoverageGaps(gaps)
-      : `${archiveMembers.length} archive member${archiveMembers.length === 1 ? "" : "s"} in this view`;
+      : `${provenanceCount} archive member${provenanceCount === 1 ? "" : "s"} in this view`;
 
   return (
     <div
@@ -536,8 +567,8 @@ function GridBanner({ diagnosisFailed }: { diagnosisFailed: boolean }) {
           </ul>
           {omittedGaps > 0 && <div>{omittedGapsLine(omittedGaps)}</div>}
           {archiveMemberMessages.length > 0 && (
-            <details>
-              <summary>Archive member provenance ({archiveMembers.length})</summary>
+            <details data-archive-provenance="">
+              <summary>Archive member provenance ({provenanceCount})</summary>
               <ArchiveMemberList messages={archiveMemberMessages} />
             </details>
           )}
