@@ -409,7 +409,6 @@ describe("the counts belong to the window's session, or nothing is called linked
   const states: [string, (input: DockModelInput) => DockModelInput][] = [
     ["not in yet", (input) => ({ ...input, counts: null })],
     ["another session's", (input) => ({ ...input, counts: counts(fixtureEdges("exactPair"), { builtFor: "session:2" }) })],
-    ["an earlier session's, marked updating", (input) => ({ ...input, counts: counts(fixtureEdges("exactPair"), { updating: true }) })],
   ];
 
   it.each(states)("pairs nothing when the counts are %s", (_why, apply) => {
@@ -431,8 +430,36 @@ describe("the counts belong to the window's session, or nothing is called linked
     expect(model.plot.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
   });
 
-  it("pairs when the counts are the window's session and current", () => {
-    expect(ready(pairScene().input).paired).toBe(true);
+  it("pairs when the counts are the window's session", () => {
+    const model = ready(pairScene().input);
+    expect(model.paired).toBe(true);
+    expect(model.updating).toBe(false);
+  });
+
+  it("keeps an earlier session's window and its own counts paired while a newer session loads, and says it is updating", () => {
+    // The counts are marked updating because a newer session exists; the window is the SAME earlier
+    // session's, so the two agree with each other and nothing newer is mixed in.
+    const { input } = pairScene();
+    const model = ready({ ...input, counts: counts(fixtureEdges("exactPair"), { updating: true }) });
+    expect(model.paired).toBe(true);
+    expect(model.updating).toBe(true);
+    expect(model.row?.strength).toBe("exact");
+    expect(model.plot.connectors).toHaveLength(1);
+    expect(model.notices).not.toContain(LINKS_LOADING_TEXT);
+  });
+
+  it("never pairs a newer window with an earlier session's counts, nor an earlier window with newer counts", () => {
+    const { input } = pairScene();
+    const newerWindow = { ...input.window!, sessionKey: "session:2" };
+    expect(ready({ ...input, window: newerWindow, counts: counts(fixtureEdges("exactPair"), { updating: true }) }).paired).toBe(false);
+    expect(ready({ ...input, counts: counts(fixtureEdges("exactPair"), { builtFor: "session:2" }) }).paired).toBe(false);
+  });
+
+  it("is not updating when nothing is paired, even if the counts that are not the window's are", () => {
+    const { input } = pairScene();
+    expect(ready({ ...input, counts: null }).updating).toBe(false);
+    const other = counts(fixtureEdges("exactPair"), { builtFor: "session:2", updating: true });
+    expect(ready({ ...input, counts: other }).updating).toBe(false);
   });
 });
 

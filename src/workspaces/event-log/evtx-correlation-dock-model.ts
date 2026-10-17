@@ -9,9 +9,11 @@
  *
  * Rules, all enforced here:
  * - A window answers ONE center. A record whose timestamp is another center is not paired with it.
- * - The counts are paired with the window only when they are the SAME session and are current
- *   (`builtFor` equals the window's session key, and they are not marked updating). Otherwise no
- *   entry is called linked or not linked, and no connector is drawn.
+ * - The counts are paired with the window only when they are the SAME session (`builtFor` equals the
+ *   window's session key). Otherwise no entry is called linked or not linked, and no connector is
+ *   drawn. A pair that belongs to an EARLIER session than the newest (`counts.updating`) is still a
+ *   consistent pair, and is shown as it was with `updating` set, as the hook keeps its previous
+ *   model while a newer session loads: nothing from the newer session is mixed into it.
  * - The selected record's origin is found in the other direction than the engine gives it: the window
  *   items are tested against the record with the origin join's own matchers. An id is never rebuilt.
  *   An origin that is no item of the window is not found, and the dock says so.
@@ -158,8 +160,13 @@ export interface DockReady {
   /** "{n} sources", or "at least {n} sources" when the window was not read whole. */
   sources: string;
   sourceCount: number;
-  /** The counts belong to the window's session and are current: links and strengths are known. */
+  /** The counts belong to the window's session: links and strengths are known for it. */
   paired: boolean;
+  /**
+   * The window and its counts are an earlier session's pair, shown while a newer session is read.
+   * They agree with each other and with nothing newer; the dock says it is updating.
+   */
+  updating: boolean;
   selected: DockSelected;
   row: DockRow | null;
   steps: DockStep[];
@@ -265,8 +272,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
   if (window === null || window.centerMs !== record.timestampEpoch) return { kind: "unread" };
   if (window.windowItems === null) return { kind: "failed", error: window.error };
 
-  const paired =
-    counts !== null && !counts.updating && counts.builtFor === window.sessionKey;
+  const paired = counts !== null && counts.builtFor === window.sessionKey;
   const pairedCounts = paired ? counts : null;
   const byId = itemsByOriginId(window.items);
   const items = [...byId.values()];
@@ -498,6 +504,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
     centerMs: window.centerMs,
     halfWidthMs: window.halfWidthMs,
     sessionKey: window.sessionKey,
+    updating: pairedCounts !== null && pairedCounts.updating,
     sources: sourcesText(laneInfos.length, window.complete),
     sourceCount: laneInfos.length,
     paired,
