@@ -16,6 +16,7 @@ import { tokens } from "@fluentui/react-components";
 import { contrastRatio } from "../../lib/color-contrast";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { getAllThemes } from "../../lib/themes";
+import { deferred } from "../../test-utils/deferred";
 import type { CMTraceTheme } from "../../lib/themes/types";
 import type { LogEntry } from "../../types/log";
 import type {
@@ -29,6 +30,10 @@ import type {
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
+
+// The helper has its own tests against the real loaders; the pane's tests need only what it says.
+const addLogSourceMock = vi.hoisted(() => vi.fn());
+vi.mock("./add-log-source", () => ({ addLogSource: addLogSourceMock }));
 
 // The store subscribes to backend events at module scope, so it is imported after the mock that
 // stands in for that bridge; a static import would be evaluated first.
@@ -657,9 +662,14 @@ describe("the Also correlating section", () => {
   });
   afterEach(cleanup);
 
-  it("is absent when no text log is open", () => {
+  it("renders with no text log open: the eyebrow and the link, no rows and no note", () => {
+    // The Add log source link lives here, so the section cannot wait for a first source.
     render(<ChannelPicker />);
-    expect(screen.queryByText("Also correlating")).not.toBeInTheDocument();
+    const section = screen.getByRole("region", { name: "Also correlating" });
+    expect(within(section).getByText("Also correlating")).toBeInTheDocument();
+    expect(within(section).getByRole("button", { name: "Add log source\u2026" })).toBeInTheDocument();
+    expect(within(section).queryByText(/entr/)).not.toBeInTheDocument();
+    expect(within(section).queryByText(/^Correlating:/)).not.toBeInTheDocument();
   });
 
   it("lists each open text log by file with its entry count", () => {
@@ -705,10 +715,192 @@ describe("the Also correlating section", () => {
     expect(within(section).getByText("and 3 more")).toBeInTheDocument();
   });
 
-  it("has no Add log source link yet (Phase 19)", () => {
+  it("ends the list with the Add log source link", () => {
     useLogStore.setState({ sourceOpenMode: "merged", entries: [textLog("C:\\logs\\a.log", 1)] });
     render(<ChannelPicker />);
-    expect(screen.queryByText(/add log source/i)).not.toBeInTheDocument();
+    const section = screen.getByRole("region", { name: "Also correlating" });
+    const link = within(section).getByRole("button", { name: "Add log source\u2026" });
+    const row = within(section).getByText("a.log");
+    expect(row.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  describe("the note says what the session is given, from the live mode", () => {
+    const FILE = "C:\\logs\\a.log";
+    const scoped = (mode: "single-file" | "aggregate-folder" | "diff") => {
+      useUiStore.setState({ currentPlatform: "windows" });
+      useLogStore.setState({
+        sourceOpenMode: mode,
+        activeSource: { kind: "file", path: FILE },
+        entries: [textLog(FILE, 1)],
+      });
+    };
+
+    it.each(["single-file", "aggregate-folder", "diff"] as const)(
+      "says only the active source is correlated in %s mode",
+      (mode) => {
+        scoped(mode);
+        render(<ChannelPicker />);
+        expect(screen.getByText("Correlating: active log source only")).toBeInTheDocument();
+        expect(screen.queryByText("Correlating: all open logs")).not.toBeInTheDocument();
+      },
+    );
+
+    it("says every open log is correlated in merged mode", () => {
+      useLogStore.setState({ sourceOpenMode: "merged", entries: [textLog(FILE, 1)] });
+      render(<ChannelPicker />);
+      expect(screen.getByText("Correlating: all open logs")).toBeInTheDocument();
+      expect(screen.queryByText("Correlating: active log source only")).not.toBeInTheDocument();
+    });
+
+    it("follows the mode as it changes, without a remount", () => {
+      scoped("single-file");
+      render(<ChannelPicker />);
+      expect(screen.getByText("Correlating: active log source only")).toBeInTheDocument();
+
+      act(() => useLogStore.setState({ sourceOpenMode: "merged" }));
+      expect(screen.getByText("Correlating: all open logs")).toBeInTheDocument();
+
+      act(() => useLogStore.setState({ sourceOpenMode: "single-file" }));
+      expect(screen.getByText("Correlating: active log source only")).toBeInTheDocument();
+    });
+
+    it("is not shown while no source is listed, whatever the mode", () => {
+      useLogStore.setState({ sourceOpenMode: "merged", entries: [] });
+      render(<ChannelPicker />);
+      expect(screen.queryByText(/^Correlating:/)).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe("the Add log source link", () => {
+  const link = () => screen.getByRole("button", { name: "Add log source\u2026" });
+  const openMenu = () => fireEvent.click(link());
+
+  beforeEach(() => {
+    resetPane({ channels: [channel("System", "enabled")] });
+    addLogSourceMock.mockReset().mockResolvedValue({ status: "cancelled" });
+  });
+  afterEach(cleanup);
+
+  it("offers a file and a folder, each labelled with the spec's ellipsis", () => {
+    render(<ChannelPicker />);
+    openMenu();
+    expect(screen.getByRole("menuitem", { name: "Add log file\u2026" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Add log folder\u2026" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["Add log file\u2026", "file"],
+    ["Add log folder\u2026", "folder"],
+  ])("runs the helper for %s", async (label, kind) => {
+    render(<ChannelPicker />);
+    openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: label }));
+    });
+    expect(addLogSourceMock).toHaveBeenCalledTimes(1);
+    expect(addLogSourceMock).toHaveBeenCalledWith(kind);
+  });
+
+  it("is disabled while an add runs, so a second one cannot start, and gives focus back after", async () => {
+    const pending = deferred<{ status: "cancelled" }>();
+    addLogSourceMock.mockReturnValue(pending.promise);
+    render(<ChannelPicker />);
+    openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Add log file\u2026" }));
+    });
+
+    expect(link()).toHaveAttribute("aria-disabled", "true");
+    // A click on the disabled link opens no menu, so no second add can be chosen.
+    fireEvent.click(link());
+    expect(screen.queryByRole("menuitem", { name: "Add log file\u2026" })).not.toBeInTheDocument();
+    expect(addLogSourceMock).toHaveBeenCalledTimes(1);
+
+    // The native dialog and the menu item are gone by the time the add finishes: focus has fallen
+    // to the page, and has to be put back on the link.
+    (document.activeElement as HTMLElement).blur();
+    expect(document.body).toHaveFocus();
+
+    await act(async () => {
+      pending.resolve({ status: "cancelled" });
+      await pending.promise;
+    });
+    expect(link()).not.toHaveAttribute("aria-disabled", "true");
+    expect(link()).toHaveFocus();
+  });
+
+  it.each([
+    ["failed", "Could not add b.log: The file is locked. No text log is now correlated."],
+    ["rejected", "Not added: x.reg is a registry file, which opens in the Log workspace. No text log is now correlated."],
+  ] as const)("shows a %s add as an alert that carries the helper's message", async (status, message) => {
+    addLogSourceMock.mockResolvedValue({ status, message });
+    render(<ChannelPicker />);
+    openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Add log file\u2026" }));
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+    expect(link()).toHaveFocus();
+
+    // Dismissed, it is gone, and a new add starts from a clean slate.
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows what a successful add could not read as a status, not an alert", async () => {
+    addLogSourceMock.mockResolvedValue({ status: "added", notice: "Not read: b.log." });
+    render(<ChannelPicker />);
+    openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Add log file\u2026" }));
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Not read: b.log.");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [{ status: "cancelled" }],
+    [{ status: "added", notice: null }],
+  ])("says nothing for %o", async (outcome) => {
+    addLogSourceMock.mockResolvedValue(outcome);
+    render(<ChannelPicker />);
+    openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Add log file\u2026" }));
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("clears an earlier report when the next add starts", async () => {
+    addLogSourceMock.mockResolvedValueOnce({ status: "failed", message: "Could not add b.log: boom. No text log is now correlated." });
+    render(<ChannelPicker />);
+    openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Add log file\u2026" }));
+    });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    const pending = deferred<{ status: "cancelled" }>();
+    addLogSourceMock.mockReturnValue(pending.promise);
+    openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Add log folder\u2026" }));
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await act(async () => {
+      pending.resolve({ status: "cancelled" });
+      await pending.promise;
+    });
+  });
+
+  it("takes its text sizes from the list font size", () => {
+    useUiStore.setState({ logListFontSize: 20 });
+    render(<ChannelPicker />);
+    const groupFontSize = Math.max(10, getLogListMetrics(20).fontSize - 2);
+    expect(link().style.fontSize).toBe(`${groupFontSize}px`);
   });
 });
 
@@ -1589,6 +1781,8 @@ describe("contrast of everything the pane renders", () => {
       expect(pairs.some((pair) => pair.what.startsWith('text "needs elevation"'))).toBe(true);
       expect(pairs.some((pair) => pair.what.startsWith("sparkline bar"))).toBe(true);
       expect(pairs.some((pair) => pair.what.startsWith("swatch outline"))).toBe(true);
+      // The Also correlating note (merged mode here) is measured like every other inline text.
+      expect(pairs.some((pair) => pair.what === 'text "Correlating: all open logs"')).toBe(true);
 
       const failures = pairs.filter((pair) => pair.ratio < pair.minimum);
       expect(
@@ -1665,6 +1859,39 @@ describe("contrast of everything the pane renders", () => {
       expect(
         failures.map((pair) => `${pair.what}: ${pair.ratio.toFixed(2)}:1 (needs ${pair.minimum})`),
       ).toEqual([]);
+    },
+  );
+
+  it.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
+    "meets the same floors for the Add log source link and a failed add's report in %s",
+    async (_id, theme) => {
+      const message = "Could not add b.log: The file is locked. No text log is now correlated.";
+      resetPane({ channels: [channel("System", "enabled")] });
+      useUiStore.setState({ themeId: theme.id });
+      addLogSourceMock.mockReset().mockResolvedValue({ status: "failed", message });
+      const { container } = render(<ChannelPicker />);
+      fireEvent.click(screen.getByRole("button", { name: "Add log source\u2026" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: "Add log file\u2026" }));
+      });
+      expect(screen.getByRole("alert")).toHaveTextContent(message);
+
+      // The report's text sets its own color, so the harness reads it.
+      const pairs = measurePane(container, theme);
+      expect(pairs.some((pair) => pair.what === `text "${message}"`)).toBe(true);
+      const failures = pairs.filter((pair) => pair.ratio < pair.minimum);
+      expect(
+        failures.map((pair) => `${pair.what}: ${pair.ratio.toFixed(2)}:1 (needs ${pair.minimum})`),
+      ).toEqual([]);
+
+      // Both links take Fluent's link color from their class, the pair the footer's link is
+      // measured with, so neither may override it inline.
+      const surface = resolveToken(tokens.colorNeutralBackground2, theme);
+      expect(
+        contrastRatio(resolveToken(tokens.colorBrandForegroundLink, theme), surface),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(screen.getByRole("button", { name: "Add log source\u2026" }).style.color).toBe("");
+      expect(screen.getByRole("button", { name: "Dismiss" }).style.color).toBe("");
     },
   );
 

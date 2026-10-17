@@ -27,6 +27,7 @@ import {
   type TextLogRowModel,
 } from "./evtx-channel-stats";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
+import { AddLogSourceControl } from "./AddLogSourceControl";
 import { ChannelClearControls, ChannelClearDialog } from "./ChannelClearControls";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
 import { scopeLogEntries } from "./unified-timeline";
@@ -626,14 +627,14 @@ export function ChannelPicker() {
               No channels match filter
             </div>
           )}
-          {correlatingSources.length > 0 && (
-            <AlsoCorrelating
-              sources={correlatingSources}
-              metrics={rowMetrics}
-              primaryText={primaryText}
-              mutedText={mutedText}
-            />
-          )}
+          {/* Always rendered, even with no text log: the Add log source link lives here. */}
+          <AlsoCorrelating
+            sources={correlatingSources}
+            merged={logSourceOpenMode === "merged"}
+            metrics={rowMetrics}
+            primaryText={primaryText}
+            mutedText={mutedText}
+          />
         </div>
 
         {sourceMode === "live" && loadedChannels.size > 0 && (
@@ -1334,11 +1335,14 @@ function TreeNodeView({
 
 function AlsoCorrelating({
   sources,
+  merged,
   metrics,
   primaryText,
   mutedText,
 }: {
   sources: ReturnType<typeof summarizeLogSources>;
+  /** The log store is in "merged" mode, the only mode that correlates every open log. */
+  merged: boolean;
   metrics: RowMetrics;
   primaryText: string;
   mutedText: string;
@@ -1350,6 +1354,18 @@ function AlsoCorrelating({
       <div style={{ ...eyebrowStyle(metrics.captionFontSize, mutedText), padding: "0 12px 4px" }}>
         Also correlating
       </div>
+      {/* Read from the live mode, so it always says what the session is being given (spec 8.19). */}
+      {sources.length > 0 && (
+        <div
+          style={{
+            padding: "0 12px 4px",
+            fontSize: `${metrics.captionFontSize}px`,
+            color: mutedText,
+          }}
+        >
+          {merged ? "Correlating: all open logs" : "Correlating: active log source only"}
+        </div>
+      )}
       {shown.map((source) => (
         <div
           key={source.path}
@@ -1390,6 +1406,7 @@ function AlsoCorrelating({
           {`and ${omitted} more`}
         </div>
       )}
+      <AddLogSourceControl primaryText={primaryText} />
     </section>
   );
 }
