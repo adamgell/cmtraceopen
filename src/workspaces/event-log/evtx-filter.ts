@@ -290,7 +290,7 @@ export interface VisibleRecordsInput {
   selectedChannels: Set<string>;
   filterLevels: Set<EvtxLevel>;
   filterEventIds: string;
-  /** The search box's text, read as a field query (`compileFieldQuery`). */
+  /** The applied search, read as a field query (`compileFieldQuery`): the last text that parsed. */
   filterSearch: string;
   quickFilter?: EvtxQuickFilter;
   /** The ordered column ids currently shown by the grid. */
@@ -464,6 +464,14 @@ export function fieldQueryError(text: string): EvtxQueryError | null {
   return result.ok ? null : result.error;
 }
 
+/**
+ * Whether a quick filter can be applied as edited: every mode but a field query that does not
+ * parse. The Event IDs mode keeps its own rule for an invalid list (`recordMatchesVisibleFilter`).
+ */
+export function quickFilterApplies(filter: EvtxQuickFilter): boolean {
+  return filter.mode !== "fieldQuery" || fieldQueryError(filter.query) === null;
+}
+
 function termMatches(
   record: EvtxRecord,
   term: EvtxCompiledTerm,
@@ -635,11 +643,10 @@ export function recordMatchesVisibleFilter(
   const search =
     input.searchQuery ??
     (input.filterSearch.trim() ? compileFieldQuery(input.filterSearch, false) : undefined);
-  if (search) {
-    // An invalid search matches nothing, and the search box says why. Dropping the bad term and
-    // filtering on the rest would present a partial filter as the operator's.
-    if (!search.ok) return false;
-    if (!matchesFieldQuery(record, search.query, searchBoxText(record))) return false;
+  // A search that does not parse is not applied at all (spec 8.3), never in part. The store keeps
+  // the last search that parsed as `filterSearch`, so one only reaches here from outside the store.
+  if (search?.ok && !matchesFieldQuery(record, search.query, searchBoxText(record))) {
+    return false;
   }
   const quickFilter = input.quickFilter;
   if (!quickFilter || !quickFilter.query.trim()) return true;
@@ -656,9 +663,9 @@ export function recordMatchesVisibleFilter(
     quickFilter.mode === "fieldQuery"
       ? input.quickFieldQuery ?? compileFieldQuery(quickFilter.query, quickFilter.caseSensitive)
       : undefined;
-  // An invalid field query shows nothing, for a hide rule as well: hiding nothing would show every
-  // record under an exclusion that never applied, which reads as a complete result.
-  if (quickFieldQuery && !quickFieldQuery.ok) return false;
+  // A field query that does not parse is not applied, whether it would show or hide (spec 8.3).
+  // The Event IDs mode above keeps its own rule.
+  if (quickFieldQuery && !quickFieldQuery.ok) return true;
   const matched = matchesQuickFilter(
     record,
     quickFilter,

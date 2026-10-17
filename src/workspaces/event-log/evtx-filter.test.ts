@@ -9,6 +9,7 @@ import {
   levelsFilteredAtSource,
   matchesQuickFilter,
   parseEventIdSelectors,
+  quickFilterApplies,
   selectVisibleRecords,
   sortRecords,
   type EvtxQuickFilter,
@@ -538,10 +539,12 @@ describe("the search box speaks the field grammar", () => {
     expect(fieldQueryError("Status: 0xC000006D C:\\Windows\\System32 http://host 12:00:01")).toBeNull();
   });
 
-  it("matches nothing for a query that does not parse, and says why", () => {
-    expect(searched("level:erro")).toEqual([]);
-    expect(searched('token "broker')).toEqual([]);
-    expect(searched("token OR")).toEqual([]);
+  it("does not apply a query that does not parse, not even in part, and says why (spec 8.3)", () => {
+    const every = ["aad", "mdm", "power", "service"];
+    expect(searched("level:erro")).toEqual(every);
+    // "token" alone would narrow to one record: the valid part is not applied either.
+    expect(searched('token "broker')).toEqual(every);
+    expect(searched("token OR")).toEqual(every);
     expect(fieldQueryError("level:erro")?.message).toBe(
       'level: takes critical, error, warning, info, information or verbose, not "erro".',
     );
@@ -590,11 +593,19 @@ describe("the fieldQuery quick-filter mode", () => {
     expect(fieldQuick("level:error", { action: "hide" })).toEqual(["power", "service"]);
   });
 
-  it("shows nothing for a query that does not parse, for a hide rule as well", () => {
-    expect(fieldQuick("level:erro")).toEqual([]);
-    // The Event IDs mode hides nothing for an invalid hide rule. This mode does not: every record
-    // under an exclusion that never applied would read as a complete result.
-    expect(fieldQuick("level:erro", { action: "hide" })).toEqual([]);
+  it("does not apply a query that does not parse, as a show rule or a hide rule (spec 8.3)", () => {
+    const every = ["aad", "mdm", "power", "service"];
+    expect(fieldQuick("level:erro")).toEqual(every);
+    expect(fieldQuick("level:error -id:", { action: "hide" })).toEqual(every);
+  });
+
+  it("can be applied as edited unless it is a field query that does not parse", () => {
+    expect(quickFilterApplies(quick({ mode: "fieldQuery", query: "level:error" }))).toBe(true);
+    expect(quickFilterApplies(quick({ mode: "fieldQuery", query: "  " }))).toBe(true);
+    expect(quickFilterApplies(quick({ mode: "fieldQuery", query: "level:" }))).toBe(false);
+    // Other modes have no grammar to fail, and Event IDs keeps its own rule for a bad list.
+    expect(quickFilterApplies(quick({ mode: "oneString", query: "level:" }))).toBe(true);
+    expect(quickFilterApplies(quick({ mode: "eventIds", query: "abc" }))).toBe(true);
   });
 
   it("gives the row's match state the same answer, and false for a query that does not parse", () => {
