@@ -12,6 +12,11 @@
  * message. A report says what happened to the add; how many text logs are correlated is appended from
  * the pane's own count, so it stays true if the correlated set changes under a report that is still
  * on screen.
+ *
+ * That sentence is its own node in a region that is not atomic, so a real change of the count
+ * announces the changed sentence and not the whole report again. While the log store loads the count
+ * is held at its last settled value: a folder load moves the active source before it parses, and the
+ * values in between are not facts anyone should hear.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, Menu, MenuItem, MenuList, MenuPopover, MenuTrigger } from "@fluentui/react-components";
@@ -32,6 +37,7 @@ export function AddLogSourceControl({
   groupFontSize,
   captionFontSize,
   correlatedCount,
+  logStoreLoading,
 }: {
   primaryText: string;
   /** The pane's group-header size (f - 2): the link and the menu items. */
@@ -40,7 +46,15 @@ export function AddLogSourceControl({
   captionFontSize: number;
   /** How many text logs the pane lists as correlated right now. */
   correlatedCount: number;
+  /** The log store is loading, so `correlatedCount` may be a value no load has settled on. */
+  logStoreLoading: boolean;
 }) {
+  // The count shown is the last one the log store settled on. Adjusted during render, as the pane's
+  // throttle is, so the first value shown after a load is the settled one and not a stale one.
+  const [settledCount, setSettledCount] = useState(correlatedCount);
+  if (!logStoreLoading && settledCount !== correlatedCount) setSettledCount(correlatedCount);
+  const shownCount = logStoreLoading ? settledCount : correlatedCount;
+
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<Report | null>(null);
   const linkRef = useRef<HTMLButtonElement>(null);
@@ -82,16 +96,19 @@ export function AddLogSourceControl({
     [busy],
   );
 
-  const text = (kind: Report["kind"]) =>
-    report?.kind === kind ? `${report.message} ${describeCorrelatedState(correlatedCount)}` : "";
-  const regionStyle = (shown: string) => ({
-    marginTop: shown === "" ? 0 : "6px",
+  const regionStyle = (shown: boolean) => ({
+    marginTop: shown ? "6px" : 0,
     fontSize: `${captionFontSize}px`,
     color: primaryText,
     overflowWrap: "anywhere" as const,
   });
-  const notice = text("notice");
-  const failure = text("failure");
+  // The message and the sentence are separate nodes: the sentence changes without the message.
+  const reportText = (kind: Report["kind"]) =>
+    report?.kind === kind ? (
+      <>
+        <span>{report.message}</span> <span>{describeCorrelatedState(shownCount)}</span>
+      </>
+    ) : null;
 
   const itemStyle = { fontSize: `${groupFontSize}px` };
   return (
@@ -119,11 +136,11 @@ export function AddLogSourceControl({
           </MenuList>
         </MenuPopover>
       </Menu>
-      <div role="status" style={regionStyle(notice)}>
-        {notice}
+      <div role="status" aria-atomic="false" style={regionStyle(report?.kind === "notice")}>
+        {reportText("notice")}
       </div>
-      <div role="alert" style={regionStyle(failure)}>
-        {failure}
+      <div role="alert" aria-atomic="false" style={regionStyle(report?.kind === "failure")}>
+        {reportText("failure")}
       </div>
       {report !== null && (
         <Link

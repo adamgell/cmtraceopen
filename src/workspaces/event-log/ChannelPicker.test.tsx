@@ -977,6 +977,95 @@ describe("the Add log source link", () => {
     expect(alertRegion().textContent).toMatch(/^Could not add b\.log: boom\. /);
   });
 
+  describe("the state sentence is its own node in a region that is not atomic", () => {
+    afterEach(() => {
+      useLogStore.setState({ isLoading: false });
+    });
+
+    const failedAdd = async () => {
+      addLogSourceMock.mockResolvedValue({ status: "failed", message: "Could not add b.log: boom." });
+      render(<ChannelPicker />);
+      await addFile();
+    };
+    const sourcesInStore = (...files: string[]) =>
+      useLogStore.setState({
+        sourceOpenMode: "merged",
+        entries: files.map((file, index) => textLog(file, index + 1)),
+      });
+
+    it("marks both regions aria-atomic false, before and after a report", async () => {
+      render(<ChannelPicker />);
+      expect(statusRegion()).toHaveAttribute("aria-atomic", "false");
+      expect(alertRegion()).toHaveAttribute("aria-atomic", "false");
+      cleanup();
+
+      await failedAdd();
+      expect(statusRegion()).toHaveAttribute("aria-atomic", "false");
+      expect(alertRegion()).toHaveAttribute("aria-atomic", "false");
+    });
+
+    it("keeps the sentence in a node of its own, apart from the message", async () => {
+      await failedAdd();
+
+      const message = within(alertRegion()).getByText("Could not add b.log: boom.");
+      const sentence = within(alertRegion()).getByText("No text log is now correlated.");
+      expect(sentence).not.toBe(message);
+      expect(sentence.textContent).toBe("No text log is now correlated.");
+      expect(message.textContent).toBe("Could not add b.log: boom.");
+      expect(sentence.parentElement).toBe(alertRegion());
+      expect(message.parentElement).toBe(alertRegion());
+    });
+
+    it("changes only the sentence node when the count really changes", async () => {
+      await failedAdd();
+      const message = within(alertRegion()).getByText("Could not add b.log: boom.");
+      const sentence = within(alertRegion()).getByText("No text log is now correlated.");
+      const observer = new MutationObserver(() => undefined);
+      observer.observe(alertRegion(), { subtree: true, childList: true, characterData: true });
+
+      act(() => sourcesInStore("C:\\logs\\a.log"));
+
+      const records = observer.takeRecords();
+      observer.disconnect();
+      expect(records.length).toBeGreaterThan(0);
+      // Everything that moved is inside the sentence; the message was not touched, so a screen
+      // reader that announces changes announces the sentence once and not the report again.
+      expect(records.every((record) => sentence.contains(record.target))).toBe(true);
+      expect(message.textContent).toBe("Could not add b.log: boom.");
+      expect(within(alertRegion()).getByText("1 text log is now correlated.")).toBe(sentence);
+    });
+
+    it("holds the count at its last settled value while the log store loads, and then shows the settled one", async () => {
+      await failedAdd();
+      const sentence = within(alertRegion()).getByText("No text log is now correlated.");
+      const observer = new MutationObserver(() => undefined);
+      observer.observe(alertRegion(), { subtree: true, childList: true, characterData: true });
+
+      // A folder load moves the source first and the entries last: the list passes through values
+      // that no load settled on.
+      act(() => useLogStore.setState({ isLoading: true }));
+      act(() => sourcesInStore("C:\\logs\\a.log", "C:\\logs\\b.log", "C:\\logs\\c.log"));
+      act(() => sourcesInStore("C:\\logs\\a.log"));
+      act(() => sourcesInStore());
+
+      expect(sentence).toHaveTextContent("No text log is now correlated.");
+      expect(observer.takeRecords()).toEqual([]);
+
+      act(() => {
+        sourcesInStore("C:\\logs\\a.log", "C:\\logs\\b.log");
+        useLogStore.setState({ isLoading: false });
+      });
+      observer.disconnect();
+      expect(sentence).toHaveTextContent("2 text logs are now correlated.");
+    });
+
+    it("shows a real change at once when nothing is loading", async () => {
+      await failedAdd();
+      act(() => sourcesInStore("C:\\logs\\a.log", "C:\\logs\\b.log"));
+      expect(alertRegion()).toHaveTextContent("Could not add b.log: boom. 2 text logs are now correlated.");
+    });
+  });
+
   it("clears an earlier report when the next add starts", async () => {
     addLogSourceMock.mockResolvedValueOnce({ status: "failed", message: "Could not add b.log: boom." });
     render(<ChannelPicker />);
@@ -1984,9 +2073,11 @@ describe("contrast of everything the pane renders", () => {
       });
       expect(screen.getByRole("alert")).toHaveTextContent(message);
 
-      // The report's text sets its own color, so the harness reads it.
+      // The report's text sets its own color, so the harness reads it: the message and the state
+      // sentence are separate nodes, each measured.
       const pairs = measurePane(container, theme);
-      expect(pairs.some((pair) => pair.what === `text "${message}"`)).toBe(true);
+      expect(pairs.some((pair) => pair.what === `text "${reported}"`)).toBe(true);
+      expect(pairs.some((pair) => pair.what === 'text "No text log is now correlated."')).toBe(true);
       const failures = pairs.filter((pair) => pair.ratio < pair.minimum);
       expect(
         failures.map((pair) => `${pair.what}: ${pair.ratio.toFixed(2)}:1 (needs ${pair.minimum})`),

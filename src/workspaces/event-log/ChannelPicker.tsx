@@ -225,6 +225,8 @@ export function ChannelPicker() {
   const logEntries = useLogStore((s) => s.entries);
   const activeLogSource = useLogStore((s) => s.activeSource);
   const logSourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  // A text-log load moves the source before the entries, so the list is not settled while it runs.
+  const logStoreLoading = useLogStore((s) => s.isLoading);
   const currentPlatform = useUiStore((s) => s.currentPlatform);
 
   const [search, setSearch] = useState("");
@@ -631,6 +633,7 @@ export function ChannelPicker() {
           <AlsoCorrelating
             sources={correlatingSources}
             merged={logSourceOpenMode === "merged"}
+            logStoreLoading={logStoreLoading}
             metrics={rowMetrics}
             primaryText={primaryText}
             mutedText={mutedText}
@@ -1336,6 +1339,7 @@ function TreeNodeView({
 function AlsoCorrelating({
   sources,
   merged,
+  logStoreLoading,
   metrics,
   primaryText,
   mutedText,
@@ -1343,6 +1347,8 @@ function AlsoCorrelating({
   sources: ReturnType<typeof summarizeLogSources>;
   /** The log store is in "merged" mode, the only mode that correlates every open log. */
   merged: boolean;
+  /** The log store is loading, so `sources` may not have settled. */
+  logStoreLoading: boolean;
   metrics: RowMetrics;
   primaryText: string;
   mutedText: string;
@@ -1411,6 +1417,7 @@ function AlsoCorrelating({
         groupFontSize={metrics.groupFontSize}
         captionFontSize={metrics.captionFontSize}
         correlatedCount={sources.length}
+        logStoreLoading={logStoreLoading}
       />
     </section>
   );
