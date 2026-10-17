@@ -18,6 +18,7 @@ import {
   selectVisibleRecords,
   sortRecords,
   type EvtxQuickFilter,
+  type VisibleRecordsInput,
 } from "./evtx-filter";
 import * as evtxColumns from "./evtx-columns";
 import * as evtxQueryGrammar from "./evtx-query-grammar";
@@ -950,6 +951,77 @@ describe("transient criteria in selectVisibleRecords", () => {
 
     it("is zero without a range", () => {
       expect(countHiddenForWantOfTimestamp({ ...input, timeRange: null })).toBe(0);
+    });
+
+    it("is zero when every record has a usable timestamp", () => {
+      expect(countHiddenForWantOfTimestamp({ ...input, records: [at(1, 150), at(2, 160)] })).toBe(0);
+    });
+
+    describe("against the two-pass count it replaces", () => {
+      /** The first version: run every criterion over every record, then keep the untimed. */
+      const twoPass = (value: VisibleRecordsInput) =>
+        selectVisibleRecords({ ...value, timeRange: null }).filter((r) => !hasUsableTimestamp(r)).length;
+      const mapped = (property: string, text: string) => [{ property, text, complete: true }];
+      const mixed = [
+        at(1, 150, { message: "disk failure", mapped: mapped("Path", "C:\\data") }),
+        at(2, 0, { message: "disk failure", mapped: mapped("Path", "D:\\data") }),
+        at(3, Number.NaN, { message: "network down", channel: "System" }),
+        at(4, -1, { message: "disk failure", level: "Warning" }),
+        at(5, 0, { message: "quiet", mapped: mapped("Other", "disk") }),
+        at(6, 175, { message: "disk failure", channel: "System" }),
+        at(7, 0, { message: "disk failure", channel: "Elsewhere" }),
+        at(8, Infinity, { message: "disk failure", eventId: 7036 }),
+      ];
+      const variants: [string, Partial<VisibleRecordsInput>][] = [
+        ["no other criterion", {}],
+        ["a search", { filterSearch: "disk" }],
+        ["a field query in the search", { filterSearch: "level:error disk" }],
+        ["a show quick filter over all columns", { quickFilter: quick({ query: "disk" }) }],
+        ["a hide quick filter", { quickFilter: quick({ query: "disk", action: "hide" }) }],
+        ["a quick filter over a mapped column", { quickFilter: quick({ query: "data" }) }],
+        ["a quick filter over the visible columns", { quickFilter: quick({ query: "disk", scope: "visibleColumns" }), visibleColumns: ["message"] }],
+        ["a quick filter on Event IDs", { quickFilter: quick({ mode: "eventIds", query: "7036" }) }],
+        ["levels", { filterLevels: new Set<EvtxLevel>(["Error"]) }],
+        ["the Event ID list", { filterEventIds: "4624" }],
+        ["a scope", { scopeRecords: new Set([mixed[1], mixed[2], mixed[4], mixed[5]]) }],
+        ["an empty scope", { scopeRecords: new Set() }],
+        ["a deselected channel", { selectedChannels: new Set(["Application"]) }],
+      ];
+
+      it.each(variants)("counts what the old pass counted, with %s", (_label, overrides) => {
+        const value: VisibleRecordsInput = {
+          ...base(mixed),
+          timeRange: { startMs: 100, endMs: 200 },
+          ...overrides,
+        };
+        expect(countHiddenForWantOfTimestamp(value)).toBe(twoPass(value));
+      });
+
+      it("runs the other criteria on the untimed records only, not on every loaded one", () => {
+        class CountingChannels extends Set<string> {
+          lookups = 0;
+          override has(value: string) {
+            this.lookups += 1;
+            return super.has(value);
+          }
+        }
+        const timed = Array.from({ length: 500 }, (_, i) => at(100 + i, 150));
+        const untimed = [at(1, 0), at(2, Number.NaN), at(3, -1)];
+        const channels = new CountingChannels(["Application", "System"]);
+        const count = countHiddenForWantOfTimestamp({
+          ...base([...timed, ...untimed]),
+          selectedChannels: channels,
+          timeRange: { startMs: 100, endMs: 200 },
+        });
+        expect(count).toBe(3);
+        // The channel test is the predicate's first step for every record it examines.
+        expect(channels.lookups).toBe(untimed.length);
+      });
+
+      it("is not trivially zero on the mixed set", () => {
+        const value: VisibleRecordsInput = { ...base(mixed), timeRange: { startMs: 100, endMs: 200 } };
+        expect(twoPass(value)).toBeGreaterThan(3);
+      });
     });
   });
 });

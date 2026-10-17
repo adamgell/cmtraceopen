@@ -832,11 +832,12 @@ export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
  */
 export function countHiddenForWantOfTimestamp(input: VisibleRecordsInput): number {
   if (input.timeRange === null) return 0;
-  let count = 0;
-  for (const record of selectVisibleRecords({ ...input, timeRange: null })) {
-    if (!hasUsableTimestamp(record)) count += 1;
-  }
-  return count;
+  // The records without a usable timestamp first, then every other criterion on only those: the
+  // criteria are per record, so this is the count of running them all and keeping the untimed, at
+  // the cost of a cheap pass over the loaded records and the full predicate over the few.
+  const untimed = input.records.filter((record) => !hasUsableTimestamp(record));
+  if (untimed.length === 0) return 0;
+  return selectVisibleRecords({ ...input, records: untimed, timeRange: null }).length;
 }
 
 /** A field the event list can group by. */
