@@ -1,0 +1,688 @@
+/**
+ * The Event Logs Timeline view (spec section 8.9): one lane per provider, channel or event ID, a dot
+ * for each event, drawn on a canvas.
+ *
+ * It charts the records it is given, which the workspace builds with the time range left out (the
+ * histogram's input), so brushing never empties its own chart. The x axis is the histogram's
+ * (`evtx-swimlanes.ts` builds the scene on `buildHistogram`), a count it cannot place is said so,
+ * and while a load runs it draws nothing: unknown is never zero.
+ *
+ * Layers, in document order, which is paint order: the surface, the wash over the brushed range,
+ * the canvas (lane baselines and the dots), then the range's edge borders. The wash is a DOM layer
+ * behind a transparent canvas so that it is drawn BEHIND the dots (over them the Error dot measures
+ * about 1.8:1 in every theme) and so that forced colors can drop it, as the histogram's does.
+ *
+ * Colors: the canvas takes resolved colors (`swimlaneColors`); everything else here is a token.
+ * Lane-count and axis text use `colorNeutralForeground2`, not the spec's Foreground3 (spec 6.1),
+ * which measures 3.37:1 on the solarized-dark surface and 3.03:1 on dracula; text needs 4.5:1.
+ */
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { Dropdown, Option, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
+import { getLogListMetrics } from "../../lib/log-accessibility";
+import { getThemeById } from "../../lib/themes";
+import { useUiStore } from "../../stores/ui-store";
+import { countCoverageGapMessages } from "./evtx-coverage";
+import {
+  HISTOGRAM_LEVEL_LABELS,
+  HISTOGRAM_STACK_ORDER,
+  RANGE_OUTSIDE_NOTE,
+  buildAxisTicks,
+  describeCoverage,
+  describeUntimed,
+  rangeOnPlot,
+} from "./evtx-histogram";
+import { brushPaletteFor, solveBrushOpacity } from "./evtx-histogram-brush";
+import {
+  DOT_MARKS,
+  PLOT_INSET_PX,
+  canvasWidthFor,
+  paintSwimlanes,
+  planPaint,
+  swimlaneColors,
+} from "./evtx-swimlane-canvas";
+import {
+  SWIMLANE_FIELDS,
+  SWIMLANE_FIELD_LABELS,
+  SWIMLANE_FIELD_NOUNS,
+  buildSwimlanes,
+  describeFoldedLanes,
+  describeLaneCount,
+  describeSwimlaneFigure,
+  laneHeightFor,
+  laneLabelFonts,
+  laneLabelLineHeights,
+  type SwimlaneField,
+  type SwimlaneScene,
+} from "./evtx-swimlanes";
+import { useEvtxStore } from "./evtx-store";
+import { DERIVATION_THROTTLE_MS, useThrottledValue } from "./evtx-throttle";
+import { timeZoneLabel } from "./evtx-time";
+import { useEvtxVisualTokens } from "./evtx-visual-tokens";
+import type { EvtxLevel, EvtxRecord } from "./types";
+
+/** The legend lists the levels from the most severe down. */
+const LEGEND_ORDER: readonly EvtxLevel[] = [...HISTOGRAM_STACK_ORDER].reverse();
+
+const FORCED_COLORS = "@media (forced-colors: active)";
+const FORCED_COLORS_QUERY = "(forced-colors: active)";
+
+/** The help text of spec 8.9, with "drag to zoom" corrected: the lanes do not rescale, the drag selects a range. */
+export const SWIMLANE_HELP_TEXT =
+  "each dot is one event · larger = more severe · drag to select a time range";
+
+/** The label block of a lane: 172 px of text and 8 px of padding (spec 8.9). */
+const LABEL_TEXT_WIDTH_PX = 172;
+const LABEL_PAD_PX = 8;
+export const LABEL_WIDTH_PX = LABEL_TEXT_WIDTH_PX + LABEL_PAD_PX;
+
+/** The space a lane view without lanes (loading, empty) keeps, so the message has somewhere to be. */
+const MESSAGE_MIN_HEIGHT_PX = 56;
+
+const TEXT_COLOR = tokens.colorNeutralForeground2;
+
+const useStyles = makeStyles({
+  root: {
+    margin: 0,
+    flex: "1 1 auto",
+    minHeight: 0,
+    display: "flex",
+    flexDirection: "column",
+    boxSizing: "border-box",
+    padding: "6px 12px 6px",
+    overflow: "hidden",
+    position: "relative",
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  header: {
+    flexShrink: 0,
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    columnGap: "14px",
+    rowGap: "4px",
+    paddingBottom: "6px",
+  },
+  legend: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    columnGap: "10px",
+    margin: 0,
+    padding: 0,
+    listStyleType: "none",
+  },
+  legendItem: { display: "flex", alignItems: "center", columnGap: "5px", whiteSpace: "nowrap" },
+  // A mark's glyph in the legend: sized and shaped from the same table the canvas draws from. Under
+  // forced colors it keeps its level colour, in a CanvasText ring, as the histogram's swatches do.
+  swatch: {
+    flexShrink: 0,
+    display: "inline-block",
+    boxSizing: "border-box",
+    [FORCED_COLORS]: {
+      forcedColorAdjust: "none",
+      outlineStyle: "solid",
+      outlineWidth: "1px",
+      outlineColor: "CanvasText",
+    },
+  },
+  lanesControl: { display: "flex", alignItems: "center", columnGap: "6px", marginLeft: "auto" },
+  scroller: { flex: "1 1 auto", minHeight: 0, overflowX: "hidden", overflowY: "auto" },
+  stack: { display: "flex", alignItems: "flex-start" },
+  labels: { flexShrink: 0, margin: 0, padding: 0, listStyleType: "none", width: `${LABEL_WIDTH_PX}px` },
+  label: {
+    boxSizing: "border-box",
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "center",
+    paddingRight: `${LABEL_PAD_PX}px`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    overflow: "hidden",
+  },
+  text: { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+  plotArea: {
+    flex: "1 1 auto",
+    minWidth: 0,
+    boxSizing: "border-box",
+    padding: `0 ${PLOT_INSET_PX}px`,
+  },
+  plotBox: { position: "relative" },
+  plot: {
+    position: "relative",
+    outlineStyle: "none",
+    touchAction: "none",
+    userSelect: "none",
+    ":focus-visible": {
+      outlineStyle: "solid",
+      outlineWidth: "2px",
+      outlineColor: tokens.colorStrokeFocus2,
+      outlineOffset: "1px",
+    },
+  },
+  interactive: { cursor: "crosshair" },
+  layer: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 },
+  // Under forced colors the surface is forced to Canvas but the marks keep their own colours, so the
+  // wash's 3:1 proof (made on the theme's surface) no longer holds. The wash is dropped there and the
+  // edge borders, whose colour is forced to a system colour, carry the range.
+  wash: {
+    pointerEvents: "none",
+    [FORCED_COLORS]: { display: "none" },
+  },
+  canvas: { position: "absolute", top: 0, display: "block", pointerEvents: "none" },
+  message: { display: "flex", alignItems: "center", justifyContent: "center" },
+  axisRow: { flexShrink: 0, display: "flex", alignItems: "flex-start" },
+  zone: {
+    flexShrink: 0,
+    boxSizing: "border-box",
+    width: `${LABEL_WIDTH_PX}px`,
+    paddingRight: `${LABEL_PAD_PX}px`,
+    textAlign: "right",
+    whiteSpace: "nowrap",
+    fontFamily: tokens.fontFamilyNumeric,
+    fontVariantNumeric: "tabular-nums",
+  },
+  axis: { position: "relative" },
+  tick: {
+    position: "absolute",
+    top: 0,
+    whiteSpace: "nowrap",
+    fontFamily: tokens.fontFamilyNumeric,
+    fontVariantNumeric: "tabular-nums",
+  },
+  notes: { margin: "2px 0 0", flexShrink: 0 },
+  visuallyHidden: {
+    position: "absolute",
+    width: "1px",
+    height: "1px",
+    overflow: "hidden",
+    clipPath: "inset(50%)",
+    whiteSpace: "nowrap",
+  },
+});
+
+/** Whether a media query holds, kept current. False where `matchMedia` does not exist. */
+function useMediaMatch(query: string): boolean {
+  const read = () => (typeof window.matchMedia === "function" ? window.matchMedia(query).matches : false);
+  const [matches, setMatches] = useState(read);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const list = window.matchMedia(query);
+    const onChange = () => setMatches(list.matches);
+    onChange();
+    list.addEventListener?.("change", onChange);
+    return () => list.removeEventListener?.("change", onChange);
+  }, [query]);
+  return matches;
+}
+
+/**
+ * Device pixels per CSS pixel, kept current. It changes when the window moves to another screen or
+ * the page is zoomed, and neither reflows the plot, so a resize observer cannot see it: the
+ * resolution media query for the current ratio fires when it stops matching, and is then re-armed
+ * for the new one. A window resize covers browsers that zoom without firing the query.
+ */
+function useDevicePixelRatio(): number {
+  const read = () => window.devicePixelRatio || 1;
+  const [dpr, setDpr] = useState(read);
+  useEffect(() => {
+    let list: MediaQueryList | null = null;
+    const arm = () => {
+      list?.removeEventListener?.("change", onChange);
+      list =
+        typeof window.matchMedia === "function"
+          ? window.matchMedia(`(resolution: ${read()}dppx)`)
+          : null;
+      list?.addEventListener?.("change", onChange);
+    };
+    const onChange = () => {
+      setDpr(read());
+      arm();
+    };
+    arm();
+    const onResize = () => setDpr(read());
+    window.addEventListener("resize", onResize);
+    return () => {
+      list?.removeEventListener?.("change", onChange);
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
+  return dpr;
+}
+
+/**
+ * The colour CanvasText resolves to here, read from a probe element's computed colour. A canvas is
+ * not recoloured by forced colors, so its marks need the resolved system colour passed in.
+ */
+function resolveCanvasText(host: HTMLElement): string {
+  const probe = document.createElement("span");
+  probe.setAttribute("aria-hidden", "true");
+  probe.dataset.evtxProbe = "canvas-text";
+  probe.style.color = "CanvasText";
+  probe.style.display = "none";
+  host.appendChild(probe);
+  const resolved = window.getComputedStyle(probe).color;
+  host.removeChild(probe);
+  return resolved || "CanvasText";
+}
+
+interface LegendProps {
+  swatchClass: string;
+  itemClass: string;
+  listClass: string;
+  colors: Readonly<Record<EvtxLevel, string>>;
+  fontSize: number;
+}
+
+/** The legend: each level's mark as the canvas draws it (shape, size, opacity), from `DOT_MARKS`. */
+const Legend = memo(function Legend({ swatchClass, itemClass, listClass, colors, fontSize }: LegendProps) {
+  return (
+    <ul aria-label="Levels" className={listClass} style={{ fontSize: `${fontSize}px`, color: TEXT_COLOR }}>
+      {LEGEND_ORDER.map((level) => {
+        const mark = DOT_MARKS[level];
+        const color = colors[level];
+        return (
+          <li key={level} className={itemClass} data-evtx-legend-level={level}>
+            <span
+              aria-hidden="true"
+              className={swatchClass}
+              data-evtx-legend-shape={mark.shape}
+              style={{
+                width: `${mark.size}px`,
+                height: `${mark.size}px`,
+                opacity: mark.opacity,
+                borderRadius: mark.shape === "diamond" ? 0 : "50%",
+                clipPath: mark.shape === "diamond" ? "polygon(50% 0, 100% 50%, 50% 100%, 0 50%)" : undefined,
+                backgroundColor: mark.shape === "ring" ? "transparent" : color,
+                border: mark.shape === "ring" ? `${mark.strokePx}px solid ${color}` : undefined,
+              }}
+            />
+            {HISTOGRAM_LEVEL_LABELS[level]}
+          </li>
+        );
+      })}
+    </ul>
+  );
+});
+
+interface EvtxSwimlaneViewProps {
+  /**
+   * The events the filters leave on screen, WITHOUT the time range (spec 8.5): the context a brush
+   * selects from. Empty while a load runs.
+   */
+  records: readonly EvtxRecord[];
+  /** A load is running: the records are being replaced and nothing can be said about them. */
+  loading: boolean;
+}
+
+const EMPTY_FIELD_SCENE = (field: SwimlaneField): SwimlaneScene => buildSwimlanes([], field, "utc");
+
+export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
+  const styles = useStyles();
+  const visual = useEvtxVisualTokens();
+  const listFontSize = useUiStore((s) => s.logListFontSize);
+  const themeId = useUiStore((s) => s.themeId);
+  const metrics = useMemo(() => getLogListMetrics(listFontSize), [listFontSize]);
+  const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  const legacyGaps = useEvtxStore((s) => s.coverageGaps);
+  const structuredGaps = useEvtxStore((s) => s.coverageDetails);
+  const tailGaps = useEvtxStore((s) => s.tailCoverageGaps);
+  const timeRange = useEvtxStore((s) => s.timeRange);
+
+  // Component state, so it resets when the view is left (a view that is not kept alive unmounts):
+  // spec 9 persists the view, panels, rail tab and sizes, and not this choice.
+  const [field, setField] = useState<SwimlaneField>("provider");
+
+  // Published at most once per 75 ms (spec section 11), so a live tail does not rebuild per batch.
+  const shown = useThrottledValue(records, DERIVATION_THROTTLE_MS);
+  // Until the throttled set catches up with an arrival, an empty `shown` is not "no events".
+  const catchingUp = shown !== records && shown.length === 0;
+  const scene = useMemo(() => buildSwimlanes(shown, field, timeZoneMode), [shown, field, timeZoneMode]);
+  const ready = !loading && !catchingUp && scene.axis.domain !== null;
+  const view = scene;
+
+  const theme = useMemo(() => getThemeById(themeId), [themeId]);
+  // Resolved again whenever the theme changes, with no reload and no remount: the canvas repaints.
+  const colors = useMemo(() => swimlaneColors(theme), [theme]);
+  // How opaque the wash over the brushed range is: the histogram's, from its solver, unchanged, so
+  // the two figures show one wash and every non-exempt dot keeps 3:1 on it.
+  const washOpacity = useMemo(() => solveBrushOpacity(brushPaletteFor(theme)), [theme]);
+  const gapCount = useMemo(
+    () => countCoverageGapMessages(legacyGaps, tailGaps, structuredGaps),
+    [legacyGaps, tailGaps, structuredGaps],
+  );
+
+  const fontSize = metrics.fontSize;
+  const laneHeight = laneHeightFor(fontSize);
+  const { namePx, countPx } = laneLabelFonts(fontSize);
+  const { nameLine, countLine } = laneLabelLineHeights(fontSize);
+  const axisPx = Math.max(9, fontSize - 4);
+  const smallPx = Math.max(10, fontSize - 3);
+  const axisHeight = Math.max(16, Math.round(axisPx * 1.5));
+  const captionLine = Math.round(smallPx * 1.4);
+  const ticks = useMemo(() => buildAxisTicks(view.axis, timeZoneMode), [view, timeZoneMode]);
+
+  const plotRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [plotWidth, setPlotWidth] = useState(0);
+  const dpr = useDevicePixelRatio();
+  const forced = useMediaMatch(FORCED_COLORS_QUERY);
+  const [forcedRing, setForcedRing] = useState<string | null>(null);
+
+  useLayoutEffect(() => {
+    const plot = plotRef.current;
+    if (plot === null) return;
+    const measure = () => setPlotWidth(Math.round(plot.getBoundingClientRect().width));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(plot);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    setForcedRing(forced && plotRef.current !== null ? resolveCanvasText(plotRef.current) : null);
+  }, [forced, themeId]);
+
+  const plan = useMemo(
+    () => (ready && plotWidth > 0 ? planPaint(view, { plotWidth, laneHeight, dpr }) : null),
+    [ready, view, plotWidth, laneHeight, dpr],
+  );
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas === null || plan === null) return;
+    canvas.width = Math.round(plan.width * plan.dpr);
+    canvas.height = Math.round(plan.height * plan.dpr);
+    const context = canvas.getContext("2d");
+    if (context === null) return;
+    paintSwimlanes(context, plan, colors, forcedRing);
+  }, [plan, colors, forcedRing]);
+
+  const appliedOnPlot = ready && timeRange !== null ? rangeOnPlot(view.axis, timeRange) : null;
+  const notes: string[] = [];
+  if (!loading && !catchingUp) {
+    if (scene.untimed > 0) notes.push(describeUntimed(scene.untimed));
+    if (gapCount > 0) notes.push(describeCoverage(gapCount));
+    if (ready && timeRange !== null && appliedOnPlot === null) notes.push(RANGE_OUTSIDE_NOTE);
+  }
+  const message =
+    loading || catchingUp
+      ? "Loading events..."
+      : scene.axis.domain === null
+        ? shown.length === 0
+          ? "No events to chart."
+          : "No timestamped events to chart."
+        : null;
+
+  const zone = ready && scene.axis.domain !== null ? timeZoneLabel(timeZoneMode, scene.axis.domain.startMs) : "";
+  const legendColors = useMemo(
+    () =>
+      Object.fromEntries(HISTOGRAM_STACK_ORDER.map((level) => [level, visual.levels[level].dotColor])) as Record<
+        EvtxLevel,
+        string
+      >,
+    [visual],
+  );
+  const noun = SWIMLANE_FIELD_NOUNS[field];
+  const stackHeight = ready ? view.lanes.length * laneHeight : MESSAGE_MIN_HEIGHT_PX;
+
+  const edge = (fraction: number, side: string) => (
+    <div
+      key={side}
+      aria-hidden="true"
+      data-evtx-layer="edge"
+      data-evtx-edge={side}
+      style={{
+        position: "absolute",
+        top: 0,
+        bottom: 0,
+        left: `${fraction * 100}%`,
+        marginLeft: "-1px",
+        pointerEvents: "none",
+        borderLeft: `2px solid ${tokens.colorNeutralStrokeAccessible}`,
+      }}
+    />
+  );
+
+  return (
+    <figure
+      data-evtx-region="swimlanes"
+      className={styles.root}
+      aria-label={describeSwimlaneFigure(ready ? scene : EMPTY_FIELD_SCENE(field), timeZoneMode)}
+      aria-busy={loading || catchingUp}
+    >
+      <div className={styles.header}>
+        <span
+          data-evtx-swimlane-title
+          style={{ fontSize: `${fontSize}px`, fontWeight: 600, color: tokens.colorNeutralForeground1 }}
+        >
+          {`Swimlanes by ${noun}`}
+        </span>
+        <span
+          data-evtx-swimlane-help
+          style={{ fontSize: `${Math.max(10, fontSize - 2)}px`, color: TEXT_COLOR }}
+        >
+          {SWIMLANE_HELP_TEXT}
+        </span>
+        <Legend
+          swatchClass={styles.swatch}
+          itemClass={styles.legendItem}
+          listClass={styles.legend}
+          colors={legendColors}
+          fontSize={smallPx}
+        />
+        <span className={styles.lanesControl}>
+          <span style={{ fontSize: `${Math.max(10, fontSize - 2)}px`, color: TEXT_COLOR }}>Lanes:</span>
+          <Dropdown
+            button={{ style: { fontSize: `${Math.max(11, fontSize - 1)}px` } }}
+            size="small"
+            aria-label="Lanes"
+            value={SWIMLANE_FIELD_LABELS[field]}
+            selectedOptions={[field]}
+            style={{ minWidth: "112px" }}
+            onOptionSelect={(_, data) => {
+              const next = SWIMLANE_FIELDS.find((candidate) => candidate === data.optionValue);
+              if (next !== undefined) setField(next);
+            }}
+          >
+            {SWIMLANE_FIELDS.map((candidate) => (
+              <Option
+                key={candidate}
+                value={candidate}
+                text={SWIMLANE_FIELD_LABELS[candidate]}
+                style={{ fontSize: `${Math.max(11, fontSize - 1)}px` }}
+              >
+                {SWIMLANE_FIELD_LABELS[candidate]}
+              </Option>
+            ))}
+          </Dropdown>
+        </span>
+      </div>
+
+      <div className={styles.scroller} data-evtx-swimlane-scroller>
+        <div className={styles.stack}>
+          {ready && (
+            <ul aria-label="Lanes" className={styles.labels}>
+              {view.lanes.map((lane, index) => (
+                <li
+                  key={lane.id}
+                  className={styles.label}
+                  data-evtx-lane={index}
+                  style={{ height: `${laneHeight}px` }}
+                  title={lane.isOther ? describeFoldedLanes(lane, field) : lane.label}
+                >
+                  <span
+                    className={styles.text}
+                    style={{
+                      fontSize: `${namePx}px`,
+                      lineHeight: `${nameLine}px`,
+                      color: tokens.colorNeutralForeground1,
+                    }}
+                  >
+                    {lane.label}
+                  </span>
+                  <span
+                    className={styles.text}
+                    data-evtx-lane-count
+                    style={{
+                      fontSize: `${countPx}px`,
+                      lineHeight: `${countLine}px`,
+                      color: TEXT_COLOR,
+                      fontFamily: tokens.fontFamilyNumeric,
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {describeLaneCount(lane.count)}
+                  </span>
+                  {lane.isOther && (
+                    <span className={styles.visuallyHidden}>{describeFoldedLanes(lane, field)}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className={styles.plotArea}>
+            <div className={styles.plotBox}>
+              <div
+                ref={plotRef}
+                className={mergeClasses(styles.plot, ready && styles.interactive)}
+                style={{ height: `${stackHeight}px` }}
+              >
+                {ready && appliedOnPlot !== null && (
+                  <div
+                    aria-hidden="true"
+                    data-evtx-layer="wash"
+                    className={mergeClasses(styles.layer, styles.wash)}
+                    style={{
+                      left: `${appliedOnPlot.left * 100}%`,
+                      right: `${(1 - appliedOnPlot.right) * 100}%`,
+                      backgroundColor: tokens.colorNeutralBackground1Selected,
+                      opacity: washOpacity,
+                    }}
+                  />
+                )}
+                {ready && (
+                  <canvas
+                    ref={canvasRef}
+                    aria-hidden="true"
+                    data-evtx-layer="marks"
+                    className={styles.canvas}
+                    style={{
+                      left: `-${PLOT_INSET_PX}px`,
+                      width: `${canvasWidthFor(plotWidth)}px`,
+                      height: `${stackHeight}px`,
+                    }}
+                  />
+                )}
+                {ready && appliedOnPlot !== null && !appliedOnPlot.clippedLeft && edge(appliedOnPlot.left, "start")}
+                {ready && appliedOnPlot !== null && !appliedOnPlot.clippedRight && edge(appliedOnPlot.right, "end")}
+              </div>
+              {message !== null && (
+                <div
+                  role="status"
+                  className={mergeClasses(styles.layer, styles.message)}
+                  style={{ fontSize: `${smallPx}px`, color: TEXT_COLOR, pointerEvents: "none" }}
+                >
+                  {message}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div
+        aria-hidden="true"
+        className={styles.axisRow}
+        style={{ height: `${axisHeight}px`, fontSize: `${axisPx}px`, lineHeight: `${axisHeight}px`, color: TEXT_COLOR }}
+      >
+        <span className={styles.zone} data-evtx-zone>
+          {zone}
+        </span>
+        <div className={styles.plotArea}>
+          <div className={styles.axis}>
+            {ready &&
+              ticks.map((tick) => (
+                <span
+                  key={tick.edgeIndex}
+                  className={styles.tick}
+                  data-evtx-tick={tick.edgeIndex}
+                  style={{
+                    left: `${tick.fraction * 100}%`,
+                    transform:
+                      tick.fraction === 0
+                        ? undefined
+                        : tick.fraction === 1
+                          ? "translateX(-100%)"
+                          : "translateX(-50%)",
+                  }}
+                >
+                  {tick.label}
+                </span>
+              ))}
+          </div>
+        </div>
+      </div>
+
+      {/* A slot that is always here, so focus and blur never change the figure's height. The notes
+          take a line of their own above it; the cursor line fills it only for the keyboard. */}
+      <figcaption className={styles.notes} style={{ fontSize: `${smallPx}px`, color: TEXT_COLOR }}>
+        {notes.length > 0 && (
+          <div data-evtx-notes style={{ lineHeight: `${captionLine}px` }}>
+            {notes.join(" ")}
+          </div>
+        )}
+        <div
+          data-evtx-cursor-slot
+          style={{
+            height: `${captionLine}px`,
+            lineHeight: `${captionLine}px`,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        />
+      </figcaption>
+
+      {ready && (
+        <table className={styles.visuallyHidden}>
+          <caption>{describeSwimlaneFigure(scene, timeZoneMode)}</caption>
+          <thead>
+            <tr>
+              <th scope="col">{SWIMLANE_FIELD_LABELS[field]}</th>
+              {LEGEND_ORDER.map((level) => (
+                <th key={level} scope="col">
+                  {HISTOGRAM_LEVEL_LABELS[level]}
+                </th>
+              ))}
+              <th scope="col">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {scene.lanes.map((lane) => (
+              <tr key={lane.id}>
+                <th scope="row">{lane.isOther ? `${lane.label}. ${describeFoldedLanes(lane, field)}` : lane.label}</th>
+                {LEGEND_ORDER.map((level) => (
+                  <td key={level}>{lane.levelCounts[level]}</td>
+                ))}
+                <td>{lane.count}</td>
+              </tr>
+            ))}
+            {scene.untimed > 0 && (
+              <tr>
+                <th scope="row">Not charted: no timestamp</th>
+                <td colSpan={LEGEND_ORDER.length} />
+                <td>{scene.untimed}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      )}
+    </figure>
+  );
+}
