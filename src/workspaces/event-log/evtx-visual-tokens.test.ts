@@ -16,6 +16,8 @@ import { describe, expect, it } from "vitest";
 import { contrastRatio, parseHex, readableOn } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
 import type { DiagnosisCorrelationStatus, EvtxLevel } from "./types";
+import { overviewBandOpacity } from "./evtx-correlation-overview";
+import { compositeOver } from "./evtx-histogram-brush";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import moduleSource from "./evtx-visual-tokens.ts?raw";
 
@@ -239,7 +241,14 @@ const NEUTRAL_MARK_MIN_DELTA_L = 10;
 const LIGHT_FAMILY_THEME_IDS: readonly string[] = ["light", "classic-cmtrace"];
 
 type SurfaceKey =
-  "surface" | "rail" | "group" | "pressed" | "selected" | "ownRow" | "livePill";
+  | "surface"
+  | "rail"
+  | "group"
+  | "pressed"
+  | "selected"
+  | "ownRow"
+  | "livePill"
+  | "overviewBand";
 
 const SURFACE_TOKEN_LABEL: Record<SurfaceKey, string> = {
   surface: "colorNeutralBackground1",
@@ -254,6 +263,8 @@ const SURFACE_TOKEN_LABEL: Record<SurfaceKey, string> = {
   selected: "selection background (colorPaletteBlueBackground2)",
   ownRow: "the level's own row background",
   livePill: "the live source pill background (colorPaletteGreenBackground1)",
+  overviewBand:
+    "the overview zoom band's wash (colorNeutralBackground1Selected at the opacity solved for it, over colorNeutralBackground1)",
 };
 
 interface Placement {
@@ -474,6 +485,10 @@ const PLACEMENT_INVENTORY: readonly RoleEntry[] = [
     colors: (v) => ({ ...v.strengthBars }),
     placements: [
       { surface: "surface", section: "8.11 overview strip chain bars (#840)" },
+      {
+        surface: "overviewBand",
+        section: "8.11 overview strip chain bars under the zoom band (#840, Adam's criterion)",
+      },
     ],
   },
 ];
@@ -1205,6 +1220,13 @@ describe("evtx visual tokens", () => {
             return resolveToken(visual.selection.background, theme);
           case "livePill":
             return resolveToken(visual.liveSource.background, theme);
+          case "overviewBand":
+            // Drawn behind the bars (surface, wash, bars); the opacity is the one solved for it.
+            return compositeOver(
+              resolveToken(tokens.colorNeutralBackground1, theme),
+              resolveToken(tokens.colorNeutralBackground1Selected, theme),
+              overviewBandOpacity(theme),
+            );
           case "ownRow":
             return resolveToken(
               visual.levels[name as EvtxLevel].rowBackground,
