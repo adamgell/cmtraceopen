@@ -643,15 +643,38 @@ describe("EvtxInsightsRail filter actions", () => {
   });
 
   describe("text logs", () => {
-    it("states, with the build it came from, that the session held text logs", () => {
-      const { rerender } = render(<EvtxInsightsRail summary={SUMMARY} records={loaded} textLogCount={2} />);
-      expect(screen.getByLabelText("Operational diagnosis")).toHaveTextContent("Text logs are not scoped.");
-      // The count belongs to the build, as the scope count does: a new count with the same summary
-      // does not rewrite what that build was given.
-      rerender(<EvtxInsightsRail summary={SUMMARY} records={loaded} textLogCount={0} />);
-      expect(screen.getByLabelText("Operational diagnosis")).toHaveTextContent("Text logs are not scoped.");
-      rerender(<EvtxInsightsRail summary={{ ...SUMMARY }} records={loaded} textLogCount={0} />);
-      expect(screen.getByLabelText("Operational diagnosis")).not.toHaveTextContent("Text logs are not scoped.");
+    const panelText = () => screen.getByLabelText("Operational diagnosis");
+
+    it("says they are not scoped when the visible events are fewer than the loaded ones", () => {
+      render(<EvtxInsightsRail summary={SUMMARY} records={loaded.slice(0, 2)} textLogCount={2} />);
+      expect(panelText()).toHaveTextContent("Scoped to 2 visible events");
+      expect(panelText()).toHaveTextContent("Text logs are not scoped.");
+    });
+
+    it("says nothing when every loaded event is visible, text logs or not", () => {
+      render(<EvtxInsightsRail summary={SUMMARY} records={loaded} textLogCount={2} />);
+      expect(panelText()).toHaveTextContent("Scoped to 4 visible events");
+      expect(panelText()).not.toHaveTextContent("Text logs are not scoped.");
+    });
+
+    it("counts a narrowing by a time range or a record scope as well as by a filter", () => {
+      render(<EvtxInsightsRail summary={SUMMARY} records={[loaded[1]]} textLogCount={1} />);
+      expect(panelText()).toHaveTextContent("Text logs are not scoped.");
+    });
+
+    it("states, with the build it came from, what the session held and how many events were loaded", () => {
+      const { rerender } = render(
+        <EvtxInsightsRail summary={SUMMARY} records={loaded.slice(0, 2)} textLogCount={2} />,
+      );
+      expect(panelText()).toHaveTextContent("Text logs are not scoped.");
+      // The counts belong to the build, as the scope count does: new counts with the same summary do
+      // not rewrite what that build was given.
+      act(() => useEvtxStore.setState({ records: loaded.slice(0, 2) }));
+      rerender(<EvtxInsightsRail summary={SUMMARY} records={loaded.slice(0, 2)} textLogCount={0} />);
+      expect(panelText()).toHaveTextContent("Text logs are not scoped.");
+      // A new build is made with what is true now: two events loaded, two visible, so nothing narrowed.
+      rerender(<EvtxInsightsRail summary={{ ...SUMMARY }} records={loaded.slice(0, 2)} textLogCount={2} />);
+      expect(panelText()).not.toHaveTextContent("Text logs are not scoped.");
     });
   });
 });

@@ -174,9 +174,15 @@ export function EvtxInsightsRail({
     summary: DiagnosisSummary;
     scopeCount: number;
     textLogCount: number;
+    loadedCount: number;
   } | null>(null);
   if (summary && lastBuildRef.current?.summary !== summary) {
-    lastBuildRef.current = { summary, scopeCount: records.length, textLogCount };
+    lastBuildRef.current = {
+      summary,
+      scopeCount: records.length,
+      textLogCount,
+      loadedCount: storeRecords.length,
+    };
   }
   if (error || (!summary && !pending)) lastBuildRef.current = null;
   const shown = summary || (pending && !error) ? lastBuildRef.current : null;
@@ -299,6 +305,7 @@ export function EvtxInsightsRail({
           error={error}
           scopeCount={shown?.scopeCount ?? null}
           textLogCount={shown?.textLogCount ?? 0}
+          loadedCount={shown?.loadedCount}
           onFilterToFinding={filterToFinding}
           onFilterToEventId={filterToEventId}
           activeEventId={activeEventId}

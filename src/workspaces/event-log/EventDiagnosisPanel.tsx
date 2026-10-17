@@ -106,9 +106,15 @@ interface EventDiagnosisPanelProps {
   scopeCount?: number | null;
   /**
    * How many text-log entries the diagnosis session was given. Text logs are never narrowed by the
-   * event criteria, so when there are any the scope line says so.
+   * event criteria, so once the events ARE narrowed (see `loadedCount`) the scope line says so.
    */
   textLogCount?: number;
+  /**
+   * How many events were loaded when the shown summary was built. The scope line says text logs are
+   * not scoped only when the visible events are fewer than these: with no narrowing there is
+   * nothing the text logs were left out of. Absent, the line is not shown.
+   */
+  loadedCount?: number;
   /**
    * Narrows the view to the loaded events a finding's event evidence names. Called with the finding
    * and what was resolved; absent, a finding card has no "Filter to" link.
@@ -491,12 +497,14 @@ function OverviewBlock({
   overview,
   scopeCount,
   textLogCount,
+  loadedCount,
   updating,
   sizes,
 }: {
   overview: DiagnosisOverview;
   scopeCount: number | null;
   textLogCount: number;
+  loadedCount: number | undefined;
   updating: boolean;
   sizes: RailSizes;
 }) {
@@ -545,9 +553,13 @@ function OverviewBlock({
             Scoped to <Count value={scopeCount} /> visible {scopeCount === 1 ? "event" : "events"}
           </div>
         )}
-        {scopeCount !== null && textLogCount > 0 && (
+        {scopeCount !== null &&
+          textLogCount > 0 &&
+          loadedCount !== undefined &&
+          scopeCount < loadedCount && (
           // The event criteria (levels, search, a time range, a record scope) never narrow the text
-          // logs the session was given, so the diagnosis mixes a scoped set of events with all of them.
+          // logs the session was given, so a narrowed diagnosis mixes a scoped set of events with
+          // all of them. With nothing narrowed there is nothing they were left out of.
           <div style={{ fontSize: `${sizes.caption}px`, color: railText.secondary }}>
             Text logs are not scoped.
           </div>
@@ -983,6 +995,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
   error = null,
   scopeCount,
   textLogCount = 0,
+  loadedCount,
   onFilterToFinding,
   onFilterToEventId,
   activeEventId = null,
@@ -1087,6 +1100,7 @@ export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
         overview={summary.overview}
         scopeCount={scopeCount !== undefined ? scopeCount : records ? records.length : null}
         textLogCount={textLogCount}
+        loadedCount={loadedCount}
         updating={updating}
         sizes={sizes}
       />

@@ -1110,25 +1110,42 @@ describe("Top event IDs as filters", () => {
 
 describe("the scope line and text logs", () => {
   const records = [record(1, 100, "Error")];
+  const panel = () => screen.getByLabelText("Operational diagnosis");
 
-  it("adds a muted line that text logs are not scoped when the session holds some", () => {
-    render(<EventDiagnosisPanel summary={summary} records={records} textLogCount={3} />);
-    const panel = screen.getByLabelText("Operational diagnosis");
-    expect(panel).toHaveTextContent("Scoped to 1 visible event");
-    expect(panel).toHaveTextContent("Text logs are not scoped.");
+  it("adds a muted line that text logs are not scoped when the events are narrowed and the session holds some", () => {
+    render(<EventDiagnosisPanel summary={summary} records={records} textLogCount={3} loadedCount={5} />);
+    expect(panel()).toHaveTextContent("Scoped to 1 visible event");
+    expect(panel()).toHaveTextContent("Text logs are not scoped.");
+  });
+
+  it("leaves the line out when nothing is narrowed: every loaded event is visible", () => {
+    render(<EventDiagnosisPanel summary={summary} records={records} textLogCount={3} loadedCount={1} />);
+    expect(panel()).toHaveTextContent("Scoped to 1 visible event");
+    expect(panel()).not.toHaveTextContent("Text logs are not scoped.");
+  });
+
+  it("follows the counts the shown build was made with, not the records now in view", () => {
+    render(
+      <EventDiagnosisPanel summary={summary} records={records} scopeCount={2} textLogCount={3} loadedCount={2} />,
+    );
+    expect(panel()).not.toHaveTextContent("Text logs are not scoped.");
   });
 
   it("leaves the line out without text logs, and keeps the scope line's own text unchanged", () => {
-    render(<EventDiagnosisPanel summary={summary} records={records} textLogCount={0} />);
-    const panel = screen.getByLabelText("Operational diagnosis");
-    expect(panel).toHaveTextContent("Scoped to 1 visible event");
-    expect(panel).not.toHaveTextContent("Text logs are not scoped.");
+    render(<EventDiagnosisPanel summary={summary} records={records} textLogCount={0} loadedCount={5} />);
+    expect(panel()).toHaveTextContent("Scoped to 1 visible event");
+    expect(panel()).not.toHaveTextContent("Text logs are not scoped.");
+  });
+
+  it("leaves the line out when the loaded count is not known", () => {
+    render(<EventDiagnosisPanel summary={summary} records={records} textLogCount={3} />);
+    expect(panel()).not.toHaveTextContent("Text logs are not scoped.");
   });
 
   it("leaves the line out where there is no scope line", () => {
-    render(<EventDiagnosisPanel summary={summary} textLogCount={3} />);
-    expect(screen.getByLabelText("Operational diagnosis")).not.toHaveTextContent("Scoped to");
-    expect(screen.getByLabelText("Operational diagnosis")).not.toHaveTextContent("Text logs are not scoped.");
+    render(<EventDiagnosisPanel summary={summary} textLogCount={3} loadedCount={5} />);
+    expect(panel()).not.toHaveTextContent("Scoped to");
+    expect(panel()).not.toHaveTextContent("Text logs are not scoped.");
   });
 });
 
