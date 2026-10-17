@@ -70,7 +70,7 @@ import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
 import { formatEventTime, timeZoneLabel } from "./evtx-time";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
-import { useThrottledValue } from "./use-throttled-value";
+import { useThrottledValue } from "./evtx-throttle";
 import type { TimelineItem } from "./unified-timeline";
 
 /** Spec 10: a polite announcement at most once every 5 s. */
