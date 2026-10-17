@@ -15,7 +15,6 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
-  useState,
   type ReactNode,
 } from "react";
 import { Tab, TabList, tokens } from "@fluentui/react-components";
@@ -35,6 +34,7 @@ import { findRecordById, formatCount } from "./evtx-insights-data";
 import { useRailTextColors } from "./evtx-rail-text";
 import { useEvtxStore } from "./evtx-store";
 import type { DiagnosisFinding, DiagnosisSummary, EvtxRecord } from "./types";
+import { useThrottledValue } from "./use-throttled-value";
 
 interface EvtxInsightsRailProps {
   summary: DiagnosisSummary | null;
@@ -83,34 +83,6 @@ export function quickFilterAfterEventIdClick(
 
 const NO_RECORDS: readonly EvtxRecord[] = [];
 const NO_FINDINGS: readonly DiagnosisFinding[] = [];
-
-/**
- * `value`, published at most once per `delayMs`: the first change starts a timer that publishes the
- * latest value when it fires, and further changes do not restart it (the analysis pump's precedent).
- * A pure trailing debounce would starve the cards while a tail never goes quiet for the delay. The
- * first value is immediate.
- */
-export function useThrottledValue<T>(value: T, delayMs: number): T {
-  const [published, setPublished] = useState(value);
-  const latestRef = useRef(value);
-  const timerRef = useRef<number | null>(null);
-  latestRef.current = value;
-  useEffect(() => {
-    if (Object.is(published, value) || timerRef.current !== null) return;
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = null;
-      setPublished(latestRef.current);
-    }, delayMs);
-  }, [value, published, delayMs]);
-  useEffect(
-    () => () => {
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    },
-    [],
-  );
-  return published;
-}
 
 function Count({ value, size, color }: { value: number; size: number; color: string }) {
   return (
