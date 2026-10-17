@@ -237,10 +237,11 @@ export function bucketEdges(
 const BUILD_LIMIT = 300;
 
 /**
- * The width and edges for a span: of the rungs whose bucket count (counted from the real edges)
- * falls in 48 to 96, the one nearest 72, and when none does, the nearest to 72 overall. A span so
- * long that even the 365 day rung exceeds 96 buckets takes a multiple of it, so the count is never
- * above 96.
+ * The width and edges for a span. Only rungs that fit in 96 buckets are candidates; of those, the
+ * one in 48 to 96 nearest 72 where there is one, and otherwise the finest that fits (the span is in
+ * a jump between two rungs, and the finer one is over 96). A multiple of the 365 day rung is taken
+ * only when EVERY rung is over 96 buckets, so the count is never above 96 and a span is never
+ * charted as a single bucket of years while a rung would have fitted.
  */
 export function chooseBuckets(
   minMs: number,
@@ -250,7 +251,7 @@ export function chooseBuckets(
   const span = maxMs - minMs + 1;
   let best: { intervalMs: number; edges: number[]; count: number } | null = null;
   const score = (count: number) => ({
-    inBand: count >= MIN_BUCKETS && count <= MAX_BUCKETS,
+    inBand: count >= MIN_BUCKETS,
     distance: Math.abs(count - TARGET_BUCKETS),
   });
   for (const intervalMs of HISTOGRAM_INTERVALS_MS) {
@@ -258,6 +259,7 @@ export function chooseBuckets(
     if (estimate > BUILD_LIMIT) continue;
     const edges = bucketEdges(minMs, maxMs, intervalMs, clock);
     const count = edges.length - 1;
+    if (count > MAX_BUCKETS) continue;
     const candidate = score(count);
     const current = best === null ? null : score(best.count);
     if (
@@ -268,7 +270,7 @@ export function chooseBuckets(
       best = { intervalMs, edges, count };
     }
   }
-  if (best !== null && best.count <= MAX_BUCKETS) return best;
+  if (best !== null) return best;
   const widest = 365 * DAY;
   for (let multiple = Math.max(2, Math.ceil(span / (TARGET_BUCKETS * widest))); ; multiple += 1) {
     const intervalMs = multiple * widest;

@@ -164,6 +164,83 @@ describe("the width ladder", () => {
     }
   });
 
+  describe("where the ladder jumps by more than two", () => {
+    /** The count each rung would give a span, from its real edges; a rung far past 96 is not built. */
+    const rungCounts = (min: number, max: number) =>
+      HISTOGRAM_INTERVALS_MS.map((intervalMs) => ({
+        intervalMs,
+        count:
+          Math.ceil((max - min + 1) / intervalMs) + 1 > 300
+            ? Number.POSITIVE_INFINITY
+            : bucketEdges(min, max, intervalMs, UTC_CLOCK).length - 1,
+      }));
+
+    /**
+     * The rule: of the rungs that fit in 96 buckets, one in 48 to 96 nearest 72 where there is one,
+     * and otherwise the finest that fits. A 365 day multiple only when every rung is over 96.
+     */
+    const expectChoice = (min: number, max: number) => {
+      const fitting = rungCounts(min, max).filter((rung) => rung.count <= MAX_BUCKETS);
+      const { intervalMs, edges } = chooseBuckets(min, max, UTC_CLOCK);
+      const count = edges.length - 1;
+      const label = `${(max - min + 1) / MINUTE} minutes from ${new Date(min).toISOString()}`;
+      expect(count, label).toBeLessThanOrEqual(MAX_BUCKETS);
+      if (fitting.length === 0) {
+        expect(intervalMs, label).toBeGreaterThanOrEqual(2 * 365 * DAY);
+        return;
+      }
+      expect(HISTOGRAM_INTERVALS_MS, label).toContain(intervalMs);
+      if (fitting.some((rung) => rung.count >= 48)) expect(count, label).toBeGreaterThanOrEqual(48);
+      else expect(count, label).toBe(Math.max(...fitting.map((rung) => rung.count)));
+    };
+
+    it("never falls back to a multiple of 365 days while a rung fits in 96 buckets", () => {
+      let checked = 0;
+      for (let step = 0; step <= 600; step += 1) {
+        const span = Math.round(Math.exp(Math.log(SECOND) + (step / 600) * (Math.log(60 * 365 * DAY) - Math.log(SECOND))));
+        for (const offset of [0, 7 * MINUTE + 13, 5 * HOUR + 1]) {
+          const min = utc(2, 14, 3, 7, 9) + offset;
+          expectChoice(min, min + span);
+          checked += 1;
+        }
+      }
+      expect(checked).toBe(1803);
+    });
+
+    it.each([
+      ["2 s to 5 s", 195 * SECOND, 5 * SECOND],
+      ["2 min to 5 min", 3 * HOUR + 15 * MINUTE, 5 * MINUTE],
+      ["2 d to 7 d", Math.round(205.8 * DAY), 7 * DAY],
+      ["14 d to 30 d", 1360 * DAY, 30 * DAY],
+      ["30 d to 90 d", 3000 * DAY, 90 * DAY],
+      ["90 d to 365 d", 9500 * DAY, 365 * DAY],
+    ])("takes the finest rung that fits inside the %s window", (_window, span, rung) => {
+      const min = utc(10, 6, 10, 1);
+      const { intervalMs, edges } = chooseBuckets(min, min + span, UTC_CLOCK);
+      expect(intervalMs).toBe(rung);
+      expect(edges.length - 1).toBeLessThanOrEqual(MAX_BUCKETS);
+      expectChoice(min, min + span);
+    });
+
+    it("charts a live channel's 3 h 15 min as 5 minute buckets, not one bucket of two years", () => {
+      const histogram = buildHistogram([rec(utc(10, 6, 10, 1)), rec(utc(10, 6, 13, 16))], "utc");
+      expect(histogram.intervalMs).toBe(5 * MINUTE);
+      expect(histogram.buckets).toHaveLength(40);
+      expect(histogram.domain).toEqual({ startMs: utc(10, 6, 10, 0), endMs: utc(10, 6, 13, 20) });
+      expect(describeFigure(histogram, "utc")).toMatch(/^Events per 5 minutes over 10:00.13:20 \(UTC\), stacked by level$/);
+    });
+
+    it("keeps a 365 day multiple for spans where every rung is over 96 buckets", () => {
+      for (const years of [100, 150, 400]) {
+        const min = utc(1, 1, 0, 0);
+        const { intervalMs, edges } = chooseBuckets(min, min + years * 365 * DAY, UTC_CLOCK);
+        expect(intervalMs % (365 * DAY)).toBe(0);
+        expect(intervalMs).toBeGreaterThanOrEqual(2 * 365 * DAY);
+        expect(edges.length - 1).toBeLessThanOrEqual(MAX_BUCKETS);
+      }
+    });
+  });
+
   it("gives one record, or records at one instant, a single bucket one second wide", () => {
     const histogram = buildHistogram([rec(utc(10, 6, 10, 20, 47, 250)), rec(utc(10, 6, 10, 20, 47, 250))], "utc");
     expect(histogram.intervalMs).toBe(SECOND);
