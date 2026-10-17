@@ -321,6 +321,19 @@ export function buildEvidenceIndex(records: readonly EvtxRecord[]): EvidenceInde
   return index;
 }
 
+/**
+ * The loaded records the index holds for one event ID and one record identity text (the text
+ * `recordIdentityText` gives a record). Empty when none is loaded. For a caller that names a
+ * record by something other than a diagnosis evidence reference, such as a timeline origin.
+ */
+export function recordsForIdentity(
+  index: EvidenceIndex,
+  eventId: number,
+  identity: string,
+): readonly EvtxRecord[] {
+  return index.get(identityKey(eventId, identity)) ?? [];
+}
+
 /** The identity an evidence reference names, in the engine's `stable_id` order, or null when it has none a record can match. */
 function evidenceIdentityText(value: DiagnosisEventEvidence): string | null {
   if (hasRecordIdText(value.recordIdText)) return value.recordIdText;

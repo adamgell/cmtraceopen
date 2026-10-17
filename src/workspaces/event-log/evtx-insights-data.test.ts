@@ -16,6 +16,7 @@ import {
   formatCount,
   redactedValueMatches,
   neighborRecordId,
+  recordsForIdentity,
   scopeForFinding,
   summarizeRecords,
   summaryIsBounded,
@@ -370,6 +371,28 @@ describe("findRecordById", () => {
     expect(findRecordById(records, 7)).toBe(records[2]);
     expect(findRecordById(records, 99)).toBeNull();
     expect(findRecordById(records, null)).toBeNull();
+  });
+});
+
+describe("recordsForIdentity", () => {
+  it("returns every loaded record for one event ID and record identity, in load order", () => {
+    const first = record(1, { eventId: 7, eventRecordId: 42, eventRecordIdText: "42" });
+    const twin = record(2, { eventId: 7, eventRecordId: 42, eventRecordIdText: "42", sourceLabel: "b.evtx" });
+    const index = buildEvidenceIndex([first, twin, record(3, { eventId: 8, eventRecordId: 42 })]);
+    expect(recordsForIdentity(index, 7, "42")).toEqual([first, twin]);
+  });
+
+  it("separates the event ID from the identity, so 7 and 42 is not 74 and 2", () => {
+    const index = buildEvidenceIndex([record(1, { eventId: 7, eventRecordId: 42 })]);
+    expect(recordsForIdentity(index, 74, "2")).toEqual([]);
+    expect(recordsForIdentity(index, 7, "42")).toHaveLength(1);
+  });
+
+  it("is empty for an identity nothing loaded has, and for a record the provider never numbered", () => {
+    const unnumbered = record(1, { eventRecordId: 0, eventRecordIdText: "0" });
+    const index = buildEvidenceIndex([unnumbered]);
+    expect(recordsForIdentity(index, 100, "0")).toEqual([]);
+    expect(recordsForIdentity(index, 100, "5")).toEqual([]);
   });
 });
 
