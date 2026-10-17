@@ -2279,6 +2279,16 @@ useEvtxStore.subscribe((state, previous) => {
     cancelComparison();
     return;
   }
+  // Starting a live tail changes what is on screen for the compared channels, and a result made
+  // before it has no note for rows that are about to arrive. The cancel is keyed on `tailRequestId`
+  // becoming a new non-null value, not on `tailChannels`, which the tail listener rewrites as a new
+  // Set on every append and `tailRequestId` rewrites with the same string: an append under a tail
+  // that is already running changes neither the request nor what the result says. A denied Clear
+  // restarts the tail and so cancels as well, which is acceptable over-cancelling.
+  if (state.tailRequestId !== null && state.tailRequestId !== previous.tailRequestId) {
+    cancelComparison();
+    return;
+  }
   // A Clear takes a channel out of what is loaded without a load. The comparison depends on the
   // channels it compared, so it is cancelled when one of them is no longer loaded, and left alone
   // when any other channel is cleared or loaded.

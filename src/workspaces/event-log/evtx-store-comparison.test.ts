@@ -87,6 +87,21 @@ function installBridge(): void {
   });
 }
 
+/** Lets a test Clear a channel through the real store action. */
+function answerClear(): void {
+  const base = invoke.getMockImplementation();
+  invoke.mockImplementation((name: string, rawArgs: unknown) =>
+    name === "evtx_clear_channel"
+      ? Promise.resolve({
+          channel: (rawArgs as { channel: string }).channel,
+          result: { status: "cleared" },
+        })
+      : base
+        ? base(name, rawArgs)
+        : Promise.resolve(undefined)
+  );
+}
+
 function comparisonQueries(): PendingQuery[] {
   return queries.filter((query) => isComparisonRequestId(query.args.requestId));
 }
@@ -1327,21 +1342,6 @@ describe("comparing loaded files with their previous period", () => {
 });
 
 describe("a comparison is invalidated by what it compared", () => {
-  /** Lets a test Clear a channel through the real store action. */
-  function answerClear(): void {
-    const base = invoke.getMockImplementation();
-    invoke.mockImplementation((name: string, rawArgs: unknown) =>
-      name === "evtx_clear_channel"
-        ? Promise.resolve({
-            channel: (rawArgs as { channel: string }).channel,
-            result: { status: "cleared" },
-          })
-        : base
-          ? base(name, rawArgs)
-          : Promise.resolve(undefined)
-    );
-  }
-
   const changes: Array<[string, () => void | Promise<void>]> = [
     ["the source mode", () => useEvtxStore.setState({ sourceMode: "files" })],
     ["the source paths", () => useEvtxStore.setState({ sourcePaths: ["other.evtx"] })],
@@ -1763,6 +1763,130 @@ describe("the anchor of a live comparison", () => {
       expect(
         countCurrentPeriod(useEvtxStore.getState().records, outcome.result, visibility).tailExcluded
       ).toBe(4);
+    });
+
+    describe("starting a tail", () => {
+      /** Holds each `evtx_start_tail` until the test lets it land. */
+      function holdTailStarts(): Array<() => void> {
+        const landings: Array<() => void> = [];
+        const base = invoke.getMockImplementation();
+        invoke.mockImplementation((name: string, rawArgs: unknown) => {
+          if (name !== "evtx_start_tail") return base ? base(name, rawArgs) : Promise.resolve(undefined);
+          const args = rawArgs as { channel: string; requestId: string };
+          return new Promise((resolve) =>
+            landings.push(() =>
+              resolve({
+                requestId: args.requestId,
+                channel: args.channel,
+                mode: "subscription",
+                active: true,
+                nextSequence: 0,
+                coverageGaps: [],
+              })
+            )
+          );
+        });
+        return landings;
+      }
+
+      it("cancels a comparison on show, which would otherwise be missing the note", async () => {
+        await runAndSettle(ANCHOR);
+        const settledOutcome = settled();
+        expect(settledOutcome.status).toBe("complete");
+        if (settledOutcome.status === "complete") expect(settledOutcome.result.notes).toEqual([]);
+
+        installTailBridge();
+        await useEvtxStore.getState().startLiveTail();
+
+        expect(getComparisonState()).toEqual({ phase: "idle" });
+      });
+
+      it("cancels a comparison in flight, and stops its reads", async () => {
+        const run = comparePreviousPeriod(ANCHOR);
+        await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
+        const requestId = comparisonQueries()[0].args.requestId;
+
+        installTailBridge();
+        await useEvtxStore.getState().startLiveTail();
+
+        expect(getComparisonState()).toEqual({ phase: "idle" });
+        expect(cancelCalls()).toContain(requestId);
+        comparisonQueries().forEach((query) => query.resolve(reply(0)));
+        await run;
+        expect(getComparisonState()).toEqual({ phase: "idle" });
+      });
+
+      it("cancels a comparison made while the start was still awaiting the service, when the start lands", async () => {
+        installTailBridge();
+        const landings = holdTailStarts();
+        const starting = useEvtxStore.getState().startLiveTail();
+        await vi.waitFor(() => expect(landings).toHaveLength(2));
+        expect(useEvtxStore.getState().tailRequestId).toBeNull();
+
+        await runAndSettle(ANCHOR);
+        expect(getComparisonState().phase).toBe("settled");
+
+        landings.forEach((land) => land());
+        await starting;
+
+        expect(useEvtxStore.getState().tailRequestId).not.toBeNull();
+        expect(getComparisonState()).toEqual({ phase: "idle" });
+      });
+
+      it("also cancels it when a denied Clear restarts the tail", async () => {
+        installTailBridge();
+        await useEvtxStore.getState().startLiveTail();
+        await runAndSettle(ANCHOR);
+        expect(getComparisonState().phase).toBe("settled");
+        const base = invoke.getMockImplementation();
+        invoke.mockImplementation((name: string, rawArgs: unknown) =>
+          name === "evtx_clear_channel"
+            ? Promise.resolve({
+                channel: (rawArgs as { channel: string }).channel,
+                result: { status: "denied", detail: "Access is denied." },
+              })
+            : base
+              ? base(name, rawArgs)
+              : Promise.resolve(undefined)
+        );
+
+        await useEvtxStore.getState().clearChannel("System", true);
+
+        expect(getComparisonState()).toEqual({ phase: "idle" });
+      });
+
+      it("leaves a comparison on show when the tail is stopped, which adds nothing to the grid", async () => {
+        installTailBridge();
+        await useEvtxStore.getState().startLiveTail();
+        await runAndSettle(ANCHOR);
+        expect(getComparisonState().phase).toBe("settled");
+
+        await useEvtxStore.getState().stopLiveTail();
+
+        expect(useEvtxStore.getState().tailRequestId).toBeNull();
+        expect(getComparisonState().phase).toBe("settled");
+      });
+
+      it("leaves a comparison alone for an append under a tail that was already running", async () => {
+        installTailBridge();
+        await useEvtxStore.getState().startLiveTail();
+        const run = comparePreviousPeriod(ANCHOR);
+        await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
+        const requestId = comparisonQueries()[0].args.requestId;
+
+        tailBatch("System", [record("System")]);
+        tailBatch("Application", [record("Application")]);
+        expect(getComparisonState()).toMatchObject({ phase: "running", requestId });
+
+        for (const query of comparisonQueries()) {
+          complete(query.args.channels[0], 0, 0, requestId);
+          query.resolve(reply(0));
+        }
+        await run;
+        expect(getComparisonState().phase).toBe("settled");
+        tailBatch("System", [record("System")], 1);
+        expect(getComparisonState().phase).toBe("settled");
+      });
     });
 
     it("adds no note once a tail that appended nothing has been stopped", async () => {
