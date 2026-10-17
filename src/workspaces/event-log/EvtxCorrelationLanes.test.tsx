@@ -273,6 +273,15 @@ describe("the lanes and markers", () => {
       expect(axis()).toHaveLength(5);
     });
 
+    it("keeps the seconds when the ticks are a minute or more apart, where the shared default would drop them", () => {
+      // The lane plot asks for seconds explicitly: its window can be as narrow as 10 s, and a wide
+      // one is read to the second as well. At 60 s between ticks the shared default is minutes only.
+      pinNow("2026-10-16T12:00:00Z");
+      const start = Date.UTC(2026, 9, 6, 10, 20, 5);
+      draw(exactPlot({ window: { startMs: start, endMs: start + 4 * 60_000 } }));
+      expect(axis()).toEqual(["10:20:05", "10:21:05", "10:22:05", "10:23:05", "10:24:05"]);
+    });
+
     it("names the day on every tick once the window crosses midnight, so a clock never names two days", () => {
       pinNow("2026-10-16T12:00:00Z");
       const start = Date.UTC(2026, 9, 6, 23, 59, 50);

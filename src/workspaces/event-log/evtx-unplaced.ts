@@ -182,7 +182,7 @@ export function unplacedOmittedNotice(view: UnplacedView): string | null {
 }
 
 /** One row as a line of text: kind, label, context, and where it is. No time. */
-export function unplacedRowText(row: UnplacedRow): string {
+function unplacedRowText(row: UnplacedRow): string {
   return `${row.chip}  ${row.label}  ${row.context}  (${row.position})`;
 }
 
