@@ -66,12 +66,9 @@ interface EvtxViewState {
   importViews: (imported: readonly EvtxViewBody[]) => EvtxViewMerge;
 }
 
+/** A view id: a random UUID, as `ui-store` makes its tab ids. */
 function newId(): string {
-  // crypto.randomUUID is unavailable in some webviews (the filter store makes the same allowance).
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `view-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return crypto.randomUUID();
 }
 
 /** Reads what storage held: only `views`, and only the views this build can read exactly. */
