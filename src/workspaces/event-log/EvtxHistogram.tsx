@@ -480,7 +480,21 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
                   "aria-describedby": descriptionId,
                   "aria-keyshortcuts": "ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Home End Enter Escape",
                 }
-              : {})}
+              : loading || catchingUp
+                ? // The same element stays focusable while a load runs, so focus is not thrown to the body
+                  // and is where it was when the load ends; it just says it cannot be used now.
+                  {
+                    role: "slider",
+                    tabIndex: 0,
+                    "aria-label": "Time range",
+                    "aria-orientation": "horizontal" as const,
+                    "aria-disabled": true,
+                    "aria-valuemin": 0,
+                    "aria-valuemax": 0,
+                    "aria-valuenow": 0,
+                    "aria-valuetext": "Loading events",
+                  }
+                : {})}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}

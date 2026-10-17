@@ -238,8 +238,13 @@ describe("the histogram in the workspace", () => {
     seed([record(1, T0 - HOUR)], { isLoading: true });
     render(<EventLogWorkspace />);
     expect(histogramRegion()).toHaveAttribute("aria-busy", "true");
-    expect(within(histogramRegion()).queryByRole("slider")).toBeNull();
+    // The plot stays in the tab order, said to be unavailable, so focus is not lost to the load.
+    expect(within(histogramRegion()).getByRole("slider", { name: "Time range" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(within(histogramRegion()).queryByRole("table")).toBeNull();
+    expect(histogramRegion().querySelector("[data-evtx-layer=bars]")).toBeNull();
   });
 });
 

@@ -553,13 +553,57 @@ describe("keeping the overlay and the Time chip in step", () => {
 });
 
 describe("what it cannot be used for", () => {
-  it("offers no slider, and sets nothing, while loading or with nothing to chart", () => {
-    const { rerender } = render(<EvtxHistogram records={[]} loading />);
+  it("offers no slider with nothing to chart", () => {
+    render(<EvtxHistogram records={[]} loading={false} />);
     expect(screen.queryByRole("slider")).toBeNull();
-    rerender(<EvtxHistogram records={[]} loading={false} />);
-    expect(screen.queryByRole("slider")).toBeNull();
-    rerender(<EvtxHistogram records={[rec(0)]} loading={false} />);
+    cleanup();
+    render(<EvtxHistogram records={[rec(0)]} loading={false} />);
     expect(screen.queryByRole("slider")).toBeNull();
     expect(tooltip()).toBeNull();
+  });
+
+  it("offers a disabled slider while loading, which sets nothing", () => {
+    render(<EvtxHistogram records={[]} loading />);
+    const slider = screen.getByRole("slider", { name: "Time range" });
+    expect(slider).toHaveAttribute("aria-disabled", "true");
+    key(slider, "Enter");
+    down(slider, 10);
+    up(slider, 10);
+    expect(setTimeRangeSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("a load while the plot has focus", () => {
+  const withChips = (extra: { records: readonly EvtxRecord[]; loading: boolean }) => (
+    <>
+      <EvtxFilterChips visibleCount={records.length} loadedCount={records.length} />
+      <EvtxHistogram records={extra.records} loading={extra.loading} />
+    </>
+  );
+
+  it("keeps the plot focusable and aria-disabled while loading, and usable again afterwards", () => {
+    const { slider, rerender } = mount();
+    act(() => {
+      slider.focus();
+    });
+    expect(document.activeElement).toBe(slider);
+
+    rerender(withChips({ records: [], loading: true }));
+    // Still the same element, still in the tab order, and said to be unavailable.
+    expect(screen.getByRole("slider", { name: "Time range" })).toBe(slider);
+    expect(slider.getAttribute("tabindex")).toBe("0");
+    expect(slider).toHaveAttribute("aria-disabled", "true");
+    expect(document.activeElement).toBe(slider);
+    key(slider, "ArrowLeft");
+    key(slider, "Enter");
+    expect(setTimeRangeSpy).not.toHaveBeenCalled();
+
+    rerender(withChips({ records, loading: false }));
+    expect(screen.getByRole("slider", { name: "Time range" })).toBe(slider);
+    expect(slider).not.toHaveAttribute("aria-disabled", "true");
+    expect(document.activeElement).toBe(slider);
+    expect(slider).toHaveAttribute("aria-valuenow", "71");
+    key(slider, "ArrowLeft");
+    expect(slider).toHaveAttribute("aria-valuenow", "70");
   });
 });
