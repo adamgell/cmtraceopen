@@ -9,7 +9,14 @@
  * window are on the filter row, so only the search text has a chip; levels and the time window never
  * do. A chip's `title` is its tooltip when that says more than the chip does.
  */
-import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FocusEvent,
+} from "react";
 import {
   createFocusOutlineStyle,
   Link,
@@ -326,6 +333,9 @@ interface EvtxFilterChipsProps {
 /** A chip's remove button, or the search box. The search chip has its own id, so the box is not a string. */
 type FocusTarget = { chip: EvtxFilterChipId } | { searchBox: true };
 
+/** What has focus inside the row: a chip's remove button, or the Clear all link. */
+type FocusHold = { chip: EvtxFilterChipId } | { clearAll: true };
+
 export function EvtxFilterChips({
   visibleCount,
   loadedCount,
@@ -353,21 +363,77 @@ export function EvtxFilterChips({
   const isLoading = useEvtxStore((s) => s.isLoading);
   const { chips, heldChannels } = useFilterChips(untimedHiddenCount);
 
-  // Removing a chip unmounts the button that had focus, and removing the last one unmounts the
-  // whole row. Focus is handed on after the re-render: to the next chip's remove button, else the
-  // previous one, else the search box.
+  // A chip, the Clear all link or the whole row can unmount while focus is inside it, and then the
+  // browser puts focus on the body. That happens by a click on a remove button (below), by Escape on
+  // the time range, by a load starting or the source changing (which clear the transient criteria),
+  // and by a cleared channel pruning the scope: no caller is listed here. What is watched is the focus
+  // itself. The row remembers which of its controls last had it; when that control is no longer in
+  // the row after a render and focus has fallen out of the document's controls, focus is handed to
+  // the next chip's remove button, else the previous one, else the search box (the anchor in the
+  // filter row, as a click has always done).
   const rowRef = useRef<HTMLDivElement>(null);
   const pendingFocus = useRef<FocusTarget | null>(null);
+  const heldFocus = useRef<FocusHold | null>(null);
+  const previousChipIds = useRef<EvtxFilterChipId[]>([]);
+  const clearAllShown = chips.some((chip) => chip.clearedByClearAll);
   useLayoutEffect(() => {
+    const ids = chips.map((chip) => chip.id);
+    const before = previousChipIds.current;
+    previousChipIds.current = ids;
+
+    // A click on a remove button or Clear all names where focus goes; some webviews do not focus a
+    // button on click, so this does not depend on the button having had it.
     const target = pendingFocus.current;
-    if (target === null) return;
-    pendingFocus.current = null;
-    const chipButton =
-      "chip" in target
-        ? rowRef.current?.querySelector<HTMLElement>(`[data-evtx-chip="${target.chip}"] button`)
-        : null;
-    (chipButton ?? document.getElementById(EVTX_SEARCH_INPUT_ID))?.focus();
+    if (target !== null) {
+      pendingFocus.current = null;
+      heldFocus.current = null;
+      const chipButton =
+        "chip" in target
+          ? rowRef.current?.querySelector<HTMLElement>(`[data-evtx-chip="${target.chip}"] button`)
+          : null;
+      (chipButton ?? document.getElementById(EVTX_SEARCH_INPUT_ID))?.focus();
+      return;
+    }
+
+    const held = heldFocus.current;
+    if (held === null) return;
+    const gone = "chip" in held ? !ids.includes(held.chip) : !clearAllShown;
+    if (!gone) return;
+    heldFocus.current = null;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body && active.isConnected) return;
+
+    let next: HTMLElement | null = null;
+    if ("chip" in held) {
+      const removedAt = before.indexOf(held.chip);
+      const around =
+        removedAt < 0
+          ? []
+          : [...before.slice(removedAt + 1), ...before.slice(0, removedAt).reverse()];
+      const neighbour = around.find((id) => ids.includes(id));
+      next =
+        neighbour === undefined
+          ? null
+          : (rowRef.current?.querySelector<HTMLElement>(`[data-evtx-chip="${neighbour}"] button`) ?? null);
+    }
+    (next ?? document.getElementById(EVTX_SEARCH_INPUT_ID))?.focus();
   });
+  const rememberFocus = (event: FocusEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement;
+    const chip = target.closest<HTMLElement>("[data-evtx-chip]");
+    if (chip) heldFocus.current = { chip: chip.dataset.evtxChip as EvtxFilterChipId };
+    else heldFocus.current = target.closest("[data-evtx-clear-all]") ? { clearAll: true } : null;
+  };
+  const releaseFocus = (event: FocusEvent<HTMLElement>) => {
+    // Moving between the row's own controls is not leaving it; the next focus event names the new one.
+    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+    // A control that is still in the document when it loses focus was left on purpose (the operator
+    // went elsewhere). One that is gone was removed while focused, and the layout effect handles it.
+    const left = event.target;
+    queueMicrotask(() => {
+      if (left instanceof Node && left.isConnected) heldFocus.current = null;
+    });
+  };
 
   if (chips.length === 0) return null;
 
@@ -410,6 +476,8 @@ export function EvtxFilterChips({
       data-evtx-region="chip-row"
       className={styles.row}
       style={{ fontSize, lineHeight }}
+      onFocus={rememberFocus}
+      onBlur={releaseFocus}
     >
       <ul aria-label="Active filters" className={styles.list}>
         {chips.map((chip) => (
@@ -446,6 +514,7 @@ export function EvtxFilterChips({
         <Link
           as="button"
           type="button"
+          data-evtx-clear-all="true"
           style={{ fontSize, fontWeight: 600 }}
           onClick={() => {
             // Clear all unmounts itself once nothing clearable is left, so focus goes to the search.

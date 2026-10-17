@@ -985,6 +985,73 @@ describe("EventLogWorkspace fixtures", () => {
       expect(useEvtxStore.getState().timeRange).toBeNull();
     });
 
+    describe("focus when Escape clears the range under a focused control", () => {
+      const search = () => screen.getByRole("textbox", { name: "Search events" });
+      const removeTime = () => screen.getByRole("button", { name: `Remove Time: brushed 11:00${SEP}13:00` });
+      const scopeIt = () => {
+        const [first] = useEvtxStore.getState().records;
+        act(() => {
+          useEvtxStore.getState().setRecordScope({
+            kind: "finding",
+            title: "A finding",
+            records: new Set([first]),
+            counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+          });
+        });
+      };
+
+      it("moves to the search box when Escape on the Time chip's remove button removes the whole row", () => {
+        renderWithRange();
+        removeTime().focus();
+        expect(removeTime()).toHaveFocus();
+        fireEvent.keyDown(removeTime(), { key: "Escape" });
+        expect(useEvtxStore.getState().timeRange).toBeNull();
+        expect(screen.queryByRole("list", { name: "Active filters" })).toBeNull();
+        expect(search()).toHaveFocus();
+      });
+
+      it("moves to the next chip's remove button when another chip is left", () => {
+        renderWithRange();
+        scopeIt();
+        removeTime().focus();
+        fireEvent.keyDown(removeTime(), { key: "Escape" });
+        expect(screen.getByRole("button", { name: "Remove Finding: A finding" })).toHaveFocus();
+      });
+
+      it("moves to the search box when Escape on Clear all removes the last clearable chip", () => {
+        renderWithRange();
+        const clearAll = screen.getByRole("button", { name: "Clear all" });
+        clearAll.focus();
+        fireEvent.keyDown(clearAll, { key: "Escape" });
+        expect(useEvtxStore.getState().timeRange).toBeNull();
+        expect(screen.queryByRole("button", { name: "Clear all" })).toBeNull();
+        expect(search()).toHaveFocus();
+      });
+
+      it("moves to the search box when a cleared channel prunes the focused Finding chip's scope to nothing", async () => {
+        renderWithRange();
+        act(() => {
+          useEvtxStore.getState().setTimeRange(null);
+        });
+        scopeIt();
+        invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+          if (command === "evtx_clear_channel") return { channel: args?.channel, result: { status: "cleared" } };
+          if (command === "load_markers") return null;
+          return undefined;
+        });
+        const removeScope = screen.getByRole("button", { name: "Remove Finding: A finding" });
+        removeScope.focus();
+        expect(removeScope).toHaveFocus();
+
+        await act(async () => {
+          await useEvtxStore.getState().clearChannel("Application", true);
+        });
+
+        expect(useEvtxStore.getState().recordScope).toBeNull();
+        expect(search()).toHaveFocus();
+      });
+    });
+
     it("steps aside for an Escape that something else has already used", () => {
       renderWithRange();
       const used = (event: Event) => event.preventDefault();

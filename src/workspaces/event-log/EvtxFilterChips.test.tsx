@@ -615,6 +615,148 @@ describe("EvtxFilterChips", () => {
   });
 });
 
+/**
+ * Focus when the row loses the control that had it, by any path but a click on a remove button: the
+ * store clears a criterion (a load start, a change of source, a cleared channel's prune) and the chip
+ * or the whole row unmounts under the focus. The row watches the focus, so none of these is listed.
+ */
+describe("focus when a chip, Clear all or the row unmounts under it", () => {
+  const renderWithSearch = () =>
+    render(
+      <>
+        <input id={EVTX_SEARCH_INPUT_ID} aria-label="Search events" />
+        <EvtxFilterChips visibleCount={1} loadedCount={2} />
+      </>,
+    );
+  const remove = (label: string) => screen.getByRole("button", { name: `Remove ${label}` });
+  const TIME = `Time: brushed 09:00${SEP}09:45`;
+  const SCOPE = "Finding: MDM enrollment failed";
+  const search = () => screen.getByRole("textbox", { name: "Search events" });
+  /** The store clears both criteria the way a load start does: a second `set` on the store. */
+  const startLoad = () => act(() => useEvtxStore.setState({ isLoading: true }));
+
+  /** channels, time range, record scope: three chips, two of them transient. */
+  const seedThree = () =>
+    seedWithTransient(
+      { timeRange: RANGE, recordScope: scopeOf(3) },
+      { timeZoneMode: "utc", selectedChannels: new Set(["System"]) },
+    );
+
+  it("moves to the neighbouring chip when a load starts under the focused Time chip", () => {
+    seedThree();
+    renderWithSearch();
+    remove(TIME).focus();
+    startLoad();
+    // Both transient chips are gone, so the neighbour is the one before: the channels chip.
+    expect(remove("Channels: 1 of 2")).toHaveFocus();
+  });
+
+  it("moves to the next chip when only the focused chip goes", () => {
+    seedThree();
+    renderWithSearch();
+    remove(TIME).focus();
+    act(() => {
+      useEvtxStore.getState().setTimeRange(null);
+    });
+    expect(remove(SCOPE)).toHaveFocus();
+  });
+
+  it("moves to the previous chip when the focused chip was the last one", () => {
+    seedThree();
+    renderWithSearch();
+    remove(SCOPE).focus();
+    act(() => {
+      useEvtxStore.getState().setRecordScope(null);
+    });
+    expect(remove(TIME)).toHaveFocus();
+  });
+
+  it("moves to the search box when the whole row unmounts under the focused chip", () => {
+    seedWithTransient({ timeRange: RANGE, recordScope: scopeOf(3) }, { timeZoneMode: "utc" });
+    renderWithSearch();
+    remove(TIME).focus();
+    startLoad();
+    expect(screen.queryByRole("list", { name: "Active filters" })).toBeNull();
+    expect(search()).toHaveFocus();
+  });
+
+  it("does the same when the source changes", () => {
+    seedWithTransient({ timeRange: RANGE }, { timeZoneMode: "utc" });
+    renderWithSearch();
+    remove(TIME).focus();
+    act(() => useEvtxStore.setState({ sourceMode: "live" }));
+    expect(useEvtxStore.getState().timeRange).toBeNull();
+    expect(search()).toHaveFocus();
+  });
+
+  it("moves to the search box when the focused Clear all link goes with its last clearable chip", () => {
+    seedWithTransient({ timeRange: RANGE }, { timeZoneMode: "utc", selectedChannels: new Set(["System"]) });
+    renderWithSearch();
+    screen.getByRole("button", { name: "Clear all" }).focus();
+    startLoad();
+    // The channels chip is not cleared by Clear all, so the row stays and the link does not.
+    expect(screen.queryByRole("button", { name: "Clear all" })).toBeNull();
+    expect(screen.getByRole("list", { name: "Active filters" })).toBeInTheDocument();
+    expect(search()).toHaveFocus();
+  });
+
+  it("leaves focus where it is when the chip that goes did not have it", () => {
+    seedThree();
+    renderWithSearch();
+    remove("Channels: 1 of 2").focus();
+    startLoad();
+    expect(remove("Channels: 1 of 2")).toHaveFocus();
+  });
+
+  it("does not take focus from the search box", () => {
+    seedThree();
+    renderWithSearch();
+    remove(TIME).focus();
+    search().focus();
+    startLoad();
+    expect(search()).toHaveFocus();
+    // Nor from a control elsewhere in the document.
+    cleanup();
+    seedThree();
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    try {
+      renderWithSearch();
+      remove(TIME).focus();
+      outside.focus();
+      startLoad();
+      expect(outside).toHaveFocus();
+    } finally {
+      outside.remove();
+    }
+  });
+
+  it("keeps following focus as it moves from one control of the row to another", async () => {
+    seedThree();
+    renderWithSearch();
+    remove("Channels: 1 of 2").focus();
+    remove(TIME).focus();
+    // Let the blur of the first control settle before the criteria go.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    startLoad();
+    expect(remove("Channels: 1 of 2")).toHaveFocus();
+  });
+
+  it("does not bring focus back after the operator clicked away from a chip", async () => {
+    seedThree();
+    renderWithSearch();
+    remove(TIME).focus();
+    remove(TIME).blur();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    startLoad();
+    expect(document.body).toHaveFocus();
+  });
+});
+
 describe("the Time chip's colors", () => {
   it("come from the token map, not from the Fluent palette tokens the map happens to hold", () => {
     expect(chipsSource).not.toMatch(/colorPaletteBlue/);
