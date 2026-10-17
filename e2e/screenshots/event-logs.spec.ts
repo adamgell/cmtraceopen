@@ -179,6 +179,19 @@ test.describe("event-logs screenshots", () => {
           }
           return captured.page;
         };
+        // No test pages edges: the first timeline page previews all of them. No edge page was
+        // captured, so a fixture that holds more edges than that page carries reaches this and
+        // fails through the guard record, not through the shim's generic unrecorded error.
+        overrides["evtx_query_analysis_edges"] = (args: {
+          sessionId: string;
+          offset: number;
+          limit: number;
+        }) => {
+          throw stale(
+            "evtx_query_analysis_edges",
+            `no captured edge page (offset ${args.offset}, limit ${args.limit})`,
+          );
+        };
         overrides["evtx_diagnose_analysis_session"] = (args: {
           sessionId: string;
           coverageGaps: unknown[];
@@ -419,9 +432,11 @@ test.describe("event-logs screenshots", () => {
     // ("filters the table to the chain, switches to Table and moves focus to the Table tab", with
     // the Chain chip).
 
-    // Nothing above narrowed the analysis, so the session on show is still the full-set one: its
-    // edges give the same four chains in the rail (coverage blocked is counted apart), and no
-    // alert is up. The afterEach also fails the test if any replay guard tripped on the way.
+    // The rail's Correlations card counts four chains (coverage blocked is counted apart) and no
+    // alert is up. This does not prove that the full-set session is the one on show: while a
+    // rebuild runs the hook keeps the previous counts, dimmed, so a card can read "4 chains"
+    // during one. The protection is that no step above narrows the analysis (the range set at the
+    // top covers every record) and that the afterEach fails the test if any replay guard tripped.
     await expect(page.getByTestId("correlation-card-headline")).toHaveText(/^4 chains$/);
     await expect(page.getByRole("alert")).toHaveCount(0);
   });
