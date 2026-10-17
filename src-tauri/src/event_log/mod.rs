@@ -10,6 +10,7 @@ pub mod maps;
 pub mod models;
 pub mod parser;
 pub mod provider_db;
+pub mod query_failure;
 pub mod rendered;
 pub mod timeline;
 pub mod writer;
