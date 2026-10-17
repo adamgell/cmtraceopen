@@ -67,7 +67,7 @@ export async function offerElevationForSourceFailure({
     // workspace that reopens a text log after the restart, which is not always
     // the one that was active: Event Logs would reopen the source as EVTX.
     const active = useUiStore.getState().activeWorkspace;
-    const workspace = textLogRestoreWorkspace(active, getWorkspace(active));
+    const workspace = textLogRestoreWorkspace(active, getWorkspace(active), source);
 
     const state = await readElevationState();
     // Covers unsupported platform, already elevated, and the post-retry loop

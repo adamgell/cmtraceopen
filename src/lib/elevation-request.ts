@@ -70,22 +70,54 @@ export function describeRestoreTarget(target: RestoreTarget): string {
 }
 
 /**
+ * The workspaces the backend accepts in a restore ticket: `AppWorkspace` in
+ * src-tauri/src/elevation/mod.rs. `WorkspaceId` has one more, "sccm", and a ticket that names it is
+ * refused at the backend boundary, so no ticket may. A test reads the Rust enum and fails if this
+ * list drifts from it.
+ */
+export const BACKEND_ELEVATION_WORKSPACES: readonly WorkspaceId[] = [
+  "log",
+  "intune",
+  "new-intune",
+  "dsregcmd",
+  "macos-diag",
+  "macos-jamf",
+  "deployment",
+  "event-log",
+  "esp-diagnostics",
+  "secureboot",
+  "sysmon",
+  "timeline",
+  "dns-dhcp",
+];
+
+/** A file, or a known source that is one file: what a text-log handler can reopen as a text log. */
+function isTextLogFile(source: LogSource | null): boolean {
+  if (source === null) return false;
+  return source.kind === "file" || (source.kind === "known" && source.pathKind === "file");
+}
+
+/**
  * The workspace a restore ticket names when a TEXT-LOG load failed Access Denied.
  *
  * After the elevated restart the ticket's workspace opens the source through its own
  * `onOpenSource` (`restoreElevatedSource`), and only the Log workspace, which has none, falls
- * through to the text-log loader. So the failing workspace keeps its own ticket when it has no
- * handler (JAMF, which restores nothing, and Log) or says its handler reopens text logs (the Intune
- * workspaces load them through the log store). Any other workspace with a handler would reopen the
- * source as something else: the ticket names the Log workspace, whose restore is the text-log load
- * the user asked for.
+ * through to the text-log loader. So the active workspace keeps its own ticket only if it is the Log
+ * workspace, or it says its handler reopens text-log files (the Intune workspaces load a file
+ * through the log store before they analyze it) and this source is a file. Every other workspace,
+ * and an Intune folder, names the Log workspace, whose restore is the text-log load the user asked
+ * for. That includes the workspaces with no handler at all: a workspace the backend does not accept
+ * (SCCM) can never be named.
  */
 export function textLogRestoreWorkspace(
   active: WorkspaceId,
-  definition: Pick<WorkspaceDefinition, "onOpenSource" | "capabilities">,
+  definition: Pick<WorkspaceDefinition, "capabilities">,
+  source: LogSource | null,
 ): WorkspaceId {
-  if (!definition.onOpenSource) return active;
-  return definition.capabilities?.reopensTextLogFiles === true ? active : "log";
+  if (active === "log") return "log";
+  return definition.capabilities?.reopensTextLogFiles === true && isTextLogFile(source)
+    ? active
+    : "log";
 }
 
 export interface ElevationRequestContext {
