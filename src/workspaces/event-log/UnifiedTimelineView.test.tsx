@@ -633,3 +633,192 @@ describe("UnifiedTimelineView", () => {
     ).toBeInTheDocument();
   });
 });
+
+/**
+ * #839, first comment: a preview is paired with the SAME page's own total, and a total that is
+ * missing or not a count is unknown. It is never 0, and it never lets "Showing the first N" or the
+ * exact/candidate/ambiguous breakdown claim completeness.
+ */
+describe("the header when a count is not known", () => {
+  const edge = (n: number, strength: "exact" | "candidate" | "ambiguous" = "exact") => ({
+    id: `edge-${n}`,
+    fromId: `from-${n}`,
+    toId: `to-${n}`,
+    key: { kind: "activityId", value: `{key-${n}}` },
+    strength,
+    confidence: "high" as const,
+    candidateIds: [],
+    evidence: [],
+    coverage: { state: "covered" as const },
+  });
+  const gap = (n: number) => ({ source: "correlation", reason: `gap ${n}` });
+  const base = () => timelineSessionProps(timeline);
+
+  /** The session, with the first page changed: the status keeps the totals the session reported. */
+  function sessionWith(
+    page: Record<string, unknown>,
+    status: Record<string, unknown> = {},
+  ) {
+    const props = base();
+    return {
+      ...props,
+      status: { ...props.status, ...status },
+      initialPage: { ...props.initialPage, ...page },
+    };
+  }
+  const header = () => document.body.textContent ?? "";
+  const open = () => fireEvent.click(screen.getByText("Show correlation details"));
+  const detail = () => screen.getByRole("region", { name: "Correlation details" }).textContent ?? "";
+
+  describe("with no session at all", () => {
+    it("says the counts are unknown, never 0", () => {
+      render(<UnifiedTimelineView status={null} initialPage={null} loadPage={vi.fn()} pending={false} />);
+      expect(screen.getByText("counts unknown")).toBeInTheDocument();
+      expect(header()).not.toMatch(/\b0\b/);
+      expect(header()).not.toMatch(/log lines|events|correlations|coverage gaps|exact|ambiguous/);
+    });
+
+    it("does not say there is nothing to place", () => {
+      render(<UnifiedTimelineView status={null} initialPage={null} loadPage={vi.fn()} pending={false} />);
+      expect(screen.getByText("The unified timeline is not available: its size is not known.")).toBeInTheDocument();
+      expect(header()).not.toMatch(/Nothing to place/);
+    });
+
+    it("says the counts are unknown while the session is being built too, beside the building message", () => {
+      render(<UnifiedTimelineView status={null} initialPage={null} loadPage={vi.fn()} pending />);
+      expect(screen.getByText("counts unknown")).toBeInTheDocument();
+      expect(screen.getByText("Building the unified timeline...")).toBeInTheDocument();
+    });
+  });
+
+  describe("correlation edges", () => {
+    it.each([
+      ["not a number", Number.NaN],
+      ["missing", undefined],
+      ["negative", -3],
+      ["fractional", 1.5],
+      ["infinite", Number.POSITIVE_INFINITY],
+    ])("reads a page total that is %s as unknown, with no breakdown and no 'of M' line", (_why, total) => {
+      render(
+        <UnifiedTimelineView
+          {...sessionWith({ edgesPreview: [edge(1)], totalEdges: total }, { totalEdges: 1 })}
+        />,
+      );
+      // The session total says 1, but the preview belongs to the page, and the page's total is bad.
+      expect(screen.getByText("correlations unknown")).toBeInTheDocument();
+      expect(screen.queryByText(/^exact \d/)).toBeNull();
+      expect(screen.queryByText(/^correlations \d/)).toBeNull();
+      open();
+      expect(detail()).toContain("Showing the first 1 correlations; the number in this session is not known.");
+      expect(detail()).not.toMatch(/ of \d|NaN|omitted/);
+    });
+
+    it("reads a page total below what its preview holds as unknown: a contradiction is not proof", () => {
+      render(<UnifiedTimelineView {...sessionWith({ edgesPreview: [edge(1), edge(2)], totalEdges: 1 })} />);
+      expect(screen.getByText("correlations unknown")).toBeInTheDocument();
+      expect(screen.queryByText("exact 2")).toBeNull();
+    });
+
+    it("shows 'the first N of M' with M from the PAGE when the preview is shorter than its total", () => {
+      render(
+        <UnifiedTimelineView
+          {...sessionWith(
+            { edgesPreview: [edge(1), edge(2), edge(3)], totalEdges: 7 },
+            // A different session total must not be the one paired with this preview.
+            { totalEdges: 99 },
+          )}
+        />,
+      );
+      expect(screen.getByText("correlations 7")).toBeInTheDocument();
+      expect(screen.queryByText(/correlations 99/)).toBeNull();
+      expect(screen.queryByText(/^exact \d/)).toBeNull();
+      open();
+      expect(detail()).toContain("Showing the first 3 of 7 correlations; 4 omitted.");
+      expect(detail()).not.toContain("99");
+    });
+
+    it("still gives the breakdown when the page's total equals its preview", () => {
+      render(
+        <UnifiedTimelineView
+          {...sessionWith({ edgesPreview: [edge(1), edge(2, "candidate")], totalEdges: 2 })}
+        />,
+      );
+      expect(screen.getByText("exact 1")).toBeInTheDocument();
+      expect(screen.getByText("candidate 1")).toBeInTheDocument();
+      expect(screen.queryByText(/correlations (unknown|\d)/)).toBeNull();
+    });
+
+    it("shows no correlation chip at all when the page counts none", () => {
+      render(<UnifiedTimelineView {...sessionWith({ edgesPreview: [], totalEdges: 0 })} />);
+      expect(screen.queryByText(/correlations/)).toBeNull();
+      expect(screen.queryByText("Show correlation details")).toBeNull();
+    });
+  });
+
+  describe("coverage gaps", () => {
+    it("reads a page total that is not a count as unknown, and says how many are listed", () => {
+      render(
+        <UnifiedTimelineView
+          {...sessionWith({ coverageGapsPreview: [gap(1)], totalCoverageGaps: Number.NaN }, { totalCoverageGaps: 1 })}
+        />,
+      );
+      expect(screen.getByText("coverage gaps unknown")).toBeInTheDocument();
+      open();
+      expect(detail()).toContain("Showing the first 1 coverage gaps; the number in this session is not known.");
+      expect(detail()).not.toMatch(/ of \d|NaN/);
+    });
+
+    it("takes M from the page, not the session, when the preview is shorter", () => {
+      render(
+        <UnifiedTimelineView
+          {...sessionWith(
+            { coverageGapsPreview: [gap(1), gap(2)], totalCoverageGaps: 5 },
+            { totalCoverageGaps: 99 },
+          )}
+        />,
+      );
+      expect(screen.getByText("coverage gaps 5")).toBeInTheDocument();
+      open();
+      expect(detail()).toContain("Showing the first 2 of 5 coverage gaps; 3 omitted.");
+    });
+  });
+
+  describe("unplaced entries", () => {
+    it("says the number is unknown in the header and under the list when the page's total is not a count", () => {
+      render(<UnifiedTimelineView {...sessionWith({ totalUnplaced: Number.NaN }, { totalUnplaced: 1 })} />);
+      expect(screen.getByText("The number of timeline items that could not be placed is not known")).toBeInTheDocument();
+      expect(screen.getByText(/Showing the first 1 unplaced entries; the number in this session is not known\./)).toBeInTheDocument();
+      expect(screen.queryByText(/1 timeline item could not be placed/)).toBeNull();
+    });
+
+    it("does not say there is nothing to place when the total is unknown and nothing is listed", () => {
+      const props = timelineSessionProps({ ...timeline, items: [], unplaced: [] });
+      render(<UnifiedTimelineView {...props} initialPage={{ ...props.initialPage, totalUnplaced: Number.NaN }} />);
+      expect(screen.queryByText(/Nothing to place/)).toBeNull();
+      // Said in the header and again as the empty state's heading.
+      expect(
+        screen.getAllByText("The number of timeline items that could not be placed is not known").length,
+      ).toBeGreaterThanOrEqual(1);
+    });
+
+    it("says nothing is to be placed only when the page counts none", () => {
+      render(<UnifiedTimelineView {...timelineSessionProps({ ...timeline, items: [], unplaced: [] })} />);
+      expect(screen.getByText(/Nothing to place on the timeline yet/)).toBeInTheDocument();
+    });
+  });
+
+  describe("the session's own counts", () => {
+    it("says log lines and events are unknown when the status does not report a count", () => {
+      render(<UnifiedTimelineView {...sessionWith({}, { logItems: Number.NaN, eventItems: undefined })} />);
+      expect(screen.getByText("log lines unknown")).toBeInTheDocument();
+      expect(screen.getByText("events unknown")).toBeInTheDocument();
+      expect(header()).not.toMatch(/NaN|\b0 log lines|\b0 events/);
+    });
+
+    it("says them as numbers when it does", () => {
+      render(<UnifiedTimelineView {...sessionWith({}, { logItems: 12, eventItems: 1_234 })} />);
+      expect(screen.getByText("12 log lines")).toBeInTheDocument();
+      expect(screen.getByText("1,234 events")).toBeInTheDocument();
+    });
+  });
+});
