@@ -16,7 +16,8 @@
  * - the field `correlationCount` anywhere (a word, so `correlationCounts` is another name);
  * - `CorrelationRow` and `DiagnosisCorrelationEdge`, the diagnosis row component and its type.
  *
- * WHAT IT DOES NOT CHECK. These are the text-scan limits it has; none is covered by anything else:
+ * WHAT IT DOES NOT CHECK. These are the text-scan limits it has. This file covers none of them
+ * (the last is covered by the UnifiedTimelineView tests):
  * - a helper that reads the fields added INSIDE one of the two wire files, which are exempt whole;
  * - a read through a dynamic key (`summary[key]`) or through an alias of the summary's type;
  * - nested destructuring (`const { summary: { correlations } } = state`): the pattern looks for
