@@ -275,6 +275,50 @@ describe("EvtxHistogram", () => {
     expect(screen.queryByText(/No events/)).toBeNull();
   });
 
+  it("reserves the caption slot in every state, so focus never changes the figure's height", () => {
+    const slotOf = (container: HTMLElement) => container.querySelector<HTMLElement>("figure > figcaption");
+    const shape = (slot: HTMLElement) => ({
+      tags: [...slot.children].map((child) => child.tagName),
+      minHeight: slot.querySelector<HTMLElement>("[data-evtx-cursor-slot]")?.style.minHeight,
+    });
+    const ready = render(<EvtxHistogram records={dayOfEvents()} loading={false} />);
+    const slot = slotOf(ready.container)!;
+    expect(slot).not.toBeNull();
+    const before = shape(slot);
+    expect(before.tags).toEqual(["DIV"]);
+    expect(before.minHeight).toMatch(/^\d+px$/);
+    const slider = screen.getByRole("slider", { name: "Time range" });
+    fireEvent.focus(slider);
+    expect(slotOf(ready.container)).toBe(slot);
+    expect(shape(slot)).toEqual(before);
+    fireEvent.blur(slider);
+    expect(slotOf(ready.container)).toBe(slot);
+    expect(shape(slot)).toEqual(before);
+    cleanup();
+
+    for (const view of [
+      render(<EvtxHistogram records={[]} loading />),
+      render(<EvtxHistogram records={[]} loading={false} />),
+    ]) {
+      expect(slotOf(view.container)).not.toBeNull();
+      view.unmount();
+    }
+  });
+
+  it("puts the notes on a line of their own above the cursor slot, so a note and the cursor text never share a line", () => {
+    seed({ coverageGaps: ["System: newest 2000 events shown (the channel may hold more)"] });
+    const { container } = render(<EvtxHistogram records={dayOfEvents()} loading={false} />);
+    const slot = container.querySelector<HTMLElement>("figure > figcaption")!;
+    const lines = [...slot.children] as HTMLElement[];
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toHaveTextContent(describeCoverage(1));
+    expect(lines[1].hasAttribute("data-evtx-cursor-slot")).toBe(true);
+    const before = lines.map((line) => line.tagName);
+    fireEvent.focus(screen.getByRole("slider", { name: "Time range" }));
+    expect([...slot.children].map((line) => line.tagName)).toEqual(before);
+    expect(lines[0]).toHaveTextContent(describeCoverage(1));
+  });
+
   it("keeps the loading status out of the slider, whose children are presentational", () => {
     render(<EvtxHistogram records={[]} loading />);
     const slider = screen.getByRole("slider", { name: "Time range" });

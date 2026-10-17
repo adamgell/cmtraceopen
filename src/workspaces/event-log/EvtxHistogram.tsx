@@ -289,6 +289,11 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
   );
   const [hover, setHover] = useState<number | null>(null);
   const [focused, setFocused] = useState(false);
+  // Whether the plot is being used from the keyboard: set by Tab focus or a key, cleared by a press.
+  // The cursor line in the caption is for the keyboard; a pointer press focuses the plot too, and
+  // must not show it.
+  const [keyboardMode, setKeyboardMode] = useState(false);
+  const pressRef = useRef(false);
   const [keys, setKeys] = useState<BrushKeyState | null>(null);
   const [drag, setDrag] = useState<{ anchor: number; current: number } | null>(null);
   // The buckets a gesture started on. A live tail can regrid the chart under a pointer or a pending
@@ -318,6 +323,7 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
   const axisPx = Math.max(9, metrics.fontSize - 4);
   const smallPx = Math.max(10, metrics.fontSize - 3);
   const axisHeight = Math.max(16, Math.round(axisPx * 1.5));
+  const captionLine = Math.round(smallPx * 1.4);
   const ticks = useMemo(() => buildAxisTicks(view, timeZoneMode), [view, timeZoneMode]);
 
   const appliedSpan = ready && timeRange !== null ? spanOfRange(view, timeRange) : null;
@@ -374,7 +380,11 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
     setFrozen(view);
     setDrag({ anchor: index, current: index });
     setKeys({ cursor: index, anchor: null });
+    setKeyboardMode(false);
+    // The focus this press causes is the pointer's, not the keyboard's: onFocus reads this.
+    pressRef.current = true;
     event.currentTarget.focus({ preventScroll: true });
+    pressRef.current = false;
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -403,6 +413,7 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (!ready || event.ctrlKey || event.metaKey || event.altKey) return;
+    setKeyboardMode(true);
     if (event.key === "Escape") {
       // A pending selection is cancelled and the key is spent, so the workspace's Escape (which
       // clears the applied range) steps aside. With nothing pending the key passes up to it.
@@ -439,7 +450,7 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
   // and the slider's value text carries it for assistive technology.
   const tipIndex = ready ? hover : null;
   const cursorBucket =
-    ready && focused && cursor < count ? view.buckets[cursor] : null;
+    ready && focused && keyboardMode && cursor < count ? view.buckets[cursor] : null;
   const hovered = tipIndex !== null && tipIndex < count ? view.buckets[tipIndex] : null;
   const zone = histogram.domain === null ? null : timeZoneLabel(timeZoneMode, histogram.domain.startMs);
 
@@ -526,9 +537,13 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
               onKeyDown={onKeyDown}
               // The cursor is not stored on focus: with no keys held it is derived from the chart, so
               // focus that arrives during a load does not pin it to an empty chart's first bucket.
-              onFocus={() => setFocused(true)}
+              onFocus={() => {
+                setFocused(true);
+                if (!pressRef.current) setKeyboardMode(true);
+              }}
               onBlur={() => {
                 setFocused(false);
+                setKeyboardMode(false);
                 setKeys(null);
                 if (drag === null) setFrozen(null);
               }}
@@ -670,8 +685,18 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
           <li className={mergeClasses(styles.legendItem, styles.zone)}>{ready ? zone : ""}</li>
         </ul>
       </div>
-      {(notes.length > 0 || cursorBucket !== null) && (
-        <figcaption className={styles.notes} style={{ fontSize: `${smallPx}px`, color: TEXT_COLOR }}>
+      {/* A slot that is always here, so focus and blur never change the figure's height. The notes
+          take a line of their own above it; the cursor line fills it only for the keyboard. */}
+      <figcaption className={styles.notes} style={{ fontSize: `${smallPx}px`, color: TEXT_COLOR }}>
+        {notes.length > 0 && (
+          <div data-evtx-notes style={{ lineHeight: `${captionLine}px` }}>
+            {notes.join(" ")}
+          </div>
+        )}
+        <div
+          data-evtx-cursor-slot
+          style={{ minHeight: `${captionLine}px`, lineHeight: `${captionLine}px` }}
+        >
           {cursorBucket !== null && (
             <span
               data-evtx-cursor-text={cursor}
@@ -680,10 +705,8 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
               {describeBucket(cursorBucket, timeZoneMode, view.showYear)}
             </span>
           )}
-          {cursorBucket !== null && notes.length > 0 && " "}
-          {notes.join(" ")}
-        </figcaption>
-      )}
+        </div>
+      </figcaption>
       {ready && (
         <table className={styles.visuallyHidden}>
           <caption>{describeFigure(histogram, timeZoneMode)}</caption>

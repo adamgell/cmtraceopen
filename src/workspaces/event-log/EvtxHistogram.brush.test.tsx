@@ -359,6 +359,31 @@ describe("the keyboard", () => {
     );
   });
 
+  it("shows no cursor text when a pointer press focused the plot, and shows it after the next key", () => {
+    const { slider } = mount();
+    down(slider, x(9));
+    expect(document.activeElement).toBe(slider);
+    expect(cursorText()).toBeNull();
+    up(slider, x(9));
+    expect(cursorText()).toBeNull();
+    key(slider, "ArrowLeft");
+    expect(cursorText()!.textContent).toBe(describeBucket(histogram.buckets[8], "utc"));
+    // Another press returns to the pointer: the line is for the keyboard only.
+    down(slider, x(20));
+    expect(cursorText()).toBeNull();
+    up(slider, x(20));
+    expect(cursorText()).toBeNull();
+  });
+
+  it("shows the cursor text on Tab focus, and keeps it through an arrow key", () => {
+    const { slider } = mount();
+    // Tab focus is a focus event with no pointer press before it.
+    fireEvent.focus(slider);
+    expect(cursorText()!.textContent).toBe(describeBucket(histogram.buckets[71], "utc"));
+    key(slider, "ArrowLeft");
+    expect(cursorText()!.textContent).toBe(describeBucket(histogram.buckets[70], "utc"));
+  });
+
   it("is a persistent line in the figure, not an overlay, and goes when focus leaves", () => {
     const { slider } = mount();
     fireEvent.focus(slider);
