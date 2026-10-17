@@ -600,6 +600,44 @@ describe("EventDiagnosisPanel", () => {
         await settle();
         expect(banner()).toHaveTextContent(KEY);
       });
+
+      it("claims every gap behind a listed group, though the rows read the same", async () => {
+        // Two profiles' files: the engine's projection redacts both paths to the same text, so
+        // the disclosure groups the two rows into one listed line of 2 occurrences.
+        const alice = {
+          source: "C:\\Users\\alice\\System.evtx",
+          kind: "record" as const,
+          reason: "record unavailable",
+        };
+        const bob = { ...alice, source: "C:\\Users\\bob\\System.evtx" };
+        const row = (id: string, ordinal: number): DiagnosisCoverageGap => ({
+          id,
+          source: "C:\\Users\\[user]\\System.evtx",
+          state: "parseFailed",
+          detail: "record unavailable",
+          evidence: [],
+          inputIndices: [ordinal],
+        });
+        const grouped: DiagnosisSummary = {
+          ...summary,
+          coverageGaps: [row("alice", 0), row("bob", 1)],
+          overview: { ...summary.overview, coverageGapCount: 2 },
+        };
+        useEvtxStore.setState({ coverageDetails: [alice, bob] });
+        render(
+          <CoverageClaimsProvider>
+            <EvtxCoverageBanner />
+            <EventDiagnosisPanel
+              summary={grouped}
+              coverageInput={coverageInputKeys([alice, bob], 2)}
+            />
+          </CoverageClaimsProvider>,
+        );
+        await settle();
+
+        expect(screen.getByText(/\(2 occurrences\)/)).toBeTruthy();
+        expect(banner()).toBeNull();
+      });
     });
 
     it("is not drawn without an accessDenied gap", async () => {
