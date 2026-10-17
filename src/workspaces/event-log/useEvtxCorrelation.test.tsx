@@ -11,6 +11,7 @@ import type {
   EventLogAnalysisSessionStatus,
   EventLogAnalysisTimelinePage,
 } from "../../lib/commands";
+import { buildCorrelationChains } from "./evtx-correlation-chains";
 import type { CorrelationLoadDeps } from "./evtx-correlation-load";
 import {
   CORRELATION_SETTLE_MS,
@@ -262,6 +263,30 @@ describe("edges only (the Insights card, which needs counts and no scan)", () =>
     expect(session.timelineCalls).toEqual([]);
     expect(session.edgeCalls).toEqual([]);
     expect(session.sleeps).not.toContain(CORRELATION_SETTLE_MS);
+  });
+
+  it("publishes the chain model's own rows in its own order, with and without items", async () => {
+    // More than the 100 row cap, so the order decides which rows are shown at all.
+    const pairs: [number, number][] = Array.from({ length: 120 }, (_, i) => [(119 - i) * 2, (119 - i) * 2 + 1]);
+    const session = new FakeSession({ itemCount: 300, pairs });
+    const expected = (withItems: boolean) =>
+      buildCorrelationChains({
+        items: withItems ? session.items : [],
+        timelineEdges: session.edges,
+        totalTimelineEdges: session.edges.length,
+        findings: NO_FINDINGS,
+      });
+    const countsProps = session.props();
+    const counts = renderHook(() => useEvtxCorrelation(countsProps));
+    await waitFor(() => expect(counts.result.current.stage).toBe("edgesOnly"));
+    expect(counts.result.current.model).toEqual(expected(false));
+    expect(counts.result.current.model?.chains).toHaveLength(100);
+    expect(counts.result.current.model?.omittedCount).toBe(20);
+
+    const itemProps = session.props({ needItems: true });
+    const full = renderHook(() => useEvtxCorrelation(itemProps));
+    await waitFor(() => expect(full.result.current.stage).toBe("ready"));
+    expect(full.result.current.model).toEqual(expected(true));
   });
 
   it("never scans the timeline for a consumer that does not need items", async () => {
