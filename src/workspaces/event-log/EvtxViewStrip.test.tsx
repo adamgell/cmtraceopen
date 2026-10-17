@@ -18,7 +18,8 @@ import { getAllThemes, getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import { deferred } from "../../test-utils/deferred";
 import { viewImportSummary } from "./EvtxViewDialogs";
-import { EvtxViewStrip, evtxStripMutedTextColor, exportFileStem } from "./EvtxViewStrip";
+import { EvtxViewStrip, exportFileStem } from "./EvtxViewStrip";
+import { pickRailTextColors } from "./evtx-rail-text";
 import { DEFAULT_QUICK_FILTER } from "./evtx-filter";
 import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { captureCriteria, sanitizeCriteria } from "./evtx-saved-filters";
@@ -144,6 +145,35 @@ describe("EvtxViewStrip", () => {
       expect(style.padding).toBe("4px 10px");
       expect(style.display).toBe("inline-flex");
       expect(style.whiteSpace).toBe("nowrap");
+    });
+
+    it("makes every item the same height: the New view icon takes the line height, not its own 16 px (T4)", () => {
+      makeView("Mine");
+      const { unmount } = render(<EvtxViewStrip />);
+      const strip = document.querySelector<HTMLElement>("[data-evtx-region='view-strip']")!;
+      const icon = () => document.querySelector<SVGElement>("[data-evtx-new-view-icon]")!;
+      // A card is 4 + 4 padding, 2 border and one line; the button is the same with the icon as its line.
+      expect(strip.style.lineHeight).toBe("14px");
+      expect(icon().style.width).toBe("14px");
+      expect(icon().style.height).toBe("14px");
+      expect(icon()).toHaveAttribute("aria-hidden", "true");
+      const cardHeight = (button: HTMLElement) => {
+        const style = getComputedStyle(button);
+        const content = button === card("New view") ? parseFloat(icon().style.height) : parseFloat(strip.style.lineHeight);
+        return parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + 2 * parseFloat(style.borderTopWidth) + content;
+      };
+      expect(cardHeight(card("New view"))).toBe(24);
+      expect(cardHeight(card("Mine"))).toBe(24);
+      expect(cardHeight(card("Enrollment triage"))).toBe(24);
+      unmount();
+
+      // It follows the font size: the icon is the line, whatever the line is.
+      useUiStore.setState({ logListFontSize: 20 });
+      render(<EvtxViewStrip />);
+      const bigLine = document.querySelector<HTMLElement>("[data-evtx-region='view-strip']")!.style.lineHeight;
+      expect(bigLine).toBe("23px");
+      expect(icon().style.width).toBe(bigLine);
+      expect(icon().style.height).toBe(bigLine);
     });
 
     it("sizes its text from the log list font size", () => {
@@ -990,6 +1020,7 @@ describe("EvtxViewStrip Import views...", () => {
     layout: null,
     ...patch,
   });
+  const importNotice = () => document.querySelector("[data-evtx-import-notice]");
   const openNewDialog = () => {
     render(<EvtxViewStrip />);
     fireEvent.click(card("New view"));
@@ -1021,8 +1052,13 @@ describe("EvtxViewStrip Import views...", () => {
     file.views.push({ name: "Broken", criteria: { beforeLoad: { levels: ["Nonsense"] } } });
     await importFile(JSON.stringify(file));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    const notice = screen.getByText("Imported 2 views, 1 replaced, 1 skipped.");
-    expect(notice).toHaveAttribute("role", "status");
+    // For the eye, and (T6) through the persistent polite region for the ear: the notice is not a
+    // second live region that mounts already holding its text.
+    const summary = "Imported 2 views, 1 replaced, 1 skipped.";
+    expect(importNotice()).toHaveTextContent(summary);
+    expect(importNotice()).not.toHaveAttribute("role");
+    expect(screen.getByRole("status")).toHaveTextContent(summary);
+    expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
     const views = useEvtxViewStore.getState().views;
     expect(views.map((v) => v.name)).toEqual(["Mine", "Shared", "Enrollment triage (2)"]);
     expect(views[0].id).toBe(mine.id);
@@ -1033,7 +1069,22 @@ describe("EvtxViewStrip Import views...", () => {
     await waitFor(() => expect(card("New view")).toHaveFocus());
     // The next thing the operator does clears it.
     fireEvent.click(card("Shared"));
-    expect(screen.queryByText("Imported 2 views, 1 replaced, 1 skipped.")).toBeNull();
+    expect(importNotice()).toBeNull();
+  });
+
+  it("announces the summary again when a second import says the same thing (a keyed node, not a text change)", async () => {
+    const file = buildViewExport([bodyOf("Once")]);
+    await importFile(file);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const first = within(screen.getByRole("status")).getByText("Imported 1 view.");
+    useEvtxViewStore.getState().remove(useEvtxViewStore.getState().views[0].id);
+    vi.mocked(open).mockResolvedValue("C:\\views\\again.json");
+    vi.mocked(readTextFile).mockReturnValue(Promise.resolve(file));
+    fireEvent.click(card("New view"));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "New view" })).getByRole("button", { name: "Import views..." }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const second = within(screen.getByRole("status")).getByText("Imported 1 view.");
+    expect(second).not.toBe(first);
   });
 
   it("stays open and changes nothing when the picker is cancelled", async () => {
@@ -1090,7 +1141,7 @@ describe("EvtxViewStrip Import views...", () => {
     );
     await importFile(`{"schema":1,"views":[${JSON.stringify(hostile)},${proto}]}`);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(screen.getByText("Imported 2 views.")).toBeInTheDocument();
+    expect(importNotice()).toHaveTextContent("Imported 2 views.");
     const views = useEvtxViewStore.getState().views;
     expect(views.map((v) => v.name)).toEqual(["Hostile", "Proto"]);
     expect(views.every((v) => v.id !== ENROLLMENT_TRIAGE_ID)).toBe(true);
@@ -1106,7 +1157,7 @@ describe("EvtxViewStrip Import views...", () => {
     for (let i = 0; i < MAX_CUSTOM_VIEWS - 1; i += 1) makeView(`V${i}`);
     await importFile(buildViewExport([bodyOf("One more"), bodyOf("Too many")]));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(screen.getByText("Imported 1 view, 1 skipped.")).toBeInTheDocument();
+    expect(importNotice()).toHaveTextContent("Imported 1 view, 1 skipped.");
     expect(useEvtxViewStore.getState().views).toHaveLength(MAX_CUSTOM_VIEWS);
   });
 
@@ -1155,7 +1206,7 @@ describe("EvtxViewStrip Import views...", () => {
 describe("the strip's colors in all seven themes", () => {
   const themes = getAllThemes().map((theme) => [theme.id, theme] as const);
 
-  describe.each(themes)("%s", (_id, theme) => {
+  describe.each(themes)("%s", (id, theme) => {
     const r = (value: string) => resolveToken(value, theme);
     const surface = r(tokens.colorNeutralBackground1);
 
@@ -1164,8 +1215,8 @@ describe("the strip's colors in all seven themes", () => {
       expect(contrastRatio(r(selection.foreground), r(selection.background))).toBeGreaterThanOrEqual(4.5);
     });
 
-    it("reads the subtitle, the eyebrow and the source line at 4.5:1 on the strip", () => {
-      expect(contrastRatio(evtxStripMutedTextColor(theme), surface)).toBeGreaterThanOrEqual(4.5);
+    it("reads the subtitle, the eyebrow and the source line at 4.5:1 on the strip, in the rail's own rule (T5)", () => {
+      expect(contrastRatio(r(pickRailTextColors(theme).cardSecondary), surface)).toBeGreaterThanOrEqual(4.5);
     });
 
     it("reads a card's name and the New view text at 4.5:1 on the strip", () => {
@@ -1173,11 +1224,24 @@ describe("the strip's colors in all seven themes", () => {
       expect(contrastRatio(r(tokens.colorNeutralForeground2), surface)).toBeGreaterThanOrEqual(4.5);
     });
 
-    it("keeps the third-level foreground where it is readable, and steps up only where it is not", () => {
-      const fg3 = r(tokens.colorNeutralForeground3);
-      const muted = evtxStripMutedTextColor(theme);
-      if (contrastRatio(fg3, surface) >= 4.5) expect(muted).toBe(fg3);
-      else expect(muted).not.toBe(fg3);
+    it("draws the eyebrow, an idle subtitle and the source line in the rail's card secondary color", () => {
+      cleanup();
+      useUiStore.setState({ themeId: id });
+      useEvtxStore.setState({ sourceMode: "files", channels: [channelInfo("System")], records: [RECORD] });
+      render(<EvtxViewStrip />);
+      const expected = pickRailTextColors(theme).cardSecondary;
+      expect(screen.getByText("Views", { selector: "span" }).style.color).toBe(expected);
+      expect(screen.getByText("Built-in, 3 filters").style.color).toBe(expected);
+      expect(document.querySelector<HTMLElement>("[data-evtx-view-source]")!.style.color).toBe(expected);
+      useUiStore.setState({ themeId: "light" });
     });
+  });
+
+  it("steps up from fg3 to fg2 only where fg3 is below 4.5:1: solarized-dark and dracula", () => {
+    const stepped = getAllThemes()
+      .filter((theme) => pickRailTextColors(theme).cardSecondary !== tokens.colorNeutralForeground3)
+      .map((theme) => theme.id)
+      .sort();
+    expect(stepped).toEqual(["dracula", "solarized-dark"]);
   });
 });

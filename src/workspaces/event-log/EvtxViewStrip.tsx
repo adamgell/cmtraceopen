@@ -35,10 +35,7 @@ import {
 import { Add16Regular } from "@fluentui/react-icons";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
-import { contrastRatio, readableOn } from "../../lib/color-contrast";
 import { getLogListMetrics } from "../../lib/log-accessibility";
-import { getThemeById } from "../../lib/themes";
-import type { CMTraceTheme } from "../../lib/themes/types";
 import { useUiStore } from "../../stores/ui-store";
 import { applyView } from "./evtx-criteria-actions";
 import {
@@ -66,26 +63,10 @@ import {
   type EvtxView,
 } from "./evtx-views";
 import { useEvtxViewStore, type EvtxViewFailure } from "./evtx-views-store";
-import { resolveToken, useEvtxVisualTokens } from "./evtx-visual-tokens";
+import { useRailTextColors } from "./evtx-rail-text";
+import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 
 const NEW_VIEW_ID = "__new-view__";
-
-const MIN_TEXT_CONTRAST = 4.5;
-
-/**
- * The secondary text color (spec 8.15 names fg3 for the subtitle, the eyebrow and the source line):
- * the theme's third-level foreground where it reaches 4.5:1 on the strip, and otherwise the next
- * stronger neutral that does. fg3 measures 3.37:1 in solarized-dark and 3.03:1 in dracula, and token
- * values are never changed here, so the rendering steps up instead.
- */
-export function evtxStripMutedTextColor(theme: CMTraceTheme): string {
-  const surface = resolveToken(tokens.colorNeutralBackground1, theme);
-  for (const token of [tokens.colorNeutralForeground3, tokens.colorNeutralForeground2]) {
-    const color = resolveToken(token, theme);
-    if (contrastRatio(color, surface) >= MIN_TEXT_CONTRAST) return color;
-  }
-  return readableOn(surface, resolveToken(tokens.colorNeutralForeground1, theme), MIN_TEXT_CONTRAST);
-}
 
 const useStyles = makeStyles({
   card: {
@@ -146,8 +127,10 @@ export function exportFileStem(name: string): string {
 export function EvtxViewStrip() {
   const styles = useStyles();
   const { selection, levels } = useEvtxVisualTokens();
-  const themeId = useUiStore((s) => s.themeId);
-  const mutedText = useMemo(() => evtxStripMutedTextColor(getThemeById(themeId)), [themeId]);
+  // Secondary text (spec 8.15 names fg3) by the rule the rail already uses on this surface: fg3 where
+  // it reaches 4.5:1 on colorNeutralBackground1, else fg2 (fg3 measures 3.37:1 in solarized-dark and
+  // 3.03:1 in dracula). The strip does not keep a rule of its own.
+  const { cardSecondary: mutedText } = useRailTextColors();
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
   // Spec 8.15: f - 2 for the cards, on one line (about 24 px a card, 30 px with the strip's padding);
@@ -378,8 +361,12 @@ export function EvtxViewStrip() {
       const parsed = parseViewExport(await readTextFile(chosen));
       if (!parsed.ok) return { kind: "failed", message: viewImportFailureMessage(parsed.reason) };
       const merged = useEvtxViewStore.getState().importViews(parsed.views);
+      const summary = viewImportSummary({ ...merged, skipped: merged.skipped + parsed.skipped });
       setProblem(null);
-      setImportNotice(viewImportSummary({ ...merged, skipped: merged.skipped + parsed.skipped }));
+      // Announced through the persistent region, as every other action is: a live region that mounts
+      // already holding its text is not reliably spoken. The notice below is for the eye.
+      setImportNotice(summary);
+      announce(summary);
       return { kind: "imported" };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -511,7 +498,13 @@ export function EvtxViewStrip() {
           onFocus={() => setTabStop(NEW_VIEW_ID)}
           onClick={() => setDialog({ kind: "new" })}
         >
-          <Add16Regular aria-hidden />
+          {/* The icon is 16 px by default and the line is 14 at the default size, which would make
+              this button 2 px taller than the cards: it takes the line height. */}
+          <Add16Regular
+            aria-hidden
+            data-evtx-new-view-icon
+            style={{ width: lineHeight, height: lineHeight, flexShrink: 0 }}
+          />
           New view
         </button>
       </div>
@@ -527,7 +520,7 @@ export function EvtxViewStrip() {
         {announcement.text && <span key={announcement.id}>{announcement.text}</span>}
       </span>
       {importNotice && (
-        <div role="status" style={{ flexBasis: "100%", color: mutedText }}>
+        <div data-evtx-import-notice style={{ flexBasis: "100%", color: mutedText }}>
           {importNotice}
         </div>
       )}
