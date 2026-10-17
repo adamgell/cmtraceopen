@@ -21,7 +21,7 @@ function failure(text: string): EvtxQueryError {
 
 /** Each clause as a list of terms written back in a compact, comparable form. */
 function shape(text: string): string[][] {
-  const describe = (term: EvtxQueryTerm) => {
+  const written = (term: EvtxQueryTerm) => {
     const sign = term.negated ? "-" : "";
     switch (term.kind) {
       case "text":
@@ -32,7 +32,7 @@ function shape(text: string): string[][] {
         return `${sign}data.${term.name}(${term.value})`;
     }
   };
-  return parsed(text).clauses.map((clause) => clause.map(describe));
+  return parsed(text).clauses.map((clause) => clause.map(written));
 }
 
 describe("parseFieldQuery: terms", () => {
