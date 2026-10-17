@@ -241,9 +241,27 @@ describe("buildFilterChips, the transient criteria", () => {
     expect(chip.title?.split("\n")).toEqual([
       "Chain: Enrollment 7a",
       "2 events in this scope.",
-      "3 cited entries could not be matched to a record because their timeline items were not read.",
+      "3 entries of this chain could not be matched to a record because their timeline items were not read.",
     ]);
     expect(chip.title).not.toMatch(/not loaded/);
+  });
+
+  it("words a Chain chip's tooltip for a chain and a Finding chip's for a finding, whatever the counts", () => {
+    const gaps = { notLoaded: 1, noUsableIdentity: 0, ambiguous: 0, bounded: true };
+    const chain = buildFilterChips(input({ recordScope: scopeOf(2, "Enrollment 7a", "chain", gaps) }))[0];
+    expect(chain.title?.split("\n")).toEqual([
+      "Chain: Enrollment 7a",
+      "2 events in this scope.",
+      "1 event of this chain is not loaded.",
+      "Edges were not all loaded, so this chain may include more events.",
+    ]);
+    const finding = buildFilterChips(input({ recordScope: scopeOf(2, "Enrollment 7a", "finding", gaps) }))[0];
+    expect(finding.title?.split("\n")).toEqual([
+      "Finding: Enrollment 7a",
+      "2 events in this scope.",
+      "1 cited event is not loaded.",
+      "The diagnosis response is bounded, so this finding may cite more events than were sent.",
+    ]);
   });
 
   it("lists them last, in the spec's order: time range, then record scope", () => {

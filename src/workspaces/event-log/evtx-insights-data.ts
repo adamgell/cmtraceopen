@@ -12,6 +12,7 @@ import {
   EVTX_LEVELS,
   hasUsableTimestamp,
   type EvtxRecordScopeCounts,
+  type EvtxRecordScopeKind,
 } from "./evtx-filter";
 import type {
   DiagnosisEventEvidence,
@@ -445,11 +446,25 @@ export function scopeForFinding(
 
 /**
  * One sentence for each way a record scope falls short of what it was made from, apart from each
- * other and in a fixed order. Empty when it falls short in none.
+ * other and in a fixed order. Empty when it falls short in none. The words follow the scope's
+ * KIND: a finding CITES events, a chain is made of entries, and the reason a chain scope can be
+ * bounded is its edges, not a diagnosis response. The kind is required so a caller cannot forget
+ * it and get a finding's wording for a chain.
  */
-export function describeScopeCounts(counts: EvtxRecordScopeCounts): string[] {
+export function describeScopeCounts(
+  counts: EvtxRecordScopeCounts,
+  kind: EvtxRecordScopeKind,
+): string[] {
+  const chain = kind === "chain";
   const sentences: string[] = [];
-  const events = (n: number) => `${formatCount(n)} cited ${n === 1 ? "event" : "events"}`;
+  const events = (n: number) =>
+    chain
+      ? `${formatCount(n)} ${n === 1 ? "event" : "events"} of this chain`
+      : `${formatCount(n)} cited ${n === 1 ? "event" : "events"}`;
+  const entries = (n: number) =>
+    chain
+      ? `${formatCount(n)} ${n === 1 ? "entry" : "entries"} of this chain`
+      : `${formatCount(n)} cited ${n === 1 ? "entry" : "entries"}`;
   if (counts.notLoaded > 0) {
     sentences.push(`${events(counts.notLoaded)} ${counts.notLoaded === 1 ? "is" : "are"} not loaded.`);
   }
@@ -462,16 +477,22 @@ export function describeScopeCounts(counts: EvtxRecordScopeCounts): string[] {
   if (unresolved > 0) {
     // No absence is claimed: the record these name was never looked for, so it may well be loaded.
     sentences.push(
-      `${formatCount(unresolved)} cited ${unresolved === 1 ? "entry" : "entries"} could not be matched to a record because ${unresolved === 1 ? "its timeline item was" : "their timeline items were"} not read.`,
+      `${entries(unresolved)} could not be matched to a record because ${unresolved === 1 ? "its timeline item was" : "their timeline items were"} not read.`,
     );
   }
   if (counts.ambiguous > 0) {
     sentences.push(
-      `${formatCount(counts.ambiguous)} cited ${counts.ambiguous === 1 ? "reference matches" : "references match"} more than one loaded event. Every match is included.`,
+      chain
+        ? `${entries(counts.ambiguous)} ${counts.ambiguous === 1 ? "matches" : "match"} more than one loaded event. Every match is included.`
+        : `${formatCount(counts.ambiguous)} cited ${counts.ambiguous === 1 ? "reference matches" : "references match"} more than one loaded event. Every match is included.`,
     );
   }
   if (counts.bounded) {
-    sentences.push("The diagnosis response is bounded, so this finding may cite more events than were sent.");
+    sentences.push(
+      chain
+        ? "Edges were not all loaded, so this chain may include more events."
+        : "The diagnosis response is bounded, so this finding may cite more events than were sent.",
+    );
   }
   return sentences;
 }

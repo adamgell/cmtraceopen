@@ -702,12 +702,12 @@ describe("describeScopeCounts", () => {
   });
 
   it("says nothing when the scope fell short in no way", () => {
-    expect(describeScopeCounts(counts({}))).toEqual([]);
+    expect(describeScopeCounts(counts({}), "finding")).toEqual([]);
   });
 
   it("names each class on its own line, in a fixed order", () => {
     expect(
-      describeScopeCounts(counts({ notLoaded: 2, noUsableIdentity: 1, ambiguous: 3, bounded: true })),
+      describeScopeCounts(counts({ notLoaded: 2, noUsableIdentity: 1, ambiguous: 3, bounded: true }), "finding"),
     ).toEqual([
       "2 cited events are not loaded.",
       "1 cited event cannot be matched to a loaded event: no usable record identity.",
@@ -717,19 +717,19 @@ describe("describeScopeCounts", () => {
   });
 
   it("names references it could not look for apart from ones that are not loaded, and claims no absence", () => {
-    expect(describeScopeCounts(counts({ unresolved: 3 }))).toEqual([
+    expect(describeScopeCounts(counts({ unresolved: 3 }), "finding")).toEqual([
       "3 cited entries could not be matched to a record because their timeline items were not read.",
     ]);
-    expect(describeScopeCounts(counts({ unresolved: 1 }))).toEqual([
+    expect(describeScopeCounts(counts({ unresolved: 1 }), "finding")).toEqual([
       "1 cited entry could not be matched to a record because its timeline item was not read.",
     ]);
-    const text = describeScopeCounts(counts({ unresolved: 5 })).join(" ");
+    const text = describeScopeCounts(counts({ unresolved: 5 }), "finding").join(" ");
     expect(text).not.toMatch(/not loaded|no record|absent|missing/);
   });
 
   it("puts the unresolved sentence after no usable identity and before ambiguous", () => {
     expect(
-      describeScopeCounts(counts({ notLoaded: 1, noUsableIdentity: 1, unresolved: 1, ambiguous: 1 })),
+      describeScopeCounts(counts({ notLoaded: 1, noUsableIdentity: 1, unresolved: 1, ambiguous: 1 }), "finding"),
     ).toEqual([
       "1 cited event is not loaded.",
       "1 cited event cannot be matched to a loaded event: no usable record identity.",
@@ -738,9 +738,56 @@ describe("describeScopeCounts", () => {
     ]);
   });
 
+  describe("for a chain scope", () => {
+    it("names each class in a chain's words, in the same fixed order", () => {
+      expect(
+        describeScopeCounts(
+          counts({ notLoaded: 2, noUsableIdentity: 1, unresolved: 4, ambiguous: 3, bounded: true }),
+          "chain",
+        ),
+      ).toEqual([
+        "2 events of this chain are not loaded.",
+        "1 event of this chain cannot be matched to a loaded event: no usable record identity.",
+        "4 entries of this chain could not be matched to a record because their timeline items were not read.",
+        "3 entries of this chain match more than one loaded event. Every match is included.",
+        "Edges were not all loaded, so this chain may include more events.",
+      ]);
+    });
+
+    it("uses the singular for one", () => {
+      expect(describeScopeCounts(counts({ notLoaded: 1 }), "chain")).toEqual(["1 event of this chain is not loaded."]);
+      expect(describeScopeCounts(counts({ unresolved: 1 }), "chain")).toEqual([
+        "1 entry of this chain could not be matched to a record because its timeline item was not read.",
+      ]);
+      expect(describeScopeCounts(counts({ ambiguous: 1 }), "chain")).toEqual([
+        "1 entry of this chain matches more than one loaded event. Every match is included.",
+      ]);
+    });
+
+    it("never speaks of a finding, a citation or a diagnosis response", () => {
+      const text = describeScopeCounts(
+        counts({ notLoaded: 2, noUsableIdentity: 1, unresolved: 4, ambiguous: 3, bounded: true }),
+        "chain",
+      ).join(" ");
+      expect(text).not.toMatch(/cited|cite|finding|diagnosis response/i);
+    });
+
+    it("claims no absence for an entry whose item was not read", () => {
+      const text = describeScopeCounts(counts({ unresolved: 5 }), "chain").join(" ");
+      expect(text).not.toMatch(/not loaded|no record|absent|missing/);
+    });
+
+    it("keeps a finding's words for the same counts", () => {
+      const same = counts({ notLoaded: 2, bounded: true });
+      expect(describeScopeCounts(same, "finding")).not.toEqual(describeScopeCounts(same, "chain"));
+      expect(describeScopeCounts(same, "finding").join(" ")).toMatch(/cited events are not loaded/);
+      expect(describeScopeCounts(same, "finding").join(" ")).toMatch(/diagnosis response is bounded/);
+    });
+  });
+
   it("uses the singular for one", () => {
-    expect(describeScopeCounts(counts({ notLoaded: 1 }))).toEqual(["1 cited event is not loaded."]);
-    expect(describeScopeCounts(counts({ ambiguous: 1 }))).toEqual([
+    expect(describeScopeCounts(counts({ notLoaded: 1 }), "finding")).toEqual(["1 cited event is not loaded."]);
+    expect(describeScopeCounts(counts({ ambiguous: 1 }), "finding")).toEqual([
       "1 cited reference matches more than one loaded event. Every match is included.",
     ]);
   });

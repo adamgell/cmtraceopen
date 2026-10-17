@@ -458,7 +458,7 @@ function ScopeLink({
   const { cardSecondary } = useRailTextColors();
   if (!finding.evidence.some((evidence) => evidence.kind === "event")) return null;
   const count = scope.records.length;
-  const gaps = describeScopeCounts(scope.counts);
+  const gaps = describeScopeCounts(scope.counts, "finding");
   return (
     <div style={{ display: "grid", gap: "2px", fontSize: `${sizes.small}px` }}>
       {count > 0 && (

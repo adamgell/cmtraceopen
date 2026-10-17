@@ -163,7 +163,7 @@ export function buildFilterChips(input: EvtxFilterChipInput): EvtxFilterChip[] {
       title: [
         label,
         `${formatCount(size)} ${size === 1 ? "event" : "events"} in this scope.`,
-        ...describeScopeCounts(scope.counts),
+        ...describeScopeCounts(scope.counts, scope.kind),
       ].join("\n"),
       clearedByClearAll: true,
     });
