@@ -38,6 +38,8 @@ mod state;
 pub mod sysmon;
 pub mod timeline;
 mod watcher;
+#[cfg(any(feature = "esp-diagnostics", feature = "event-log"))]
+mod zip_entry;
 
 use state::app_state::AppState;
 

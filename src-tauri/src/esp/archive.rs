@@ -278,8 +278,15 @@ fn extract_zip(
                 format: ArchiveFormat::Zip,
                 detail: error.to_string(),
             })?;
+        let path = entry
+            .name()
+            .map_err(|error| ArchiveError::InvalidArchive {
+                format: ArchiveFormat::Zip,
+                detail: error.to_string(),
+            })?
+            .into_owned();
         metadata.push(ArchiveEntryMetadata {
-            path: entry.name().to_string(),
+            path,
             uncompressed_size: entry.size(),
             kind: zip_entry_kind(&entry),
         });
@@ -863,7 +870,7 @@ fn is_reserved_windows_component(component: &str) -> bool {
 }
 
 fn zip_entry_kind<R: Read>(entry: &zip::read::ZipFile<'_, R>) -> ArchiveEntryKind {
-    let unix_file_type = entry.unix_mode().map(|mode| mode & 0o170000);
+    let unix_file_type = crate::zip_entry::stored_unix_mode(entry).map(|mode| mode & 0o170000);
     if unix_file_type == Some(0o120000) {
         return ArchiveEntryKind::Symlink;
     }
