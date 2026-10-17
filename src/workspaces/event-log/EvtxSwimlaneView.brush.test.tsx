@@ -702,6 +702,58 @@ describe("clicking a dot", () => {
     expect(region("swimlanes").querySelector('[data-evtx-layer="selected"]')).toBeNull();
   });
 
+  describe.each([720.49, 720.6])("on a fractional layout, the plot measuring %s px", (measured) => {
+    /** The canvas is drawn on the rounded width. */
+    const drawn = Math.round(measured);
+    const fractional = () =>
+      vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(
+        () =>
+          ({
+            left: LEFT,
+            top: 0,
+            right: LEFT + measured,
+            bottom: 200,
+            width: measured,
+            height: 200,
+            x: LEFT,
+            y: 0,
+            toJSON: () => ({}),
+          }) as DOMRect,
+      );
+    const lastErrorOfLaneA = () => {
+      const lane = buildSwimlanes(records, "provider", "utc").lanes[0];
+      const dot = lane.records.map((record) => record.level).lastIndexOf("Error");
+      return { record: lane.records[dot], plotX: lane.fractions[dot] * drawn, y: LANE / 2 };
+    };
+
+    it("hits on the geometry the canvas drew, to the pixel, at the far end of the plot", () => {
+      fractional();
+      const { laneSlider } = mount();
+      const target = lastErrorOfLaneA();
+      expect(target.plotX).toBeGreaterThan(600);
+      // 4.5 px of radius and 4 px of slop is 8.5 px from the drawn centre; 8.7 is just outside it and
+      // 8.3 just inside. The sub-pixel width, or a floored one, puts the centre 0.5 to 1 px away.
+      down(laneSlider, LEFT + target.plotX + 8.7, target.y);
+      up(laneSlider, LEFT + target.plotX + 8.7, target.y);
+      expect(useEvtxStore.getState().selectedRecordId).toBeNull();
+      down(laneSlider, LEFT + target.plotX + 8.3, target.y);
+      up(laneSlider, LEFT + target.plotX + 8.3, target.y);
+      expect(useEvtxStore.getState().selectedRecordId).toBe(target.record.id);
+    });
+
+    it("selects the dot on the very last instant when the click is on the plot's right edge", () => {
+      fractional();
+      const { laneSlider } = mount();
+      const scene = buildSwimlanes(records, "provider", "utc");
+      const lane = scene.lanes[0];
+      const last = lane.count - 1;
+      expect(lane.fractions[last]).toBeCloseTo(1, 1);
+      down(laneSlider, LEFT + measured, LANE / 2);
+      up(laneSlider, LEFT + measured, LANE / 2);
+      expect(useEvtxStore.getState().selectedRecordId).toBe(lane.records[last].id);
+    });
+  });
+
   it("takes focus for the plot, as a press on the histogram does", () => {
     const { laneSlider } = mount();
     const target = pick(0, 3);

@@ -592,7 +592,9 @@ export function EvtxSwimlaneView({ records, loading }: EvtxSwimlaneViewProps) {
   const hitAt = (event: { clientX: number; clientY: number }): DotHit | null => {
     const point = plotPoint(event);
     if (point === null) return null;
-    return hitTest(view, { plotWidth: point.width, laneHeight }, point.x + PLOT_INSET_PX, point.y);
+    // The width the canvas was drawn on (`plotWidth` is the rounded measure), not the sub-pixel one:
+    // on a fractional layout the two differ by up to half a pixel at the far end of the plot.
+    return hitTest(view, { plotWidth: Math.round(point.width), laneHeight }, point.x + PLOT_INSET_PX, point.y);
   };
   const endGesture = () => {
     setDrag(null);
