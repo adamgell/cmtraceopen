@@ -1456,26 +1456,59 @@ describe("a comparison is invalidated by what it compared", () => {
     expect(cancelCalls()).not.toContain(requestId);
   });
 
-  it("leaves a comparison alone when a channel it did not compare is cleared", async () => {
-    // Security is neither selected nor loaded here, so no comparison depends on it.
-    const run = startComparison();
-    await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
-    const requestId = comparisonQueries()[0].args.requestId;
-    answerClear();
+  describe("a Clear of a channel that is loaded but was not compared", () => {
+    /**
+     * Security is loaded and not selected: the operator can Clear it from the channel list, and no
+     * comparison depends on it. Only a channel that is loaded can be cleared, so a Clear of one that
+     * is not loaded (the state a test starts from) does not exercise the predicate at all.
+     */
+    function loadSecurityUnselected(): void {
+      useEvtxStore.setState({
+        channels: LIVE_CHANNELS.map(liveInfo),
+        loadedChannels: new Set(LIVE_CHANNELS),
+      });
+      expect(useEvtxStore.getState().selectedChannels).toEqual(new Set(["System", "Application"]));
+    }
 
-    await useEvtxStore.getState().clearChannel("Security", true);
+    async function clearSecurity(): Promise<void> {
+      answerClear();
+      await useEvtxStore.getState().clearChannel("Security", true);
+      expect(useEvtxStore.getState().loadedChannels).toEqual(new Set(["System", "Application"]));
+    }
 
-    expect(getComparisonState()).toMatchObject({ phase: "running", requestId });
-    expect(cancelCalls()).toEqual([]);
-    complete("System", 0, 0, requestId);
-    complete("Application", 0, 0, requestId);
-    comparisonQueries().forEach((query) => query.resolve(reply(0)));
-    await run;
-    expect(settled().status).toBe("complete");
+    it("leaves a comparison in flight alone", async () => {
+      loadSecurityUnselected();
+      const run = startComparison();
+      await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
+      const requestId = comparisonQueries()[0].args.requestId;
 
-    // A finished comparison survives it too.
-    await useEvtxStore.getState().clearChannel("Security", true);
-    expect(getComparisonState().phase).toBe("settled");
+      await clearSecurity();
+
+      expect(getComparisonState()).toMatchObject({ phase: "running", requestId });
+      expect(cancelCalls()).toEqual([]);
+      complete("System", 0, 0, requestId);
+      complete("Application", 0, 0, requestId);
+      comparisonQueries().forEach((query) => query.resolve(reply(0)));
+      await run;
+      expect(settled().status).toBe("complete");
+    });
+
+    it("leaves a finished comparison alone", async () => {
+      loadSecurityUnselected();
+      const run = startComparison();
+      await vi.waitFor(() => expect(comparisonQueries()).toHaveLength(2));
+      const requestId = comparisonQueries()[0].args.requestId;
+      complete("System", 0, 0, requestId);
+      complete("Application", 0, 0, requestId);
+      comparisonQueries().forEach((query) => query.resolve(reply(0)));
+      await run;
+      expect(settled().status).toBe("complete");
+
+      await clearSecurity();
+
+      expect(getComparisonState().phase).toBe("settled");
+      expect(settled().status).toBe("complete");
+    });
   });
 
   it("leaves a comparison alone for changes that do not alter what it compared", async () => {
@@ -1537,10 +1570,15 @@ describe("the anchor of a live comparison", () => {
     });
   }
 
-  function tailBatch(channel: string, records: EvtxRecord[], sequence = 0): void {
+  function tailBatch(
+    channel: string,
+    records: EvtxRecord[],
+    sequence = 0,
+    requestId: string | null = useEvtxStore.getState().tailRequestId
+  ): void {
     listeners.get("evtx-tail-batch")?.({
       payload: {
-        requestId: useEvtxStore.getState().tailRequestId,
+        requestId,
         channel,
         sequence,
         mode: "subscription",
@@ -1816,13 +1854,18 @@ describe("the anchor of a live comparison", () => {
     });
 
     describe("starting a tail", () => {
-      /** Holds each `evtx_start_tail` until the test lets it land. */
-      function holdTailStarts(): Array<() => void> {
+      /**
+       * Holds each `evtx_start_tail` until the test lets it land; with `held`, only those channels'
+       * starts are held and the others land at once.
+       */
+      function holdTailStarts(held?: ReadonlySet<string>): Array<() => void> {
         const landings: Array<() => void> = [];
         const base = invoke.getMockImplementation();
         invoke.mockImplementation((name: string, rawArgs: unknown) => {
-          if (name !== "evtx_start_tail") return base ? base(name, rawArgs) : Promise.resolve(undefined);
           const args = rawArgs as { channel: string; requestId: string };
+          if (name !== "evtx_start_tail" || (held && !held.has(args.channel))) {
+            return base ? base(name, rawArgs) : Promise.resolve(undefined);
+          }
           return new Promise((resolve) =>
             landings.push(() =>
               resolve({
@@ -1881,6 +1924,66 @@ describe("the anchor of a live comparison", () => {
 
         expect(useEvtxStore.getState().tailRequestId).not.toBeNull();
         expect(getComparisonState()).toEqual({ phase: "idle" });
+      });
+
+      /**
+       * Starts a tail over System, Application, Security and `others`, all loaded, with System and
+       * Application selected: Security's start lands at once and its first batch arrives before
+       * the starts of the compared channels do, so the tail request is set and the tail holds
+       * Security and the other channels that landed, and the compared channels are not tailed yet.
+       */
+      async function startTailWithAnEarlyBatch(others: string[] = []) {
+        const loaded = [...LIVE_CHANNELS, ...others];
+        useEvtxStore.setState({ channels: loaded.map(liveInfo), loadedChannels: new Set(loaded) });
+        installTailBridge();
+        const landings = holdTailStarts(new Set(["System", "Application"]));
+        const starting = useEvtxStore.getState().startLiveTail();
+        await vi.waitFor(() => expect(landings).toHaveLength(2));
+        const tailRequest = (
+          invoke.mock.calls.find((call) => call[0] === "evtx_start_tail")![1] as { requestId: string }
+        ).requestId;
+        tailBatch("Security", [record("Security")], 0, tailRequest);
+        expect(useEvtxStore.getState().tailRequestId).toBe(tailRequest);
+        expect(useEvtxStore.getState().tailChannels).toEqual(new Set(["Security"]));
+        return {
+          tailRequest,
+          starting,
+          land: async () => {
+            landings.forEach((land) => land());
+            await starting;
+          },
+        };
+      }
+
+      it("cancels a comparison made after an early batch from another channel, when the compared channels' starts land", async () => {
+        const tail = await startTailWithAnEarlyBatch();
+
+        // The compared channels are not being tailed yet and hold no tail rows: no note.
+        await runAndSettle(ANCHOR);
+        const outcome = settled();
+        expect(outcome.status).toBe("complete");
+        if (outcome.status === "complete") expect(outcome.result.notes).toEqual([]);
+
+        // Their starts land. The tail request does not change, but rows are about to arrive for
+        // channels the result was made without a note for.
+        await tail.land();
+
+        expect(useEvtxStore.getState().tailChannels).toEqual(new Set(LIVE_CHANNELS));
+        expect(getComparisonState()).toEqual({ phase: "idle" });
+      });
+
+      it("leaves a comparison alone when a channel it did not compare joins the tail", async () => {
+        const tail = await startTailWithAnEarlyBatch(["Setup"]);
+        await runAndSettle(ANCHOR);
+        expect(settled().status).toBe("complete");
+
+        // Setup is loaded and not selected: its first batch adds it to the tail and tells the
+        // result nothing it needs, so the result stays.
+        tailBatch("Setup", [record("Setup")], 0, tail.tailRequest);
+
+        expect(useEvtxStore.getState().tailChannels).toEqual(new Set(["Security", "Setup"]));
+        expect(getComparisonState().phase).toBe("settled");
+        await tail.land();
       });
 
       it("also cancels it when a denied Clear restarts the tail", async () => {

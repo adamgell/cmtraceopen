@@ -2282,11 +2282,25 @@ useEvtxStore.subscribe((state, previous) => {
   }
   // Starting a live tail changes what is on screen for the compared channels, and a result made
   // before it has no note for rows that are about to arrive. The cancel is keyed on `tailRequestId`
-  // becoming a new non-null value, not on `tailChannels`, which the tail listener rewrites as a new
-  // Set on every append and `tailRequestId` rewrites with the same string: an append under a tail
-  // that is already running changes neither the request nor what the result says. A denied Clear
-  // restarts the tail and so cancels as well, which is acceptable over-cancelling.
+  // becoming a new non-null value, not on `tailChannels` alone, which the tail listener rewrites as
+  // a new Set on every append and `tailRequestId` rewrites with the same string: an append under a
+  // tail that is already running changes neither the request nor what the result says. A denied
+  // Clear restarts the tail and so cancels as well, which is acceptable over-cancelling.
   if (state.tailRequestId !== null && state.tailRequestId !== previous.tailRequestId) {
+    cancelComparison();
+    return;
+  }
+  // The request id alone misses a start whose first batch arrives early. A batch from one channel
+  // sets `tailRequestId` before the start has landed for the others, so the landing then leaves the
+  // request as it was and only adds channels to `tailChannels`. A comparison made in between has no
+  // note for the channels that are about to be tailed, so it is cancelled when a channel it depends
+  // on enters `tailChannels`. Once a start has landed, an append adds no channel to the set and a
+  // stop removes them, so neither reaches this.
+  if (
+    comparedChannelsOfComparison().some(
+      (channel) => state.tailChannels.has(channel) && !previous.tailChannels.has(channel)
+    )
+  ) {
     cancelComparison();
     return;
   }

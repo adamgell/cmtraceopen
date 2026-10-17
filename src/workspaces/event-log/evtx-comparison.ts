@@ -753,9 +753,11 @@ export function getComparisonState(): ComparisonState {
 }
 
 /**
- * The channels the comparison on show, or in flight, depends on; none when there is none or it
- * could not be made. The store cancels a comparison when one of these is removed from what is
- * loaded, and leaves it alone when any other channel is.
+ * The channels the comparison on show, or in flight, depends on; none when there is none. An
+ * outcome that could not be made returns no channels here, since it holds no result to name them
+ * from: it depends on every channel it refused, so the store cancels it on any change to what is
+ * loaded. Any other comparison is cancelled when one of these is removed from what is loaded, and
+ * left alone when any other channel is.
  */
 export function comparedChannelsOfComparison(): readonly string[] {
   const state = getComparisonState();
