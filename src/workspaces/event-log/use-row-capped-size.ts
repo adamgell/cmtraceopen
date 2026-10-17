@@ -86,12 +86,15 @@ export function effectiveResizeRange(
  * screen. While a cap binds, the rendered width is below the stored (requested) width; clamping a
  * proposal into the effective range and finding it equal to the rendered width means the visible
  * pane would not move, so the stored preference must be left alone (the pane returns to it when
- * the window widens again).
+ * the window widens again). The result is always an integer.
  */
 export function proposeResize(
   next: number,
   range: { value: number; min: number; max: number },
 ): number | null {
-  const clamped = Math.max(range.min, Math.min(next, range.max));
+  // Round first, as the stores do (`clampNumber`): the guard must judge the number that would be
+  // kept. A sub-pixel pointer drag proposes `cap - 0.4`, which the store rounds back to the cap
+  // and would persist over the stored preference.
+  const clamped = Math.max(range.min, Math.min(Math.round(next), range.max));
   return clamped === range.value ? null : clamped;
 }
