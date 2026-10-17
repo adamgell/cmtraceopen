@@ -3,10 +3,15 @@
  * loaded channels instead of the event-log store.
  *
  * The picker's own suite (`evtx-live-ops.test.tsx`) covers the workflow through the rendered
- * controls: the dialog, the modal queue, and where focus goes while a clear runs and after it
- * settles. This file covers what that suite does not reach: the single-flight guard, every result
- * the store can return, a chosen channel that stops being loaded, and the dialog's focus fallback
- * when the select is not mounted.
+ * controls: Cancel and Escape returning focus to the select, the modal queue, the status taking
+ * focus while a clear runs, the alert taking it after a clear fails, the select taking it after a
+ * clear succeeds while other channels stay loaded, a settled clear leaving alone focus the operator
+ * moved elsewhere, and the filter taking focus when a control the operator moved it to is removed.
+ *
+ * This file covers the rest: the single-flight guard, every result the store can return, a chosen
+ * channel that stops being loaded, the dialog's fallback to the filter when the select is not
+ * mounted, and where focus goes when a clear succeeds while its status holds focus: back to the
+ * select, or to the filter when the clear removed the last loaded channel and the controls with it.
  */
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +40,17 @@ function setup(loaded: readonly string[] = ["Application", "System"]) {
   });
   hook.result.current.selectRef.current = select;
 
+  /** Mounts the "Clearing" status, wired to the workflow's focus handlers as the controls wire it. */
+  const mountStatus = () => {
+    const status = document.createElement("div");
+    status.tabIndex = -1;
+    status.addEventListener("focus", () => hook.result.current.onStatusFocus());
+    status.addEventListener("blur", () => hook.result.current.onStatusBlur());
+    document.body.append(status);
+    hook.result.current.statusRef.current = status;
+    return status;
+  };
+
   /** Chooses `channel`, asks for confirmation and confirms, as the controls do. */
   const confirmClear = (channel = "Application") => {
     act(() => hook.result.current.chooseTarget(channel));
@@ -51,7 +67,7 @@ function setup(loaded: readonly string[] = ["Application", "System"]) {
   const setLoaded = (next: readonly string[]) =>
     hook.rerender({ ...options, loadedChannels: new Set(next) });
 
-  return { hook, clearChannel, filter, select, confirmClear, settle, setLoaded };
+  return { hook, clearChannel, filter, select, mountStatus, confirmClear, settle, setLoaded };
 }
 
 describe("useChannelClear", () => {
@@ -182,6 +198,39 @@ describe("useChannelClear", () => {
     hook.result.current.selectRef.current = null;
     act(() => hook.result.current.requestConfirmation());
     act(() => hook.result.current.cancelConfirmation());
+    expect(filter).toHaveFocus();
+  });
+
+  it("returns focus to the select after a clear succeeds while its status holds focus", async () => {
+    const { hook, select, mountStatus, confirmClear, settle, setLoaded } = setup();
+    const status = mountStatus();
+
+    confirmClear();
+    expect(status).toHaveFocus();
+
+    // The store drops the cleared channel; System stays loaded, so the controls stay mounted.
+    act(() => setLoaded(["System"]));
+    await settle({ status: "cleared" });
+
+    expect(hook.result.current.clearingChannel).toBeNull();
+    expect(select).toHaveFocus();
+  });
+
+  it("moves focus to the filter when a clear removes the last loaded channel and the controls", async () => {
+    const { hook, filter, select, mountStatus, confirmClear, settle, setLoaded } =
+      setup(["Application"]);
+    const status = mountStatus();
+
+    confirmClear();
+    expect(status).toHaveFocus();
+
+    // The store drops the last loaded channel, so the picker unmounts the clear controls.
+    act(() => setLoaded([]));
+    hook.result.current.selectRef.current = null;
+    select.remove();
+    await settle({ status: "cleared" });
+
+    expect(hook.result.current.clearingChannel).toBeNull();
     expect(filter).toHaveFocus();
   });
 });
