@@ -64,6 +64,7 @@ import {
 } from "./evtx-correlation-load";
 import {
   classifyCoverageGaps,
+  gapsClearCompleteness,
   UNKNOWN_CORRELATION_GAPS,
   type CorrelationGaps,
 } from "./evtx-correlation-gaps";
@@ -430,9 +431,14 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
         let items = cache.items;
         if (items === undefined || cache.itemsFor !== loadedEdges) {
           // The origins the gaps name are read too: a gap says an origin was never correlated, and
-          // which records that makes unknown needs its fields, whether or not it has an edge.
+          // which records that makes unknown needs its fields, whether or not it has an edge. Only
+          // while that can matter: once a limit or a cut preview already clears completeness, no
+          // attribution makes the answer complete, and a session with no edge would pay a full
+          // scan for nothing.
           const wantedIds = edgeEndpointIds(loadedEdges.edges);
-          for (const originId of gaps.originIds) wantedIds.add(originId);
+          if (!gapsClearCompleteness(gaps)) {
+            for (const originId of gaps.originIds) wantedIds.add(originId);
+          }
           update({ nextScan: { state: "running", progress: null, stoppedBy: null, error: null } });
           if (initialPage.nextOffset !== null && wantedIds.size > 0) {
             await deps.sleep(settleMs);

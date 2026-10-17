@@ -644,6 +644,57 @@ describe("items (the Correlation view and the Chains tab)", () => {
       expect(result.current.scan.progress?.retainedItems).toBe(3);
     });
 
+    describe("the scan for the origins the gaps name is worth its cost only while it can matter", () => {
+      it("scans a session with no edge for the origins a complete gap list names", async () => {
+        // The only reason to read pages is the gap's origin, and the gap list is whole.
+        const session = new FakeSession({
+          itemCount: 2_500,
+          pairs: [],
+          gaps: [fanOut("item-1200")],
+          totalCoverageGaps: 1,
+        });
+        const props = session.props({ needItems: true });
+        const { result } = renderHook(() => useEvtxCorrelation(props));
+        await waitFor(() => expect(result.current.stage).toBe("ready"));
+        expect(session.timelineCalls.length).toBeGreaterThan(0);
+        expect(result.current.itemsById.has("item-1200")).toBe(true);
+        expect(result.current.gaps.previewCut).toBe(false);
+      });
+
+      it.each([
+        ["a global limit", [{ source: "correlation", reason: "edge budget" }, fanOut("item-1200")], 2],
+        ["a preview that does not show every gap", [fanOut("item-1200")], 301],
+        ["a gap count that is not known", [fanOut("item-1200")], Number.NaN],
+      ])("makes no scan for a session with no edge once %s already clears completeness", async (_why, gaps, total) => {
+        const session = new FakeSession({ itemCount: 2_500, pairs: [], gaps, totalCoverageGaps: total });
+        const props = session.props({ needItems: true });
+        const { result } = renderHook(() => useEvtxCorrelation(props));
+        await waitFor(() => expect(result.current.stage).toBe("ready"));
+        // Attribution cannot make the answer complete, so no page is read for it.
+        expect(session.timelineCalls).toEqual([]);
+        expect(session.sleeps.filter((ms) => ms > 0)).toEqual([]);
+        expect(result.current.itemsById.size).toBe(0);
+        expect(result.current.gaps.originIds.has("item-1200")).toBe(true);
+      });
+
+      it("still reads the pages the edges need when the gaps already clear completeness", async () => {
+        const session = new FakeSession({
+          itemCount: 2_500,
+          pairs: [[5, 2_400]],
+          gaps: [{ source: "correlation", reason: "edge budget" }, fanOut("item-1200")],
+          totalCoverageGaps: 2,
+        });
+        const props = session.props({ needItems: true });
+        const { result } = renderHook(() => useEvtxCorrelation(props));
+        await waitFor(() => expect(result.current.stage).toBe("ready"));
+        expect(session.timelineCalls.length).toBeGreaterThan(0);
+        expect(result.current.itemsById.has("item-5")).toBe(true);
+        expect(result.current.itemsById.has("item-2400")).toBe(true);
+        // The gap's own origin is not asked for: it could not change the answer.
+        expect(result.current.itemsById.has("item-1200")).toBe(false);
+      });
+    });
+
     it("keeps the gaps of the model on show while a newer session loads", async () => {
       const one = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200]], revision: 1, gaps: [fanOut("item-7")], totalCoverageGaps: 1 });
       const two = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200]], revision: 2, gaps: [], totalCoverageGaps: 0 });
