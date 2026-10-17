@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   queryTimeline: vi.fn(),
   queryEdges: vi.fn(),
   hook: vi.fn(),
+  rail: vi.fn(),
   viewLoaded: vi.fn(),
 }));
 
@@ -36,7 +37,12 @@ vi.mock("./ChannelPicker", () => ({ ChannelPicker: () => null }));
 vi.mock("./EvtxFilterBar", () => ({ EvtxFilterBar: () => null }));
 vi.mock("./EvtxCoverageBanner", () => ({ EvtxCoverageBanner: () => null }));
 vi.mock("./EvtxTimeline", () => ({ EvtxTimeline: () => null }));
-vi.mock("./EvtxInsightsRail", () => ({ EvtxInsightsRail: () => null }));
+vi.mock("./EvtxInsightsRail", () => ({
+  EvtxInsightsRail: (props: unknown) => {
+    mocks.rail(props);
+    return null;
+  },
+}));
 vi.mock("./UnifiedTimelineView", () => ({ UnifiedTimelineView: () => null }));
 // Counts how often the lazy view's module is evaluated: once it is first needed, not before.
 vi.mock("./EvtxCorrelationView", async (importOriginal) => {
@@ -66,6 +72,7 @@ import {
 import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { useEvtxStore } from "./evtx-store";
+import { deferred } from "../../test-utils/deferred";
 import { useLogStore } from "../../stores/log-store";
 import type { UseEvtxCorrelationOptions } from "./useEvtxCorrelation";
 import type { LogEntry } from "../../types/log";
@@ -134,6 +141,11 @@ const lastHookCall = () => {
   return calls[calls.length - 1]!;
 };
 const tab = (name: string) => screen.getByRole("tab", { name });
+type RailScope = { visibleCount: number; loadedCount: number; textLogCount: number } | null;
+const lastRailScope = (): RailScope => {
+  const calls = mocks.rail.mock.calls;
+  return (calls[calls.length - 1]?.[0] as { scope?: RailScope } | undefined)?.scope ?? null;
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -187,6 +199,76 @@ describe("what the workspace gives the shared hook", () => {
     await waitFor(() => expect(lastHookCall().needItems).toBe(false));
     fireEvent.click(tab("Charts"));
     expect(lastHookCall().needItems).toBe(false);
+  });
+});
+
+/**
+ * V1: one scope per session, read at one moment, for the Correlation view and the Insights rail.
+ * `visible` and the text logs are what the session was BUILT from; `loaded` is what the store holds
+ * at the PUBLISH. An event the filter hides that arrives while the build is pending is loaded, and
+ * the session was not built from it, so the session is narrowed on both surfaces.
+ */
+describe("the scope of a session published after a hidden event arrived during its build (V1)", () => {
+  const SESSION_SCOPE = { visibleCount: 3, loadedCount: 4, textLogCount: 3 };
+  const logEntry = (n: number) => ({ id: n, lineNumber: n, message: `log ${n}` }) as unknown as LogEntry;
+  const hiddenRecord = (n: number) => ({ ...recordFor(n), level: "Verbose" as const });
+
+  /** Three visible events, a filter that hides Verbose, three text logs, and a build left pending. */
+  async function buildPendingWithAHiddenAppend() {
+    const records = [recordFor(1), recordFor(2), { ...recordFor(3), level: "Warning" as const }];
+    act(() => {
+      useEvtxStore.setState({ records, filterLevels: new Set(["Information", "Warning"]) });
+      useLogStore.setState({ entries: [logEntry(1), logEntry(2), logEntry(3)], sourceOpenMode: "merged" });
+    });
+    const build = deferred<ReturnType<typeof analysisResult>>();
+    mocks.buildAnalysis.mockImplementationOnce(() => build.promise);
+    render(<EventLogWorkspace />);
+    await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+    // The snapshot holds three visible events and three loaded. Now a fourth arrives and the
+    // filter hides it: the visible set is the same, so the build is neither restarted nor cancelled.
+    act(() => useEvtxStore.setState({ records: [...useEvtxStore.getState().records, hiddenRecord(4)] }));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      build.resolve(analysisResult("hidden-append"));
+    });
+    await waitFor(() => expect(lastHookCall().scope).not.toBeNull());
+  }
+
+  it("counts the hidden event as loaded, so the session is narrowed (visible < loaded)", async () => {
+    await buildPendingWithAHiddenAppend();
+    expect(lastHookCall().scope).toEqual(SESSION_SCOPE);
+  });
+
+  it("gives the rail and the view the SAME scope object, read once", async () => {
+    await buildPendingWithAHiddenAppend();
+    await waitFor(() => expect(lastRailScope()).not.toBeNull());
+    expect(lastRailScope()).toEqual(SESSION_SCOPE);
+    expect(lastRailScope()).toBe(lastHookCall().scope);
+  });
+
+  it("shows the narrowed-set disclosure and the text-log line in the view for that session", async () => {
+    await buildPendingWithAHiddenAppend();
+    fireEvent.click(tab("Correlation"));
+    await screen.findAllByRole("option");
+    await waitFor(() =>
+      expect(screen.getByTestId("correlation-notices")).toHaveTextContent(
+        "Links and strengths are computed over the 3 events visible.",
+      ),
+    );
+    expect(screen.getByTestId("correlation-notices")).toHaveTextContent("Text logs are not scoped.");
+  });
+
+  it("keeps that scope while later hidden events arrive and the view is opened (it is the session's, not the store's now)", async () => {
+    await buildPendingWithAHiddenAppend();
+    const published = lastHookCall().scope;
+    act(() => useEvtxStore.setState({ records: [...useEvtxStore.getState().records, hiddenRecord(5), hiddenRecord(6)] }));
+    // Opening the view re-runs the hook for the same session; it must be given the same scope.
+    fireEvent.click(tab("Correlation"));
+    await screen.findAllByRole("option");
+    expect(lastHookCall().scope).toBe(published);
+    expect(lastHookCall().scope).toEqual(SESSION_SCOPE);
+    expect(lastRailScope()).toBe(published);
   });
 });
 

@@ -165,10 +165,7 @@ interface EventLogAnalysisSnapshot {
   records: EvtxRecord[];
   entries: LogEntry[];
   coverageGaps: EvtxCoverageGap[];
-  /** Events loaded when the snapshot was taken: the scope line compares the session against it. */
-  loadedCount: number;
 }
-
 
 interface EventLogAnalysisPump {
   mounted: boolean;
@@ -438,7 +435,6 @@ export function EventLogWorkspace() {
       records: analysisRecords,
       entries: scopedLogEntries,
       coverageGaps: diagnosisCoverageGaps,
-      loadedCount: useEvtxStore.getState().records.length,
     };
 
     function schedule(): void {
@@ -477,9 +473,14 @@ export function EventLogWorkspace() {
           pump.publishedSessionId = result.status.sessionId;
           setAnalysisStatus(result.status);
           setInitialTimelinePage(result.initialPage);
+          // The one scope of this session, for the Correlation view and the Insights rail alike.
+          // visible and the text logs are what the session was BUILT from (the snapshot); loaded is
+          // what the store holds NOW, at the publish, in the same batch as the status and the page:
+          // an event the filter hides that arrived during the build is loaded, and the session
+          // was not built from it, which is exactly what makes the view narrowed.
           setAnalysisScope({
             visibleCount: snapshot.records.length,
-            loadedCount: snapshot.loadedCount,
+            loadedCount: useEvtxStore.getState().records.length,
             textLogCount: snapshot.entries.length,
           });
           setDiagnosis(result.diagnosis);
@@ -790,7 +791,7 @@ export function EventLogWorkspace() {
                 records={analysisRecords}
                 pending={timelinePending}
                 error={diagnosisError}
-                textLogCount={scopedLogEntries.length}
+                scope={analysisScope}
               />
             </div>
           </aside>

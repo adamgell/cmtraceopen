@@ -172,7 +172,14 @@ describe("EventLogWorkspace backend-owned analysis wiring", () => {
   describe("the text logs the session is given", () => {
     const logEntry = (n: number) => ({ id: n, lineNumber: n, message: `log ${n}` }) as unknown as LogEntry;
     const lastRailProps = () =>
-      mocks.rail.mock.calls[mocks.rail.mock.calls.length - 1]?.[0] as { textLogCount?: number };
+      mocks.rail.mock.calls[mocks.rail.mock.calls.length - 1]?.[0] as {
+        scope?: { visibleCount: number; loadedCount: number; textLogCount: number } | null;
+      };
+    /** The scope reaches the rail with the session that was published, a moment after the build. */
+    const publishedScope = async () => {
+      await waitFor(() => expect(lastRailProps().scope).toBeTruthy());
+      return lastRailProps().scope!;
+    };
 
     it("tells the rail how many, so its scope line can say they are not scoped", async () => {
       seed([RECORD]);
@@ -182,14 +189,14 @@ describe("EventLogWorkspace backend-owned analysis wiring", () => {
       expect(mocks.buildAnalysis).toHaveBeenCalledWith(
         expect.objectContaining({ entries: expect.arrayContaining([expect.objectContaining({ id: 1 })]) }),
       );
-      expect(lastRailProps().textLogCount).toBe(3);
+      expect((await publishedScope()).textLogCount).toBe(3);
     });
 
     it("tells it none when the session holds no text log", async () => {
       seed([RECORD]);
       render(<EventLogWorkspace />);
       await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
-      expect(lastRailProps().textLogCount).toBe(0);
+      expect(await publishedScope()).toEqual({ visibleCount: 1, loadedCount: 1, textLogCount: 0 });
     });
 
     it("does not narrow them when an event criterion is set", async () => {
@@ -204,7 +211,7 @@ describe("EventLogWorkspace backend-owned analysis wiring", () => {
           entries: [expect.objectContaining({ id: 1 }), expect.objectContaining({ id: 2 })],
         }),
       );
-      expect(lastRailProps().textLogCount).toBe(2);
+      expect(await publishedScope()).toEqual({ visibleCount: 1, loadedCount: 2, textLogCount: 2 });
     });
   });
 

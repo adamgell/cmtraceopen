@@ -35,6 +35,7 @@ import { useRailTextColors } from "./evtx-rail-text";
 import { useEvtxStore } from "./evtx-store";
 import type { DiagnosisFinding, DiagnosisSummary, EvtxRecord } from "./types";
 import { DERIVATION_THROTTLE_MS, useThrottledValue } from "./evtx-throttle";
+import type { ScopeDisclosureInput } from "./evtx-correlation-copy";
 
 interface EvtxInsightsRailProps {
   summary: DiagnosisSummary | null;
@@ -44,8 +45,12 @@ interface EvtxInsightsRailProps {
   pending?: boolean;
   /** Why the last diagnosis build failed. */
   error?: string | null;
-  /** How many text-log entries the diagnosis session was given (the event criteria never narrow them). */
-  textLogCount?: number;
+  /**
+   * What the session `summary` came from was built from: the visible, loaded and text-log counts,
+   * read once when the session was published. The workspace gives the Correlation view the same
+   * object, so the two surfaces state one scope for one session. Null when there is none.
+   */
+  scope?: ScopeDisclosureInput | null;
 }
 
 /** Tabs the rail can show today, in order. Phase 10c adds "chains" between the two. */
@@ -102,7 +107,7 @@ export function EvtxInsightsRail({
   records,
   pending = false,
   error = null,
-  textLogCount = 0,
+  scope = null,
 }: EvtxInsightsRailProps) {
   const railTab = useEvtxLayoutStore((s) => s.railTab);
   const setRailTab = useEvtxLayoutStore((s) => s.setRailTab);
@@ -137,20 +142,21 @@ export function EvtxInsightsRail({
 
   // The diagnosis is cleared while it rebuilds. Keep showing the previous build, marked as
   // updating, so the reader's place survives a live-tail batch; drop it on failure or no input.
-  // The visible-event count is stored WITH the summary, so the scope line states the scope the
-  // shown numbers were built from, never the new count beside old numbers.
+  // The session's scope is stored WITH the summary, so the scope line states the scope the shown
+  // numbers were built from, never the new count beside old numbers. It is the workspace's scope
+  // for that session, not the store's records now: the loaded count is read once, at the publish.
   const lastBuildRef = useRef<{
     summary: DiagnosisSummary;
-    scopeCount: number;
+    scopeCount: number | null;
     textLogCount: number;
-    loadedCount: number;
+    loadedCount: number | undefined;
   } | null>(null);
   if (summary && lastBuildRef.current?.summary !== summary) {
     lastBuildRef.current = {
       summary,
-      scopeCount: records.length,
-      textLogCount,
-      loadedCount: storeRecords.length,
+      scopeCount: scope?.visibleCount ?? null,
+      textLogCount: scope?.textLogCount ?? 0,
+      loadedCount: scope?.loadedCount,
     };
   }
   if (error || (!summary && !pending)) lastBuildRef.current = null;
