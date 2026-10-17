@@ -10,21 +10,41 @@ import {
   type CorrelationChainStrength,
 } from "./evtx-correlation-chains";
 import {
+  AMBIGUOUS_EVENT_NOTE,
+  DOCK_SCOPE_NOTE,
+  LINKS_LOADING_TEXT,
+  NOT_IN_TIMELINE_NOTE,
+  NO_SELECTION_TEXT,
+  NO_SESSION_TEXT,
+  READING_WINDOW_TEXT,
   SCOPE_NOT_KNOWN_NOTICE,
   STRENGTH_LABELS,
+  UNREAD_SOURCES_NOTE,
+  UNTIMED_TEXT,
   chainCopyText,
   coverageGapNotice,
+  dockOmissionNotice,
+  dockSubtitle,
   edgeErrorNotice,
   edgeInputNotice,
+  emptyWindowText,
   keyKindLabel,
+  nearbyReason,
+  openDisabledText,
+  outsideWindowNote,
+  partialChainTitle,
   pastCapNotice,
   plotOmissionNotice,
   renderCapNotice,
   scanNotice,
   scopeDisclosure,
+  sourcesText,
   unresolvedNotice,
   whyHeading,
   whyStatement,
+  windowFailureText,
+  windowNotice,
+  windowWidthLabel,
   type ChainCopyInput,
   type UnplacedEvidence,
 } from "./evtx-correlation-copy";
@@ -514,21 +534,40 @@ describe("chainCopyText", () => {
 describe("no string claims an entry is unplaced without proof", () => {
   const STRING_EXPORTS = new Set([
     // evtx-correlation-copy.ts
+    "AMBIGUOUS_EVENT_NOTE",
+    "DOCK_SCOPE_NOTE",
+    "LINKS_LOADING_TEXT",
+    "NOT_IN_TIMELINE_NOTE",
+    "NO_SELECTION_TEXT",
+    "NO_SESSION_TEXT",
+    "READING_WINDOW_TEXT",
     "SCOPE_NOT_KNOWN_NOTICE",
     "STRENGTH_LABELS",
+    "UNREAD_SOURCES_NOTE",
     "chainCopyText",
     "coverageGapNotice",
+    "dockOmissionNotice",
+    "dockSubtitle",
     "edgeErrorNotice",
     "edgeInputNotice",
+    "emptyWindowText",
     "keyKindLabel",
+    "nearbyReason",
+    "openDisabledText",
+    "outsideWindowNote",
+    "partialChainTitle",
     "pastCapNotice",
     "plotOmissionNotice",
     "renderCapNotice",
     "scanNotice",
     "scopeDisclosure",
+    "sourcesText",
     "unresolvedNotice",
     "whyHeading",
     "whyStatement",
+    "windowFailureText",
+    "windowNotice",
+    "windowWidthLabel",
     // evtx-correlation-view-model.ts
     "IN_ANOTHER_CHAIN_LABEL",
     "NOT_IN_THIS_CHAIN_LABEL",
@@ -551,6 +590,10 @@ describe("no string claims an entry is unplaced without proof", () => {
     "whyRows",
   ]);
   const NOT_STRINGS = new Set([
+    // The dock's untimed sentence states a fact read from the SELECTED EVENT'S OWN timestamp field
+    // (a record is untimed when its epoch is not a usable time). It says nothing about an entry of
+    // the unplaced list, which is what this audit guards, so the audit does not print it.
+    "UNTIMED_TEXT",
     "CORRELATION_AXIS_TICKS",
     "CORRELATION_CONNECTOR_CAP",
     "CORRELATION_MARKER_CAP",
@@ -593,6 +636,43 @@ describe("no string claims an entry is unplaced without proof", () => {
     ["an ambiguous group with one item read", chainFor("group3", [items[0]!]), [items[0]!]],
     ["a coverage blocked pair with no item read", chainFor("gappedPair", []), []],
   ];
+
+  /** Every string the dock can say, over every state that changes its words. */
+  function dockStrings(): string[] {
+    const partial = { complete: false, windowItems: 40, omittedItems: 15, items: new Array(25), halfWidthMs: 75_000, error: null };
+    return [
+      AMBIGUOUS_EVENT_NOTE,
+      DOCK_SCOPE_NOTE,
+      LINKS_LOADING_TEXT,
+      NOT_IN_TIMELINE_NOTE,
+      NO_SELECTION_TEXT,
+      NO_SESSION_TEXT,
+      READING_WINDOW_TEXT,
+      UNREAD_SOURCES_NOTE,
+      ...[30_000, 75_000, 120_000, 300_000, 90_000, 500].map((ms) => windowWidthLabel(ms)),
+      sourcesText(3, true),
+      sourcesText(1, false),
+      dockSubtitle({ eventId: 7, timeText: "10:20:00", halfWidthMs: 75_000, sources: sourcesText(2, true) }),
+      dockSubtitle({ eventId: 7, timeText: "10:20:00", halfWidthMs: 120_000, sources: null }),
+      windowFailureText(null),
+      windowFailureText("session was not found"),
+      windowNotice({ ...partial, stoppedBy: "callLimit" }) ?? "",
+      windowNotice({ ...partial, stoppedBy: "budget" }) ?? "",
+      windowNotice({ ...partial, stoppedBy: "error", error: "timeline down" }) ?? "",
+      windowNotice({ ...partial, windowItems: null, omittedItems: null, items: [], stoppedBy: "error", error: "x" }) ?? "",
+      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false }).text,
+      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: false }).text,
+      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: true }).text,
+      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: true }).text,
+      outsideWindowNote(1, 3) ?? "",
+      outsideWindowNote(3, 5) ?? "",
+      partialChainTitle(5, 2),
+      ...(["notLinked", "noLoadedLink", "inAnotherChain", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const).map((reason) => nearbyReason(reason)),
+      dockOmissionNotice({ omittedMarkers: 2, omittedNearby: 3, omittedConnectors: 1, omittedSources: 2, omittedSourceEntries: 9 }) ?? "",
+      dockOmissionNotice({ omittedMarkers: 1, omittedNearby: 1, omittedConnectors: 0, omittedSources: 1, omittedSourceEntries: 1 }) ?? "",
+      ...(["loading", "notInTimeline", "notInChain", "ambiguous"] as const).map((reason) => openDisabledText(reason)),
+    ];
+  }
 
   function everyString(chain: CorrelationChain, read: TimelineItem[], evidence: UnplacedEvidence): string[] {
     const itemsById = mapOf(read);
@@ -646,6 +726,7 @@ describe("no string claims an entry is unplaced without proof", () => {
       edgeInputNotice({ edgeInputComplete: false, unloadedEdgeCount: 0 }) ?? "",
       renderCapNotice({ shown: 100, totalCount: 120, omittedCount: 20 }) ?? "",
       pastCapNotice(100),
+      ...dockStrings(),
       plotOmissionNotice({ omittedMarkers: 4, omittedConnectors: 2 }) ?? "",
       coverageGapNotice({ originIds: new Set(), global: true, previewCut: true }) ?? "",
       coverageGapNotice({ originIds: new Set(), global: true, previewCut: false }) ?? "",
@@ -692,7 +773,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     // the manifest itself, so an export added to it and never called here fails. Only
     // UNPLACED_ENTRY is left out: it is the one string that may say "not placed", and only with
     // proof, so the audit cannot print it without defeating its own purpose.
-    const called = everyString.toString();
+    const called = everyString.toString() + dockStrings.toString();
     const producers = [...STRING_EXPORTS].filter((name) => name !== "UNPLACED_ENTRY");
     expect(producers.length).toBeGreaterThan(20);
     for (const name of producers) {
@@ -757,5 +838,219 @@ describe("no string claims an entry is unplaced without proof", () => {
     expect(text).toContain("Entries: 4 (0 placed, 2 not placed, 2 with no loaded position)");
     expect(text).toMatch(/Entries without a timeline position:\n {4}.*record5\n {4}.*record6/);
     expect(text).toMatch(/Entries with no loaded timeline position:\n {4}.*record4\n {4}.*record7/);
+  });
+});
+
+describe("the dock's words (spec 8.12, #842)", () => {
+  describe("windowWidthLabel", () => {
+    it.each([
+      [30_000, "\u00b130 s"],
+      [75_000, "\u00b175 s"],
+      [120_000, "\u00b12 min"],
+      [300_000, "\u00b15 min"],
+      [60_000, "\u00b11 min"],
+      [90_000, "\u00b190 s"],
+      [500, "\u00b1500 ms"],
+    ])("names %i ms as %s", (ms, label) => {
+      expect(windowWidthLabel(ms)).toBe(label);
+    });
+  });
+
+  describe("sourcesText", () => {
+    it("counts sources, singular for one", () => {
+      expect(sourcesText(3, true)).toBe("3 sources");
+      expect(sourcesText(1, true)).toBe("1 source");
+    });
+
+    it("says at least when the window was not read whole", () => {
+      expect(sourcesText(3, false)).toBe("at least 3 sources");
+      expect(sourcesText(1, false)).toBe("at least 1 source");
+    });
+  });
+
+  describe("dockSubtitle", () => {
+    it("is the spec's header line", () => {
+      expect(dockSubtitle({ eventId: 4624, timeText: "10:20:00.000", halfWidthMs: 75_000, sources: "3 sources" })).toBe(
+        "around Event 4624 \u00b7 10:20:00.000 \u00b7 window \u00b175 s \u00b7 3 sources",
+      );
+    });
+
+    it("leaves the source count out when the window was not read, never as 0", () => {
+      const text = dockSubtitle({ eventId: 7, timeText: "10:20:00", halfWidthMs: 120_000, sources: null });
+      expect(text).toBe("around Event 7 \u00b7 10:20:00 \u00b7 window \u00b12 min");
+      expect(text).not.toMatch(/source|\b0\b/);
+    });
+  });
+
+  describe("the sentences the selection and the session can leave", () => {
+    it("says what the spec says for an event with no timestamp", () => {
+      expect(UNTIMED_TEXT).toBe("This event has no timestamp; it cannot be placed.");
+    });
+
+    it("asks for a selection in plain words", () => {
+      expect(NO_SELECTION_TEXT).toBe("Select an event to see what happened around it.");
+    });
+
+    it("claims no link while the links are not in", () => {
+      expect(LINKS_LOADING_TEXT).toMatch(/still loading/);
+      expect(LINKS_LOADING_TEXT).not.toMatch(/not linked|no link/i);
+    });
+  });
+
+  describe("windowNotice", () => {
+    const base = { complete: false, windowItems: 2_500, omittedItems: 1_900, items: new Array(600), halfWidthMs: 75_000, error: null };
+
+    it("is silent for a window that was read whole", () => {
+      expect(windowNotice({ ...base, complete: true, omittedItems: 0, stoppedBy: null })).toBeNull();
+    });
+
+    it("gives exact numbers and names the call limit", () => {
+      expect(windowNotice({ ...base, stoppedBy: "callLimit" })).toBe(
+        "Showing 600 of 2,500 entries within \u00b175 s; reading stopped at its call limit, so entries and sources may be missing.",
+      );
+    });
+
+    it("names the memory limit and an error, with the error's own words", () => {
+      expect(windowNotice({ ...base, stoppedBy: "budget" })).toContain("reading stopped at its memory limit");
+      expect(windowNotice({ ...base, stoppedBy: "error", error: "timeline down" })).toContain(
+        "reading stopped at an error (timeline down)",
+      );
+      expect(windowNotice({ ...base, stoppedBy: "error", error: null })).toContain("reading stopped at an error,");
+    });
+
+    it("says the read failed, with no count, when the first reply never came, never '0 entries'", () => {
+      const text = windowNotice({ ...base, windowItems: null, omittedItems: null, items: [], stoppedBy: "error", error: "gone" });
+      expect(text).toBe("The entries around this event could not be read (gone).");
+      expect(text).not.toMatch(/\b0\b|showing/i);
+      expect(windowFailureText(null)).toBe("The entries around this event could not be read.");
+    });
+
+    it("never says the unread entries do not exist", () => {
+      for (const stoppedBy of ["callLimit", "budget", "error"] as const) {
+        expect(windowNotice({ ...base, stoppedBy }) ?? "").not.toMatch(/no other|none|nothing|do not exist/i);
+      }
+    });
+  });
+
+  describe("emptyWindowText (an absence claim, so conditional)", () => {
+    const width = 75_000;
+
+    it("makes the spec's claim only when nothing is narrowed and no source went unread", () => {
+      expect(emptyWindowText({ halfWidthMs: width, narrowed: false, unreadSources: false })).toEqual({
+        text: "No other sources have entries within \u00b175 s.",
+        absolute: true,
+      });
+    });
+
+    it("says what it looked in, and what it did not, when narrowed", () => {
+      const { text, absolute } = emptyWindowText({ halfWidthMs: width, narrowed: true, unreadSources: false });
+      expect(absolute).toBe(false);
+      expect(text).toBe(
+        "No other visible sources have entries within \u00b175 s. Events hidden by the current filters or time range are not searched.",
+      );
+    });
+
+    it("says it when a source went unread", () => {
+      const { text, absolute } = emptyWindowText({ halfWidthMs: width, narrowed: false, unreadSources: true });
+      expect(absolute).toBe(false);
+      expect(text).toBe(
+        "No other visible sources have entries within \u00b175 s. Some sources were not fully read, so entries may be missing.",
+      );
+    });
+
+    it("says both when both hold, and follows the chosen width", () => {
+      const { text } = emptyWindowText({ halfWidthMs: 300_000, narrowed: true, unreadSources: true });
+      expect(text).toContain("within \u00b15 min.");
+      expect(text).toContain("not searched.");
+      expect(text).toContain("not fully read");
+    });
+  });
+
+  describe("outsideWindowNote and partialChainTitle", () => {
+    it("is silent when every entry of the row is in the window", () => {
+      expect(outsideWindowNote(0, 4)).toBeNull();
+    });
+
+    it("counts the entries the window does not hold, and never places them", () => {
+      expect(outsideWindowNote(1, 3)).toBe("1 of 3 entries of this chain is outside this window, so it is not shown here.");
+      expect(outsideWindowNote(3, 5)).toBe("3 of 5 entries of this chain are outside this window, so they are not shown here.");
+    });
+
+    it("claims no title for a row the window holds only part of", () => {
+      expect(partialChainTitle(5, 2)).toBe("Chain of 5 entries (2 in this window)");
+    });
+  });
+
+  describe("nearbyReason (evidence first: by time, never a link)", () => {
+    const reasons = ["notLinked", "noLoadedLink", "inAnotherChain", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const;
+
+    it("says time only in every reason", () => {
+      for (const reason of reasons) expect(nearbyReason(reason)).toMatch(/^time only/);
+    });
+
+    it("says 'not linked' only for the entry the session can speak for", () => {
+      expect(nearbyReason("notLinked")).toBe("time only, not linked");
+      for (const reason of reasons.filter((r) => r !== "notLinked")) {
+        expect(nearbyReason(reason)).not.toMatch(/not linked/);
+      }
+      expect(nearbyReason("noLoadedLink")).toBe("time only, no loaded link");
+      expect(nearbyReason("inAnotherChain")).toBe("time only; in another chain");
+    });
+
+    it("keeps the five reasons apart", () => {
+      expect(new Set(reasons.map((reason) => nearbyReason(reason))).size).toBe(5);
+    });
+  });
+
+  describe("dockOmissionNotice", () => {
+    const none = { omittedMarkers: 0, omittedNearby: 0, omittedConnectors: 0, omittedSources: 0, omittedSourceEntries: 0 };
+
+    it("is silent when nothing was left out", () => {
+      expect(dockOmissionNotice(none)).toBeNull();
+    });
+
+    it("says how many sources and entries each cap left out", () => {
+      expect(dockOmissionNotice({ ...none, omittedSources: 2, omittedSourceEntries: 9 })).toBe(
+        "2 more sources not drawn (9 entries).",
+      );
+      expect(dockOmissionNotice({ ...none, omittedSources: 1, omittedSourceEntries: 1 })).toBe(
+        "1 more source not drawn (1 entry).",
+      );
+      expect(dockOmissionNotice({ ...none, omittedMarkers: 2 })).toBe("2 entries of this chain not drawn.");
+      expect(dockOmissionNotice({ ...none, omittedNearby: 1 })).toBe("1 more nearby entry not drawn.");
+      expect(dockOmissionNotice({ ...none, omittedConnectors: 3 })).toBe("3 connectors are not drawn.");
+    });
+
+    it("joins what several caps left out", () => {
+      expect(dockOmissionNotice({ ...none, omittedSources: 1, omittedSourceEntries: 4, omittedNearby: 2 })).toBe(
+        "1 more source not drawn (4 entries); 2 more nearby entries not drawn.",
+      );
+    });
+  });
+
+  describe("openDisabledText", () => {
+    it("gives each reason its own visible words", () => {
+      const reasons = (["loading", "notInTimeline", "notInChain", "ambiguous"] as const).map((r) => openDisabledText(r));
+      expect(new Set(reasons).size).toBe(4);
+      expect(openDisabledText("notInChain")).toBe("Not in a loaded chain.");
+    });
+  });
+
+  it("says nothing in the dock reads as cause or consequence", () => {
+    const causal = /caused|because of|as a result|led to|results? in|follows from|explains|due to/i;
+    const strings = [
+      AMBIGUOUS_EVENT_NOTE,
+      DOCK_SCOPE_NOTE,
+      LINKS_LOADING_TEXT,
+      NOT_IN_TIMELINE_NOTE,
+      NO_SELECTION_TEXT,
+      NO_SESSION_TEXT,
+      READING_WINDOW_TEXT,
+      UNREAD_SOURCES_NOTE,
+      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: true }).text,
+      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false }).text,
+      ...(["notLinked", "noLoadedLink", "inAnotherChain", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const).map((r) => nearbyReason(r)),
+    ];
+    for (const text of strings) expect(text).not.toMatch(causal);
   });
 });
