@@ -407,13 +407,13 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
 
   const valueText = (() => {
     if (!ready || cursor >= count) return undefined;
-    const bucket = describeBucket(view.buckets[cursor], timeZoneMode);
+    const bucket = describeBucket(view.buckets[cursor], timeZoneMode, view.showYear);
     if (draft !== null) {
       const range = rangeOfSpan(view, draft);
-      return `${bucket}, selecting ${formatTimeRange(range.startMs, range.endMs, timeZoneMode)}`;
+      return `${bucket}, selecting ${formatTimeRange(range.startMs, range.endMs, timeZoneMode, view.showYear)}`;
     }
     if (timeRange !== null) {
-      return `${bucket}, time range ${formatTimeRange(timeRange.startMs, timeRange.endMs, timeZoneMode)} applied`;
+      return `${bucket}, time range ${formatTimeRange(timeRange.startMs, timeRange.endMs, timeZoneMode, view.showYear)} applied`;
     }
     return bucket;
   })();
@@ -555,7 +555,7 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
                   fontSize: `${Math.max(10, metrics.fontSize - 2)}px`,
                 }}
               >
-                {describeBucket(hovered, timeZoneMode)}
+                {describeBucket(hovered, timeZoneMode, view.showYear)}
               </div>
             )}
           </div>
@@ -639,7 +639,7 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
           <tbody>
             {histogram.buckets.map((bucket) => (
               <tr key={bucket.startMs}>
-                <th scope="row">{describeBucket(bucket, timeZoneMode)}</th>
+                <th scope="row">{describeBucket(bucket, timeZoneMode, histogram.showYear)}</th>
                 {LEGEND_ORDER.map((level) => (
                   <td key={level}>{bucket.counts[level]}</td>
                 ))}

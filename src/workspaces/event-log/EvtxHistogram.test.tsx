@@ -145,6 +145,25 @@ describe("EvtxHistogram", () => {
     expect(total).toBeLessThanOrEqual(56);
   });
 
+  it("names the year in the tooltip, the value text and the table when the events span a calendar year", () => {
+    const years = [rec(Date.UTC(2024, 0, 5, 10), "Information", 1), rec(Date.UTC(2026, 9, 1, 10), "Error", 2)];
+    render(<EvtxHistogram records={years} loading={false} />);
+    const histogram = buildHistogram(years, "utc");
+    expect(histogram.showYear).toBe(true);
+    expect(screen.getByRole("figure", { name: describeFigure(histogram, "utc") })).toBeInTheDocument();
+    const rows = within(screen.getByRole("table")).getAllByRole("rowheader").map((cell) => cell.textContent);
+    expect(rows[0]).toBe(describeBucket(histogram.buckets[0], "utc", true));
+    expect(rows[0]).toMatch(/2024/);
+    const slider = screen.getByRole("slider", { name: "Time range" });
+    expect(slider.getAttribute("aria-valuetext")).toBe(
+      describeBucket(histogram.buckets[histogram.buckets.length - 1], "utc", true),
+    );
+    expect(slider.getAttribute("aria-valuetext")).toMatch(/2026/);
+    const plot = stubPlotRect(histogram.buckets.length * 10);
+    fireEvent.pointerMove(plot, { clientX: 100 + 5 });
+    expect(tooltip()).toHaveTextContent(describeBucket(histogram.buckets[0], "utc", true));
+  });
+
   it("recolours the bars from the token map in every theme", () => {
     const records = dayOfEvents();
     for (const theme of getAllThemes()) {

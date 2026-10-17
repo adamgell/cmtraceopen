@@ -22,6 +22,7 @@ import {
   describeUntimed,
   fitScale,
   fractionAt,
+  labelsNeedYear,
   rangeOnPlot,
   zoneClockFor,
   type EvtxHistogram,
@@ -649,5 +650,65 @@ describe("bar geometry", () => {
 
   it("has no scale when nothing is placed", () => {
     expect(fitScale(buildHistogram([], "utc"))).toBe(0);
+  });
+});
+
+describe("the year in day labels", () => {
+  const on = (year: number, month: number, day: number, hour = 0, minute = 0) =>
+    Date.UTC(year, month - 1, day, hour, minute);
+  const SEP = TIME_RANGE_SEPARATOR;
+
+  it("names the year on the axis, the figure and every bucket when the span crosses a calendar year", () => {
+    const histogram = buildHistogram([rec(on(2024, 1, 5)), rec(on(2026, 10, 1))], "utc");
+    expect(histogram.showYear).toBe(true);
+    const ticks = buildAxisTicks(histogram, "utc");
+    expect(ticks[0].label).toMatch(/^[A-Z][a-z]{2} \d{1,2} 2024 00:00$/);
+    expect(ticks[ticks.length - 1].label).toMatch(/ 2026 /);
+    expect(describeFigure(histogram, "utc")).toMatch(/over [A-Z][a-z]{2} \d{1,2} 2024 00:00.*2026 00:00 \(UTC\)/);
+    for (const bucket of histogram.buckets) {
+      expect(describeBucket(bucket, "utc", histogram.showYear)).toMatch(/ \d{4} \d\d:\d\d.* \d{4} \d\d:\d\d \u00b7 /);
+    }
+  });
+
+  it("names the year for a span of hours that crosses New Year", () => {
+    const histogram = buildHistogram([rec(on(2025, 12, 31, 22)), rec(on(2026, 1, 1, 3))], "utc");
+    expect(histogram.showYear).toBe(true);
+    expect(buildAxisTicks(histogram, "utc")[0].label).toBe("Dec 31 2025 22:00");
+    expect(describeBucket(histogram.buckets[0], "utc", histogram.showYear)).toMatch(/^Dec 31 2025 22:/);
+  });
+
+  it("leaves the year out when the span stays inside one year", () => {
+    const histogram = buildHistogram([rec(on(2026, 3, 2)), rec(on(2026, 9, 20))], "utc");
+    expect(histogram.showYear).toBe(false);
+    expect(buildAxisTicks(histogram, "utc")[0].label).toMatch(/^Mar \d{1,2} \d\d:\d\d$/);
+    expect(describeFigure(histogram, "utc")).not.toMatch(/2026/);
+    expect(describeBucket(histogram.buckets[0], "utc", histogram.showYear)).not.toMatch(/2026/);
+  });
+
+  it("always names the year on the 365 day rung, and no bucket reads with its start equal to its end", () => {
+    const histogram = buildHistogram([rec(on(2000, 3, 1)), rec(on(2026, 9, 1))], "utc");
+    expect(histogram.intervalMs).toBe(365 * DAY);
+    expect(histogram.showYear).toBe(true);
+    for (const bucket of histogram.buckets) {
+      const [start, end] = describeBucket(bucket, "utc", histogram.showYear).split(" \u00b7 ")[0].split(SEP);
+      expect(start).not.toBe(end);
+      expect(start).toMatch(/ \d{4} \d\d:\d\d$/);
+    }
+  });
+
+  it("needs the year for a rung of 365 days or more even over a domain inside one calendar year", () => {
+    const year = { startMs: on(2026, 1, 1), endMs: on(2027, 1, 1) };
+    // Jan 1 to Dec 31 is one calendar year, and a bucket a year wide would still read alike at both ends.
+    expect(labelsNeedYear(365 * DAY, year, UTC_CLOCK)).toBe(true);
+    expect(labelsNeedYear(90 * DAY, year, UTC_CLOCK)).toBe(false);
+    expect(labelsNeedYear(90 * DAY, { startMs: on(2026, 12, 1), endMs: on(2027, 1, 1) + 1 }, UTC_CLOCK)).toBe(true);
+  });
+
+  it("names the year on a 365 day rung even when the span sits inside one calendar year", () => {
+    // A wider-than-a-year bucket always spans a year boundary in its label, whatever the domain.
+    const histogram = buildHistogram([rec(on(2026, 3, 1)), rec(on(2026, 3, 2))], "utc");
+    expect(histogram.showYear).toBe(false);
+    const wide = { startMs: on(2026, 2, 14), endMs: on(2027, 2, 14), counts: histogram.buckets[0].counts, total: 0 };
+    expect(describeBucket(wide, "utc", true)).toContain("Feb 14 2026 00:00");
   });
 });

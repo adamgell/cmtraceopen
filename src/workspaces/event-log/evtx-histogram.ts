@@ -179,6 +179,11 @@ export interface EvtxHistogram {
   maxTotal: number;
   /** First edge to last edge, or null when nothing is placed. */
   domain: EvtxTimeRange | null;
+  /**
+   * Day labels carry the year: the domain crosses a calendar year in the zone, or the buckets are a
+   * year wide or more. Otherwise two buckets of different years would read alike.
+   */
+  showYear: boolean;
 }
 
 const EMPTY_COUNTS: LevelCounts = {
@@ -289,6 +294,17 @@ export function chooseBuckets(
 }
 
 /**
+ * Whether day labels must carry the year: the domain crosses a calendar year in the zone, or a
+ * bucket is a year wide or more (its two ends would otherwise read alike).
+ */
+export function labelsNeedYear(intervalMs: number, domain: EvtxTimeRange, clock: ZoneClock): boolean {
+  return (
+    intervalMs >= 365 * DAY ||
+    clock.wall(domain.startMs).year !== clock.wall(domain.endMs - 1).year
+  );
+}
+
+/**
  * Buckets `records` by time in `clock`'s zone. Two passes over the records and one binary search
  * per record: the first finds the extent of the timed ones, the second counts. The work does not
  * grow with the number of buckets.
@@ -311,7 +327,16 @@ export function buildHistogram(
     if (at > maxMs) maxMs = at;
   }
   if (minMs > maxMs) {
-    return { intervalMs: 0, edges: [], buckets: [], untimed, placed: 0, maxTotal: 0, domain: null };
+    return {
+      intervalMs: 0,
+      edges: [],
+      buckets: [],
+      untimed,
+      placed: 0,
+      maxTotal: 0,
+      domain: null,
+      showYear: false,
+    };
   }
 
   const { intervalMs, edges } = chooseBuckets(minMs, maxMs, clock);
@@ -347,6 +372,7 @@ export function buildHistogram(
     placed += total;
     if (total > maxTotal) maxTotal = total;
   }
+  const domain = { startMs: edges[0], endMs: edges[count] };
   return {
     intervalMs,
     edges,
@@ -354,7 +380,8 @@ export function buildHistogram(
     untimed,
     placed,
     maxTotal,
-    domain: { startMs: edges[0], endMs: edges[count] },
+    domain,
+    showYear: labelsNeedYear(intervalMs, domain, clock),
   };
 }
 
@@ -438,7 +465,7 @@ export function describeFigure(histogram: EvtxHistogram, mode: EvtxTimeZoneMode)
   if (domain === null) return "Events per interval, stacked by level";
   return (
     `Events per ${describeInterval(histogram.intervalMs)} over ` +
-    `${formatTimeRange(domain.startMs, domain.endMs, mode)} ` +
+    `${formatTimeRange(domain.startMs, domain.endMs, mode, histogram.showYear)} ` +
     `(${timeZoneLabel(mode, domain.startMs)}), stacked by level`
   );
 }
@@ -466,9 +493,13 @@ export function describeCounts(bucket: HistogramBucket): string {
  * disagree: `09:00-09:20 · 3 errors, 5 warnings, 40 info (UTC-05:00)`, the range with the spec's
  * separator. The zone is the bucket's own, so a bucket across a DST change says so.
  */
-export function describeBucket(bucket: HistogramBucket, mode: EvtxTimeZoneMode): string {
+export function describeBucket(
+  bucket: HistogramBucket,
+  mode: EvtxTimeZoneMode,
+  withYear = false,
+): string {
   return (
-    `${formatTimeRange(bucket.startMs, bucket.endMs, mode)} · ${describeCounts(bucket)} ` +
+    `${formatTimeRange(bucket.startMs, bucket.endMs, mode, withYear)} · ${describeCounts(bucket)} ` +
     `(${timeZoneLabel(mode, bucket.startMs)})`
   );
 }
@@ -505,7 +536,10 @@ export function buildAxisTicks(histogram: EvtxHistogram, mode: EvtxTimeZoneMode)
     ticks.push({
       edgeIndex,
       fraction: edgeIndex / count,
-      label: crossesDays ? formatDayClock(at, mode, withSeconds) : formatClock(at, mode, withSeconds),
+      label:
+        crossesDays || histogram.showYear
+          ? formatDayClock(at, mode, withSeconds, histogram.showYear)
+          : formatClock(at, mode, withSeconds),
     });
   }
   return ticks;
