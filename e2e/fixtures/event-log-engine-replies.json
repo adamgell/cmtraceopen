@@ -1,11 +1,11 @@
 {
   "about": "Replies captured from the real event-log analysis engine (EventLogAnalysisSession) over the records in event-log-data.ts. Do not edit by hand. Regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`; engineCommit is the commit the engine was built from.",
   "provenance": {
-    "engineCommit": "9330fbc08a1c576577414e11bcea6447ef7ecdc9",
-    "engineTreeDirty": false,
+    "engineCommit": "20958178760dde9a0a0b9d244cb016c9aba21d21",
+    "engineTreeDirty": true,
     "capturedBy": "e2e/fixtures/capture-event-log-replies.mjs",
     "inputSha256": "da1e4812542fcd92895e8151f3cf130f8d5d7b396234afcdf9d1da5921182544",
-    "engineSourceSha256": "82dd96c6b1cd9b075a169d75c912e89c00eb6320a4f20f976f1c6da853a53c05"
+    "engineSourceSha256": "6541586c30107b33bb47ec5e83b22bebff607a4e3d2ec2cf62ce105a5c29df92"
   },
   "sessionId": "00000000-0000-4000-8000-000000000828",
   "appendChunkRecordCounts": [
@@ -27424,7 +27424,10 @@
             "source": "C:\\Fixture\\EventLogs\\Security.evtx",
             "state": "accessDenied",
             "detail": "source metadata access was denied",
-            "evidence": []
+            "evidence": [],
+            "inputIndices": [
+              0
+            ]
           }
         ],
         "recommendedChecks": [
@@ -28364,7 +28367,10 @@
         "source": "C:\\Fixture\\EventLogs\\Security.evtx",
         "state": "accessDenied",
         "detail": "source metadata access was denied",
-        "evidence": []
+        "evidence": [],
+        "inputIndices": [
+          0
+        ]
       },
       {
         "id": "event:48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx12:[host:610d3f569955ca35]72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin66:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider2:725:88726:mdm-enrollment-status",

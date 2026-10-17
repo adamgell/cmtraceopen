@@ -19,7 +19,7 @@ use cmtraceopen_parser::unified_timeline::{
 use serde::{Deserialize, Serialize};
 
 use super::commands::{
-    append_diagnosis_cap_finding, diagnosis_event_input, diagnosis_finding_for_gap,
+    append_diagnosis_cap_finding, diagnosis_event_input, diagnosis_finding_for_input_gap,
     diagnosis_record_identity, evtx_log_entry, timeline_coverage_state,
     validate_diagnosis_coverage_gaps, validate_diagnosis_log_entry, validate_diagnosis_record,
     DiagnosisRecordIdentity, MAX_DIAGNOSIS_ARCHIVE_TEXT_RECORDS, MAX_DIAGNOSIS_EVENT_RECORDS,
@@ -769,7 +769,12 @@ struct DiagnosisSnapshot {
 impl DiagnosisSnapshot {
     fn summarize(self, coverage_gaps: Vec<EvtxCoverageGap>) -> DiagnosisSummary {
         let mut findings = self.text_findings;
-        findings.extend(coverage_gaps.into_iter().map(diagnosis_finding_for_gap));
+        findings.extend(
+            coverage_gaps
+                .into_iter()
+                .enumerate()
+                .map(|(ordinal, gap)| diagnosis_finding_for_input_gap(ordinal, gap)),
+        );
         findings.extend(self.identity_findings);
         findings.extend(self.diagnosis_input_findings);
         findings.extend(self.timeline_coverage_gaps.iter().map(|gap| {
@@ -1953,6 +1958,113 @@ mod tests {
             .expect("provider-description gap remains visible");
         assert_eq!(gap.state, CoverageState::ProviderDescriptionUnavailable);
         assert_ne!(gap.state, CoverageState::ParseFailed);
+    }
+
+    fn supplied_gap(source: &str, reason: &str) -> EvtxCoverageGap {
+        EvtxCoverageGap::new(
+            source,
+            super::super::models::EvtxCoverageGapKind::Record,
+            reason,
+        )
+    }
+
+    fn summarize_supplied(gaps: Vec<EvtxCoverageGap>) -> DiagnosisSummary {
+        let mut session = EventLogAnalysisSession::new("test-session".to_string());
+        session
+            .append(vec![mdm_success_record(1)], Vec::new())
+            .unwrap();
+        session.finalize().unwrap();
+        session.diagnosis_snapshot().unwrap().summarize(gaps)
+    }
+
+    #[test]
+    fn supplied_coverage_rows_carry_their_input_ordinals_through_deduplication() {
+        // Ordinals 0 and 2 report the same row; 1 reports its own.
+        let summary = summarize_supplied(vec![
+            supplied_gap("System", "record unavailable"),
+            supplied_gap("Application", "record unavailable"),
+            supplied_gap("System", "record unavailable"),
+        ]);
+
+        let ordinals = |source: &str| {
+            summary
+                .coverage_gaps
+                .iter()
+                .find(|gap| gap.source == source)
+                .map(|gap| gap.input_indices.clone())
+        };
+        assert_eq!(ordinals("System"), Some(vec![0, 2]));
+        assert_eq!(ordinals("Application"), Some(vec![1]));
+        // Gaps the engine found itself carry none.
+        assert!(summary
+            .coverage_gaps
+            .iter()
+            .filter(|gap| gap.source != "System" && gap.source != "Application")
+            .all(|gap| gap.input_indices.is_empty()));
+    }
+
+    #[test]
+    fn input_ordinals_survive_the_display_projection_of_a_profile_path() {
+        let source = r"C:\Users\alice\Downloads\System.evtx";
+        let mut gap = EvtxCoverageGap::new(
+            source,
+            super::super::models::EvtxCoverageGapKind::Chunk,
+            "chunk 3 is missing or zero-filled",
+        );
+        gap.chunk_id = Some(3);
+
+        let summary = summarize_supplied(vec![supplied_gap("Application", "skipped"), gap]);
+
+        let row = summary
+            .coverage_gaps
+            .iter()
+            .find(|row| row.input_indices == vec![1])
+            .expect("the supplied gap keeps its ordinal");
+        assert!(!row.source.contains("alice"), "{}", row.source);
+        assert_ne!(row.source, source);
+        assert!(row.detail.contains("(chunk 3)"), "{}", row.detail);
+    }
+
+    #[test]
+    fn input_ordinals_survive_compaction_of_an_oversized_reason() {
+        let reason = "x".repeat(MAX_DIAGNOSIS_DISPLAY_TEXT_BYTES + 1_000);
+
+        let summary = summarize_supplied(vec![supplied_gap("System", &reason)]);
+
+        let row = summary
+            .coverage_gaps
+            .iter()
+            .find(|row| row.input_indices == vec![0])
+            .expect("the compacted row keeps its ordinal");
+        assert!(
+            row.detail.len() <= MAX_DIAGNOSIS_DISPLAY_TEXT_BYTES,
+            "{}",
+            row.detail.len()
+        );
+        assert!(row.detail.contains("digest="), "{}", row.detail);
+    }
+
+    #[test]
+    fn input_ordinals_survive_row_truncation() {
+        let gaps = (0..150)
+            .map(|index| supplied_gap(&format!("Channel-{index:03}"), "record unavailable"))
+            .collect::<Vec<_>>();
+
+        let summary = summarize_supplied(gaps);
+
+        assert!(summary.coverage_gaps.len() <= MAX_DIAGNOSIS_RESPONSE_ROWS);
+        assert!(summary.overview.coverage_gap_count > summary.coverage_gaps.len());
+        let supplied = summary
+            .coverage_gaps
+            .iter()
+            .filter(|row| !row.input_indices.is_empty())
+            .collect::<Vec<_>>();
+        assert!(!supplied.is_empty());
+        for row in supplied {
+            // Each retained row still names exactly the input it came from.
+            assert_eq!(row.input_indices.len(), 1);
+            assert_eq!(row.source, format!("Channel-{:03}", row.input_indices[0]));
+        }
     }
 
     #[test]
