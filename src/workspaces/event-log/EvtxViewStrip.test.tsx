@@ -383,7 +383,7 @@ describe("EvtxViewStrip", () => {
       render(<EvtxViewStrip />);
       fireEvent.click(card("Enrollment triage"));
       expect(screen.getByText("Built-in, 3 filters · 1 channel not in these files")).toBeInTheDocument();
-      expect(screen.getByRole("status")).toHaveTextContent("Applied Enrollment triage. 1 of its channel is not in these files.");
+      expect(screen.getByRole("status")).toHaveTextContent("Applied Enrollment triage. 1 of its channels is not in these files.");
     });
 
     it("says nothing when every channel is there, and nothing on a card that is not active", () => {
@@ -393,6 +393,44 @@ describe("EvtxViewStrip", () => {
       fireEvent.click(card("Enrollment triage"));
       expect(screen.getByText("Built-in, 3 filters")).toBeInTheDocument();
       expect(screen.queryByText(/not loaded|not in these files/)).toBeNull();
+    });
+  });
+
+  describe("the strip makes no claim that the built-in's events are related (acceptance B, at run time)", () => {
+    // The same words the view's own test scans for, over what the strip renders.
+    const RELATIONAL =
+      /\b(relat\w*|caus\w*|because|lead\w*|led|precede\w*|follow\w*|then|after|before|chain\w*|link\w*|correlat\w*|due to|root cause|result\w*|trigger\w*|impl(y|ies|ied)|together)\b/i;
+
+    it("holds for the card, its tooltip and label, the suffixes, the announcement and the menu, in each state", async () => {
+      const seen: string[] = [];
+      const collect = () => {
+        const triage = card("Enrollment triage");
+        seen.push(
+          triage.textContent ?? "",
+          triage.getAttribute("title") ?? "",
+          triage.getAttribute("aria-label") ?? "",
+          document.getElementById(triage.getAttribute("aria-describedby") ?? "")?.textContent ?? "",
+          screen.getByRole("status").textContent ?? "",
+        );
+      };
+      // Files with two of the three channels: the singular suffix and announcement.
+      useEvtxStore.setState({ sourceMode: "files", channels: [channelInfo("System"), channelInfo(AAD)], records: [RECORD] });
+      const { unmount } = render(<EvtxViewStrip />);
+      collect();
+      fireEvent.click(card("Enrollment triage"));
+      collect();
+      fireEvent.contextMenu(card("Enrollment triage"));
+      seen.push(...within(await screen.findByRole("menu")).getAllByRole("menuitem").map((i) => i.textContent ?? ""));
+      unmount();
+      // Live with one channel loaded: the plural.
+      useEvtxStore.setState({ sourceMode: "live", channels: [channelInfo("System"), channelInfo(AAD), channelInfo(DMEDP)], loadedChannels: new Set(["System"]) });
+      render(<EvtxViewStrip />);
+      fireEvent.click(card("Enrollment triage"));
+      collect();
+
+      expect(seen.join(" | ")).toContain("channels are not loaded");
+      expect(seen.join(" | ")).toContain("channels is not in these files");
+      for (const text of seen) expect(text).not.toMatch(RELATIONAL);
     });
   });
 
@@ -614,6 +652,39 @@ describe("EvtxViewStrip context menu", () => {
       expect(await screen.findByRole("menu")).toBeInTheDocument();
     });
 
+    // The arrow keys between items are Fluent's (tabster), which jsdom does not run: that part is
+    // for the browser, and is asserted in the event-logs views capture test.
+    it("moves focus to the first item when it opens, from the keyboard or the mouse", async () => {
+      makeView("Mine");
+      render(<EvtxViewStrip />);
+      const items = () => within(screen.getByRole("menu")).getAllByRole("menuitem");
+
+      card("Mine").focus();
+      fireEvent.keyDown(card("Mine"), { key: "ContextMenu" });
+      await screen.findByRole("menu");
+      await waitFor(() => expect(items()[0]).toHaveFocus());
+      // Escape inside the menu closes it, and the card has the focus again.
+      fireEvent.keyDown(items()[0], { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+      await waitFor(() => expect(card("Mine")).toHaveFocus());
+
+      fireEvent.contextMenu(card("Mine"));
+      await screen.findByRole("menu");
+      await waitFor(() => expect(items()[0]).toHaveFocus());
+    });
+
+    it("runs the item that has the focus, with Enter", async () => {
+      makeView("Mine");
+      render(<EvtxViewStrip />);
+      card("Mine").focus();
+      fireEvent.keyDown(card("Mine"), { key: "F10", shiftKey: true });
+      const menu = await screen.findByRole("menu");
+      const rename = within(menu).getByRole("menuitem", { name: "Rename..." });
+      await waitFor(() => expect(rename).toHaveFocus());
+      fireEvent.keyDown(rename, { key: "Enter" });
+      expect(await screen.findByRole("dialog", { name: "Rename view" })).toBeInTheDocument();
+    });
+
     it("does not apply the view when it opens, and a card says it has a menu", async () => {
       makeView("Mine");
       store().setFilterEventIds("1");
@@ -792,12 +863,11 @@ describe("EvtxViewStrip context menu", () => {
       await waitFor(() => expect(card("Second")).toHaveFocus());
     });
 
-    it("moves focus to the previous card, or to New view, when the last card goes", async () => {
+    it("moves focus to New view when the last card goes: the next item, which always exists", async () => {
       makeView("Only");
       render(<EvtxViewStrip />);
       await choose("Only", "Delete...");
       fireEvent.click(within(await screen.findByRole("dialog", { name: "Delete view" })).getByRole("button", { name: "Delete" }));
-      // The built-in is before it, so focus goes there.
       await waitFor(() => expect(card("New view")).toHaveFocus());
     });
 

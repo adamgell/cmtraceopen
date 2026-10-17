@@ -161,11 +161,6 @@ export function EvtxViewNameDialog({
         <DialogBody>
           <DialogTitle>{title}</DialogTitle>
           <DialogContent style={{ display: "flex", flexDirection: "column", gap: "12px", fontSize }}>
-            {offerLayout && (
-              <span style={{ color: tokens.colorNeutralForeground2 }}>
-                Saves the filters that are applied now, so one click brings them back.
-              </span>
-            )}
             <Field label={{ children: "Name", style: { fontSize } }} required>
               <Input
                 ref={nameRef}

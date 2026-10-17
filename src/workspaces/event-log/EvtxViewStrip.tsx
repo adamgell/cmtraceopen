@@ -13,6 +13,7 @@
  */
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -233,7 +234,7 @@ export function EvtxViewStrip() {
     applyView(view);
     announce(
       missing > 0
-        ? `Applied ${view.name}. ${missing} of its ${missing === 1 ? "channel is" : "channels are"} ${absence}.`
+        ? `Applied ${view.name}. ${missing} of its channels ${missing === 1 ? "is" : "are"} ${absence}.`
         : `Applied ${view.name}.`,
     );
   };
@@ -276,6 +277,15 @@ export function EvtxViewStrip() {
   type Dialog = { kind: "new" } | { kind: "rename" | "delete"; id: string } | null;
   const [dialog, setDialog] = useState<Dialog>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  // The menu is opened by state, so Fluent does not know a key opened it and leaves focus on the
+  // card, out of reach of the arrow keys. Whenever a menu opens, focus its first item.
+  useEffect(() => {
+    if (menuFor === null) return;
+    const timer = setTimeout(() => {
+      document.querySelector<HTMLElement>('[role="menu"] [role="menuitem"]')?.focus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [menuFor]);
   const focusSoon = (id: string) => setTimeout(() => focusItem(id), 0);
   const closeDialog = (returnTo: string) => {
     setDialog(null);
@@ -326,14 +336,14 @@ export function EvtxViewStrip() {
     }
   };
   const deleteView = (id: string) => {
-    const index = itemIds.indexOf(id);
-    // The neighbour that is left, else the New view button, takes the focus the card had.
-    const neighbour = itemIds[index + 1] ?? itemIds[index - 1];
+    // The next item takes the focus the card had. New view follows every custom card, so there is
+    // always one: the card after it, or New view when it was the last.
+    const next = itemIds[itemIds.indexOf(id) + 1];
     const name = custom.find((view) => view.id === id)?.name ?? "view";
     useEvtxViewStore.getState().remove(id);
     clearMessages();
     announce(`Deleted ${name}.`);
-    closeDialog(neighbour ?? NEW_VIEW_ID);
+    closeDialog(next);
   };
   // One export at a time: the save dialog is awaited before anything else is in flight.
   const exporting = useRef(false);

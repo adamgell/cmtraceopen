@@ -335,5 +335,19 @@ test.describe("event-logs screenshots", () => {
       path: outPath("event-logs-views.png"),
       animations: "disabled",
     });
+
+    // After the capture: a card's menu from the keyboard. Focus goes to the first item, the arrow
+    // keys move between items (Fluent's, which jsdom cannot show), and Escape gives the card back
+    // its focus. A built-in offers Duplicate and Export.
+    await card.focus();
+    await page.keyboard.press("Shift+F10");
+    const menu = page.getByRole("menu");
+    await expect(menu.getByRole("menuitem")).toHaveText(["Duplicate", "Export..."]);
+    await expect(menu.getByRole("menuitem", { name: "Duplicate" })).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(menu.getByRole("menuitem", { name: "Export..." })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(card).toBeFocused();
   });
 });
