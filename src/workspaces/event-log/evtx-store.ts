@@ -744,18 +744,24 @@ function readIsServerFiltered(snapshot: FilterSnapshot): boolean {
 }
 
 /**
- * The read record for one channel's load. `replyCount` is the reply's per-channel count; the
- * larger of it and the records that reached the view counts, so a read is never taken as empty
- * while either says it returned something.
+ * The read record for `channel`'s load. Callers pass the records this load returned for the
+ * channel; only those of `channel` are counted all the same, so a wider array (the whole load,
+ * or the store) cannot lend another channel's oldest time or count. `replyCount` is the reply's
+ * per-channel count; the larger of it and the records that reached the view counts, so a read is
+ * never taken as empty while either says it returned something.
  */
 function channelReadRecord(
+  channel: string,
   readThrough: number,
   records: readonly EvtxRecord[],
   replyCount: number,
   serverFiltered: boolean
 ): ChannelReadRecord {
   let oldestPlacedMs: number | null = null;
+  let returned = 0;
   for (const record of records) {
+    if (record.channel !== channel) continue;
+    returned += 1;
     const at = record.timestampEpoch;
     if (Number.isFinite(at) && at > 0 && (oldestPlacedMs === null || at < oldestPlacedMs)) {
       oldestPlacedMs = at;
@@ -764,7 +770,7 @@ function channelReadRecord(
   return {
     readThrough,
     oldestPlacedMs,
-    returnedCount: Math.max(replyCount, records.length),
+    returnedCount: Math.max(replyCount, returned),
     serverFiltered,
   };
 }
@@ -1243,6 +1249,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             readThrough.set(
               ch,
               channelReadRecord(
+                ch,
                 readAt,
                 records,
                 result.channels.find((c) => c.name === ch)?.eventCount ?? 0,
@@ -1551,6 +1558,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         readRecords.set(
           channel,
           channelReadRecord(
+            channel,
             readAt,
             records,
             result.channels.find((c) => c.name === channel)?.eventCount ?? 0,
@@ -1772,6 +1780,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         readRecords.set(
           channel,
           channelReadRecord(
+            channel,
             readAt,
             records,
             result.channels.find((candidate) => candidate.name === channel)?.eventCount ?? 0,

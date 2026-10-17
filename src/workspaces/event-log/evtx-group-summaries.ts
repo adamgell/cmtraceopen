@@ -11,8 +11,11 @@
  * evidence. An empty bin is 0 only when every channel in the visible scope (and any channel the
  * group's events came from) was read across the whole bin; otherwise it is `null`, unknown, and
  * must not be drawn as zero. What "read" means comes from the coverage the store holds
- * (`classifyChannelReads`), each live load's read time (`readThrough`) and, for files, each file's
- * own run of events (`channelReadSpans`). Records never extend a live read.
+ * (`classifyChannelReads`) and, for a live channel, only from the record its current load left
+ * at commit (`loadReads`): the span starts at that load's `oldestPlacedMs`, an empty read
+ * (`returnedCount` 0) proves the binned range only when `serverFiltered` is false, and every span
+ * ends at the load's `readThrough`. The records in the store never move a live span. For files,
+ * each file's own run of events counts (`channelReadSpans`).
  *
  * Nothing here reads a clock; the caller passes `nowMs` and the read times.
  */

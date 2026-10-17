@@ -1464,3 +1464,84 @@ describe("a selected channel whose load did not finish", () => {
     expect(errorZeros()).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// The read record of a load of more than one channel: each channel's own oldest time and count.
+// ---------------------------------------------------------------------------------------------
+
+describe("the read record of a load of two channels", () => {
+  /** Security: three events, the oldest at 10:00. System: five events, the oldest at 12:00. */
+  const rowsFor: Record<string, () => EvtxRecord[]> = {
+    Security: () => [10, 16, 17].map((hour) => rec({ eventId: 4624, channel: "Security", at: DAY_START + hour * HOUR })),
+    System: () => [12, 13, 14, 18, 19].map((hour) => rec({ eventId: 7036, channel: "System", at: DAY_START + hour * HOUR })),
+  };
+  const both = ["Security", "System"];
+
+  /** Lists both channels and answers each query with that channel's rows, as one batch. */
+  function backendOfTwo() {
+    vi.mocked(invoke).mockImplementation(async (command: string, raw?: unknown) => {
+      if (command === "evtx_enumerate_channels") {
+        return both.map((name) => ({ name, eventCount: 0, sourceType: "live", enabledState: "enabled" }));
+      }
+      const { channels, requestId } = (raw ?? {}) as { channels?: string[]; requestId?: string };
+      const channel = channels?.[0] ?? "";
+      const rows = rowsFor[channel]?.() ?? [];
+      listeners.get("evtx-record-batch")?.({ payload: { requestId, channel, sequence: 0, records: rows } });
+      listeners.get("evtx-record-stream-complete")?.({
+        payload: { requestId, channel, sequenceCount: 1, totalRecords: rows.length },
+      });
+      return {
+        records: [],
+        channels: [{ name: channel, eventCount: rows.length, sourceType: "live" }],
+        totalRecords: rows.length,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    });
+  }
+
+  function liveBoth(loaded: boolean) {
+    useEvtxStore.setState({
+      sourceMode: "live",
+      timeWindow: "24h",
+      channels: both.map((name) => ({ name, eventCount: 0, sourceType: "live" as const })),
+      selectedChannels: new Set(both),
+      loadedChannels: new Set(loaded ? both : []),
+    });
+  }
+
+  /** Both channels' records, whatever order the load committed them in. */
+  function expectEachChannelsOwn() {
+    const reads = useEvtxStore.getState().channelReadThrough;
+    expect(reads.get("Security")).toMatchObject({ oldestPlacedMs: DAY_START + 10 * HOUR, returnedCount: 3 });
+    expect(reads.get("System")).toMatchObject({ oldestPlacedMs: DAY_START + 12 * HOUR, returnedCount: 5 });
+  }
+
+  beforeEach(() => {
+    useEvtxStore.getState().reset();
+    vi.mocked(invoke).mockReset();
+    backendOfTwo();
+  });
+  afterEach(() => {
+    vi.mocked(invoke).mockReset();
+    useEvtxStore.getState().reset();
+  });
+
+  it("the automatic load records each channel's own oldest time and count", async () => {
+    await useEvtxStore.getState().enumerateChannels();
+    expect([...useEvtxStore.getState().loadedChannels].sort()).toEqual(both);
+    expectEachChannelsOwn();
+  });
+
+  it("an explicit Load records each channel's own oldest time and count", async () => {
+    liveBoth(false);
+    await useEvtxStore.getState().queryChannels(both);
+    expectEachChannelsOwn();
+  });
+
+  it("a refresh records each channel's own oldest time and count", async () => {
+    liveBoth(true);
+    await useEvtxStore.getState().refreshLoadedChannels();
+    expectEachChannelsOwn();
+  });
+});
