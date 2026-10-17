@@ -531,13 +531,28 @@ describe("a folder", () => {
       });
     });
 
-    it("names what the listing could not include: unreadable entries and its own limits", async () => {
+    it("counts the entries that could not be listed, and only those", async () => {
       commands.listLogSourceFolder.mockResolvedValue(
         listing(files, {
           childErrors: [
             { path: `${folder}\\locked.log`, reason: "entry is not readable" },
-            { path: folder, reason: "folder listing reached the 4096-entry limit" },
+            { path: `${folder}\\sub`, reason: "symbolic link or reparse point is not followed" },
           ],
+        }),
+      );
+      dialog.open.mockResolvedValue(folder);
+
+      expect(await addLogSource("folder")).toEqual({
+        status: "added",
+        notice:
+          "2 entries could not be listed: locked.log (entry is not readable), sub (symbolic link or reparse point is not followed).",
+      });
+    });
+
+    it("reports a limit on the listing itself without a count, because it stands for entries never listed", async () => {
+      commands.listLogSourceFolder.mockResolvedValue(
+        listing(files, {
+          childErrors: [{ path: folder, reason: "folder listing reached the 4096-entry limit" }],
         }),
       );
       dialog.open.mockResolvedValue(folder);
@@ -547,8 +562,68 @@ describe("a folder", () => {
       expect(outcome).toEqual({
         status: "added",
         notice:
-          "2 entries could not be listed: locked.log (entry is not readable), bundle (folder listing reached the 4096-entry limit).",
+          "The folder listing itself reported: folder listing reached the 4096-entry limit. How many entries that left out is unknown.",
       });
+      // No quantity of entries is claimed anywhere in it.
+      expect(outcome.status === "added" && outcome.notice).not.toMatch(/\b1 entr/);
+    });
+
+    it("counts the entries and leaves the limit out of the count when both are reported", async () => {
+      commands.listLogSourceFolder.mockResolvedValue(
+        listing(files, {
+          childErrors: [
+            { path: `${folder}\\locked.log`, reason: "entry is not readable" },
+            { path: folder, reason: "folder listing reached the 4096-entry limit" },
+            { path: folder, reason: "folder listing reached the 16384-entry work limit" },
+          ],
+        }),
+      );
+      dialog.open.mockResolvedValue(folder);
+
+      expect(await addLogSource("folder")).toEqual({
+        status: "added",
+        notice:
+          "1 entry could not be listed: locked.log (entry is not readable). " +
+          "The folder listing itself reported: folder listing reached the 4096-entry limit, " +
+          "folder listing reached the 16384-entry work limit. How many entries that left out is unknown.",
+      });
+    });
+
+    it("recognizes the listed folder by its path as the platform compares it, not by its spelling", async () => {
+      commands.listLogSourceFolder.mockResolvedValue(
+        listing(files, {
+          // The backend echoes the path it was given; case and separators are the platform's business.
+          childErrors: [{ path: "C:/LOGS/bundle/", reason: "combined diagnostics exceeded the limit" }],
+        }),
+      );
+      dialog.open.mockResolvedValue(folder);
+
+      const outcome = await addLogSource("folder");
+
+      expect(outcome.status === "added" && outcome.notice).toBe(
+        "The folder listing itself reported: combined diagnostics exceeded the limit. How many entries that left out is unknown.",
+      );
+    });
+
+    it("tells a limit from an entry by the record's path, not its message", async () => {
+      // A message that says "limit" about a child is still one entry; one about the folder that
+      // does not say it is still the listing.
+      commands.listLogSourceFolder.mockResolvedValue(
+        listing(files, {
+          childErrors: [
+            { path: `${folder}\\huge.log`, reason: "file exceeds the 1048576 byte bundle limit" },
+            { path: folder, reason: "a diagnostic worded some other way" },
+          ],
+        }),
+      );
+      dialog.open.mockResolvedValue(folder);
+
+      const outcome = await addLogSource("folder");
+
+      expect(outcome.status === "added" && outcome.notice).toBe(
+        "1 entry could not be listed: huge.log (file exceeds the 1048576 byte bundle limit). " +
+          "The folder listing itself reported: a diagnostic worded some other way. How many entries that left out is unknown.",
+      );
     });
 
     it("keeps a long reason short", async () => {
@@ -561,6 +636,19 @@ describe("a folder", () => {
 
       expect(outcome.status === "added" && outcome.notice).toBe(
         `1 entry could not be listed: x (${"r".repeat(117)}...).`,
+      );
+    });
+
+    it("keeps a long listing-level reason short too", async () => {
+      commands.listLogSourceFolder.mockResolvedValue(
+        listing(files, { childErrors: [{ path: folder, reason: "r".repeat(400) }] }),
+      );
+      dialog.open.mockResolvedValue(folder);
+
+      const outcome = await addLogSource("folder");
+
+      expect(outcome.status === "added" && outcome.notice).toBe(
+        `The folder listing itself reported: ${"r".repeat(117)}.... How many entries that left out is unknown.`,
       );
     });
 

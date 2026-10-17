@@ -30,6 +30,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getBaseName } from "../../lib/file-paths";
 import {
   classifySourceError,
+  getLogSourcePath,
   loadFilesAsLogSource,
   loadPathAsLogSource,
   type LoadLogSourceResult,
@@ -155,24 +156,45 @@ function refusalFor(paths: readonly string[]): string | null {
   return reasons.length > 0 ? `Not added: ${reasons.join(" ")}` : null;
 }
 
+const shortReason = (reason: string) =>
+  reason.length > MAX_REASON_LENGTH ? `${reason.slice(0, MAX_REASON_LENGTH - 3)}...` : reason;
+
 /**
  * What a folder add did not cover, from what the loaders know: the listing's own diagnostics and
  * limits, the subfolders a non-bundle folder load never enters, and, for an evidence bundle, the
  * kinds of file its collector skips without counting them anywhere the UI can read.
+ *
+ * A `childErrors` record carries only a path and a reason. A record whose path is a child names one
+ * entry that could not be listed, and those are counted. A record whose path is the listed folder
+ * itself describes the listing, not an entry: its limits (entries, work, diagnostics, a bundle's
+ * truncation) stand for entries that were never listed, however many, so it is reported without a
+ * count. The decision is the record's path, never its message.
  */
-function folderCoverage(result: LoadLogSourceResult, isBundle: boolean): string[] {
+function folderCoverage(
+  result: LoadLogSourceResult,
+  isBundle: boolean,
+  keyOf: (path: string) => string,
+): string[] {
   const parts: string[] = [];
   const childErrors = result.childErrors ?? [];
-  if (childErrors.length > 0) {
-    const described = childErrors.map((diagnostic) => {
-      const reason =
-        diagnostic.reason.length > MAX_REASON_LENGTH
-          ? `${diagnostic.reason.slice(0, MAX_REASON_LENGTH - 3)}...`
-          : diagnostic.reason;
-      return `${getBaseName(diagnostic.path) || diagnostic.path} (${reason})`;
-    });
+  const folderKey = keyOf(getLogSourcePath(result.source));
+  const entryErrors = childErrors.filter((diagnostic) => keyOf(diagnostic.path) !== folderKey);
+  const listingErrors = childErrors.filter((diagnostic) => keyOf(diagnostic.path) === folderKey);
+  if (entryErrors.length > 0) {
+    const described = entryErrors.map(
+      (diagnostic) =>
+        `${getBaseName(diagnostic.path) || diagnostic.path} (${shortReason(diagnostic.reason)})`,
+    );
     parts.push(
-      `${childErrors.length} ${plural(childErrors.length, "entry", "entries")} could not be listed: ${nameList(described)}.`,
+      `${entryErrors.length} ${plural(entryErrors.length, "entry", "entries")} could not be listed: ${nameList(described)}.`,
+    );
+  }
+  if (listingErrors.length > 0) {
+    const reasons = listingErrors.map((diagnostic) =>
+      shortReason(diagnostic.reason.replace(/[.\s]+$/, "")),
+    );
+    parts.push(
+      `The folder listing itself reported: ${nameList(reasons)}. How many entries that left out is unknown.`,
     );
   }
   if (isBundle) {
@@ -263,7 +285,7 @@ export async function addLogSource(kind: AddLogSourceKind): Promise<AddLogSource
 
   const coverage =
     kind === "folder" && folderResult !== null
-      ? folderCoverage(folderResult, log.bundleMetadata !== null)
+      ? folderCoverage(folderResult, log.bundleMetadata !== null, keyOf)
       : [];
 
   if (loaded.length === 0) {
