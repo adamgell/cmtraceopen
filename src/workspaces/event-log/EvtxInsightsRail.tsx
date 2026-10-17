@@ -54,9 +54,6 @@ const RAIL_TABS: readonly EvtxRailTabId[] = ["insights", "details"];
 /** Record summaries publish at most once per this long (spec section 11, the 75 ms precedent). */
 export const INSIGHTS_DEBOUNCE_MS = DERIVATION_THROTTLE_MS;
 
-// Moved to its own module so the histogram can use it; still exported here for existing importers.
-export { useThrottledValue };
-
 /**
  * The one event ID a quick filter is showing, or null: the applied filter is in Event IDs mode, shows
  * what matches, and names exactly one ID (a range or a list names more, and an invalid one none).
