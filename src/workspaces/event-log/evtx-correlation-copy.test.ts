@@ -10,6 +10,7 @@ import {
   type CorrelationChainStrength,
 } from "./evtx-correlation-chains";
 import {
+  SCOPE_NOT_KNOWN_NOTICE,
   STRENGTH_LABELS,
   chainCopyText,
   coverageGapNotice,
@@ -141,6 +142,28 @@ describe("STRENGTH_LABELS", () => {
         expect(STRENGTH_LABELS[strength], `${theme.id} ${strength}`).toBe(tokens.strengths[strength].label);
       }
     }
+  });
+});
+
+describe("scopeDisclosure with a scope that is not known (P5)", () => {
+  it("says so, and never reads it as nothing narrowed", () => {
+    const disclosure = scopeDisclosure(null);
+    expect(disclosure).toEqual({ strengthNote: SCOPE_NOT_KNOWN_NOTICE, textLogNote: null });
+    expect(SCOPE_NOT_KNOWN_NOTICE).toBe(
+      "The events this model was built from are not known here, so events outside them may make an Exact link ambiguous.",
+    );
+  });
+
+  it("goes into the copied text, so a paste cannot read as more certain than the view", () => {
+    const text = chainCopyText({
+      chain: chainFor("exactPair", [eventItem(1, T0, "info", "a", 101), eventItem(2, T0 + 1_000, "info", "b", 102)]),
+      itemsById: mapOf([eventItem(1, T0, "info", "a", 101), eventItem(2, T0 + 1_000, "info", "b", 102)]),
+      timeZoneMode: "utc",
+      scope: scopeDisclosure(null),
+      edgeInput: COMPLETE,
+      unplaced: PROVEN,
+    });
+    expect(text).toContain(SCOPE_NOT_KNOWN_NOTICE);
   });
 });
 
@@ -477,6 +500,7 @@ describe("chainCopyText", () => {
 describe("no string claims an entry is unplaced without proof", () => {
   const STRING_EXPORTS = new Set([
     // evtx-correlation-copy.ts
+    "SCOPE_NOT_KNOWN_NOTICE",
     "STRENGTH_LABELS",
     "chainCopyText",
     "coverageGapNotice",
@@ -610,6 +634,8 @@ describe("no string claims an entry is unplaced without proof", () => {
       scanNotice({ state: "incomplete", stoppedBy: null, error: null }) ?? "",
       edgeErrorNotice("edges down") ?? "",
       narrowed?.strengthNote ?? "",
+      SCOPE_NOT_KNOWN_NOTICE,
+      scopeDisclosure(null)?.strengthNote ?? "",
       narrowed?.textLogNote ?? "",
       keyKindLabel("activityId"),
       keyHeader(chain.keys)?.shortValue ?? "",

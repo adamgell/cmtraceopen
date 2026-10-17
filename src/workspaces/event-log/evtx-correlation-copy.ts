@@ -80,12 +80,21 @@ export interface ScopeDisclosure {
 }
 
 /**
+ * Said when the scope the model was built from is not known. Not knowing it is not the same as
+ * nothing being narrowed, so the disclosure is shown, not left out.
+ */
+export const SCOPE_NOT_KNOWN_NOTICE =
+  "The events this model was built from are not known here, so events outside them may make an Exact link ambiguous.";
+
+/**
  * The disclosure for a narrowed view (decision 10): links and strengths are computed over the
  * visible events only, so an event outside the view can make an Exact link ambiguous. It uses the
  * rail's condition, visible < loaded, and the rail's text-log sentence. Null when nothing is
- * narrowed, because then there is nothing the events were left out of.
+ * narrowed, because then there is nothing the events were left out of. When the scope is not
+ * known (`input` null) the disclosure says so: an unknown scope is never read as no narrowing.
  */
-export function scopeDisclosure(input: ScopeDisclosureInput): ScopeDisclosure | null {
+export function scopeDisclosure(input: ScopeDisclosureInput | null): ScopeDisclosure | null {
+  if (input === null) return { strengthNote: SCOPE_NOT_KNOWN_NOTICE, textLogNote: null };
   if (!(input.visibleCount < input.loadedCount)) return null;
   return {
     strengthNote: `Links and strengths are computed over the ${events(input.visibleCount)} visible. Events outside the view can make an Exact link ambiguous.`,
