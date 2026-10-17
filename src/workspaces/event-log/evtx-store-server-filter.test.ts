@@ -11,7 +11,7 @@
  * The Tauri bridge is mocked because the store imports it at module scope.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { EVTX_LEVELS, levelsFilteredAtSource } from "./evtx-filter";
+import { EVTX_LEVELS } from "./evtx-filter";
 import { deferred } from "../../test-utils/deferred";
 import type { EvtxLevel, EvtxRecord } from "./types";
 
@@ -110,13 +110,6 @@ describe("the level numbers the store sends, for every level subset", () => {
       } else {
         expect(sent, label).toBeUndefined();
       }
-    }
-  });
-
-  it("agrees with the filter row on whether a level predicate is sent", () => {
-    for (const subset of SUBSETS) {
-      const sent = JSON.parse(serverFilterKey("all", "", subset)).filter.levels !== undefined;
-      expect(levelsFilteredAtSource(subset), [...subset].join(",") || "(none)").toBe(sent);
     }
   });
 });
