@@ -41,7 +41,7 @@ export function viewFailureMessage(reason: EvtxViewFailure, name: string): strin
     case "library-full":
       return `The library holds ${MAX_CUSTOM_VIEWS} views. Delete one to make room.`;
     case "unreadable":
-      return "These filters would not read back as written, so they cannot be saved. Check the Event IDs list.";
+      return "These filters would not read back as written, so they cannot be saved. Check that the Event IDs list is valid and that not too many channels are selected.";
     case "not-found":
       return "That view is no longer in the library.";
   }
