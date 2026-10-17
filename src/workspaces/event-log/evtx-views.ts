@@ -183,18 +183,31 @@ export function viewDescription(view: EvtxView): string {
 // Names
 // ---------------------------------------------------------------------------------------------
 
-/** Control characters, and the format characters that reorder or hide text (bidi overrides, zero width). */
-const UNSAFE_NAME_CHARACTERS = /[\x00-\x1F\x7F-\x9F\u{200B}-\u{200F}\u{202A}-\u{202E}\u{2060}-\u{2064}\u{2066}-\u{2069}\u{FEFF}]/u;
+/**
+ * What a typed name never holds: control characters, format characters (bidi marks and overrides,
+ * zero width and tag characters, soft hyphen) and the other default-ignorable code points. They draw
+ * nothing, so a name with them reads as another name: "Enrollment triage" followed by U+061C looks
+ * like the built-in's. Matched by Unicode property, so a code point added to a class later is
+ * covered without this list changing.
+ */
+const INVISIBLE_NAME_CHARACTERS = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
 
 /**
- * A name as the library keeps it: whitespace collapsed and trimmed. Null when nothing usable is
- * left, when it is over the limit, or when it carried control or bidi-format characters (those are
- * not whitespace to tidy but a sign the text was not typed).
+ * A name as the library keeps it: whitespace collapsed, invisible characters removed, trimmed. The
+ * invisible characters are removed rather than refused, so the name that results is the name that
+ * shows, and it collides with the built-in's or another view's exactly when it reads as it. Null when
+ * nothing usable is left or it is over the limit.
  */
 export function cleanViewName(input: unknown): string | null {
   if (typeof input !== "string") return null;
-  if (UNSAFE_NAME_CHARACTERS.test(input)) return null;
-  const name = input.replace(/\s+/g, " ").trim();
+  // Whitespace first: a tab or a newline is a space between words, not an invisible character that
+  // would join them. By the White_Space property, not `\s`, which also counts U+FEFF as a space: that
+  // one draws nothing and is removed with the rest.
+  const name = input
+    .replace(/\p{White_Space}+/gu, " ")
+    .replace(INVISIBLE_NAME_CHARACTERS, "")
+    .replace(/\p{White_Space}+/gu, " ")
+    .trim();
   if (!name || name.length > MAX_VIEW_NAME_LENGTH) return null;
   return name;
 }

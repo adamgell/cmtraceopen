@@ -37,7 +37,7 @@ const DMEDP_PROVIDER = "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostic
 const AAD = "Microsoft-Windows-AAD/Operational";
 const DNS_PROVIDER = "Microsoft-Windows-DNS-Client";
 
-const ch = (code: number) => String.fromCharCode(code);
+const ch = (code: number) => String.fromCodePoint(code);
 
 let nextId = 0;
 const makeId = () => `made-${++nextId}`;
@@ -281,13 +281,66 @@ describe("listing and naming views", () => {
     expect(viewSubtitle(listViews(custom)[1])).toBe("Filters and layout");
   });
 
-  it("cleans a name and refuses one it cannot", () => {
+  it("cleans a name and refuses one with nothing usable left", () => {
     expect(cleanViewName("  Login   storms ")).toBe("Login storms");
     expect(cleanViewName("x".repeat(MAX_VIEW_NAME_LENGTH))).toBe("x".repeat(MAX_VIEW_NAME_LENGTH));
     expect(cleanViewName("x".repeat(MAX_VIEW_NAME_LENGTH + 1))).toBeNull();
-    for (const bad of ["", "   ", 5, null, undefined, {}, `a${ch(7)}b`, `a${ch(0x202e)}b`, `a${ch(0x200b)}b`, `a${ch(0xfeff)}b`, `a${ch(0x85)}b`]) {
+    for (const bad of ["", "   ", 5, null, undefined, {}, ch(7), ch(0x202e), `${ch(0x200b)} ${ch(0xfeff)}`]) {
       expect(cleanViewName(bad)).toBeNull();
     }
+  });
+
+  describe("characters that draw nothing are removed, so a name is the name that shows", () => {
+    // Control, format and default-ignorable code points, by Unicode property (T7).
+    const invisible: Array<[string, number]> = [
+      ["U+0007 bell (control)", 0x07],
+      ["U+00AD soft hyphen", 0xad],
+      ["U+034F combining grapheme joiner", 0x34f],
+      ["U+061C arabic letter mark", 0x61c],
+      ["U+180E mongolian vowel separator", 0x180e],
+      ["U+200B zero width space", 0x200b],
+      ["U+200F right-to-left mark", 0x200f],
+      ["U+202E right-to-left override", 0x202e],
+      ["U+2060 word joiner", 0x2060],
+      ["U+2066 left-to-right isolate", 0x2066],
+      ["U+3164 hangul filler", 0x3164],
+      ["U+FEFF byte order mark", 0xfeff],
+      ["U+E0001 language tag", 0xe0001],
+      ["U+E0041 tag latin capital a", 0xe0041],
+      ["U+E007F cancel tag", 0xe007f],
+    ];
+
+    it.each(invisible)("removes %s", (_label, code) => {
+      expect(cleanViewName(`Ab${ch(code)}c`)).toBe("Abc");
+      expect(cleanViewName(`${ch(code)}Abc${ch(code)}`)).toBe("Abc");
+    });
+
+    it("keeps a tab or a newline as the space it is, not as an invisible character that joins two words", () => {
+      expect(cleanViewName("one\ttwo\nthree")).toBe("one two three");
+      expect(cleanViewName(`one${ch(0x85)}two${ch(0xa0)}three${ch(0x2028)}four`)).toBe("one two three four");
+      expect(cleanViewName(`one ${ch(0x200b)} two`)).toBe("one two");
+    });
+
+    it("lets a name that is only text through untouched, accents and CJK included", () => {
+      expect(cleanViewName("Enrollment triage")).toBe("Enrollment triage");
+      expect(cleanViewName("Crème brûlée 登録")).toBe("Crème brûlée 登録");
+    });
+
+    it("measures the length after removing them", () => {
+      expect(cleanViewName(`${"x".repeat(MAX_VIEW_NAME_LENGTH)}${ch(0x200b)}${ch(0x61c)}`)).toBe("x".repeat(MAX_VIEW_NAME_LENGTH));
+    });
+
+    it("makes the built-in's name followed by one a taken name, in every way a name comes in", () => {
+      const spoof = `Enrollment triage${ch(0x61c)}`;
+      expect(cleanViewName(spoof)).toBe("Enrollment triage");
+      expect(viewNameTaken(cleanViewName(spoof)!, [])).toBe(true);
+      // From a file.
+      const merged = mergeViews([], [body({ name: spoof })].map((v) => sanitizeViewBody(plain(v))!), makeId);
+      expect(merged.views.map((v) => v.name)).toEqual(["Enrollment triage (2)"]);
+      // From storage.
+      const { views } = sanitizeStoredViews([{ id: "9d1b3f6c-3d2a-4a43-9a6f-1c0d4f2e8b11", ...plain(body({ name: spoof })) }], makeId);
+      expect(views.map((v) => v.name)).toEqual(["Enrollment triage (2)"]);
+    });
   });
 
   it("makes names unique ignoring case, across the built-ins and the custom views", () => {
@@ -420,10 +473,8 @@ describe("sanitizeViewBody", () => {
       ["a numeric name", (v) => (v.name = 5)],
       ["an empty name", (v) => (v.name = "")],
       ["a blank name", (v) => (v.name = "   ")],
+      ["a name that is only invisible characters", (v) => (v.name = `${ch(0x200b)}${ch(0x61c)}`)],
       ["an over-long name", (v) => (v.name = "n".repeat(MAX_VIEW_NAME_LENGTH + 1))],
-      ["a name with a control character", (v) => (v.name = `a${ch(7)}b`)],
-      ["a name with a bidi override", (v) => (v.name = `a${ch(0x202e)}b`)],
-      ["a name with a zero width space", (v) => (v.name = `a${ch(0x200b)}b`)],
       ["no criteria", (v) => delete v.criteria],
       ["criteria that is an array", (v) => (v.criteria = [])],
       ["criteria that is a string", (v) => (v.criteria = "x")],

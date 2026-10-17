@@ -190,6 +190,13 @@ describe("the view library", () => {
       expect(state().views).toHaveLength(1);
     });
 
+    it("keeps the name that shows: invisible characters are removed, so a look-alike of a built-in is refused", () => {
+      const spoof = `Enrollment triage${String.fromCodePoint(0x61c)}`;
+      expect(state().create(spoof, CRITERIA, null)).toEqual({ ok: false, reason: "name-taken" });
+      const made = state().create(`Mine${String.fromCodePoint(0x200b)} ${String.fromCodePoint(0xe0041)}view`, CRITERIA, null);
+      expect(made.ok && made.view.name).toBe("Mine view");
+    });
+
     it("refuses a view when the library is full", () => {
       for (let i = 0; i < MAX_CUSTOM_VIEWS; i += 1) state().create(`V${i}`, CRITERIA, null);
       expect(state().create("One more", CRITERIA, null)).toEqual({ ok: false, reason: "library-full" });
