@@ -979,19 +979,28 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   /**
    * The one rule for a before-load change made while a load ran (`refreshRequested`), applied where
    * every kind of load ends: the channel refetch, the explicit Load and the first live load. The
-   * invariant it keeps: the criteria the controls show equal the criteria the loaded data was read
-   * with, so a window, level list or Event ID list is never shown over data read with another one.
+   * invariant it keeps is literal: after every load end, either the criteria the controls show equal
+   * the criteria the loaded data was read with, or exactly one replay runs. A window, level list or
+   * Event ID list is never shown over data read with another one.
    *
-   * `settleQueuedChange` is the stop half. If the operator stopped the load that is ending and a
-   * change was queued, it returns the criteria the load read with, to be written in the same `set`
-   * that clears `isLoading` (never through the setters, which would queue a read, and never a frame
-   * later, which would show the new window over old data). Stop means stop: no read starts on its own.
-   * A Stop leaves no cancelled gap on a channel whose scan had already finished, or when the cancel
-   * failed, so the coverage banner cannot be relied on to say the criteria differ. Quick filter and
-   * search are not server criteria and stay as the operator left them.
+   * `settleQueuedChange` is the restore half: for every queued change that will not be replayed it
+   * returns the criteria the load read with, to be written in the same `set` that clears `isLoading`
+   * (never through the setters, which would queue a read, and never a frame later, which would show
+   * the new window over old data). A change is not replayed when the operator stopped the load (Stop
+   * means stop: no read starts on its own), or when the source is no longer live once the load has
+   * ended (a remote refetch or first load that failed everywhere drops to no source), or when the load
+   * failed before reading anything. A Stop leaves no cancelled gap on a channel whose scan had already
+   * finished, or when the cancel failed, and a dropped source leaves fragments, so the coverage banner
+   * cannot be relied on to say the criteria differ. Quick filter and search are not server criteria
+   * and stay as the operator left them. `endingSourceMode` is the source mode the load's final `set`
+   * writes, which is what `takeQueuedChange` will see.
    */
-  const settleQueuedChange = (requestId: string): Partial<EvtxState> => {
-    if (!refreshRequested || requestId !== stoppedRequestId) return {};
+  const settleQueuedChange = (
+    requestId: string,
+    endingSourceMode: EvtxSourceMode
+  ): Partial<EvtxState> => {
+    if (!refreshRequested) return {};
+    if (requestId !== stoppedRequestId && endingSourceMode === "live") return {};
     refreshRequested = false;
     const kept = requestCriteria?.requestId === requestId ? requestCriteria.criteria : null;
     return kept
@@ -1004,13 +1013,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   };
 
   /**
-   * The replay half, evaluated after the load has ended: true when the caller should read again now.
-   * A stopped load never does (its change was settled above). Otherwise the caller replays against
-   * the channels its finished load attempted, not only those that ended usable, so a load in which
-   * every channel failed still applies the newer criterion once. Only a live source replays: a remote
-   * refetch or first load that failed everywhere has dropped to no source, while an explicit Load
-   * never drops the source, so a remote Load that failed everywhere stays live and replays once.
-   * Nothing retries: the flag is set only by an operator change.
+   * The replay half, evaluated after the load has ended: true when the caller should read again now,
+   * which is exactly when `settleQueuedChange` left the queued change alone. A stopped load never
+   * replays. Otherwise the caller replays against the channels its finished load attempted, not only
+   * those that ended usable, so a load in which every channel failed still applies the newer
+   * criterion once. Only a live source replays: a remote refetch or first load that failed everywhere
+   * has dropped to no source, while an explicit Load never drops the source, so a remote Load that
+   * failed everywhere stays live and replays once. Nothing retries: the flag is set only by an
+   * operator change.
    */
   const takeQueuedChange = (finishedRequestId: string): boolean => {
     if (!refreshRequested) return false;
@@ -1163,6 +1173,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       loadedChannels.size === 0 &&
       nextCoverageGaps.length > 0;
     clearVisibleRequestPublication(requestId);
+    const endingSourceMode = remoteRefreshFailed ? null : finalState.sourceMode;
     set({
       ...merged,
       channels: finalState.channels.map((channel) => ({
@@ -1175,13 +1186,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         finalState.coverageDetails,
         reportedDetails
       ),
-      sourceMode: remoteRefreshFailed ? null : finalState.sourceMode,
+      sourceMode: endingSourceMode,
       isLoading: false,
       loadError,
       loadingChannel: null,
       loadingProgress: null,
       loadElapsedMs: performance.now() - startTime,
-      ...settleQueuedChange(requestId),
+      ...settleQueuedChange(requestId, endingSourceMode),
     });
     if (takeQueuedChange(requestId)) void refreshChannels(loaded);
   };
@@ -1531,14 +1542,15 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           (availableCore.length === 0
             ? channels.length === 0
             : finalState.loadedChannels.size === 0 && finalState.coverageGaps.length > 0);
+        const endingSourceMode = remoteQueryFailed ? null : "live";
         set({
-          sourceMode: remoteQueryFailed ? null : "live",
+          sourceMode: endingSourceMode,
           isLoading: false,
           loadingChannel: null,
           loadingProgress: null,
           loadElapsedMs: performance.now() - startTime,
           loadError,
-          ...settleQueuedChange(requestId),
+          ...settleQueuedChange(requestId, endingSourceMode),
         });
         if (takeQueuedChange(requestId) && availableCore.length > 0) {
           void refreshChannels(availableCore);
@@ -1562,9 +1574,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           coverageGaps: remoteGap
             ? mergeCoverageGaps(state.coverageGaps, [remoteGap])
             : state.coverageGaps,
-          ...settleQueuedChange(requestId),
+          // The enumeration itself failed, so nothing was read and nothing will replay: restore.
+          ...settleQueuedChange(requestId, null),
         }));
-        // The enumeration itself failed, so there is nothing to replay against.
         dropQueuedChange();
       }
     })();
@@ -1759,7 +1771,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     // guard when "All channels" was used.
     const processedChannelNames = [...processedChannels];
     clearVisibleRequestPublication(requestId);
-    const settledCriteria = settleQueuedChange(requestId);
+    // An explicit Load never changes the source mode.
+    const settledCriteria = settleQueuedChange(requestId, get().sourceMode);
     set((state) => {
       const merged = mergeRecordsPreservingSelection(
         state.records,
