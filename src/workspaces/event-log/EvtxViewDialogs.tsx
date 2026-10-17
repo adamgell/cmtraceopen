@@ -46,33 +46,54 @@ const DIALOG_STYLE = {
   padding: "24px",
 } as const;
 
-interface EvtxNewViewDialogProps {
+interface EvtxViewNameDialogProps {
   open: boolean;
+  title: string;
+  saveLabel: string;
+  /** What the field holds each time the dialog opens. */
+  initialName: string;
+  /** Whether the "Include current layout" choice is offered (a new view), or not (a rename). */
+  offerLayout: boolean;
   /** The text size of the dialog's labels and fields. */
   fontSize: string;
   onClose: () => void;
-  /** Makes the view. Returns why it was refused, or null once it is made. */
+  /** Applies the name. Returns why it was refused, or null once it is done. */
   onSave: (name: string, includeLayout: boolean) => EvtxViewFailure | null;
 }
 
-/** "+ New view": a name, and whether the current layout is saved with the filters. */
-export function EvtxNewViewDialog({ open, fontSize, onClose, onSave }: EvtxNewViewDialogProps) {
+/**
+ * A name, and for a new view whether the current layout is saved with the filters ("+ New view",
+ * spec 8.15). Also the rename dialog, which has the name alone.
+ */
+export function EvtxViewNameDialog({
+  open,
+  title,
+  saveLabel,
+  initialName,
+  offerLayout,
+  fontSize,
+  onClose,
+  onSave,
+}: EvtxViewNameDialogProps) {
   const { levels } = useEvtxVisualTokens();
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initialName);
   const [includeLayout, setIncludeLayout] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
 
-  // Each opening starts from a blank form, with the cursor in the name. Focus is set after the
+  // Each opening starts from the form's start, with the cursor in the name. Focus is set after the
   // dialog has taken it for itself, which it does when it mounts.
   useEffect(() => {
     if (!open) return;
-    setName("");
+    setName(initialName);
     setIncludeLayout(true);
     setError(null);
-    const timer = setTimeout(() => nameRef.current?.focus(), 0);
+    const timer = setTimeout(() => {
+      nameRef.current?.focus();
+      nameRef.current?.select();
+    }, 0);
     return () => clearTimeout(timer);
-  }, [open]);
+  }, [open, initialName]);
 
   const save = () => {
     const failure = onSave(name, includeLayout);
@@ -82,13 +103,15 @@ export function EvtxNewViewDialog({ open, fontSize, onClose, onSave }: EvtxNewVi
 
   return (
     <Dialog open={open} onOpenChange={(_, data) => !data.open && onClose()}>
-      <DialogSurface style={DIALOG_STYLE} aria-label="New view">
+      <DialogSurface style={DIALOG_STYLE} aria-label={title}>
         <DialogBody>
-          <DialogTitle>New view</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogContent style={{ display: "flex", flexDirection: "column", gap: "12px", fontSize }}>
-            <span style={{ color: tokens.colorNeutralForeground2 }}>
-              Saves the filters that are applied now, so one click brings them back.
-            </span>
+            {offerLayout && (
+              <span style={{ color: tokens.colorNeutralForeground2 }}>
+                Saves the filters that are applied now, so one click brings them back.
+              </span>
+            )}
             <Field label={{ children: "Name", style: { fontSize } }} required>
               <Input
                 ref={nameRef}
@@ -97,7 +120,7 @@ export function EvtxNewViewDialog({ open, fontSize, onClose, onSave }: EvtxNewVi
                 maxLength={MAX_VIEW_NAME_LENGTH}
                 input={{ style: { fontSize } }}
                 aria-invalid={error !== null}
-                aria-describedby={error ? "evtx-new-view-error" : undefined}
+                aria-describedby={error ? "evtx-view-name-error" : undefined}
                 onChange={(_, data) => {
                   setName(data.value);
                   setError(null);
@@ -111,22 +134,63 @@ export function EvtxNewViewDialog({ open, fontSize, onClose, onSave }: EvtxNewVi
               />
             </Field>
             {error && (
-              <span id="evtx-new-view-error" role="alert" style={{ color: levels.Error.textColor }}>
+              <span id="evtx-view-name-error" role="alert" style={{ color: levels.Error.textColor }}>
                 {error}
               </span>
             )}
-            <Checkbox
-              checked={includeLayout}
-              label={<span style={{ fontSize }}>Include current layout</span>}
-              onChange={(_, data) => setIncludeLayout(data.checked === true)}
-            />
+            {offerLayout && (
+              <Checkbox
+                checked={includeLayout}
+                label={<span style={{ fontSize }}>Include current layout</span>}
+                onChange={(_, data) => setIncludeLayout(data.checked === true)}
+              />
+            )}
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" size="small" onClick={onClose}>
               Cancel
             </Button>
             <Button appearance="primary" size="small" onClick={save}>
-              Save
+              {saveLabel}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+interface EvtxDeleteViewDialogProps {
+  open: boolean;
+  name: string;
+  fontSize: string;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+
+/** Asks before a view is deleted. Cancel has the focus: the safe action, not the destructive one. */
+export function EvtxDeleteViewDialog({ open, name, fontSize, onClose, onConfirm }: EvtxDeleteViewDialogProps) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(() => cancelRef.current?.focus(), 0);
+    return () => clearTimeout(timer);
+  }, [open]);
+
+  return (
+    <Dialog open={open} onOpenChange={(_, data) => !data.open && onClose()}>
+      <DialogSurface style={DIALOG_STYLE} aria-label="Delete view">
+        <DialogBody>
+          <DialogTitle>Delete view</DialogTitle>
+          <DialogContent style={{ fontSize }}>
+            Delete the view &quot;{name}&quot;? It cannot be brought back.
+          </DialogContent>
+          <DialogActions>
+            <Button ref={cancelRef} appearance="secondary" size="small" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button appearance="primary" size="small" onClick={onConfirm}>
+              Delete
             </Button>
           </DialogActions>
         </DialogBody>

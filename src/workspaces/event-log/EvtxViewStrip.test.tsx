@@ -1,6 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { tokens } from "@fluentui/react-components";
 
 const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
@@ -15,12 +17,12 @@ import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes, getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import { deferred } from "../../test-utils/deferred";
-import { EvtxViewStrip, evtxStripMutedTextColor } from "./EvtxViewStrip";
+import { EvtxViewStrip, evtxStripMutedTextColor, exportFileStem } from "./EvtxViewStrip";
 import { DEFAULT_QUICK_FILTER } from "./evtx-filter";
 import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { captureCriteria, sanitizeCriteria } from "./evtx-saved-filters";
 import { cancelActiveLoad, useEvtxStore } from "./evtx-store";
-import { EVTX_BUILT_IN_VIEWS, MAX_CUSTOM_VIEWS, type EvtxViewBody } from "./evtx-views";
+import { EVTX_BUILT_IN_VIEWS, MAX_CUSTOM_VIEWS, parseViewExport, type EvtxViewBody } from "./evtx-views";
 import { EVTX_VIEWS_STORAGE_KEY, useEvtxViewStore } from "./evtx-views-store";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import type { EvtxRecord } from "./types";
@@ -551,6 +553,345 @@ describe("EvtxViewStrip", () => {
       expect(localStorage.getItem(EVTX_VIEWS_STORAGE_KEY)).not.toMatch(TRANSIENT);
       // And the brush is still there: saving a view takes nothing from the session.
       expect(store().timeRange).not.toBeNull();
+    });
+  });
+});
+
+describe("EvtxViewStrip context menu", () => {
+  beforeEach(reset);
+  afterEach(cleanup);
+
+  const openMenu = async (name: string) => {
+    fireEvent.contextMenu(card(name));
+    return screen.findByRole("menu");
+  };
+  const choose = async (name: string, item: string | RegExp) => {
+    const menu = await openMenu(name);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: item }));
+  };
+  const itemNames = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((i) => i.textContent);
+
+  describe("what it offers", () => {
+    it("offers the five actions on a custom view, in the spec's order", async () => {
+      makeView("Mine");
+      render(<EvtxViewStrip />);
+      expect(itemNames(await openMenu("Mine"))).toEqual([
+        "Rename...",
+        "Update from current",
+        "Duplicate",
+        "Delete...",
+        "Export...",
+      ]);
+    });
+
+    it("offers only Duplicate and Export on a built-in, which is read-only", async () => {
+      render(<EvtxViewStrip />);
+      expect(itemNames(await openMenu("Enrollment triage"))).toEqual(["Duplicate", "Export..."]);
+    });
+
+    it("opens from the keyboard: the menu key and Shift+F10, and no other key", async () => {
+      makeView("Mine");
+      render(<EvtxViewStrip />);
+      fireEvent.keyDown(card("Mine"), { key: "a" });
+      expect(screen.queryByRole("menu")).toBeNull();
+      fireEvent.keyDown(card("Mine"), { key: "F10" });
+      expect(screen.queryByRole("menu")).toBeNull();
+      fireEvent.keyDown(card("Mine"), { key: "ContextMenu" });
+      expect(await screen.findByRole("menu")).toBeInTheDocument();
+      fireEvent.keyDown(card("Mine"), { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+      fireEvent.keyDown(card("Mine"), { key: "F10", shiftKey: true });
+      expect(await screen.findByRole("menu")).toBeInTheDocument();
+    });
+
+    it("does not apply the view when it opens, and a card says it has a menu", async () => {
+      makeView("Mine");
+      store().setFilterEventIds("1");
+      render(<EvtxViewStrip />);
+      expect(card("Mine")).toHaveAttribute("aria-haspopup", "menu");
+      await openMenu("Mine");
+      expect(store().filterEventIds).toBe("1");
+    });
+
+    it("uses the Escape key to close, so the workspace does not also clear a brushed range with it", async () => {
+      makeView("Mine");
+      render(<EvtxViewStrip />);
+      // Escape on a card with no menu open is not used here, so it reaches the workspace's listener.
+      expect(fireEvent.keyDown(card("Mine"), { key: "Escape" })).toBe(true);
+      await openMenu("Mine");
+      card("Mine").focus();
+      // The key is used (default prevented), so a window listener that honours that steps aside.
+      expect(fireEvent.keyDown(card("Mine"), { key: "Escape" })).toBe(false);
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    });
+  });
+
+  describe("Rename", () => {
+    it("renames from a dialog that starts with the current name, and gives focus back to the card", async () => {
+      makeView("Old name");
+      render(<EvtxViewStrip />);
+      await choose("Old name", "Rename...");
+      const dialog = await screen.findByRole("dialog", { name: "Rename view" });
+      const name = within(dialog).getByRole("textbox", { name: /Name/ });
+      expect(name).toHaveValue("Old name");
+      expect(within(dialog).queryByRole("checkbox")).toBeNull();
+      fireEvent.change(name, { target: { value: "New name" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(useEvtxViewStore.getState().views[0].name).toBe("New name");
+      expect(screen.getByRole("status")).toHaveTextContent("Renamed to New name.");
+      await waitFor(() => expect(card("New name")).toHaveFocus());
+    });
+
+    it("refuses a name another view or a built-in has, or an empty one, and keeps the dialog open", async () => {
+      makeView("A");
+      makeView("B");
+      render(<EvtxViewStrip />);
+      await choose("A", "Rename...");
+      const dialog = await screen.findByRole("dialog", { name: "Rename view" });
+      const name = within(dialog).getByRole("textbox", { name: /Name/ });
+      fireEvent.change(name, { target: { value: "b" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+      expect(within(dialog).getByRole("alert")).toHaveTextContent("A view with that name already exists.");
+      fireEvent.change(name, { target: { value: "Enrollment Triage" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+      expect(within(dialog).getByRole("alert")).toHaveTextContent("already exists");
+      fireEvent.change(name, { target: { value: "" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+      expect(within(dialog).getByRole("alert")).toHaveTextContent("Enter a name.");
+      expect(useEvtxViewStore.getState().views.map((v) => v.name)).toEqual(["A", "B"]);
+    });
+
+    it("cancels with Escape and gives focus back", async () => {
+      makeView("Keep");
+      render(<EvtxViewStrip />);
+      await choose("Keep", "Rename...");
+      const dialog = await screen.findByRole("dialog", { name: "Rename view" });
+      fireEvent.keyDown(within(dialog).getByRole("textbox", { name: /Name/ }), { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(useEvtxViewStore.getState().views[0].name).toBe("Keep");
+      await waitFor(() => expect(card("Keep")).toHaveFocus());
+    });
+  });
+
+  describe("Update from current", () => {
+    it("replaces the criteria with the ones on screen, and the layout of a view that has one", async () => {
+      makeView("Mine", { layout: { activeView: "table", panels: { channels: true, insights: true, dock: false } } });
+      store().setFilterEventIds("41");
+      store().setTimeWindow("7d");
+      useEvtxLayoutStore.getState().setActiveView("grouped");
+      render(<EvtxViewStrip />);
+      expect(pressed("Mine")).toBe("false");
+      await choose("Mine", "Update from current");
+      const [view] = useEvtxViewStore.getState().views;
+      expect(view.criteria.beforeLoad).toMatchObject({ eventIds: "41", timeWindow: "7d" });
+      expect(view.layout?.activeView).toBe("grouped");
+      expect(view.name).toBe("Mine");
+      expect(pressed("Mine")).toBe("true");
+      expect(screen.getByRole("status")).toHaveTextContent("Updated Mine from the current filters.");
+    });
+
+    it("keeps a view saved without a layout without one", async () => {
+      makeView("Filters only");
+      store().setFilterEventIds("41");
+      useEvtxLayoutStore.getState().setActiveView("charts");
+      render(<EvtxViewStrip />);
+      await choose("Filters only", "Update from current");
+      expect(useEvtxViewStore.getState().views[0].layout).toBeNull();
+      expect(useEvtxViewStore.getState().views[0].criteria.beforeLoad.eventIds).toBe("41");
+    });
+
+    it("never stores a brushed range or a record scope", async () => {
+      makeView("Mine");
+      SELECTION_FILES();
+      useEvtxStore.setState({ timeRange: { startMs: 1_700_000_000_000, endMs: 1_700_000_060_000 } });
+      render(<EvtxViewStrip />);
+      await choose("Mine", "Update from current");
+      expect(store().timeRange).not.toBeNull();
+      expect(JSON.stringify(useEvtxViewStore.getState().views)).not.toMatch(TRANSIENT);
+      expect(localStorage.getItem(EVTX_VIEWS_STORAGE_KEY)).not.toMatch(TRANSIENT);
+    });
+
+    it("says so when the filters on screen cannot be saved, and changes nothing", async () => {
+      makeView("Mine");
+      const before = JSON.stringify(useEvtxViewStore.getState().views);
+      useEvtxStore.setState({ filterEventIds: "4624,abc" });
+      render(<EvtxViewStrip />);
+      await choose("Mine", "Update from current");
+      expect(screen.getByRole("alert")).toHaveTextContent("Mine was not updated.");
+      expect(JSON.stringify(useEvtxViewStore.getState().views)).toBe(before);
+    });
+  });
+
+  describe("Duplicate", () => {
+    it("copies a custom view under a new name and puts focus on the copy", async () => {
+      makeView("Mine", { layout: { activeView: "grouped", panels: { channels: true, insights: false, dock: false } } });
+      render(<EvtxViewStrip />);
+      await choose("Mine", "Duplicate");
+      const views = useEvtxViewStore.getState().views;
+      expect(views.map((v) => v.name)).toEqual(["Mine", "Mine copy"]);
+      expect(views[1].criteria).toEqual(views[0].criteria);
+      expect(views[1].layout).toEqual(views[0].layout);
+      expect(views[1].id).not.toBe(views[0].id);
+      expect(screen.getByRole("status")).toHaveTextContent("Duplicated Mine as Mine copy.");
+      await waitFor(() => expect(card("Mine copy")).toHaveFocus());
+    });
+
+    it("turns a built-in into a view that can be edited", async () => {
+      render(<EvtxViewStrip />);
+      await choose("Enrollment triage", "Duplicate");
+      expect(useEvtxViewStore.getState().views.map((v) => v.name)).toEqual(["Enrollment triage copy"]);
+      const menu = await openMenu("Enrollment triage copy");
+      expect(itemNames(menu)).toContain("Rename...");
+      expect(card("Enrollment triage copy")).toHaveAttribute("data-evtx-view-card", "custom");
+    });
+
+    it("says so when the library is full", async () => {
+      for (let i = 0; i < MAX_CUSTOM_VIEWS; i += 1) makeView(`V${i}`);
+      render(<EvtxViewStrip />);
+      await choose("V0", "Duplicate");
+      expect(screen.getByRole("alert")).toHaveTextContent("V0 was not duplicated. The library holds");
+      expect(useEvtxViewStore.getState().views).toHaveLength(MAX_CUSTOM_VIEWS);
+    });
+  });
+
+  describe("Delete", () => {
+    it("asks first, with Cancel focused, and deletes nothing on Cancel", async () => {
+      makeView("Mine");
+      render(<EvtxViewStrip />);
+      await choose("Mine", "Delete...");
+      const dialog = await screen.findByRole("dialog", { name: "Delete view" });
+      expect(dialog).toHaveTextContent('Delete the view "Mine"?');
+      await waitFor(() => expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus());
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(useEvtxViewStore.getState().views).toHaveLength(1);
+      await waitFor(() => expect(card("Mine")).toHaveFocus());
+    });
+
+    it("deletes on confirmation, announces it, and moves focus to the next card", async () => {
+      makeView("First");
+      makeView("Second");
+      render(<EvtxViewStrip />);
+      await choose("First", "Delete...");
+      const dialog = await screen.findByRole("dialog", { name: "Delete view" });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(useEvtxViewStore.getState().views.map((v) => v.name)).toEqual(["Second"]);
+      expect(screen.getByRole("status")).toHaveTextContent("Deleted First.");
+      await waitFor(() => expect(card("Second")).toHaveFocus());
+    });
+
+    it("moves focus to the previous card, or to New view, when the last card goes", async () => {
+      makeView("Only");
+      render(<EvtxViewStrip />);
+      await choose("Only", "Delete...");
+      fireEvent.click(within(await screen.findByRole("dialog", { name: "Delete view" })).getByRole("button", { name: "Delete" }));
+      // The built-in is before it, so focus goes there.
+      await waitFor(() => expect(card("New view")).toHaveFocus());
+    });
+
+    it("cancels on Escape", async () => {
+      makeView("Mine");
+      render(<EvtxViewStrip />);
+      await choose("Mine", "Delete...");
+      const dialog = await screen.findByRole("dialog", { name: "Delete view" });
+      fireEvent.keyDown(within(dialog).getByRole("button", { name: "Cancel" }), { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(useEvtxViewStore.getState().views).toHaveLength(1);
+    });
+  });
+
+  describe("Export", () => {
+    beforeEach(() => {
+      vi.mocked(save).mockReset();
+      vi.mocked(writeTextFile).mockReset();
+    });
+
+    it("writes the view as a schema 1 file that reads back as the view, without its id", async () => {
+      const view = makeView("Mine", { layout: { activeView: "grouped", panels: { channels: true, insights: false, dock: false } } });
+      vi.mocked(save).mockResolvedValue("C:\\out\\mine.json");
+      vi.mocked(writeTextFile).mockResolvedValue(undefined);
+      render(<EvtxViewStrip />);
+      await choose("Mine", "Export...");
+      await waitFor(() => expect(writeTextFile).toHaveBeenCalledTimes(1));
+      expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: "mine.json" }));
+      const [path, text] = vi.mocked(writeTextFile).mock.calls[0] as [string, string];
+      expect(path).toBe("C:\\out\\mine.json");
+      expect(JSON.parse(text).schema).toBe(1);
+      expect(text).not.toContain(view.id);
+      expect(text).not.toMatch(/builtIn|lastUsed/);
+      expect(parseViewExport(text)).toEqual({ ok: true, views: [{ name: view.name, criteria: view.criteria, layout: view.layout }], skipped: 0 });
+      await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Exported Mine."));
+    });
+
+    it("exports a built-in as an ordinary view, named for it", async () => {
+      vi.mocked(save).mockResolvedValue("/tmp/e.json");
+      vi.mocked(writeTextFile).mockResolvedValue(undefined);
+      render(<EvtxViewStrip />);
+      await choose("Enrollment triage", "Export...");
+      await waitFor(() => expect(writeTextFile).toHaveBeenCalled());
+      expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: "enrollment-triage.json" }));
+      const parsed = parseViewExport(vi.mocked(writeTextFile).mock.calls[0][1] as string);
+      expect(parsed.ok && parsed.views[0].criteria).toEqual(EVTX_BUILT_IN_VIEWS[0].criteria);
+    });
+
+    it("writes nothing when the save dialog is cancelled", async () => {
+      makeView("Mine");
+      vi.mocked(save).mockResolvedValue(null);
+      render(<EvtxViewStrip />);
+      await choose("Mine", "Export...");
+      await waitFor(() => expect(save).toHaveBeenCalled());
+      expect(writeTextFile).not.toHaveBeenCalled();
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("shows the failure in full, as an alert", async () => {
+      makeView("Mine");
+      vi.mocked(save).mockResolvedValue("/tmp/e.json");
+      vi.mocked(writeTextFile).mockRejectedValue(new Error("Access is denied. (os error 5)"));
+      render(<EvtxViewStrip />);
+      await choose("Mine", "Export...");
+      expect(await screen.findByRole("alert")).toHaveTextContent("Mine was not exported. Access is denied. (os error 5)");
+    });
+
+    it("does not start a second export while the first is choosing a file", async () => {
+      makeView("Mine");
+      const chosen = deferred<string | null>();
+      vi.mocked(save).mockReturnValue(chosen.promise);
+      vi.mocked(writeTextFile).mockResolvedValue(undefined);
+      render(<EvtxViewStrip />);
+      await choose("Mine", "Export...");
+      await choose("Mine", "Export...");
+      expect(save).toHaveBeenCalledTimes(1);
+      chosen.resolve("/tmp/e.json");
+      await waitFor(() => expect(writeTextFile).toHaveBeenCalledTimes(1));
+    });
+
+    it("never writes a brushed range or a record scope", async () => {
+      makeView("Mine");
+      SELECTION_FILES();
+      useEvtxStore.setState({ timeRange: { startMs: 1_700_000_000_000, endMs: 1_700_000_060_000 } });
+      vi.mocked(save).mockResolvedValue("/tmp/e.json");
+      vi.mocked(writeTextFile).mockResolvedValue(undefined);
+      render(<EvtxViewStrip />);
+      await choose("Mine", "Export...");
+      await waitFor(() => expect(writeTextFile).toHaveBeenCalled());
+      expect(vi.mocked(writeTextFile).mock.calls[0][1] as string).not.toMatch(TRANSIENT);
+    });
+  });
+
+  describe("the default file name", () => {
+    it.each([
+      ["Enrollment triage", "enrollment-triage"],
+      ["  Spaced   out  ", "spaced-out"],
+      ["../../etc/passwd", "etcpasswd"],
+      ["a\\b/c:d*e?f", "abcdef"],
+      ["", "view"],
+      ["...", "view"],
+      ["x".repeat(100), "x".repeat(40)],
+    ])("turns %j into %j", (name, stem) => {
+      expect(exportFileStem(name)).toBe(stem);
     });
   });
 });

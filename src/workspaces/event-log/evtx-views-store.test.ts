@@ -214,6 +214,9 @@ describe("the view library", () => {
           counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
         },
       });
+      // They are there to be captured: a store that held neither would prove nothing.
+      expect(useEvtxStore.getState().timeRange).not.toBeNull();
+      expect(useEvtxStore.getState().recordScope).not.toBeNull();
       const captured = captureCriteria(useEvtxStore.getState());
       state().create("Made", captured, LAYOUT);
       const id = state().views[0].id;
