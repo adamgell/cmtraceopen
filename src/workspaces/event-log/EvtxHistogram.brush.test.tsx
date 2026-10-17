@@ -573,6 +573,80 @@ describe("what it cannot be used for", () => {
   });
 });
 
+describe("a load that ends a gesture", () => {
+  const withChips = (list: readonly EvtxRecord[], loading: boolean) => (
+    <>
+      <EvtxFilterChips visibleCount={list.length} loadedCount={list.length} />
+      <EvtxHistogram records={list} loading={loading} />
+    </>
+  );
+  const settle = () =>
+    act(() => {
+      vi.advanceTimersByTime(DERIVATION_THROTTLE_MS);
+    });
+
+  it("derives the cursor from the chart once it is ready, when focus arrived during the load", () => {
+    vi.useFakeTimers();
+    const { rerender } = render(withChips([], true));
+    const slider = screen.getByRole("slider", { name: "Time range" });
+    act(() => {
+      slider.focus();
+    });
+    expect(document.activeElement).toBe(slider);
+    rerender(withChips(records, false));
+    settle();
+    // The newest bucket, not the oldest that an empty chart's cursor would have been.
+    expect(screen.getByRole("slider", { name: "Time range" })).toBe(slider);
+    expect(slider).toHaveAttribute("aria-valuenow", "71");
+    expect(slider).toHaveAttribute("aria-valuetext", describeBucket(histogram.buckets[71], "utc"));
+    expect(cursorText()!.textContent).toBe(describeBucket(histogram.buckets[71], "utc"));
+  });
+
+  it("shows no stale grid and commits none after a load, when a Shift selection was pending", () => {
+    vi.useFakeTimers();
+    const { container, rerender } = render(withChips(records, false));
+    const slider = screen.getByRole("slider", { name: "Time range" });
+    act(() => {
+      slider.focus();
+    });
+    key(slider, "ArrowLeft", { shiftKey: true });
+    expect(wash(container)!.dataset.evtxDraft).toBe("true");
+
+    // A load starts and ends with different events: a different grid.
+    rerender(withChips([], true));
+    settle();
+    const reloaded = [...records, rec(FIRST + 5 * DAY, "Error", 500)];
+    const fresh = buildHistogram(reloaded, "utc");
+    expect(fresh.buckets.length).not.toBe(72);
+    rerender(withChips(reloaded, false));
+    settle();
+
+    expect(container.querySelectorAll("[data-evtx-bucket]")).toHaveLength(fresh.buckets.length);
+    expect(wash(container)).toBeNull();
+    expect(slider.getAttribute("aria-valuetext")).not.toMatch(/selecting/);
+    expect(slider).toHaveAttribute("aria-valuenow", String(fresh.buckets.length - 1));
+    // Enter applies the newest bucket of the grid on screen, not a range from the grid before the load.
+    key(slider, "Enter");
+    const last = fresh.buckets.length - 1;
+    expect(storeRange()).toEqual({ startMs: fresh.edges[last], endMs: fresh.edges[last + 1] });
+  });
+
+  it("drops a drag in progress when a load starts, and commits nothing on release", () => {
+    vi.useFakeTimers();
+    const { container, rerender } = render(withChips(records, false));
+    const slider = screen.getByRole("slider", { name: "Time range" });
+    slider.getBoundingClientRect = () =>
+      ({ left: LEFT, top: 0, right: LEFT + 720, bottom: 56, width: 720, height: 56, x: LEFT, y: 0, toJSON: () => ({}) }) as DOMRect;
+    down(slider, x(3));
+    move(slider, x(8));
+    expect(wash(container)!.dataset.evtxDraft).toBe("true");
+    rerender(withChips([], true));
+    expect(wash(container)).toBeNull();
+    up(slider, x(8));
+    expect(setTimeRangeSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("a load while the plot has focus", () => {
   const withChips = (extra: { records: readonly EvtxRecord[]; loading: boolean }) => (
     <>

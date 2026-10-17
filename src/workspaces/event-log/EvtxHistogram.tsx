@@ -295,6 +295,22 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
   // keyboard selection; the gesture keeps the buckets it began with and commits their edges.
   const [frozen, setFrozen] = useState<HistogramData | null>(null);
 
+  // When a load begins (or the first events of the next set are still arriving), whatever a gesture
+  // held belongs to the set that is going away: the grid it froze, the drag, the anchor and the
+  // cursor. They are dropped, and derived again from the new chart once it is ready. Done while
+  // rendering, so no frame draws the old grid under the new state.
+  const busy = loading || catchingUp;
+  const [wasBusy, setWasBusy] = useState(busy);
+  if (busy !== wasBusy) {
+    setWasBusy(busy);
+    if (busy) {
+      setDrag(null);
+      setFrozen(null);
+      setKeys(null);
+      setHover(null);
+    }
+  }
+
   const view = frozen ?? histogram;
   const count = view.buckets.length;
   const scale = useMemo(() => fitScale(view), [view]);
@@ -423,7 +439,7 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
   // and the slider's value text carries it for assistive technology.
   const tipIndex = ready ? hover : null;
   const cursorBucket =
-    ready && focused && key !== null && cursor < count ? view.buckets[cursor] : null;
+    ready && focused && cursor < count ? view.buckets[cursor] : null;
   const hovered = tipIndex !== null && tipIndex < count ? view.buckets[tipIndex] : null;
   const zone = histogram.domain === null ? null : timeZoneLabel(timeZoneMode, histogram.domain.startMs);
 
@@ -508,10 +524,9 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
               }}
               onPointerLeave={() => setHover(null)}
               onKeyDown={onKeyDown}
-              onFocus={() => {
-                setFocused(true);
-                setKeys((held) => held ?? { cursor: initialBrushCursor(count, appliedSpan), anchor: null });
-              }}
+              // The cursor is not stored on focus: with no keys held it is derived from the chart, so
+              // focus that arrives during a load does not pin it to an empty chart's first bucket.
+              onFocus={() => setFocused(true)}
               onBlur={() => {
                 setFocused(false);
                 setKeys(null);
@@ -550,7 +565,7 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
                 shownRange !== null &&
                 !shownRange.clippedRight &&
                 edge(shownRange.right, draftOnPlot !== null, "end")}
-              {ready && focused && key !== null && cursor < count && (
+              {ready && focused && cursor < count && (
                 <div
                   aria-hidden="true"
                   data-evtx-layer="cursor"
