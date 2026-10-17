@@ -6,6 +6,8 @@ import {
   formatEventTime,
   formatTimeRange,
   TIME_RANGE_SEPARATOR,
+  offsetLabel,
+  tellRangeEndsApart,
   timeRangeNeedsYear,
   timeZoneLabel,
 } from "./evtx-time";
@@ -257,5 +259,83 @@ describe("a range label never reads with its start equal to its end", () => {
     expect(formatTimeRange(utc(2026, 10, 16, 9, 0, 0, 0), utc(2026, 10, 16, 9, 0, 1, 500), "utc")).toBe(
       `09:00:00${TIME_RANGE_SEPARATOR}09:00:01`,
     );
+  });
+});
+
+describe("a range whose two ends read alike across a DST fall-back", () => {
+  const SEP = TIME_RANGE_SEPARATOR;
+
+  describe("tellRangeEndsApart, a pure rule that takes the two offsets", () => {
+    it("labels each end with its offset when the texts are equal and the offsets differ (Europe/London, 26 Oct 2025)", () => {
+      // 01:00 BST (UTC+01:00) to 01:00 GMT (UTC+00:00): the same wall text twice, an hour apart.
+      expect(tellRangeEndsApart("Oct 26 2025 01:00", "Oct 26 2025 01:00", 60, 0)).toEqual({
+        start: "Oct 26 2025 01:00 UTC+01:00",
+        end: "Oct 26 2025 01:00 UTC+00:00",
+      });
+      expect(tellRangeEndsApart("01:00", "01:00", 60, 0)).toEqual({
+        start: "01:00 UTC+01:00",
+        end: "01:00 UTC+00:00",
+      });
+    });
+
+    it("does the same across America/New_York's fall-back and a half-hour zone's", () => {
+      expect(tellRangeEndsApart("Nov 2 2025 01:00", "Nov 2 2025 01:00", -240, -300)).toEqual({
+        start: "Nov 2 2025 01:00 UTC-04:00",
+        end: "Nov 2 2025 01:00 UTC-05:00",
+      });
+      expect(tellRangeEndsApart("01:30", "01:30", 345, 330)).toEqual({
+        start: "01:30 UTC+05:45",
+        end: "01:30 UTC+05:30",
+      });
+    });
+
+    it("leaves a normal range alone: texts that differ get no offset, even when the offsets differ", () => {
+      expect(tellRangeEndsApart("00:30", "02:30", 60, 0)).toEqual({ start: "00:30", end: "02:30" });
+      expect(tellRangeEndsApart("09:00", "09:45", 0, 0)).toEqual({ start: "09:00", end: "09:45" });
+    });
+
+    it("leaves equal texts alone when the offsets do not differ: that is a sub-second range, for milliseconds", () => {
+      expect(tellRangeEndsApart("09:00:00", "09:00:00", 0, 0)).toEqual({ start: "09:00:00", end: "09:00:00" });
+    });
+
+    it("writes an offset as UTC+hh:mm, the way timeZoneLabel does", () => {
+      expect(offsetLabel(60)).toBe("UTC+01:00");
+      expect(offsetLabel(0)).toBe("UTC+00:00");
+      expect(offsetLabel(-300)).toBe("UTC-05:00");
+      expect(offsetLabel(345)).toBe("UTC+05:45");
+    });
+  });
+
+  describe("formatTimeRange", () => {
+    const utc = (hour: number, minute = 0, second = 0, ms = 0) => Date.UTC(2026, 9, 16, hour, minute, second, ms);
+
+    it("still adds milliseconds to a genuinely sub-second range, and gives it no offset", () => {
+      expect(formatTimeRange(utc(9, 0, 0, 0), utc(9, 0, 0, 500), "utc")).toBe(
+        `09:00:00.000${SEP}09:00:00.500`,
+      );
+    });
+
+    it("gives a normal range no offset", () => {
+      expect(formatTimeRange(utc(9), utc(9, 45), "utc")).toBe(`09:00${SEP}09:45`);
+      const local = formatTimeRange(utc(9), utc(9, 45), "local");
+      expect(local).not.toMatch(/UTC/);
+    });
+
+    it("never reads with its two ends alike, across every hour of a year in the host's own zone", () => {
+      // The host's zone decides whether any of these ranges is a repeated hour: run under TZ=Europe/London
+      // or TZ=America/New_York to cover a fall-back. Under UTC it checks only that nothing reads alike.
+      const from = Date.UTC(2025, 0, 1);
+      let checked = 0;
+      for (let at = from; at < from + 365 * 24 * 3600_000; at += 3600_000) {
+        for (const span of [20 * 60_000, 3600_000, 2 * 3600_000]) {
+          for (const withYear of [false, true]) {
+            const [start, end] = formatTimeRange(at, at + span, "local", withYear).split(SEP);
+            if (start === end) throw new Error(`${new Date(at).toISOString()} + ${span}: ${start} ${SEP} ${end}`);
+            checked += 1;
+          }
+        }
+      }
+      expect(checked).toBe(365 * 24 * 3 * 2);
+    });
   });
 });

@@ -177,12 +177,55 @@ export function formatTimeRange(
     crossesDays
       ? formatDayClock(epochMs, mode, withSeconds, year)
       : formatClock(epochMs, mode, withSeconds);
-  const startText = end(startMs);
-  const endText = end(endMs);
-  if (startText !== endText) return `${startText}${TIME_RANGE_SEPARATOR}${endText}`;
+  // Across a DST fall-back a range as wide as the shift runs from the first occurrence of a wall time
+  // to the second, so both ends read alike; each then names its own offset.
+  const ends = tellRangeEndsApart(
+    end(startMs),
+    end(endMs),
+    zoneOffsetMinutes(startMs, mode),
+    zoneOffsetMinutes(endMs, mode),
+  );
+  if (ends.start !== ends.end || endMs - startMs >= 1000) {
+    return `${ends.start}${TIME_RANGE_SEPARATOR}${ends.end}`;
+  }
   // Under a second, even seconds read alike: the milliseconds tell the ends apart.
   const milliseconds = (epochMs: number) => String(((epochMs % 1000) + 1000) % 1000).padStart(3, "0");
-  return `${startText}.${milliseconds(startMs)}${TIME_RANGE_SEPARATOR}${endText}.${milliseconds(endMs)}`;
+  return `${ends.start}.${milliseconds(startMs)}${TIME_RANGE_SEPARATOR}${ends.end}.${milliseconds(endMs)}`;
+}
+
+/**
+ * The two end texts of a range, each with its zone offset when they read alike and the offsets
+ * differ: `01:00 UTC+01:00` and `01:00 UTC+00:00` for the hour that repeats when the clocks go back.
+ * Anything else is returned as it came: texts that differ need nothing, and equal texts at one offset
+ * are a sub-second range, which `formatTimeRange` tells apart by milliseconds. Pure, so it is tested
+ * with any two offsets whatever the host's zone.
+ */
+export function tellRangeEndsApart(
+  startText: string,
+  endText: string,
+  startOffsetMinutes: number,
+  endOffsetMinutes: number,
+): { start: string; end: string } {
+  if (startText !== endText || startOffsetMinutes === endOffsetMinutes) {
+    return { start: startText, end: endText };
+  }
+  return {
+    start: `${startText} ${offsetLabel(startOffsetMinutes)}`,
+    end: `${endText} ${offsetLabel(endOffsetMinutes)}`,
+  };
+}
+
+/** A zone's offset from UTC in minutes at an instant: zero in UTC, the host's own in local mode. */
+function zoneOffsetMinutes(epochMs: number, mode: EvtxTimeZoneMode): number {
+  // getTimezoneOffset is minutes *behind* UTC, so the sign is inverted.
+  return mode === "utc" ? 0 : -new Date(epochMs).getTimezoneOffset();
+}
+
+/** An offset as `UTC+01:00` (`UTC-05:00`, `UTC+00:00`). */
+export function offsetLabel(offsetMinutes: number): string {
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const absolute = Math.abs(offsetMinutes);
+  return `UTC${sign}${pad(Math.floor(absolute / 60))}:${pad(absolute % 60)}`;
 }
 
 /**
@@ -213,9 +256,5 @@ export function timeRangeNeedsYear(
  */
 export function timeZoneLabel(mode: EvtxTimeZoneMode, epochMs = Date.now()): string {
   if (mode === "utc") return "UTC";
-  // getTimezoneOffset is minutes *behind* UTC, so the sign is inverted for display.
-  const offsetMinutes = -new Date(epochMs).getTimezoneOffset();
-  const sign = offsetMinutes < 0 ? "-" : "+";
-  const absolute = Math.abs(offsetMinutes);
-  return `UTC${sign}${pad(Math.floor(absolute / 60))}:${pad(absolute % 60)}`;
+  return offsetLabel(zoneOffsetMinutes(epochMs, mode));
 }

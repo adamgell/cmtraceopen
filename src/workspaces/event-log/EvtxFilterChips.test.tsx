@@ -218,6 +218,26 @@ describe("buildFilterChips, the transient criteria", () => {
       expect(chip.label).toBe(`Time: brushed Feb 14 2026 00:00${SEP}Feb 14 2027 00:00`);
     });
 
+    it("never writes a range with its ends alike across a DST fall-back, in the host's own zone", () => {
+      // Run under TZ=Europe/London or TZ=America/New_York to cover a repeated hour; under UTC this
+      // checks only that nothing reads alike. Each hour of 2025, as the current year and as a past one.
+      const from = Date.UTC(2025, 0, 1);
+      let checked = 0;
+      for (const nowMs of [Date.UTC(2025, 5, 1), Date.UTC(2026, 9, 16)]) {
+        for (let at = from; at < from + 365 * 24 * 3600_000; at += 3600_000) {
+          for (const span of [20 * 60_000, 3600_000]) {
+            const chip = buildFilterChips(
+              input({ timeRange: { startMs: at, endMs: at + span }, timeZoneMode: "local", nowMs }),
+            )[0];
+            const [start, end] = chip.label.replace("Time: brushed ", "").split(SEP);
+            if (start === end) throw new Error(`${new Date(at).toISOString()} + ${span}: ${chip.label}`);
+            checked += 1;
+          }
+        }
+      }
+      expect(checked).toBe(2 * 365 * 24 * 2);
+    });
+
     it("compares with the clock it is given, not the real one", () => {
       const march2026 = [Date.UTC(2026, 2, 3), Date.UTC(2026, 3, 2)] as const;
       // The file pins the real clock to 2026, so only the given clock can make 2026 a past year.
