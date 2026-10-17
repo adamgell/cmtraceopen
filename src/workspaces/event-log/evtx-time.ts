@@ -105,6 +105,7 @@ function wallClock(epochMs: number, mode: EvtxTimeZoneMode) {
   const date = new Date(epochMs);
   return mode === "utc"
     ? {
+        year: date.getUTCFullYear(),
         month: date.getUTCMonth(),
         day: date.getUTCDate(),
         hours: date.getUTCHours(),
@@ -112,6 +113,7 @@ function wallClock(epochMs: number, mode: EvtxTimeZoneMode) {
         seconds: date.getUTCSeconds(),
       }
     : {
+        year: date.getFullYear(),
         month: date.getMonth(),
         day: date.getDate(),
         hours: date.getHours(),
@@ -130,10 +132,18 @@ export function formatClock(epochMs: number, mode: EvtxTimeZoneMode, withSeconds
 /**
  * A clock reading with its day, `Oct 16 22:00` (`Oct 16 22:00:05` with `withSeconds`), in the chosen
  * zone. For labels that sit on a span longer than a day, where a bare `22:00` would not say which one.
+ * With `withYear` the zone's year follows the day, `Oct 16 2026 22:00`, for a span that crosses a
+ * calendar year or buckets a year wide: without it the same label names two different years alike.
  */
-export function formatDayClock(epochMs: number, mode: EvtxTimeZoneMode, withSeconds = false): string {
-  const { month, day } = wallClock(epochMs, mode);
-  return `${MONTH_ABBREVIATIONS[month]} ${day} ${formatClock(epochMs, mode, withSeconds)}`;
+export function formatDayClock(
+  epochMs: number,
+  mode: EvtxTimeZoneMode,
+  withSeconds = false,
+  withYear = false,
+): string {
+  const { year, month, day } = wallClock(epochMs, mode);
+  const date = withYear ? `${MONTH_ABBREVIATIONS[month]} ${day} ${year}` : `${MONTH_ABBREVIATIONS[month]} ${day}`;
+  return `${date} ${formatClock(epochMs, mode, withSeconds)}`;
 }
 
 /** Between the two times of a range label: an en dash, the spec's glyph (section 8.4). */
@@ -146,13 +156,23 @@ const SECONDS_BELOW_MS = 2 * 60 * 1000;
  * A half-open time range as a label: `09:00-09:45` on one day, `Oct 16 22:00-Oct 17 03:00` across
  * days, and with seconds when the range is shorter than two minutes. The days are the zone's own,
  * and the last instant inside the range decides whether it crosses one, so a range that ends at
- * midnight stays on its day. The separator is `TIME_RANGE_SEPARATOR`.
+ * midnight stays on its day. The separator is `TIME_RANGE_SEPARATOR`. `withYear` is `formatDayClock`'s.
  */
-export function formatTimeRange(startMs: number, endMs: number, mode: EvtxTimeZoneMode): string {
+export function formatTimeRange(
+  startMs: number,
+  endMs: number,
+  mode: EvtxTimeZoneMode,
+  withYear = false,
+): string {
   const withSeconds = endMs - startMs < SECONDS_BELOW_MS;
-  const crossesDays = eventDateKey(startMs, mode) !== eventDateKey(Math.max(startMs, endMs - 1), mode);
+  // With the year, both ends always carry their day and year: a range a year wide would otherwise
+  // read the same at both ends.
+  const crossesDays =
+    withYear || eventDateKey(startMs, mode) !== eventDateKey(Math.max(startMs, endMs - 1), mode);
   const end = (epochMs: number) =>
-    crossesDays ? formatDayClock(epochMs, mode, withSeconds) : formatClock(epochMs, mode, withSeconds);
+    crossesDays
+      ? formatDayClock(epochMs, mode, withSeconds, withYear)
+      : formatClock(epochMs, mode, withSeconds);
   return `${end(startMs)}${TIME_RANGE_SEPARATOR}${end(endMs)}`;
 }
 

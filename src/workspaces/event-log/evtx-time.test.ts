@@ -163,3 +163,31 @@ describe("formatDayClock", () => {
     );
   });
 });
+
+describe("the year in day labels", () => {
+  const utc = (year: number, month: number, day: number, hour = 0, minute = 0) =>
+    Date.UTC(year, month - 1, day, hour, minute);
+
+  it("puts the zone's year between the day and the clock when asked", () => {
+    expect(formatDayClock(utc(2024, 1, 5, 22), "utc", false, true)).toBe("Jan 5 2024 22:00");
+    expect(formatDayClock(utc(2026, 10, 16, 3, 4), "utc", true, true)).toBe("Oct 16 2026 03:04:00");
+    expect(formatDayClock(utc(2026, 10, 16, 3, 4), "utc")).toBe("Oct 16 03:04");
+  });
+
+  it("reads the year on the chosen clock, not the UTC one", () => {
+    const local = new Date(utc(2025, 12, 31, 23, 30));
+    expect(formatDayClock(utc(2025, 12, 31, 23, 30), "local", false, true)).toContain(` ${local.getFullYear()} `);
+  });
+
+  it("gives a range both days and years, even one inside a single day, so two ends are never alike", () => {
+    expect(formatTimeRange(utc(2026, 2, 14), utc(2027, 2, 14), "utc", true)).toBe(
+      `Feb 14 2026 00:00${TIME_RANGE_SEPARATOR}Feb 14 2027 00:00`,
+    );
+    expect(formatTimeRange(utc(2026, 10, 16, 9), utc(2026, 10, 16, 9, 45), "utc", true)).toBe(
+      `Oct 16 2026 09:00${TIME_RANGE_SEPARATOR}Oct 16 2026 09:45`,
+    );
+    expect(formatTimeRange(utc(2026, 10, 16, 9), utc(2026, 10, 16, 9, 45), "utc")).toBe(
+      `09:00${TIME_RANGE_SEPARATOR}09:45`,
+    );
+  });
+});
