@@ -305,17 +305,34 @@ export function topEventInCell(
 }
 
 /**
+ * Whether `record` is, now, the record the store holds under its own id. The store's ids are indexes
+ * into its records, rewritten in place by every merge, so a record of the current set sits at
+ * `current[record.id]`. A scene is published up to one throttle window late: after a reload that
+ * finished inside it, the scene still holds the previous set's objects, whose ids can equal indexes
+ * of the new set. Such a record is not current, and selecting by its id would select another event.
+ */
+export function isCurrentRecord(record: EvtxRecord, current: readonly EvtxRecord[]): boolean {
+  return current[record.id] === record;
+}
+
+/**
  * Where the record with this id is drawn, or null if it is not charted (filtered out, untimed, or
  * not loaded). Ids are read now, not when the scene was built: the store rewrites them in place.
+ * With `current` (the store's records) a record that is not the store's own under that id does not
+ * count, so a stale scene finds nothing.
  */
 export function findRecordInScene(
   scene: SwimlaneScene,
   recordId: number | null,
+  current: readonly EvtxRecord[] | null = null,
 ): { lane: number; dot: number } | null {
   if (recordId === null) return null;
   for (let lane = 0; lane < scene.lanes.length; lane += 1) {
-    const dot = scene.lanes[lane].records.findIndex((record) => record.id === recordId);
-    if (dot >= 0) return { lane, dot };
+    const records = scene.lanes[lane].records;
+    for (let dot = 0; dot < records.length; dot += 1) {
+      const record = records[dot];
+      if (record.id === recordId && (current === null || isCurrentRecord(record, current))) return { lane, dot };
+    }
   }
   return null;
 }

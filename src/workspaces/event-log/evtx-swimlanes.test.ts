@@ -23,6 +23,7 @@ import {
   describeLaneCount,
   describeSwimlaneFigure,
   findRecordInScene,
+  isCurrentRecord,
   laneCellCounts,
   laneHeightFor,
   laneKeyOf,
@@ -432,6 +433,32 @@ describe("finding a record in the scene", () => {
     records[4].id = 40;
     expect(findRecordInScene(scene, 4)).toBeNull();
     expect(findRecordInScene(scene, 40)).toEqual({ lane: 1, dot: 1 });
+  });
+
+  it("finds nothing in a scene the store no longer holds: a stale record whose id is another event's", () => {
+    // After a reload inside the throttle window the scene still has the old objects; the store has
+    // new ones, under ids that are the same small numbers.
+    const old = [...many("a", 3), ...many("b", 2, T0 + HOUR)];
+    old.forEach((record, index) => (record.id = index));
+    const scene = build(old);
+    const fresh = old.map((record, index) => ({ ...record, id: index }));
+    expect(findRecordInScene(scene, 4)).toEqual({ lane: 1, dot: 1 });
+    expect(findRecordInScene(scene, 4, old)).toEqual({ lane: 1, dot: 1 });
+    expect(findRecordInScene(scene, 4, fresh)).toBeNull();
+    expect(findRecordInScene(scene, 4, [])).toBeNull();
+    // And the same objects renumbered in place by a merge are still found, at their new ids.
+    const merged = [old[4], old[0], old[1], old[2], old[3]];
+    merged.forEach((record, index) => (record.id = index));
+    expect(findRecordInScene(scene, 0, merged)).toEqual({ lane: 1, dot: 1 });
+  });
+
+  it("says a record is current only when it is the store's own under its id", () => {
+    const list = many("a", 3);
+    list.forEach((record, index) => (record.id = index));
+    expect(list.every((record) => isCurrentRecord(record, list))).toBe(true);
+    expect(isCurrentRecord(list[1], [])).toBe(false);
+    expect(isCurrentRecord(list[1], [list[0], { ...list[1] }, list[2]])).toBe(false);
+    expect(isCurrentRecord({ ...list[1], id: 99 }, list)).toBe(false);
   });
 
   it("is null for no id, an id not charted and an untimed record", () => {
