@@ -9,7 +9,7 @@
  * window are on the filter row, so only the search text has a chip; levels and the time window never
  * do. A chip's `title` is its tooltip when that says more than the chip does.
  */
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   createFocusOutlineStyle,
   Link,
@@ -299,11 +299,12 @@ const useStyles = makeStyles({
     ...createFocusOutlineStyle({ style: { outlineRadius: tokens.borderRadiusSmall } }),
   },
   // The remove icon on the selection fill. Foreground2 measures 3.80:1 there in solarized-dark, so
-  // the rest color is the selection foreground (the same token as the chip text, 6.42:1 or better in
-  // every theme). Only the rest color: hover and pressed keep the `remove` pairs, whose surfaces are
-  // the subtle hover and pressed backgrounds and not the selection fill.
+  // the rest color is the token map's selection foreground (the chip text's own color, 6.42:1 or
+  // better in every theme), handed over as a CSS variable the chip sets from `selection`: a component
+  // reads the map and does not index the palette. Only the rest color: hover and pressed keep the
+  // `remove` pairs, whose surfaces are the subtle hover and pressed backgrounds and not the fill.
   removeSelected: {
-    color: tokens.colorPaletteBlueForeground2,
+    color: "var(--evtx-chip-remove-color)",
   },
   readout: {
     marginLeft: "auto",
@@ -418,11 +419,12 @@ export function EvtxFilterChips({
             className={styles.chip}
             style={
               chip.selected
-                ? {
+                ? ({
                     backgroundColor: selection.background,
                     borderColor: selection.border,
                     color: selection.foreground,
-                  }
+                    "--evtx-chip-remove-color": selection.foreground,
+                  } as CSSProperties)
                 : undefined
             }
           >

@@ -14,6 +14,7 @@ import {
   EvtxFilterChips,
   type EvtxFilterChipInput,
 } from "./EvtxFilterChips";
+import chipsSource from "./EvtxFilterChips.tsx?raw";
 import { moreFiltersActiveCount } from "./EvtxMoreFilters";
 import {
   DEFAULT_QUICK_FILTER,
@@ -614,6 +615,12 @@ describe("EvtxFilterChips", () => {
   });
 });
 
+describe("the Time chip's colors", () => {
+  it("come from the token map, not from the Fluent palette tokens the map happens to hold", () => {
+    expect(chipsSource).not.toMatch(/colorPaletteBlue/);
+  });
+});
+
 describe("EvtxFilterChips with the transient criteria", () => {
   const arm = () => {
     seedWithTransient(
@@ -822,11 +829,17 @@ describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
       atLeast("chip text", selection.foreground, selection.background, 4.5);
     });
 
-    it("draws the remove icon at rest in the selection foreground, at 4.5:1 on the fill", () => {
+    it("draws the remove icon at rest in the token map's selection foreground, at 4.5:1 on the fill", () => {
       const remove = renderChip();
-      expect(declared(remove, "", "color")).toEqual([selection.foreground]);
+      const chip = document.querySelector<HTMLElement>("[data-evtx-chip='timeRange']")!;
+      // The class reads a variable and the chip sets it from the map, so the painted color is the
+      // map's selection foreground, whatever token that is.
+      expect(declared(remove, "", "color")).toEqual(["var(--evtx-chip-remove-color)"]);
+      expect(chip.style.getPropertyValue("--evtx-chip-remove-color")).toBe(selection.foreground);
+      expect(chip.style.color).toBe(selection.foreground);
       atLeast("remove rest", selection.foreground, selection.background, 4.5);
     });
+
 
     it("keeps the hover and pressed pairs of every chip, at 4.5:1 on their own surfaces", () => {
       const remove = renderChip();
