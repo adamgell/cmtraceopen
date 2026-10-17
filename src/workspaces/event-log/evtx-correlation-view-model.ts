@@ -21,6 +21,7 @@ import { getBaseName, getDirectoryName } from "../../lib/file-paths";
 import type {
   CorrelationChain,
   CorrelationChainEdge,
+  CorrelationChainModel,
   CorrelationChainStrength,
   CorrelationEvidenceRow,
 } from "./evtx-correlation-chains";
@@ -820,6 +821,37 @@ export function reconcileSelection(
     return { selectedId, lost: false };
   }
   return { selectedId: chains[0]?.id ?? null, lost: selectedId !== null };
+}
+
+export interface ListedRows {
+  /** The capped rows, then the selected row when the cap dropped it. */
+  rows: readonly CorrelationChain[];
+  /** The id of the selected row when it is listed past the cap, else null. */
+  pastCapId: string | null;
+}
+
+/**
+ * The rows the list shows: the model's capped `chains`, plus the selected row when the render cap
+ * dropped it. The dock and the rail open a row by id from a record's own chain (found through
+ * `rowsByMember`, which the cap does not trim), and that row can be one of thousands. Without this
+ * the selection would read as lost and another row would be shown in its place.
+ *
+ * The extra row is listed AFTER the capped ones, so the order of the capped rows never moves and
+ * the cap notice stays true. An id that no row has is not listed, and `reconcileSelection` then
+ * reports the loss.
+ */
+export function listedRows(
+  model: Pick<CorrelationChainModel, "chains" | "rowsByMember">,
+  selectedId: string | null,
+): ListedRows {
+  if (selectedId === null || model.chains.some((row) => row.id === selectedId)) {
+    return { rows: model.chains, pastCapId: null };
+  }
+  for (const rows of model.rowsByMember.values()) {
+    const row = rows.find((candidate) => candidate.id === selectedId);
+    if (row !== undefined) return { rows: [...model.chains, row], pastCapId: row.id };
+  }
+  return { rows: model.chains, pastCapId: null };
 }
 
 /** Distinct partners of each placed member by link strength, for a marker's accessible name. */

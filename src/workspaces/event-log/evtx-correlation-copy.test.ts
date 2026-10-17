@@ -549,6 +549,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "isProvenUnplaced",
     "laneKeyOf",
     "levelOfSeverity",
+    "listedRows",
     "memberLinkSummary",
     "partitionUnplaced",
     "placeInWindow",

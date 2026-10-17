@@ -40,6 +40,7 @@ import {
   UNTITLED_CHAIN,
   chainAccessibleName,
   isProvenUnplaced,
+  listedRows,
   partitionUnplaced,
 } from "./evtx-correlation-view-model";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
@@ -997,6 +998,57 @@ describe("reconcileSelection", () => {
   it("selects nothing when there are no chains, and still reports a loss", () => {
     expect(reconcileSelection([], null)).toEqual({ selectedId: null, lost: false });
     expect(reconcileSelection([], "gone")).toEqual({ selectedId: null, lost: true });
+  });
+});
+
+describe("listedRows (#842, ruling 3)", () => {
+  const pairs = (count: number) =>
+    Array.from({ length: count }, (_, i): TimelineCorrelationEdge => ({
+      id: `e${i}`,
+      fromId: `l${i}`,
+      toId: `r${i}`,
+      key: { kind: "activityId", value: `k${i}` },
+      strength: "exact",
+      confidence: "high",
+      candidateIds: [],
+      evidence: [{ originId: `l${i}`, field: "activityId", value: `k${i}` }],
+      coverage: { state: "covered" },
+    }));
+  const model = buildCorrelationChains({
+    items: [],
+    timelineEdges: pairs(130),
+    totalTimelineEdges: 130,
+    findings: [],
+  });
+  const shown = new Set(model.chains.map((row) => row.id));
+  const pastCap = [...model.rowsByMember.values()].map((rows) => rows[0] as CorrelationChain).find((row) => !shown.has(row.id)) as CorrelationChain;
+
+  it("is the capped rows, untouched, when the selection is among them or there is none", () => {
+    expect(listedRows(model, null)).toEqual({ rows: model.chains, pastCapId: null });
+    const inside = model.chains[40] as CorrelationChain;
+    expect(listedRows(model, inside.id).rows).toBe(model.chains);
+    expect(listedRows(model, inside.id).pastCapId).toBeNull();
+  });
+
+  it("lists the selected row after the 100 when the cap dropped it, leaving the 100 where they were", () => {
+    expect(pastCap).toBeDefined();
+    const listed = listedRows(model, pastCap.id);
+    expect(listed.pastCapId).toBe(pastCap.id);
+    expect(listed.rows).toHaveLength(101);
+    expect(listed.rows.slice(0, 100)).toEqual(model.chains);
+    expect(listed.rows[100]).toBe(pastCap);
+  });
+
+  it("lists nothing extra for an id no row has, so the loss is still reported", () => {
+    const listed = listedRows(model, "chain-that-never-was");
+    expect(listed).toEqual({ rows: model.chains, pastCapId: null });
+    expect(reconcileSelection(listed.rows, "chain-that-never-was").lost).toBe(true);
+  });
+
+  it("keeps a past-cap selection from reading as lost", () => {
+    const listed = listedRows(model, pastCap.id);
+    expect(reconcileSelection(listed.rows, pastCap.id)).toEqual({ selectedId: pastCap.id, lost: false });
+    expect(reconcileSelection(model.chains, pastCap.id).lost).toBe(true);
   });
 });
 
