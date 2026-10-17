@@ -36,7 +36,7 @@ export const CORRELATION_LANE_LABEL_PX = 184;
 /** The clickable box around a marker: WCAG 2.5.8 asks for 24 px, the drawn marker stays 14. */
 export const CORRELATION_MARKER_HIT_PX = 24;
 /** Spec 8.11: the lane plot is 240 px tall. */
-export const CORRELATION_PLOT_HEIGHT_PX = 240;
+const CORRELATION_PLOT_HEIGHT_PX = 240;
 /** Spec 8.11: an exact connector is 2.5 px solid, a candidate one 1.5 px dashed `5 4`. */
 export const CONNECTOR_STYLES = {
   exact: { width: 2.5, dash: undefined },

@@ -571,8 +571,8 @@ export function EventLogWorkspace() {
         diagnosisCoverageGaps.length > 0));
 
   // Today's stack: the unified timeline and the record grid. The diagnosis and the record details
-  // live in the rail; Phase 11 moves the unified timeline (the Table keeps it, so its
-  // unplaced and coverage previews stay until then); Phase 7 restyles the grid.
+  // live in the rail. The Table keeps the unified timeline, so its unplaced and coverage previews
+  // stay; Phase 7 restyles the grid.
   const renderTableView = () => (
     <>
       <div
