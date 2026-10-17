@@ -128,6 +128,18 @@ impl ScanGap {
             message,
         }
     }
+
+    /// A read the service stopped partway. A refusal reports as one; any other failure, or one
+    /// without a code, is a record gap.
+    #[cfg(any(target_os = "windows", test))]
+    pub fn read_stopped(failure: ChannelQueryError) -> Self {
+        Self {
+            kind: failure.code.map_or(EvtxCoverageGapKind::Record, |code| {
+                channel_failure_kind(code, EvtxCoverageGapKind::Record)
+            }),
+            message: failure.message,
+        }
+    }
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -290,7 +302,7 @@ fn decode_query_path_statuses(
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn decode_query_path_status_list(
+pub(super) fn decode_query_path_status_list(
     names: Vec<String>,
     statuses: Vec<u32>,
     coverage_channel: &str,
@@ -738,8 +750,8 @@ fn open_remote_session(machine: &str) -> Result<(OwnedEvtHandle, String), Channe
         )
     }
     .map_err(|error| {
-        ChannelQueryError::win32(
-            win32_code(&error),
+        channel_query_error(
+            &error,
             format_remote_error(&format!("cannot open remote session to {machine}"), &error),
         )
     })?;
@@ -1082,8 +1094,8 @@ fn query_channel_inner(
         )
     }
     .map_err(|e| {
-        ChannelQueryError::win32(
-            win32_code(&e),
+        channel_query_error(
+            &e,
             format_source_error(&format!("EvtQuery({coverage_channel})"), &e, remote),
         )
     })?;
@@ -1164,17 +1176,14 @@ fn query_channel_inner(
                     // message keeps how much of the channel was read before it.
                     push_bounded_scan_gap(
                         &mut gaps,
-                        ScanGap {
-                            kind: channel_failure_kind(
-                                win32_code(&error),
-                                EvtxCoverageGapKind::Record,
-                            ),
-                            message: format!(
+                        ScanGap::read_stopped(channel_query_error(
+                            &error,
+                            format!(
                                 "{coverage_channel}: stopped after {} events, the channel could not be read further ({})",
                                 produced,
                                 format_source_error("EvtNext", &error, remote),
                             ),
-                        },
+                        )),
                     );
                     break;
                 }
@@ -2540,6 +2549,16 @@ fn remote_error_kind(code: u32) -> &'static str {
     }
 }
 
+/// A failed Event Log call as a [`ChannelQueryError`], keeping its Win32 code beside `message`.
+///
+/// Every failed call whose `Error` can report `accessDenied` builds its error here, so the code
+/// that decides the kind is extracted in one place, and a Windows test drives it with a real
+/// `Error`. Per-path query statuses already arrive as plain codes and do not pass through it.
+#[cfg(target_os = "windows")]
+pub(super) fn channel_query_error(error: &Error, message: String) -> ChannelQueryError {
+    ChannelQueryError::win32(win32_code(error), message)
+}
+
 /// Extract the Win32 error code from an HRESULT or raw error code.
 #[cfg(target_os = "windows")]
 fn win32_code(error: &Error) -> u32 {
@@ -3665,6 +3684,27 @@ mod portable_tests {
         for code in [2, 53, 1722, 15007] {
             assert!(!clear_refused(code, false), "local code {code}");
             assert!(!clear_refused(code, true), "remote code {code}");
+        }
+    }
+
+    #[test]
+    fn a_read_stopped_by_a_refusal_reports_access_denied() {
+        for code in [5, 1314] {
+            let gap = ScanGap::read_stopped(ChannelQueryError::win32(
+                code,
+                "Security: stopped after 3 events".to_string(),
+            ));
+            assert_eq!(gap.kind, EvtxCoverageGapKind::AccessDenied, "code {code}");
+            assert_eq!(gap.message, "Security: stopped after 3 events");
+        }
+        for failure in [
+            ChannelQueryError::win32(15007, "Security: stopped after 3 events".to_string()),
+            ChannelQueryError::from("Security: stopped after 3 events".to_string()),
+        ] {
+            assert_eq!(
+                ScanGap::read_stopped(failure).kind,
+                EvtxCoverageGapKind::Record
+            );
         }
     }
 

@@ -1849,6 +1849,86 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_remote_refusal_reaches_the_gap_with_its_machine_and_channel() {
+        // The service names the path without the machine. The decoder qualifies it, and the gap
+        // the aggregation files must carry both and keep the refusal's kind.
+        let statuses = super::super::live::decode_query_path_status_list(
+            vec!["Security".to_string()],
+            vec![5],
+            "HOST-A/Security",
+            Some("HOST-A"),
+        )
+        .expect("one path and one status decode");
+        let mut scan = scan_with(0, Vec::new());
+        super::super::live::append_query_status_gaps(
+            &mut scan,
+            &super::super::live::QueryStatusInspection::Available(statuses),
+        );
+        let mut aggregation = super::QueryAggregation::default();
+        aggregation.absorb_scan("HOST-A/Security", scan);
+
+        assert_eq!(aggregation.coverage_gaps.len(), 1);
+        let gap = &aggregation.coverage_gaps[0];
+        assert_eq!(gap.source, "HOST-A/Security");
+        assert_eq!(
+            gap.kind,
+            super::super::models::EvtxCoverageGapKind::AccessDenied
+        );
+        assert_eq!(
+            gap.reason,
+            "the Event Log service refused the channel query (Windows error 5: Access is denied)"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_real_windows_error_reports_its_refusal_through_both_paths() {
+        // Built from a real Error, as the live sites build theirs, so the Win32 code extraction
+        // that decides accessDenied runs in a test rather than only in code no test reaches.
+        use super::super::models::EvtxCoverageGapKind;
+        use windows::core::{Error, HRESULT};
+
+        for (code, unqueried_kind, stopped_kind) in [
+            (
+                5,
+                EvtxCoverageGapKind::AccessDenied,
+                EvtxCoverageGapKind::AccessDenied,
+            ),
+            (
+                1314,
+                EvtxCoverageGapKind::AccessDenied,
+                EvtxCoverageGapKind::AccessDenied,
+            ),
+            (
+                15007,
+                EvtxCoverageGapKind::File,
+                EvtxCoverageGapKind::Record,
+            ),
+        ] {
+            let error = Error::from_hresult(HRESULT::from_win32(code));
+
+            let failure = super::super::live::channel_query_error(
+                &error,
+                "EvtQuery(Security): refused".to_string(),
+            );
+            assert_eq!(failure.code, Some(code));
+            let mut aggregation = super::QueryAggregation::default();
+            aggregation.absorb_failure("Security", failure);
+            assert_eq!(
+                aggregation.coverage_gaps[0].kind, unqueried_kind,
+                "code {code}"
+            );
+
+            let stopped =
+                super::super::live::ScanGap::read_stopped(super::super::live::channel_query_error(
+                    &error,
+                    "Security: stopped after 3 events".to_string(),
+                ));
+            assert_eq!(stopped.kind, stopped_kind, "code {code}");
+        }
+    }
+
     fn diagnosis_record(
         origin_kind: super::super::models::EvtxOriginKind,
         message: &str,
