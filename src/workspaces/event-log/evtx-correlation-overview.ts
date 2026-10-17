@@ -19,7 +19,11 @@
 import { tokens } from "@fluentui/react-components";
 import type { CMTraceTheme } from "../../lib/themes/types";
 import { solveBrushOpacity, type BrushPalette } from "./evtx-histogram-brush";
-import type { CorrelationChain } from "./evtx-correlation-chains";
+import {
+  STRENGTH_ORDER,
+  type CorrelationChain,
+  type CorrelationChainStrength,
+} from "./evtx-correlation-chains";
 import {
   CORRELATION_MIN_WINDOW_MS,
   defaultLaneWindow,
@@ -28,7 +32,7 @@ import {
   type TimeWindow,
 } from "./evtx-correlation-view-model";
 import type { EvtxTimeZoneMode } from "./evtx-time";
-import { buildEvtxVisualTokens, resolveToken, type EvtxChainStrength } from "./evtx-visual-tokens";
+import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 
 /** Spec 8.11: the bordered box (bars and band) is 48 px tall. The caption sits above it, the ticks below. */
 export const OVERVIEW_BOX_HEIGHT_PX = 48;
@@ -41,14 +45,6 @@ export const OVERVIEW_CAPTION = "Overview";
 export const OVERVIEW_HINT = "drag the band to zoom";
 /** Said beside the caption: the strip's scale is the chains shown, not the session (R5). */
 export const OVERVIEW_EXTENT_NOTE = "Spans the chains shown, not the whole session.";
-
-/** Bars sit in one row per strength, strongest first: the row says which, so colour does not have to. */
-export const OVERVIEW_STRENGTH_ROWS: readonly EvtxChainStrength[] = [
-  "exact",
-  "candidate",
-  "ambiguous",
-  "coverageBlocked",
-];
 
 type Span = Pick<CorrelationChain, "startMs" | "endMs">;
 
@@ -71,8 +67,8 @@ export function overviewDomain(chains: readonly Span[]): TimeWindow | null {
 
 export interface OverviewBar {
   chainId: string;
-  strength: EvtxChainStrength;
-  /** Index into `OVERVIEW_STRENGTH_ROWS`. */
+  strength: CorrelationChainStrength;
+  /** Bars sit in one row per strength, strongest first (`STRENGTH_ORDER`): the row says which, so colour does not have to. */
   row: number;
   /** 0 to 1 across the domain. */
   left: number;
@@ -105,7 +101,7 @@ export function overviewBars(
     bars.push({
       chainId: chain.id,
       strength: chain.strength,
-      row: OVERVIEW_STRENGTH_ROWS.indexOf(chain.strength),
+      row: STRENGTH_ORDER.indexOf(chain.strength),
       left: (chain.startMs - domain.startMs) / width,
       width: (chain.endMs - chain.startMs) / width,
       selected: chain.id === selectedId,
@@ -288,7 +284,7 @@ export function overviewPaletteFor(theme: CMTraceTheme): BrushPalette {
   return {
     surface: resolve(tokens.colorNeutralBackground1),
     fill: resolve(tokens.colorNeutralBackground1Selected),
-    bars: OVERVIEW_STRENGTH_ROWS.map((strength) => resolve(visual.strengthBars[strength])),
+    bars: STRENGTH_ORDER.map((strength) => resolve(visual.strengthBars[strength])),
     border: resolve(tokens.colorNeutralStrokeAccessible),
     cursor: focus,
     focus,

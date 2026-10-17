@@ -33,6 +33,7 @@ import { readableOn } from "../../lib/color-contrast";
 import { getThemeById } from "../../lib/themes";
 import type { CMTraceTheme } from "../../lib/themes/types";
 import { useUiStore } from "../../stores/ui-store";
+import type { CorrelationChainStrength } from "./evtx-correlation-chains";
 import type {
   DiagnosisCorrelationStatus,
   DiagnosisFindingSeverity,
@@ -96,9 +97,6 @@ export interface EvtxColorTriplet {
   foreground: string;
 }
 
-/** The strengths a chain row can have: every status but "not linked", which is never a chain (D7). */
-export type EvtxChainStrength = Exclude<DiagnosisCorrelationStatus, "notCausal">;
-
 export interface EvtxVisualTokens {
   levels: Record<EvtxLevel, EvtxLevelVisual>;
   strengths: Record<DiagnosisCorrelationStatus, EvtxBadgeVisual>;
@@ -110,7 +108,7 @@ export interface EvtxVisualTokens {
    * colorNeutralBackground1 and over the band's wash, which is drawn behind them
    * (`overviewBandOpacity` solves how opaque it may be); never on a selection background.
    */
-  strengthBars: Record<EvtxChainStrength, string>;
+  strengthBars: Record<CorrelationChainStrength, string>;
   /** Selected row, chain, view card and active brushed-time chip (Q-1). */
   selection: EvtxColorTriplet;
   /** Error finding callouts in the rail. */

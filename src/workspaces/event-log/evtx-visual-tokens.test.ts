@@ -19,6 +19,7 @@ import type { DiagnosisCorrelationStatus, EvtxLevel } from "./types";
 import { overviewBandOpacity } from "./evtx-correlation-overview";
 import { compositeOver } from "./evtx-histogram-brush";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
+import chainsSource from "./evtx-correlation-chains.ts?raw";
 import moduleSource from "./evtx-visual-tokens.ts?raw";
 
 const LEVELS: EvtxLevel[] = [
@@ -982,6 +983,14 @@ describe("evtx visual tokens", () => {
       }
       // D7: a time-only relation is never a chain, so it never has a bar.
       expect(visual.strengthBars).not.toHaveProperty("notCausal");
+    });
+
+    it("types the bars with the chain model's strength type, which does not import this module back", () => {
+      const tokens = moduleSource.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+      expect(tokens).toMatch(/import type \{ CorrelationChainStrength \} from "\.\/evtx-correlation-chains";/);
+      expect(tokens).not.toMatch(/EvtxChainStrength/);
+      // The dependency runs one way: this module reads the chain model's type, never the reverse.
+      expect(chainsSource).not.toMatch(/evtx-visual-tokens/);
     });
 
     it("gives coverageBlocked a distinct border style and an icon", () => {

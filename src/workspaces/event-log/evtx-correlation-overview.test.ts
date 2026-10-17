@@ -6,6 +6,7 @@ import { tokens } from "@fluentui/react-components";
 import { describe, expect, it } from "vitest";
 import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
+import { STRENGTH_ORDER, type CorrelationChainStrength } from "./evtx-correlation-chains";
 import { CORRELATION_MIN_WINDOW_MS, defaultLaneWindow } from "./evtx-correlation-view-model";
 import { BRUSH_FILL_OPACITIES, BRUSH_MIN_CONTRAST, compositeOver } from "./evtx-histogram-brush";
 import {
@@ -14,7 +15,6 @@ import {
   OVERVIEW_CAPTION,
   OVERVIEW_EXTENT_NOTE,
   OVERVIEW_HINT,
-  OVERVIEW_STRENGTH_ROWS,
   OVERVIEW_UNSELECTED_FILL_OPACITY,
   bandFractions,
   bandStepMs,
@@ -33,14 +33,13 @@ import {
   zoomWindowFor,
 } from "./evtx-correlation-overview";
 import overviewSource from "./evtx-correlation-overview.ts?raw";
-import type { EvtxChainStrength } from "./evtx-visual-tokens";
 import { resolveToken } from "./evtx-visual-tokens";
 
 const S = 1_000;
 const T0 = Date.UTC(2026, 9, 6, 10, 20, 0);
 const chain = (
   id: string,
-  strength: EvtxChainStrength,
+  strength: CorrelationChainStrength,
   startS: number | null,
   endS: number | null,
 ) => ({
@@ -92,7 +91,7 @@ describe("the bars", () => {
   it("puts a chain in its strength's row, across the domain, and counts the one with no position", () => {
     const { bars, undrawn } = overviewBars(chains, null, domain);
     const byId = Object.fromEntries(bars.map((bar) => [bar.chainId, bar]));
-    expect(OVERVIEW_STRENGTH_ROWS).toEqual(["exact", "candidate", "ambiguous", "coverageBlocked"]);
+    expect(STRENGTH_ORDER).toEqual(["exact", "candidate", "ambiguous", "coverageBlocked"]);
     expect(byId.A).toMatchObject({ row: 0, strength: "exact" });
     expect(byId.B).toMatchObject({ row: 1, strength: "candidate" });
     expect(byId.C).toMatchObject({ row: 3, strength: "coverageBlocked" });
@@ -268,7 +267,7 @@ describe("the fixed measures (R1, R8, spec 8.11)", () => {
     expect(OVERVIEW_BOX_HEIGHT_PX).toBe(48);
     expect(OVERVIEW_BAR_HEIGHT_PX).toBe(6);
     // Four rows of bars with a 3 px gap between them fit the box with room for its padding.
-    expect(OVERVIEW_STRENGTH_ROWS.length * OVERVIEW_BAR_HEIGHT_PX + (OVERVIEW_STRENGTH_ROWS.length - 1) * 3).toBeLessThan(
+    expect(STRENGTH_ORDER.length * OVERVIEW_BAR_HEIGHT_PX + (STRENGTH_ORDER.length - 1) * 3).toBeLessThan(
       OVERVIEW_BOX_HEIGHT_PX,
     );
     expect(OVERVIEW_UNSELECTED_FILL_OPACITY).toBe(0.4);
@@ -309,7 +308,7 @@ describe("the wash behind the bars (Adam's criterion on #840)", () => {
       const wash = compositeOver(palette.surface, palette.fill, opacity);
       expect(palette.bars).toHaveLength(4);
       for (const [index, bar] of palette.bars.entries()) {
-        expect(contrastRatio(bar, wash), `${id} ${OVERVIEW_STRENGTH_ROWS[index]}`).toBeGreaterThanOrEqual(
+        expect(contrastRatio(bar, wash), `${id} ${STRENGTH_ORDER[index]}`).toBeGreaterThanOrEqual(
           BRUSH_MIN_CONTRAST,
         );
       }
@@ -347,6 +346,21 @@ describe("the wash behind the bars (Adam's criterion on #840)", () => {
     const { theme, palette } = resolved("light");
     expect(palette.bars).toEqual(["#0078d4", "#424242", "#78350F", "#616161"]);
     expect(theme.id).toBe("light");
+  });
+});
+
+describe("one strength order and one strength type", () => {
+  const code = overviewSource.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+
+  it("takes its rows and its palette from the chain model's STRENGTH_ORDER and declares no list of its own", () => {
+    expect(code).toMatch(/STRENGTH_ORDER\.indexOf\(chain\.strength\)/);
+    expect(code).toMatch(/STRENGTH_ORDER\.map\(/);
+    expect(code).not.toMatch(/OVERVIEW_STRENGTH_ROWS|"candidate",\s*"ambiguous"/);
+  });
+
+  it("types a bar's strength with the chain model's type, not one of its own", () => {
+    expect(code).toMatch(/type CorrelationChainStrength/);
+    expect(code).not.toMatch(/EvtxChainStrength/);
   });
 });
 
