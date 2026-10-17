@@ -4,6 +4,7 @@ import {
   buildChannelPaneModel,
   computeChannelStats,
   defaultExpandedGroups,
+  describeCorrelatedState,
   recordTimestampMs,
   scaleActivityBars,
   summarizeLogSources,
@@ -1415,5 +1416,15 @@ describe("what the header counts as unattributed", () => {
     );
     expect(built.unattributed.count).toBe(7);
     expect(built.unattributed.reasons).toHaveLength(7);
+  });
+});
+
+describe("describeCorrelatedState", () => {
+  it.each([
+    [0, "No text log is now correlated."],
+    [1, "1 text log is now correlated."],
+    [2, "2 text logs are now correlated."],
+  ])("says what %i correlated logs are", (count, text) => {
+    expect(describeCorrelatedState(count)).toBe(text);
   });
 });

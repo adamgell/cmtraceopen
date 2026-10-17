@@ -14,7 +14,8 @@
  * with no entries, and event logs, which Event Logs opens through its own source picker.
  *
  * Outcomes are decided from the store as it is AFTER the attempt, and the messages carry only what
- * happened; the pane appends how many text logs are correlated now, live. A failed single-file or
+ * happened; the pane appends how many text logs are correlated now, live
+ * (`describeCorrelatedState`). A failed single-file or
  * folder load clears the active log (`loadLogSource`'s catch), a failed multi-file parse leaves the
  * previous one alone, and a batch parse skips the files it cannot read without an error, so
  * nothing here assumes which of those happened. An add that leaves none of its files correlated is
@@ -44,7 +45,7 @@ export type AddLogSourceKind = "file" | "folder";
 
 /**
  * What an add did. Messages say what happened to the add; none states how many text logs are
- * correlated, because that changes under a report that stays on screen (`describeCorrelatedState`).
+ * correlated, because that changes under a report that stays on screen.
  */
 export type AddLogSourceOutcome =
   /** The dialog was dismissed, or a newer load superseded this one. Nothing is reported. */
@@ -60,12 +61,6 @@ export type AddLogSourceOutcome =
   | { status: "notAdded"; message: string }
   /** The load failed, or read nothing. */
   | { status: "failed"; message: string };
-
-/** How many text logs are correlated, in the sentence that ends a report. */
-export function describeCorrelatedState(count: number): string {
-  if (count === 0) return "No text log is now correlated.";
-  return `${count} text ${count === 1 ? "log is" : "logs are"} now correlated.`;
-}
 
 /**
  * The Log workspace's Open filters without the registry viewer's. "All Files" stays, so what cannot

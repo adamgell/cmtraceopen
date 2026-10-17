@@ -28,7 +28,7 @@ import { useFilterStore } from "../../stores/filter-store";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import { logWorkspace } from "../log";
-import { addLogSource, describeCorrelatedState } from "./add-log-source";
+import { addLogSource } from "./add-log-source";
 import { summarizeLogSources } from "./evtx-channel-stats";
 import { scopeLogEntries } from "./unified-timeline";
 
@@ -106,16 +106,6 @@ beforeEach(() => {
   useUiStore.setState(useUiStore.getInitialState(), true);
   useUiStore.setState({ currentPlatform: "windows" });
   useFilterStore.getState().clearFilter();
-});
-
-describe("describeCorrelatedState", () => {
-  it.each([
-    [0, "No text log is now correlated."],
-    [1, "1 text log is now correlated."],
-    [2, "2 text logs are now correlated."],
-  ])("says what %i correlated logs are", (count, text) => {
-    expect(describeCorrelatedState(count)).toBe(text);
-  });
 });
 
 describe("the dialogs", () => {

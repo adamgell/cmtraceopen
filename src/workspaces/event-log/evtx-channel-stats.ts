@@ -726,6 +726,15 @@ export function summarizeLogSources(
     .sort((a, b) => a.label.localeCompare(b.label) || a.path.localeCompare(b.path));
 }
 
+/**
+ * How many text logs the session is given, as the sentence that ends a report of an add. It is
+ * computed from the list the pane shows, so a report that stays on screen stays true.
+ */
+export function describeCorrelatedState(count: number): string {
+  if (count === 0) return "No text log is now correlated.";
+  return `${count} text ${count === 1 ? "log is" : "logs are"} now correlated.`;
+}
+
 // ── Which groups start open ─────────────────────────────────────────────────
 
 /** Group keys of the two top-level headers; nested folders use `fullPath || name`. */
