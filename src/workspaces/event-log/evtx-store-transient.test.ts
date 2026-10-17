@@ -356,14 +356,29 @@ describe("a scope's counts are of references", () => {
     expect(held()?.references).toEqual([[loaded[3]], [loaded[0]]]);
   });
 
-  it("keeps a reference that is still ambiguous ambiguous, and one count per reference", async () => {
-    // B matches two events in Application and one more in System.
+  it("reads a reference that is cut down to one candidate as a match, not as ambiguous", async () => {
+    // B matches two events in Application and one more in System; only the System one is left.
     useEvtxStore
       .getState()
       .setRecordScope(refScope([[loaded[0]], [loaded[1], loaded[2], loaded[3]]], { ambiguous: 1 }));
     await useEvtxStore.getState().clearChannel("Application", true);
     expect(held()?.references).toEqual([[], [loaded[3]]]);
     expect(held()?.counts).toMatchObject({ notLoaded: 1, ambiguous: 0 });
+  });
+
+  it("keeps a reference that still has two candidates ambiguous, and counts it once", async () => {
+    // B matches one event in Application and two in System. Clearing Application takes A, which had
+    // only that one, and leaves B with its two System candidates.
+    useEvtxStore
+      .getState()
+      .setRecordScope(refScope([[loaded[0]], [loaded[1], loaded[3], loaded[4]]], { ambiguous: 1 }));
+    expect(held()?.counts).toMatchObject({ notLoaded: 0, ambiguous: 1 });
+
+    await useEvtxStore.getState().clearChannel("Application", true);
+
+    expect(held()?.references).toEqual([[], [loaded[3], loaded[4]]]);
+    expect([...(held()?.records ?? [])]).toEqual([loaded[3], loaded[4]]);
+    expect(held()?.counts).toMatchObject({ notLoaded: 1, ambiguous: 1 });
   });
 
   it("counts a reference that was not loaded when the scope was made along with those that stop being loaded", async () => {
