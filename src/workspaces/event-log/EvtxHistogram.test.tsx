@@ -275,6 +275,25 @@ describe("EvtxHistogram", () => {
     expect(screen.queryByText(/No events/)).toBeNull();
   });
 
+  it("keeps the loading status out of the slider, whose children are presentational", () => {
+    render(<EvtxHistogram records={[]} loading />);
+    const slider = screen.getByRole("slider", { name: "Time range" });
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Loading events...");
+    expect(slider.contains(status)).toBe(false);
+    expect(slider).toHaveAttribute("aria-valuetext", "Loading events");
+    // And it still sits over the plot, in the same positioned box.
+    expect(status.parentElement).toBe(slider.parentElement);
+  });
+
+  it("keeps the empty-state status out of the plot too", () => {
+    const { container } = render(<EvtxHistogram records={[]} loading={false} />);
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("No events to chart.");
+    expect(container.querySelector("[data-evtx-region='histogram']")).toContainElement(status);
+    expect(screen.queryByRole("slider")).toBeNull();
+  });
+
   it("does not chart the old events while a load runs", () => {
     const { container } = render(<EvtxHistogram records={dayOfEvents()} loading />);
     expect(container.querySelector("[data-evtx-layer=bars]")).toBeNull();

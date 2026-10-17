@@ -95,6 +95,9 @@ const useStyles = makeStyles({
   },
   row: { display: "flex", alignItems: "flex-start", columnGap: "8px" },
   main: { flex: "1 1 auto", minWidth: 0 },
+  // The box the plot and the status message share. The message is a sibling of the plot, not a child:
+  // a slider's children are presentational (ARIA 1.2), so a live region inside it may not be exposed.
+  plotBox: { position: "relative" },
   plot: {
     position: "relative",
     height: `${HISTOGRAM_BAR_AREA_PX}px`,
@@ -464,131 +467,133 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
     >
       <div className={styles.row}>
         <div className={styles.main}>
-          <div
-            ref={plotRef}
-            className={mergeClasses(styles.plot, ready && styles.interactive)}
-            {...(ready
-              ? {
-                  role: "slider",
-                  tabIndex: 0,
-                  "aria-label": "Time range",
-                  "aria-orientation": "horizontal" as const,
-                  "aria-valuemin": 0,
-                  "aria-valuemax": count - 1,
-                  "aria-valuenow": cursor,
-                  "aria-valuetext": valueText,
-                  "aria-describedby": descriptionId,
-                  "aria-keyshortcuts": "ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Home End Enter Escape",
-                }
-              : loading || catchingUp
-                ? // The same element stays focusable while a load runs, so focus is not thrown to the body
-                  // and is where it was when the load ends; it just says it cannot be used now.
-                  {
+          <div className={styles.plotBox}>
+            <div
+              ref={plotRef}
+              className={mergeClasses(styles.plot, ready && styles.interactive)}
+              {...(ready
+                ? {
                     role: "slider",
                     tabIndex: 0,
                     "aria-label": "Time range",
                     "aria-orientation": "horizontal" as const,
-                    "aria-disabled": true,
                     "aria-valuemin": 0,
-                    "aria-valuemax": 0,
-                    "aria-valuenow": 0,
-                    "aria-valuetext": "Loading events",
+                    "aria-valuemax": count - 1,
+                    "aria-valuenow": cursor,
+                    "aria-valuetext": valueText,
+                    "aria-describedby": descriptionId,
+                    "aria-keyshortcuts": "ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Home End Enter Escape",
                   }
-                : {})}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerCancel={endGesture}
-            onLostPointerCapture={() => {
-              if (drag !== null) endGesture();
-            }}
-            onPointerLeave={() => setHover(null)}
-            onKeyDown={onKeyDown}
-            onFocus={() => {
-              setFocused(true);
-              setKeys((held) => held ?? { cursor: initialBrushCursor(count, appliedSpan), anchor: null });
-            }}
-            onBlur={() => {
-              setFocused(false);
-              setKeys(null);
-              if (drag === null) setFrozen(null);
-            }}
-          >
-            {ready && shownRange !== null && (
-              <div
-                aria-hidden="true"
-                data-evtx-layer="wash"
-                data-evtx-draft={draftOnPlot !== null}
-                className={mergeClasses(styles.layer, styles.wash)}
-                style={{
-                  left: `${shownRange.left * 100}%`,
-                  right: `${(1 - shownRange.right) * 100}%`,
-                  backgroundColor: tokens.colorNeutralBackground1Selected,
-                  opacity: washOpacity,
-                }}
-              />
-            )}
-            {ready && (
-              <Bars
-                histogram={view}
-                scale={scale}
-                colors={colors}
-                className={mergeClasses(styles.layer, styles.bars)}
-                columnClass={styles.column}
-                segmentClass={styles.segment}
-              />
-            )}
-            {ready &&
-              shownRange !== null &&
-              !shownRange.clippedLeft &&
-              edge(shownRange.left, draftOnPlot !== null, "start")}
-            {ready &&
-              shownRange !== null &&
-              !shownRange.clippedRight &&
-              edge(shownRange.right, draftOnPlot !== null, "end")}
-            {ready && focused && key !== null && cursor < count && (
-              <div
-                aria-hidden="true"
-                data-evtx-layer="cursor"
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  bottom: 0,
-                  left: `${(cursor / count) * 100}%`,
-                  width: `${100 / count}%`,
-                  boxSizing: "border-box",
-                  pointerEvents: "none",
-                  outline: `2px solid ${tokens.colorNeutralForeground1}`,
-                  outlineOffset: "-2px",
-                }}
-              />
-            )}
+                : loading || catchingUp
+                  ? // The same element stays focusable while a load runs, so focus is not thrown to the body
+                    // and is where it was when the load ends; it just says it cannot be used now.
+                    {
+                      role: "slider",
+                      tabIndex: 0,
+                      "aria-label": "Time range",
+                      "aria-orientation": "horizontal" as const,
+                      "aria-disabled": true,
+                      "aria-valuemin": 0,
+                      "aria-valuemax": 0,
+                      "aria-valuenow": 0,
+                      "aria-valuetext": "Loading events",
+                    }
+                  : {})}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={endGesture}
+              onLostPointerCapture={() => {
+                if (drag !== null) endGesture();
+              }}
+              onPointerLeave={() => setHover(null)}
+              onKeyDown={onKeyDown}
+              onFocus={() => {
+                setFocused(true);
+                setKeys((held) => held ?? { cursor: initialBrushCursor(count, appliedSpan), anchor: null });
+              }}
+              onBlur={() => {
+                setFocused(false);
+                setKeys(null);
+                if (drag === null) setFrozen(null);
+              }}
+            >
+              {ready && shownRange !== null && (
+                <div
+                  aria-hidden="true"
+                  data-evtx-layer="wash"
+                  data-evtx-draft={draftOnPlot !== null}
+                  className={mergeClasses(styles.layer, styles.wash)}
+                  style={{
+                    left: `${shownRange.left * 100}%`,
+                    right: `${(1 - shownRange.right) * 100}%`,
+                    backgroundColor: tokens.colorNeutralBackground1Selected,
+                    opacity: washOpacity,
+                  }}
+                />
+              )}
+              {ready && (
+                <Bars
+                  histogram={view}
+                  scale={scale}
+                  colors={colors}
+                  className={mergeClasses(styles.layer, styles.bars)}
+                  columnClass={styles.column}
+                  segmentClass={styles.segment}
+                />
+              )}
+              {ready &&
+                shownRange !== null &&
+                !shownRange.clippedLeft &&
+                edge(shownRange.left, draftOnPlot !== null, "start")}
+              {ready &&
+                shownRange !== null &&
+                !shownRange.clippedRight &&
+                edge(shownRange.right, draftOnPlot !== null, "end")}
+              {ready && focused && key !== null && cursor < count && (
+                <div
+                  aria-hidden="true"
+                  data-evtx-layer="cursor"
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    bottom: 0,
+                    left: `${(cursor / count) * 100}%`,
+                    width: `${100 / count}%`,
+                    boxSizing: "border-box",
+                    pointerEvents: "none",
+                    outline: `2px solid ${tokens.colorNeutralForeground1}`,
+                    outlineOffset: "-2px",
+                  }}
+                />
+              )}
+              {hovered !== null && tipIndex !== null && (
+                <div
+                  aria-hidden="true"
+                  data-evtx-tooltip={tipIndex}
+                  className={styles.tooltip}
+                  style={{
+                    left: `${((tipIndex + 0.5) / count) * 100}%`,
+                    transform:
+                      tipIndex / count < 0.15
+                        ? "translateX(-10px)"
+                        : tipIndex / count > 0.85
+                          ? "translateX(calc(-100% + 10px))"
+                          : "translateX(-50%)",
+                    fontSize: `${Math.max(10, metrics.fontSize - 2)}px`,
+                  }}
+                >
+                  {describeBucket(hovered, timeZoneMode, view.showYear)}
+                </div>
+              )}
+            </div>
             {message !== null && (
               <div
                 role="status"
                 className={mergeClasses(styles.layer, styles.message)}
-                style={{ fontSize: `${smallPx}px`, color: TEXT_COLOR }}
+                style={{ fontSize: `${smallPx}px`, color: TEXT_COLOR, pointerEvents: "none" }}
               >
                 {message}
-              </div>
-            )}
-            {hovered !== null && tipIndex !== null && (
-              <div
-                aria-hidden="true"
-                data-evtx-tooltip={tipIndex}
-                className={styles.tooltip}
-                style={{
-                  left: `${((tipIndex + 0.5) / count) * 100}%`,
-                  transform:
-                    tipIndex / count < 0.15
-                      ? "translateX(-10px)"
-                      : tipIndex / count > 0.85
-                        ? "translateX(calc(-100% + 10px))"
-                        : "translateX(-50%)",
-                  fontSize: `${Math.max(10, metrics.fontSize - 2)}px`,
-                }}
-              >
-                {describeBucket(hovered, timeZoneMode, view.showYear)}
               </div>
             )}
           </div>
