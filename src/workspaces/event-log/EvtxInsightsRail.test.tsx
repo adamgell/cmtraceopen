@@ -486,6 +486,48 @@ describe("EvtxInsightsRail filter actions", () => {
       expect(useEvtxLayoutStore.getState().activeView).toBe("grouped");
     });
 
+    it("keeps what each cited event named, so a later change to the records is counted by event", async () => {
+      // A cites one event in System; B cites one that two events in Application both match.
+      const a = { ...RECORD, id: 1, eventRecordId: 11, channel: "System", sourceLabel: "System.evtx" };
+      const b1 = { ...RECORD, id: 2, eventRecordId: 12, sourceLabel: "x1.evtx" };
+      const b2 = { ...RECORD, id: 3, eventRecordId: 12, sourceLabel: "x2.evtx" };
+      const both = [a, b1, b2];
+      const ref = (recordId: number) => ({
+        kind: "event" as const,
+        value: { provider: "Example Provider", eventId: 1000, recordId, source: undefined as unknown as string },
+      });
+      useEvtxStore.setState({
+        records: both,
+        channels: [
+          { name: "Application", eventCount: 2, sourceType: "live" },
+          { name: "System", eventCount: 1, sourceType: "live" },
+        ],
+        loadedChannels: new Set(["Application", "System"]),
+        selectedChannels: new Set(["Application", "System"]),
+      });
+      invoke.mockImplementation(async (name: string, args?: Record<string, unknown>) =>
+        name === "evtx_clear_channel" ? { channel: args?.channel, result: { status: "cleared" } } : null,
+      );
+      const summary: DiagnosisSummary = {
+        ...SUMMARY,
+        findings: [{ ...SUMMARY.findings[0], evidence: [ref(11), ref(12)] }],
+      };
+      render(<EvtxInsightsRail summary={summary} records={both} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /Filter to 3 events/ }));
+      const scope = useEvtxStore.getState().recordScope;
+      expect(scope?.references).toEqual([[a], [b1, b2]]);
+      expect(scope?.counts).toMatchObject({ notLoaded: 0, ambiguous: 1 });
+
+      await act(async () => {
+        await useEvtxStore.getState().clearChannel("Application", true);
+      });
+      const after = useEvtxStore.getState().recordScope;
+      expect([...(after?.records ?? [])]).toEqual([a]);
+      // One cited event is gone, not two records; and it no longer matches several.
+      expect(after?.counts).toMatchObject({ notLoaded: 1, ambiguous: 0 });
+    });
+
     it("replaces a scope that was already set", () => {
       render(<EvtxInsightsRail summary={citing("Enrollment failed", 2)} records={loaded} />);
       act(() => {

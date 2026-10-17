@@ -208,6 +208,7 @@ export function EvtxInsightsRail({
       kind: "finding",
       title: finding.title,
       records: new Set(scope.records),
+      references: scope.references,
       counts: scope.counts,
     });
     if (applied) useEvtxLayoutStore.getState().setActiveView("table");
