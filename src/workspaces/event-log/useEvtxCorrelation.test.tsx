@@ -1020,10 +1020,26 @@ describe("the unplaced list (Phase 10b)", () => {
     };
   }
 
-  it("is empty with an unknown count when there is no session, never an empty list the session counted", () => {
-    expect(UNAVAILABLE_CORRELATION.unplacedList).toEqual({ items: [], total: null });
+  it("is null with no session: there is no run, which is not a run whose count is unknown", () => {
+    expect(UNAVAILABLE_CORRELATION.unplacedList).toBeNull();
     const { result } = renderHook(() => useEvtxCorrelation(NONE));
-    expect(result.current.unplacedList).toBe(UNAVAILABLE_CORRELATION.unplacedList);
+    expect(result.current.unplacedList).toBeNull();
+    expect(result.current.counts).toBeNull();
+  });
+
+  it("is a list with an unknown count, not null, for a run whose count was not trusted and whose preview is empty", async () => {
+    // The shape that must not read as a counted zero, and must not read as no run either.
+    const session = new FakeSession({ itemCount: 10, pairs: [[1, 2]], unplacedCount: 0 });
+    const props = withTotals(session, { page: Number.NaN, status: 0 });
+    const { result } = renderHook(() => useEvtxCorrelation(props));
+    await waitFor(() => expect(result.current.stage).toBe("edgesOnly"));
+    expect(result.current.unplacedList).toEqual({ items: [], total: null });
+    expect(result.current.counts?.unplacedList).toEqual({ items: [], total: null });
+    // And a counted zero is a different value, which is what lets a consumer tell them apart.
+    const countedProps = session.props();
+    const counted = renderHook(() => useEvtxCorrelation(countedProps));
+    await waitFor(() => expect(counted.result.current.stage).toBe("edgesOnly"));
+    expect(counted.result.current.unplacedList).toEqual({ items: [], total: 0 });
   });
 
   it("carries the first reply's preview and its own count, on the model and on the counts", async () => {
@@ -1035,13 +1051,13 @@ describe("the unplaced list (Phase 10b)", () => {
     expect(edgesOnly.result.current.counts?.unplacedList.items).toHaveLength(3);
     expect(edgesOnly.result.current.counts?.unplacedList.total).toBe(8);
     // Counts-only: the model-side field is the same page's, so a consumer of either reads one list.
-    expect(edgesOnly.result.current.unplacedList.total).toBe(8);
+    expect(edgesOnly.result.current.unplacedList?.total).toBe(8);
 
     const fullProps = session.props({ needItems: true });
     const full = renderHook(() => useEvtxCorrelation(fullProps));
     await waitFor(() => expect(full.result.current.stage).toBe("ready"));
-    expect(full.result.current.unplacedList.items).toHaveLength(3);
-    expect(full.result.current.unplacedList.total).toBe(8);
+    expect(full.result.current.unplacedList?.items).toHaveLength(3);
+    expect(full.result.current.unplacedList?.total).toBe(8);
     expect(full.result.current.counts?.unplacedList.total).toBe(8);
   });
 
@@ -1050,7 +1066,7 @@ describe("the unplaced list (Phase 10b)", () => {
     const props = withTotals(session, { page: 40, status: 9 });
     const { result } = renderHook(() => useEvtxCorrelation(props));
     await waitFor(() => expect(result.current.stage).toBe("edgesOnly"));
-    expect(result.current.unplacedList.total).toBe(40);
+    expect(result.current.unplacedList?.total).toBe(40);
     expect(result.current.counts?.unplacedList.total).toBe(40);
   });
 
@@ -1082,9 +1098,9 @@ describe("the unplaced list (Phase 10b)", () => {
     const props = withTotals(session, { page: bad, status: 2 }, { needItems: true });
     const { result } = renderHook(() => useEvtxCorrelation(props));
     await waitFor(() => expect(result.current.stage).toBe("ready"));
-    expect(result.current.unplacedList.total).toBeNull();
+    expect(result.current.unplacedList?.total).toBeNull();
     expect(result.current.counts?.unplacedList.total).toBeNull();
-    expect(result.current.unplacedList.items).toHaveLength(2);
+    expect(result.current.unplacedList?.items).toHaveLength(2);
     expect(result.current.unplaced.unplacedListComplete).toBe(false);
   });
 
@@ -1102,7 +1118,7 @@ describe("the unplaced list (Phase 10b)", () => {
     });
     await waitFor(() => expect(result.current.stage).toBe("ready"));
     const shown = result.current.unplacedList;
-    expect(shown.total).toBe(2);
+    expect(shown?.total).toBe(2);
 
     two.timelineGate = gate();
     rerender(two.props({ needItems: true }));
@@ -1115,6 +1131,6 @@ describe("the unplaced list (Phase 10b)", () => {
 
     act(() => two.timelineGate?.open());
     await waitFor(() => expect(result.current.builtFor).toBe(`${two.id}:2`));
-    expect(result.current.unplacedList.total).toBe(70);
+    expect(result.current.unplacedList?.total).toBe(70);
   });
 });

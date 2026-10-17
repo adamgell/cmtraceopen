@@ -112,11 +112,27 @@ function toRow(item: UnplacedItem, index: number): UnplacedRow {
   };
 }
 
-/** The list as the pane shows it: capped rows, and what the count says about the rest. */
+const NO_RUN: UnplacedView = {
+  rows: [],
+  total: null,
+  complete: false,
+  omitted: null,
+  allLogLines: false,
+  present: false,
+};
+
+/**
+ * The list as the pane shows it: capped rows, and what the count says about the rest.
+ *
+ * `null` is no run at all (no session, nothing published), which has nothing to show. It is NOT the
+ * same as a run whose count is unknown, `{ items: [], total: null }`: that run may have unplaced
+ * items nobody counted, so it is shown, as unknown. The two are told apart by type, not by a value.
+ */
 export function describeUnplaced(
-  list: UnplacedListInput,
+  list: UnplacedListInput | null,
   limit: number = UNPLACED_LIST_LIMIT,
 ): UnplacedView {
+  if (list === null) return NO_RUN;
   const rows = list.items.slice(0, limit).map(toRow);
   // A count below the items listed contradicts them, so it is not a count that can be trusted.
   const total = list.total !== null && list.total >= list.items.length ? list.total : null;
@@ -126,7 +142,8 @@ export function describeUnplaced(
     complete: total !== null && total === list.items.length && list.items.length <= limit,
     omitted: total === null ? null : Math.max(0, total - rows.length),
     allLogLines: rows.length > 0 && rows.every((row) => row.kind === "log"),
-    present: (total ?? 0) > 0 || list.items.length > 0,
+    // Only a counted 0 with nothing listed has nothing to show. An unknown count is not 0.
+    present: !(total === 0 && list.items.length === 0),
   };
 }
 
@@ -188,19 +205,25 @@ export function unplacedCopyText(view: UnplacedView): string {
 }
 
 /**
- * The Insights card's line (8.13 item 6), or null when there is nothing to say.
+ * The Insights card's line (8.13 item 6), or null when there is nothing to say (no run, or a
+ * counted 0 with nothing listed).
  * - A complete list uses the existing `unplacedSummary` wording, with the kind split.
  * - A known count over a partial list is said from the count: the preview's length is not it.
  * - An unknown count with items listed says "at least" and that the total is not known.
+ * - An unknown count with nothing listed says that the number is not known, in the words
+ *   UnifiedTimelineView uses for the same case. It is not a zero.
  */
-export function unplacedCardLine(list: UnplacedListInput): string | null {
+export function unplacedCardLine(list: UnplacedListInput | null): string | null {
   const view = describeUnplaced(list);
-  if (!view.present) return null;
+  if (list === null || !view.present) return null;
   if (view.complete) {
     return unplacedSummary({ items: [], unplaced: [...list.items], edges: [], coverageGaps: [] });
   }
   if (view.total !== null) {
     return `${count(view.total)} timeline ${view.total === 1 ? "item" : "items"} could not be placed: no timestamp`;
+  }
+  if (list.items.length === 0) {
+    return "The number of timeline items that could not be placed is not known";
   }
   return `At least ${count(list.items.length)} timeline ${list.items.length === 1 ? "item" : "items"} could not be placed: no timestamp. The total is not known.`;
 }

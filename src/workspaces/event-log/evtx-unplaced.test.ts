@@ -127,11 +127,41 @@ describe("a count that is not known is never 0", () => {
     expect(view.complete).toBe(false);
   });
 
-  it("has nothing to show for a known 0 with no item, and for an unknown count with no item", () => {
+  it("has nothing to show for a counted 0 with no item, and for no run at all", () => {
     expect(describeUnplaced(list([], 0)).present).toBe(false);
-    expect(describeUnplaced(list([], null)).present).toBe(false);
+    expect(describeUnplaced(null).present).toBe(false);
     expect(unplacedCardLine(list([], 0))).toBeNull();
-    expect(unplacedCardLine(list([], null))).toBeNull();
+    expect(unplacedCardLine(null)).toBeNull();
+  });
+
+  it("shows a run whose count is unknown and whose preview is empty, as unknown and never as a counted 0", () => {
+    // `{ items: [], total: null }` is a run that may have unplaced items nobody counted. It must not
+    // read as `{ items: [], total: 0 }`, and it is told apart from no run by type, not by identity.
+    const unknown = describeUnplaced(list([], null));
+    expect(unknown.present).toBe(true);
+    expect(unknown.total).toBeNull();
+    expect(unknown.omitted).toBeNull();
+    expect(notPlacedLabel(unknown)).toBe("Not placed (count unknown)");
+    expect(unplacedHeader(unknown)).toBe(
+      "The number of items that carry no timestamp is not known. Placing them would invent an order the evidence does not support.",
+    );
+    expect(unplacedCardLine(list([], null))).toBe(
+      "The number of timeline items that could not be placed is not known",
+    );
+    // The same shape as a counted zero in every field but the count, and the reverse in what it shows.
+    expect(describeUnplaced(list([], 0)).present).not.toBe(unknown.present);
+    expect(unplacedCardLine(list([], 0))).not.toBe(unplacedCardLine(list([], null)));
+  });
+
+  it("gives no run an empty view that shows nothing, so a missing run is never a row", () => {
+    expect(describeUnplaced(null)).toEqual({
+      rows: [],
+      total: null,
+      complete: false,
+      omitted: null,
+      allLogLines: false,
+      present: false,
+    });
   });
 
   it("shows a known count even when the preview is empty", () => {

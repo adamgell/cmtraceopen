@@ -186,8 +186,12 @@ export interface EvtxCorrelationData {
   /**
    * The unplaced list and count of the page `model` was built from (the Correlation view's "Not
    * placed" pane). Read it only together with `model`; the newest session's is in `counts`.
+   *
+   * Null is NO RUN: there is no session, so nothing was counted. It is not the same as a run whose
+   * count was not trusted, `{ items: [], total: null }`, which may have unplaced items nobody
+   * counted and so is shown as unknown. The two are told apart by type, never by a value.
    */
-  unplacedList: UnplacedListData;
+  unplacedList: UnplacedListData | null;
   /** Distinct exact and candidate partners per origin id, from the uncapped pairs of `model`. */
   linkPartners: ReadonlyMap<string, number>;
   /** The newest session's counts-only model, or null. */
@@ -205,7 +209,6 @@ const NO_UNPLACED: UnplacedEvidence = {
   unplacedListComplete: false,
   unplacedIds: new Set(),
 };
-const NO_UNPLACED_LIST: UnplacedListData = { items: [], total: null };
 const IDLE_SCAN: CorrelationScanState = {
   state: "idle",
   progress: null,
@@ -235,7 +238,7 @@ export const UNAVAILABLE_CORRELATION: EvtxCorrelationData = {
   scan: IDLE_SCAN,
   nextScan: null,
   unplaced: NO_UNPLACED,
-  unplacedList: NO_UNPLACED_LIST,
+  unplacedList: null,
   linkPartners: NO_PARTNERS,
   counts: null,
   updating: false,
@@ -573,7 +576,7 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
       scan: primary?.scan ?? IDLE_SCAN,
       nextScan: run.nextScan,
       unplaced: primary?.unplaced ?? NO_UNPLACED,
-      unplacedList: primary?.unplacedList ?? NO_UNPLACED_LIST,
+      unplacedList: primary?.unplacedList ?? null,
       linkPartners: primary?.linkPartners ?? NO_PARTNERS,
       counts:
         run.counts === null
