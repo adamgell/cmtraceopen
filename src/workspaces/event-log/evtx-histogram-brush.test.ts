@@ -333,6 +333,17 @@ describe("the deviations from spec 8.5 and 6.1", () => {
     expect(contrastRatio(foreground3, wash)).toBeLessThan(3);
   });
 
+  it("is needed in dracula alone: Foreground3 passes 3:1 on the 60% wash in every other theme", () => {
+    // The Deviates-from comment cites dracula (2.34:1); solarized-dark's 3.08:1 passes.
+    for (const theme of themes) {
+      const palette = brushPaletteFor(theme);
+      const wash = compositeOver(palette.surface, palette.fill, 0.6);
+      const foreground3 = resolved(theme, tokens.colorNeutralForeground3);
+      const failing = contrastRatio(foreground3, wash) < 3;
+      expect(failing, theme.id).toBe(theme.id === "dracula");
+    }
+  });
+
   it("keeps the axis and legend text, colorNeutralForeground2, at 4.5:1 on the surface in every theme", () => {
     for (const theme of themes) {
       const surface = resolved(theme, tokens.colorNeutralBackground1);

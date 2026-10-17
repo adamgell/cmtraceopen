@@ -178,7 +178,7 @@ export interface BrushPalette {
  * The brush colors of a theme, resolved to hex.
  *
  * Deviates from spec 8.5 / D6 (brush borders `colorNeutralForeground3`): that token measures 2.34:1
- * against the wash in dracula and 3.08:1 in solarized-dark, under the 3:1 a boundary needs. The
+ * against the wash in dracula, under the 3:1 a boundary needs (solarized-dark's 3.08:1 passes). The
  * borders use `colorNeutralStrokeAccessible`, the stroke the token map already substitutes where
  * Foreground3 is short (the notCausal badge): at least 3.97:1 against the wash in every theme.
  */
