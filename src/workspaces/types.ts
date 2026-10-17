@@ -31,8 +31,12 @@ export interface WorkspaceCapabilities {
    * the Log workspace. Set on workspaces whose own screen is where the loaded
    * log belongs; explicit navigation (the workspace picker, or a call site that
    * switches views itself) still moves the user. Defaults to false.
+   *
+   * `true` keeps the view for every trigger. A list keeps it only for the
+   * `ensureLogViewVisible` triggers it names, and every other trigger switches to
+   * the Log workspace as it does for a workspace that sets nothing.
    */
-  keepsViewOnLogLoad?: boolean;
+  keepsViewOnLogLoad?: boolean | readonly string[];
 }
 
 export interface WorkspaceDefinition {

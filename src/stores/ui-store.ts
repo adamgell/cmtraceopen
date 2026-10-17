@@ -535,7 +535,10 @@ export const useUiStore = create<UiState>()(
         const activeWorkspace = get().activeWorkspace;
         const workspace = getWorkspace(activeWorkspace);
 
-        if (workspace.capabilities?.keepsViewOnLogLoad) {
+        const keeps = workspace.capabilities?.keepsViewOnLogLoad;
+        const keepsView =
+          keeps === true || (typeof keeps === "object" && keeps.includes(trigger));
+        if (keepsView) {
           // This workspace shows the log it loaded itself, so a log load that
           // started in it stays there. Explicit navigation still switches.
           console.info("[ui-store] keeping workspace visible for log load", {
