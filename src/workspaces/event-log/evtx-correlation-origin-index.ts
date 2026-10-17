@@ -255,43 +255,121 @@ export function linkPartnerCounts(
   return new Map([...partners].map(([id, set]) => [id, set.size]));
 }
 
+export interface LinkIndexOptions {
+  /** Every loaded record: needed to find the records of a channel an origin could not be resolved in. */
+  records: readonly EvtxRecord[];
+  /** Every timeline edge of the session was loaded (`CorrelationChainModel.edgeInputComplete`). */
+  edgeInputComplete: boolean;
+  /** The scan read every timeline page (`LoadedLinkedItems.complete`). */
+  scanComplete: boolean;
+}
+
 export interface RecordLinkCounts {
   /** Partners per loaded record, positive only, held by record OBJECT. */
   counts: Map<EvtxRecord, number>;
   /**
-   * Linked origins that could not be given to one record: no item to match (never placed or not
-   * loaded), no usable identity, a text-log line, or no loaded record. Their records, if any,
-   * show no count, which is a gap in what is known, not a statement that they have no link.
+   * Records whose link status is UNKNOWN even where the index is otherwise complete: every
+   * candidate of an origin that names several (an origin cannot be told apart from its twin, so
+   * which copy carries the link is unknown), and every record of a source and channel in which an
+   * origin had no usable identity (that origin could be any record there).
+   */
+  unknownRecords: Set<EvtxRecord>;
+  /**
+   * Linked origins that could not be placed at all: no origin was read for them, so their channel
+   * is not known either. Any record might be theirs.
    */
   unmatchedOrigins: number;
-  /** Linked origins that name more than one loaded record. None of them is given the count. */
+  /** Linked origins that name more than one loaded record. */
   ambiguousOrigins: number;
+  /** Linked origins with a usable identity that name no loaded record. Their records are not here. */
+  unloadedOrigins: number;
+  /**
+   * The edges are complete, the scan is complete, and no origin was unmatched. Only then may a
+   * record with no count be read as having no link (`recordLinkStatus`).
+   */
+  complete: boolean;
 }
 
 /**
- * The link count of each loaded record. An origin is given to a record only when it names exactly
- * one, so a count is never attributed by guessing between candidates.
+ * What the Links cell may say about one record. An empty cell means "no Exact or Candidate edge"
+ * (spec 8.7), so it is for `none` only: a record the index could not resolve is `unknown`, and a
+ * count that may be short is `atLeast`.
+ */
+export type RecordLinkStatus =
+  | { kind: "linked"; count: number; atLeast: boolean }
+  | { kind: "unknown" }
+  | { kind: "none" };
+
+/**
+ * The link count of each loaded record, and which records the index cannot speak for. An origin is
+ * given to a record only when it names exactly one, so a count is never attributed by guessing
+ * between candidates. A text-log origin is not a record and affects no record's status.
  */
 export function linkCountsByRecord(
   partnerCounts: ReadonlyMap<string, number>,
   origins: OriginLookup,
   index: EvidenceIndex,
+  options: LinkIndexOptions,
 ): RecordLinkCounts {
   const counts = new Map<EvtxRecord, number>();
+  const unknownRecords = new Set<EvtxRecord>();
+  const unknownLanes = new Map<string, EventOrigin>();
   let unmatchedOrigins = 0;
   let ambiguousOrigins = 0;
+  let unloadedOrigins = 0;
   for (const [originId, partners] of partnerCounts) {
     if (partners <= 0) continue;
     const origin = origins.get(originId);
-    const resolution = origin === undefined ? undefined : resolveOriginRecords(origin, index);
-    if (resolution?.kind !== "matches" || resolution.records.length === 0) {
+    if (origin === undefined) {
       unmatchedOrigins += 1;
+      continue;
+    }
+    // A text-log origin is not a record: it changes nothing about any record.
+    if (origin.kind !== "event") continue;
+    const resolution = resolveOriginRecords(origin, index);
+    if (resolution.kind !== "matches") {
+      unknownLanes.set(`${origin.source}\u0000${origin.channel}`, origin);
+      continue;
+    }
+    if (resolution.records.length === 0) {
+      unloadedOrigins += 1;
     } else if (resolution.records.length > 1) {
       ambiguousOrigins += 1;
+      for (const record of resolution.records) unknownRecords.add(record);
     } else {
       const record = resolution.records[0] as EvtxRecord;
       counts.set(record, Math.max(counts.get(record) ?? 0, partners));
     }
   }
-  return { counts, unmatchedOrigins, ambiguousOrigins };
+  if (unknownLanes.size > 0) {
+    for (const record of options.records) {
+      for (const origin of unknownLanes.values()) {
+        if (
+          redactedValueMatches(origin.source, record.sourceLabel) &&
+          redactedValueMatches(origin.channel, record.channel)
+        ) {
+          unknownRecords.add(record);
+          break;
+        }
+      }
+    }
+  }
+  return {
+    counts,
+    unknownRecords,
+    unmatchedOrigins,
+    ambiguousOrigins,
+    unloadedOrigins,
+    complete: options.edgeInputComplete && options.scanComplete && unmatchedOrigins === 0,
+  };
+}
+
+/** What a record's Links cell may show, from `linkCountsByRecord`. */
+export function recordLinkStatus(result: RecordLinkCounts, record: EvtxRecord): RecordLinkStatus {
+  const count = result.counts.get(record);
+  const unknown = result.unknownRecords.has(record);
+  if (count !== undefined) {
+    return { kind: "linked", count, atLeast: unknown || !result.complete };
+  }
+  return unknown || !result.complete ? { kind: "unknown" } : { kind: "none" };
 }

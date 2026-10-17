@@ -16,6 +16,7 @@ import {
   linkCountsByRecord,
   linkPartnerCounts,
   originIdentityText,
+  recordLinkStatus,
   resolveOriginRecords,
   scopeForChain,
   soleRecordForOrigin,
@@ -722,64 +723,223 @@ function syntheticEdge(
 }
 
 describe("linkCountsByRecord", () => {
+  /** Edges and scan complete, so only the origins can make the index incomplete. */
+  const complete = (records: EvtxRecord[]) => ({ records, edgeInputComplete: true, scanComplete: true });
+
   it("gives each record the partners of the one origin it names, held by object", () => {
     const a = fixturePair(1);
     const b = fixturePair(2);
     const c = fixturePair(3);
-    const partners = linkPartnerCounts([
-      { left: rid(1), right: rid(2) },
-      { left: rid(1), right: rid(3) },
-    ]);
+    const loaded = [a.source, b.source, c.source];
     const result = linkCountsByRecord(
-      partners,
+      linkPartnerCounts([
+        { left: rid(1), right: rid(2) },
+        { left: rid(1), right: rid(3) },
+      ]),
       originLookup([a.item, b.item, c.item], []),
-      indexOf([a.source, b.source, c.source]),
+      indexOf(loaded),
+      complete(loaded),
     );
     expect(result.counts.get(a.source)).toBe(2);
     expect(result.counts.get(b.source)).toBe(1);
     expect(result.counts.get(c.source)).toBe(1);
-    expect(result.unmatchedOrigins).toBe(0);
-    expect(result.ambiguousOrigins).toBe(0);
+    expect(result).toMatchObject({
+      unmatchedOrigins: 0,
+      ambiguousOrigins: 0,
+      unloadedOrigins: 0,
+      complete: true,
+    });
+    expect(result.unknownRecords.size).toBe(0);
+    expect(recordLinkStatus(result, a.source)).toEqual({ kind: "linked", count: 2, atLeast: false });
   });
 
-  it("gives no record the count of an origin that names several, and says so", () => {
+  it("reads a record with no link as none only when the index is complete", () => {
     const a = fixturePair(1);
-    const twin = record(1, { eventId: 101 });
     const b = fixturePair(2);
+    const quiet = fixturePair(5);
+    const loaded = [a.source, b.source, quiet.source];
+    const result = linkCountsByRecord(
+      linkPartnerCounts([{ left: rid(1), right: rid(2) }]),
+      originLookup([a.item, b.item, quiet.item], []),
+      indexOf(loaded),
+      complete(loaded),
+    );
+    expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "none" });
+  });
+
+  it("never gives the Links cell an empty answer for the copies of an origin that names several: both are unknown, not zero", () => {
+    // The same archive loaded twice: each linked origin resolves to two identical records.
+    const a = fixturePair(1);
+    const aCopy = record(1, { eventId: 101 });
+    const b = fixturePair(2);
+    const bCopy = record(2, { eventId: 102 });
+    const loaded = [a.source, aCopy, b.source, bCopy];
     const result = linkCountsByRecord(
       linkPartnerCounts([{ left: rid(1), right: rid(2) }]),
       originLookup([a.item, b.item], []),
-      indexOf([a.source, twin, b.source]),
+      indexOf(loaded),
+      complete(loaded),
     );
-    expect(result.counts.has(a.source)).toBe(false);
-    expect(result.counts.has(twin)).toBe(false);
-    expect(result.counts.get(b.source)).toBe(1);
-    expect(result.ambiguousOrigins).toBe(1);
+    expect(result.counts.size).toBe(0);
+    expect(result.ambiguousOrigins).toBe(2);
+    expect(result.complete).toBe(true);
+    for (const copy of loaded) {
+      expect(result.unknownRecords.has(copy)).toBe(true);
+      expect(recordLinkStatus(result, copy)).toEqual({ kind: "unknown" });
+    }
   });
 
-  it("counts an origin it cannot give to a record, rather than showing it as no link", () => {
+  it("marks a record that has a count but is also a candidate of an ambiguous origin as at least that count", () => {
     const a = fixturePair(1);
-    const unnumbered = record(0, { eventRecordIdText: "0" });
-    const noIdentity = itemOf(
-      originOf(unnumbered, { stableId: "no-id", recordId: 0, recordIdText: null }),
-    );
+    const twin = record(1, { eventId: 101 });
+    const c = fixturePair(3);
+    const loaded = [a.source, twin, c.source];
     const result = linkCountsByRecord(
       linkPartnerCounts([
-        { left: rid(1), right: "never-loaded" },
-        { left: rid(1), right: "no-id" },
-        { left: rid(1), right: "log|1:a|1:b|1|1" },
+        { left: rid(1), right: rid(3) },
       ]),
-      originLookup([a.item, noIdentity], []),
-      indexOf([a.source]),
+      originLookup([a.item, c.item], []),
+      indexOf(loaded),
+      complete(loaded),
     );
-    expect(result.counts.get(a.source)).toBe(3);
-    // never-loaded (no item), no-id (no identity) and the log id (no item) are unmatched.
-    expect(result.unmatchedOrigins).toBe(3);
+    // c names one record and gets its count of 1; a's origin names two, so neither copy is counted.
+    expect(recordLinkStatus(result, c.source)).toEqual({ kind: "linked", count: 1, atLeast: false });
+    expect(recordLinkStatus(result, a.source)).toEqual({ kind: "unknown" });
+    const both = linkCountsByRecord(
+      linkPartnerCounts([{ left: rid(3), right: rid(1) }, { left: rid(3), right: rid(9) }]),
+      originLookup([a.item, c.item, fixturePair(9).item], []),
+      indexOf([...loaded, fixturePair(9).source]),
+      complete([...loaded, fixturePair(9).source]),
+    );
+    expect(both.counts.get(c.source)).toBe(2);
+  });
+
+  it.each([
+    ["the edges are not all loaded", { edgeInputComplete: false, scanComplete: true }],
+    ["the scan did not finish", { edgeInputComplete: true, scanComplete: false }],
+  ])("is not complete when %s, so a record with no count is unknown and a count is a floor", (_why, flags) => {
+    const a = fixturePair(1);
+    const b = fixturePair(2);
+    const quiet = fixturePair(5);
+    const loaded = [a.source, b.source, quiet.source];
+    const result = linkCountsByRecord(
+      linkPartnerCounts([{ left: rid(1), right: rid(2) }]),
+      originLookup([a.item, b.item, quiet.item], []),
+      indexOf(loaded),
+      { records: loaded, ...flags },
+    );
+    expect(result.complete).toBe(false);
+    expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "unknown" });
+    expect(recordLinkStatus(result, a.source)).toEqual({ kind: "linked", count: 1, atLeast: true });
+  });
+
+  it("is not complete when a linked origin was never read, and counts it as unmatched", () => {
+    const a = fixturePair(1);
+    const quiet = fixturePair(5);
+    const loaded = [a.source, quiet.source];
+    const result = linkCountsByRecord(
+      linkPartnerCounts([{ left: rid(1), right: "never-read" }]),
+      originLookup([a.item, quiet.item], []),
+      indexOf(loaded),
+      complete(loaded),
+    );
+    expect(result.unmatchedOrigins).toBe(1);
+    expect(result.complete).toBe(false);
+    expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "unknown" });
     for (const count of result.counts.values()) expect(count).toBeGreaterThan(0);
   });
 
-  it("is empty when nothing is linked", () => {
-    const result = linkCountsByRecord(new Map(), new Map(), indexOf([record(1)]));
-    expect(result).toEqual({ counts: new Map(), unmatchedOrigins: 0, ambiguousOrigins: 0 });
+  it("marks every record of the source and channel an identity-less origin could be in as unknown, and no other", () => {
+    const a = fixturePair(1);
+    const unnumbered = record(0, { eventRecordIdText: "0", eventId: 150 });
+    const noIdentity = itemOf(originOf(unnumbered, { stableId: "no-id", recordId: 0, recordIdText: null }));
+    const sameChannel = record(30, { eventId: 140 });
+    const otherChannel = record(31, { eventId: 141, channel: "Application" });
+    const otherSource = record(32, { eventId: 142, sourceLabel: "b.evtx" });
+    const loaded = [a.source, unnumbered, sameChannel, otherChannel, otherSource];
+    const result = linkCountsByRecord(
+      linkPartnerCounts([{ left: rid(1), right: "no-id" }]),
+      originLookup([a.item, noIdentity], []),
+      indexOf(loaded),
+      complete(loaded),
+    );
+    expect(result.complete).toBe(true);
+    expect(recordLinkStatus(result, unnumbered)).toEqual({ kind: "unknown" });
+    expect(recordLinkStatus(result, sameChannel)).toEqual({ kind: "unknown" });
+    expect(recordLinkStatus(result, otherChannel)).toEqual({ kind: "none" });
+    expect(recordLinkStatus(result, otherSource)).toEqual({ kind: "none" });
+    // a is in the same source and channel, so it cannot be spoken for either, though it has a count.
+    expect(recordLinkStatus(result, a.source)).toEqual({ kind: "linked", count: 1, atLeast: true });
+  });
+
+  it("does not make a record unknown for an origin whose record is not loaded", () => {
+    const a = fixturePair(1);
+    const gone = fixturePair(4);
+    const quiet = fixturePair(5);
+    const loaded = [a.source, quiet.source];
+    const result = linkCountsByRecord(
+      linkPartnerCounts([{ left: rid(1), right: rid(4) }]),
+      originLookup([a.item, gone.item, quiet.item], []),
+      indexOf(loaded),
+      complete(loaded),
+    );
+    expect(result.unloadedOrigins).toBe(1);
+    expect(result.complete).toBe(true);
+    expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "none" });
+  });
+
+  it("ignores a text-log origin: it is not a record and changes no record's status", () => {
+    const a = fixturePair(1);
+    const quiet = fixturePair(5);
+    const log = itemOf({
+      kind: "log",
+      file: "C:\\Logs\\a.log",
+      component: null,
+      line: 3,
+      source: "a.cpp",
+      machine: null,
+      bundle: null,
+      recordId: 3,
+    });
+    const logId = timelineOriginId(log.origin);
+    const loaded = [a.source, quiet.source];
+    const result = linkCountsByRecord(
+      linkPartnerCounts([{ left: rid(1), right: logId }]),
+      originLookup([a.item, log, quiet.item], []),
+      indexOf(loaded),
+      complete(loaded),
+    );
+    expect(result.counts.get(a.source)).toBe(1);
+    expect(result.unmatchedOrigins).toBe(0);
+    expect(result.complete).toBe(true);
+    expect(recordLinkStatus(result, quiet.source)).toEqual({ kind: "none" });
+  });
+
+  it("resolves an untimed origin through the unplaced list", () => {
+    const a = fixturePair(1);
+    const untimed = fixturePair(2);
+    const loaded = [a.source, untimed.source];
+    const result = linkCountsByRecord(
+      linkPartnerCounts([{ left: rid(1), right: rid(2) }]),
+      originLookup([a.item], [{ origin: untimed.item.origin, reason: "missingTimestamp" }]),
+      indexOf(loaded),
+      complete(loaded),
+    );
+    expect(result.counts.get(untimed.source)).toBe(1);
+    expect(result.unmatchedOrigins).toBe(0);
+  });
+
+  it("is complete and empty when nothing is linked and everything is read", () => {
+    const loaded = [record(1)];
+    const result = linkCountsByRecord(new Map(), new Map(), indexOf(loaded), complete(loaded));
+    expect(result).toEqual({
+      counts: new Map(),
+      unknownRecords: new Set(),
+      unmatchedOrigins: 0,
+      ambiguousOrigins: 0,
+      unloadedOrigins: 0,
+      complete: true,
+    });
+    expect(recordLinkStatus(result, loaded[0]!)).toEqual({ kind: "none" });
   });
 });
