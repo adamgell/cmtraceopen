@@ -29,7 +29,8 @@ import {
   type WallParts,
   type ZoneClock,
 } from "./evtx-histogram";
-import { TIME_RANGE_SEPARATOR, timeRangeNeedsYear } from "./evtx-time";
+import { LONDON_2026, modelZone } from "./__fixtures__/model-zone";
+import { TIME_RANGE_SEPARATOR, formatTimeRange, timeRangeNeedsYear } from "./evtx-time";
 import type { EvtxLevel, EvtxRecord } from "./types";
 
 /**
@@ -769,5 +770,76 @@ describe("the year in day labels", () => {
     expect(histogram.showYear).toBe(false);
     const wide = { startMs: on(2026, 2, 14), endMs: on(2027, 2, 14), counts: histogram.buckets[0].counts, total: 0 };
     expect(describeBucket(wide, "utc", true)).toContain("Feb 14 2026 00:00");
+  });
+});
+
+describe("no bucket ever reads with its two ends alike", () => {
+  const SEP = TIME_RANGE_SEPARATOR;
+  const LONDON = syntheticZone(LONDON_2026, [0, 60]);
+  // The fall-back: the hour 00:00Z to 01:00Z on 25 Oct 2026 is 01:00 BST, then 01:00 GMT again.
+  const FALL_BACK = Date.UTC(2026, 9, 25, 0);
+  /** Every rung of the ladder, and the 365 day multiples the fallback takes beyond it. */
+  const RUNGS = [...HISTOGRAM_INTERVALS_MS, 2 * 365 * DAY, 3 * 365 * DAY];
+
+  const zones = [
+    { name: "UTC", mode: "utc" as const, clock: UTC_CLOCK, model: null },
+    { name: "a modelled London fall-back", mode: "local" as const, clock: LONDON, model: LONDON_2026 },
+  ];
+
+  /** The buckets of one rung, aligned, around the fall-back or from the start of the current year. */
+  const bucketsOf = (rung: number, clock: ZoneClock): HistogramBucket[] => {
+    const subDay = rung < DAY;
+    const min = subDay ? FALL_BACK - 30 * rung : Date.UTC(2026, 0, 1);
+    const max = subDay ? FALL_BACK + 30 * rung : min + 40 * rung - 1;
+    const edges = bucketEdges(min, max, rung, clock);
+    return edges.slice(1).map((end, index) => ({
+      startMs: edges[index],
+      endMs: end,
+      counts: { Critical: 0, Error: 0, Warning: 0, Information: 0, Verbose: 0 },
+      total: 0,
+    }));
+  };
+
+  for (const zone of zones) {
+    it(`reads the ends of every bucket of every rung apart, in ${zone.name}`, () => {
+      const restore = zone.model === null ? () => undefined : modelZone(zone.model);
+      try {
+        let checked = 0;
+        for (const rung of RUNGS) {
+          const buckets = bucketsOf(rung, zone.clock);
+          const withYear = timeRangeNeedsYear(
+            buckets[0].startMs,
+            buckets[buckets.length - 1].endMs,
+            zone.mode,
+            PINNED_NOW,
+          );
+          for (const bucket of buckets) {
+            const context = `${zone.name}, rung ${rung / SECOND} s, ${new Date(bucket.startMs).toISOString()}`;
+            const range = formatTimeRange(bucket.startMs, bucket.endMs, zone.mode, withYear);
+            const [from, to] = range.split(SEP);
+            expect(to, context).toBeDefined();
+            expect(from, context).not.toBe(to);
+            const [text] = describeBucket(bucket, zone.mode, withYear).split(" \u00b7 ");
+            const [textFrom, textTo] = text.split(SEP);
+            expect(textFrom, context).not.toBe(textTo);
+            // A span of a second or more is told apart without milliseconds: that step is for under one.
+            expect(range, context).not.toMatch(/\.\d{3}/);
+            checked += 1;
+          }
+        }
+        expect(checked).toBeGreaterThan(600);
+      } finally {
+        restore();
+      }
+    });
+  }
+
+  it("reads a current-year 1 day bucket with its date, not as 00:00 to 00:00", () => {
+    const histogram = buildHistogram([rec(Date.UTC(2026, 7, 1)), rec(Date.UTC(2026, 9, 15))], "utc");
+    expect(histogram.intervalMs).toBe(DAY);
+    expect(histogram.showYear).toBe(false);
+    expect(describeBucket(histogram.buckets[0], "utc", histogram.showYear)).toBe(
+      `Aug 1 00:00${SEP}Aug 2 00:00 \u00b7 0 errors, 0 warnings, 1 info (UTC)`,
+    );
   });
 });

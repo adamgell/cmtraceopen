@@ -157,9 +157,14 @@ const SECONDS_BELOW_MS = 2 * 60 * 1000;
 
 /**
  * A half-open time range as a label: `09:00-09:45` on one day, `Oct 16 22:00-Oct 17 03:00` across
- * days, and with seconds when the range is shorter than two minutes. The days are the zone's own,
- * and the last instant inside the range decides whether it crosses one, so a range that ends at
- * midnight stays on its day. The separator is `TIME_RANGE_SEPARATOR`. `withYear` is `formatDayClock`'s.
+ * days, and with seconds when the range is shorter than two minutes. The days are the zone's own.
+ * The separator is `TIME_RANGE_SEPARATOR`. `withYear` is `formatDayClock`'s.
+ *
+ * The two ends never read alike for a range of a second or more. The label escalates until they
+ * differ: the clock alone (`09:00`), then the day (`Oct 6 00:00`, which a midnight-to-midnight day
+ * needs: it ends on the NEXT date but its last instant is on the first), then the year, and when no
+ * date separates them (a DST fall-back repeats a wall time) each end names its offset
+ * (`01:00 UTC+01:00`). Milliseconds are only for a range under one second.
  */
 export function formatTimeRange(
   startMs: number,
@@ -170,25 +175,35 @@ export function formatTimeRange(
   const withSeconds = endMs - startMs < SECONDS_BELOW_MS;
   // A range a year wide or more always names the year: its two ends would otherwise read alike.
   const year = withYear || endMs - startMs >= YEAR_MS;
-  // With the year, both ends always carry their day and year.
-  const crossesDays =
-    year || eventDateKey(startMs, mode) !== eventDateKey(Math.max(startMs, endMs - 1), mode);
-  const end = (epochMs: number) =>
-    crossesDays
-      ? formatDayClock(epochMs, mode, withSeconds, year)
-      : formatClock(epochMs, mode, withSeconds);
-  // Across a DST fall-back a range as wide as the shift runs from the first occurrence of a wall time
-  // to the second, so both ends read alike; each then names its own offset.
+  // The form to start with. A range that ends at a midnight is on the day before it, so its last
+  // instant says "same day" and a clock alone is tried first; the ladder below corrects that.
+  const sameDay =
+    eventDateKey(startMs, mode) === eventDateKey(Math.max(startMs, endMs - 1), mode);
+  const first = year ? 2 : sameDay ? 0 : 1;
+  const endText = (epochMs: number, form: number) =>
+    form === 0
+      ? formatClock(epochMs, mode, withSeconds)
+      : formatDayClock(epochMs, mode, withSeconds, form === 2);
+
+  // The ladder: the clock, then the day, then the year, taking the first form whose two ends differ.
+  // No range of a second or more may ever render equal ends, whatever made them alike.
+  for (let form = first; form <= 2; form += 1) {
+    const from = endText(startMs, form);
+    const to = endText(endMs, form);
+    if (from !== to) return `${from}${TIME_RANGE_SEPARATOR}${to}`;
+  }
+  // No form told them apart, so the ends are the same wall time and the difference is not in the date:
+  // either a repeated hour (a DST fall-back), where each end names its own offset, or a range under a
+  // second, which milliseconds tell apart. Both are applied to the first form tried, not to the longest.
   const ends = tellRangeEndsApart(
-    end(startMs),
-    end(endMs),
+    endText(startMs, first),
+    endText(endMs, first),
     zoneOffsetMinutes(startMs, mode),
     zoneOffsetMinutes(endMs, mode),
   );
   if (ends.start !== ends.end || endMs - startMs >= 1000) {
     return `${ends.start}${TIME_RANGE_SEPARATOR}${ends.end}`;
   }
-  // Under a second, even seconds read alike: the milliseconds tell the ends apart.
   const milliseconds = (epochMs: number) => String(((epochMs % 1000) + 1000) % 1000).padStart(3, "0");
   return `${ends.start}.${milliseconds(startMs)}${TIME_RANGE_SEPARATOR}${ends.end}.${milliseconds(endMs)}`;
 }

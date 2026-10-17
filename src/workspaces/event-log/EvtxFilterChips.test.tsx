@@ -25,6 +25,7 @@ import { useEvtxStore } from "./evtx-store";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import type { EvtxRecord } from "./types";
 import { useUiStore } from "../../stores/ui-store";
+import { LONDON_2026, modelZone } from "./__fixtures__/model-zone";
 
 const input = (overrides: Partial<EvtxFilterChipInput> = {}): EvtxFilterChipInput => ({
   filterEventIds: "",
@@ -236,6 +237,44 @@ describe("buildFilterChips, the transient criteria", () => {
         }
       }
       expect(checked).toBe(2 * 365 * 24 * 2);
+    });
+
+    it("names the dates of a range from one midnight to the next, which is not 00:00 to 00:00", () => {
+      // The last instant inside such a range is on its first day, so a clock-only label read alike.
+      const chip = timeChip(Date.UTC(2026, 9, 6), Date.UTC(2026, 9, 7));
+      expect(chip.label).toBe(`Time: brushed Oct 6 00:00${SEP}Oct 7 00:00`);
+      const span = (a: number, b: number) => timeChip(a, b).label.replace("Time: brushed ", "").split(SEP);
+      // The 23 hour and the 25 hour days of a modelled London year, midnight to midnight in the zone.
+      const restore = modelZone(LONDON_2026);
+      try {
+        const local = (a: number, b: number) =>
+          buildFilterChips(input({ timeRange: { startMs: a, endMs: b }, timeZoneMode: "local", nowMs: PINNED_NOW }))[0]
+            .label.replace("Time: brushed ", "")
+            .split(SEP);
+        expect(local(Date.UTC(2026, 2, 29, 0), Date.UTC(2026, 2, 29, 23))).toEqual(["Mar 29 00:00", "Mar 30 00:00"]);
+        expect(local(Date.UTC(2026, 9, 24, 23), Date.UTC(2026, 9, 26, 0))).toEqual(["Oct 25 00:00", "Oct 26 00:00"]);
+      } finally {
+        restore();
+      }
+      expect(span(Date.UTC(2026, 0, 1), Date.UTC(2026, 0, 2))[0]).not.toBe(span(Date.UTC(2026, 0, 1), Date.UTC(2026, 0, 2))[1]);
+    });
+
+    it("never writes a midnight-to-midnight day with its ends alike, for every day of the current year in the host's zone", () => {
+      // Run under TZ=Europe/London or America/New_York to include the 23 and 25 hour days.
+      let checked = 0;
+      for (let day = 0; day < 365; day += 1) {
+        const startMs = new Date(2026, 0, 1 + day).getTime();
+        const endMs = new Date(2026, 0, 2 + day).getTime();
+        for (const mode of ["local", "utc"] as const) {
+          const chip = buildFilterChips(
+            input({ timeRange: { startMs, endMs }, timeZoneMode: mode, nowMs: PINNED_NOW }),
+          )[0];
+          const [start, end] = chip.label.replace("Time: brushed ", "").split(SEP);
+          if (start === end) throw new Error(`${mode} ${new Date(startMs).toISOString()}: ${chip.label}`);
+          checked += 1;
+        }
+      }
+      expect(checked).toBe(730);
     });
 
     it("compares with the clock it is given, not the real one", () => {
