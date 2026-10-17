@@ -28,7 +28,12 @@ import { Dismiss12Regular } from "@fluentui/react-icons";
 import type { EvtxQuickFilter, EvtxRecordScope, EvtxRecordScopeKind, EvtxTimeRange } from "./evtx-filter";
 import { describeScopeCounts, formatCount } from "./evtx-insights-data";
 import { useEvtxStore } from "./evtx-store";
-import { formatTimeRange, timeZoneLabel, type EvtxTimeZoneMode } from "./evtx-time";
+import {
+  formatTimeRange,
+  timeRangeNeedsYear,
+  timeZoneLabel,
+  type EvtxTimeZoneMode,
+} from "./evtx-time";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
@@ -84,6 +89,8 @@ export interface EvtxFilterChipInput {
   timeZoneMode?: EvtxTimeZoneMode;
   /** How many events the range hides only because they have no usable timestamp. */
   untimedHiddenCount?: number;
+  /** The clock the range's years are compared with (its current year); the real one when omitted. */
+  nowMs?: number;
 }
 
 /** "4624,4625  4634" becomes "4624, 4625, 4634", the way the chip and the removal label read it. */
@@ -136,7 +143,10 @@ export function buildFilterChips(input: EvtxFilterChipInput): EvtxFilterChip[] {
   if (input.timeRange) {
     const { startMs, endMs } = input.timeRange;
     const mode = input.timeZoneMode ?? "local";
-    const label = `Time: brushed ${formatTimeRange(startMs, endMs, mode)}`;
+    // The year is named when the range is not in the current year, spans two years, or is a year
+    // long, so a range brushed on a multi-year chart reads as the chart's own labels do.
+    const withYear = timeRangeNeedsYear(startMs, endMs, mode, input.nowMs ?? Date.now());
+    const label = `Time: brushed ${formatTimeRange(startMs, endMs, mode, withYear)}`;
     const untimed = input.untimedHiddenCount ?? 0;
     const lines = [`${label} (${timeZoneLabel(mode, startMs)})`];
     if (untimed > 0) {

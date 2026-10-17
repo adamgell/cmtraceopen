@@ -11,7 +11,7 @@ import { EvtxHistogram } from "./EvtxHistogram";
 import { buildHistogram, describeBucket } from "./evtx-histogram";
 import { useEvtxStore } from "./evtx-store";
 import { DERIVATION_THROTTLE_MS } from "./evtx-throttle";
-import { formatTimeRange } from "./evtx-time";
+import { formatTimeRange, timeRangeNeedsYear } from "./evtx-time";
 import type { EvtxLevel, EvtxRecord } from "./types";
 
 const MINUTE = 60 * 1000;
@@ -102,6 +102,9 @@ const seedRange = (range: { startMs: number; endMs: number } | null) =>
   act(() => {
     useEvtxStore.setState({ timeRange: range });
   });
+/** The chip's label for a range, which names the year when the range is not in the current one. */
+const chipLabel = (startMs: number, endMs: number, mode: "utc" | "local" = "utc") =>
+  `Time: brushed ${formatTimeRange(startMs, endMs, mode, timeRangeNeedsYear(startMs, endMs, mode, Date.now()))}`;
 const tooltip = () => document.querySelector<HTMLElement>("[data-evtx-tooltip]");
 /** The cursor bucket's text shown inline in the caption line while the plot has keyboard focus. */
 const cursorText = () => document.querySelector<HTMLElement>("[data-evtx-cursor-text]");
@@ -150,7 +153,7 @@ describe("dragging a range", () => {
     const { slider } = mount();
     down(slider, x(10));
     up(slider, x(14));
-    const label = `Time: brushed ${formatTimeRange(edge(10), edge(15), "utc")}`;
+    const label = chipLabel(edge(10), edge(15));
     expect(screen.getByText(label)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: `Remove ${label}` })).toBeInTheDocument();
   });
@@ -526,7 +529,7 @@ describe("keeping the overlay and the Time chip in step", () => {
     down(slider, x(5));
     up(slider, x(9));
     expect(wash(container)).not.toBeNull();
-    const label = `Time: brushed ${formatTimeRange(edge(5), edge(10), "utc")}`;
+    const label = chipLabel(edge(5), edge(10));
     fireEvent.click(screen.getByRole("button", { name: `Remove ${label}` }));
     expect(storeRange()).toBeNull();
     expect(wash(container)).toBeNull();
@@ -570,7 +573,7 @@ describe("keeping the overlay and the Time chip in step", () => {
       useEvtxStore.setState({ timeZoneMode: "local" });
     });
     expect(storeRange()).toEqual(rangeOf(10, 19));
-    expect(screen.getByText(`Time: brushed ${formatTimeRange(edge(10), edge(20), "local")}`)).toBeInTheDocument();
+    expect(screen.getByText(chipLabel(edge(10), edge(20), "local"))).toBeInTheDocument();
     expect(wash(container)).not.toBeNull();
     // Where the wash sits depends on the local grid, which the host's zone decides; that it is still
     // drawn from the same instants is what the store's unchanged range says.

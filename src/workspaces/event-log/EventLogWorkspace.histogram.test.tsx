@@ -46,7 +46,7 @@ import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { buildHistogram } from "./evtx-histogram";
 import { useEvtxStore } from "./evtx-store";
 import { DERIVATION_THROTTLE_MS } from "./evtx-throttle";
-import { formatTimeRange } from "./evtx-time";
+import { formatTimeRange, timeRangeNeedsYear } from "./evtx-time";
 import type { EvtxRecord } from "./types";
 
 const MINUTE = 60 * 1000;
@@ -171,7 +171,14 @@ describe("the histogram in the workspace", () => {
     fireEvent.pointerUp(plot, { clientX: 4 * width + 1, pointerId: 1 });
     expect(storeRange()).toEqual({ startMs: histogram.edges[2], endMs: histogram.edges[5] });
     expect(
-      screen.getByText(`Time: brushed ${formatTimeRange(histogram.edges[2], histogram.edges[5], "utc")}`),
+      screen.getByText(
+        `Time: brushed ${formatTimeRange(
+          histogram.edges[2],
+          histogram.edges[5],
+          "utc",
+          timeRangeNeedsYear(histogram.edges[2], histogram.edges[5], "utc", Date.now()),
+        )}`,
+      ),
     ).toBeInTheDocument();
     expect(readout()).toMatch(/^Showing \d+ of 12$/);
     expect(readout()).not.toBe("Showing 12 of 12");
