@@ -196,6 +196,32 @@ describe("dragging a range", () => {
   });
 });
 
+describe("a press while a keyboard selection is pending", () => {
+  it("anchors under the pointer on the grid the selection froze, not the regridded chart", () => {
+    vi.useFakeTimers();
+    const { slider, rerender } = mount();
+    fireEvent.focus(slider);
+    // A Shift selection freezes the 72 buckets of 20 minutes it began on.
+    key(slider, "ArrowLeft", { shiftKey: true });
+    // The tail then appends days of events: the live chart regrids to a coarser interval.
+    const grown = [...records, rec(FIRST + 5 * DAY, "Error", 500)];
+    expect(buildHistogram(grown, "utc").buckets.length).not.toBe(72);
+    rerender(
+      <>
+        <EvtxFilterChips visibleCount={grown.length} loadedCount={grown.length} />
+        <EvtxHistogram records={grown} loading={false} />
+      </>,
+    );
+    act(() => {
+      vi.advanceTimersByTime(DERIVATION_THROTTLE_MS);
+    });
+    // Mid-plot is bucket 36 of the 72 the plot still shows, and the press releases in the same place.
+    down(slider, LEFT + 360);
+    up(slider, LEFT + 360);
+    expect(storeRange()).toEqual(rangeOf(36, 36));
+  });
+});
+
 describe("a click", () => {
   it("selects the bucket it lands on", () => {
     const { slider } = mount();

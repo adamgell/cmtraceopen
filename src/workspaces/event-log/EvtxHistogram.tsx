@@ -350,7 +350,9 @@ export function EvtxHistogram({ records, loading }: EvtxHistogramProps) {
     event.preventDefault();
     event.currentTarget.setPointerCapture?.(event.pointerId);
     const index = indexAt(event);
-    setFrozen(histogram);
+    // Freeze the grid the anchor was computed on: `view`, which is the one a pending keyboard
+    // selection froze, not the live chart that a tail may have regridded since.
+    setFrozen(view);
     setDrag({ anchor: index, current: index });
     setKeys({ cursor: index, anchor: null });
     event.currentTarget.focus({ preventScroll: true });
