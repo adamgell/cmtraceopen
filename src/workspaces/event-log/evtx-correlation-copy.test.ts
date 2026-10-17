@@ -179,6 +179,19 @@ describe("renderCapNotice", () => {
   });
 });
 
+describe("the render cap line and the paged-and-bounded notice are two different omissions", () => {
+  it("never borrow each other's words, so edges never loaded are not read as rows dropped by the cap", () => {
+    const cap = renderCapNotice({ shown: 100, totalCount: 120, omittedCount: 20 });
+    expect(cap).not.toMatch(/paged|bounded|edges|loaded/);
+    for (const state of [
+      { edgeInputComplete: false, unloadedEdgeCount: 40 },
+      { edgeInputComplete: false, unloadedEdgeCount: 0 },
+    ]) {
+      expect(edgeInputNotice(state)).not.toMatch(/Showing the first|omitted/);
+    }
+  });
+});
+
 describe("unresolvedNotice", () => {
   const chain = (ids: string[], memberCount = 5) => ({ unresolvedMemberIds: ids, memberCount });
 
