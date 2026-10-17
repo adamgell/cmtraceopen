@@ -350,7 +350,10 @@ function queryFieldText(record: EvtxRecord, field: EvtxQueryTextField): string {
   }
 }
 
-/** One field-query term with its value checked, and its text normalized for the case rule. */
+/**
+ * One field-query term with its value checked. A free-text needle is normalized for the Case
+ * setting; a field value's needle is always lower case, because field values ignore Case.
+ */
 type EvtxCompiledTerm = { negated: boolean } & (
   | { kind: "text"; needle: string }
   | { kind: "id"; selectors: EvtxEventIdSelectorParseResult }
@@ -363,7 +366,15 @@ type EvtxCompiledTerm = { negated: boolean } & (
 /** A field query ready to test records with: every clause must match, any one term in a clause. */
 export interface EvtxCompiledFieldQuery {
   clauses: EvtxCompiledTerm[][];
-  caseSensitive: boolean;
+}
+
+/**
+ * A field value or the record text it is tested against, in the one case rule field terms use:
+ * insensitive, whatever the Case setting (spec 8.3 says provider:, channel: and computer: match a
+ * case-insensitive substring; source: and data.<Name>: follow the same rule).
+ */
+function fieldValueText(value: string): string {
+  return value.toLocaleLowerCase();
 }
 
 export type EvtxFieldQueryResult =
@@ -384,9 +395,10 @@ function levelForQueryName(name: string): EvtxLevel | undefined {
  *   and inclusive ranges, matched exactly, as the Event IDs quick-filter mode does.
  * - `level:` takes a comma list of level names, mapped through `EVTX_LEVELS`.
  * - `provider:`, `channel:`, `computer:`, `source:` (the record's source label) and
- *   `data.<Name>:` (the record's EventData field of that name) match a substring, case-insensitive
- *   unless `caseSensitive`, as the quick filter's text modes do.
- * - Free text is a substring too; which values it searches is the caller's (`matchesFieldQuery`).
+ *   `data.<Name>:` (the record's EventData field of that name) match a case-insensitive
+ *   substring. `caseSensitive` does not apply to them, and neither does a quick filter's scope.
+ * - Free text is a substring too, case-sensitive only when `caseSensitive`; which values it
+ *   searches is the caller's (`matchesFieldQuery`).
  *
  * The first malformed term fails the whole query: an invalid query never filters on what is left.
  */
@@ -405,7 +417,7 @@ export function compileFieldQuery(text: string, caseSensitive: boolean): EvtxFie
           kind: "data",
           negated,
           name: term.name.toLowerCase(),
-          needle: normalizeText(value, caseSensitive),
+          needle: fieldValueText(value),
         });
       } else if (term.field === "id") {
         const selectors = parseEventIdSelectors(value);
@@ -448,13 +460,13 @@ export function compileFieldQuery(text: string, caseSensitive: boolean): EvtxFie
           kind: "textField",
           negated,
           field: term.field,
-          needle: normalizeText(value, caseSensitive),
+          needle: fieldValueText(value),
         });
       }
     }
     clauses.push(compiled);
   }
-  return { ok: true, query: { clauses, caseSensitive } };
+  return { ok: true, query: { clauses } };
 }
 
 /** The first problem in a field query for the operator to read, or null when there is none. */
@@ -475,7 +487,6 @@ export function quickFilterApplies(filter: EvtxQuickFilter): boolean {
 function termMatches(
   record: EvtxRecord,
   term: EvtxCompiledTerm,
-  caseSensitive: boolean,
   matchesText: (needle: string) => boolean
 ): boolean {
   switch (term.kind) {
@@ -486,13 +497,13 @@ function termMatches(
     case "level":
       return term.levels.has(record.level);
     case "textField":
-      return normalizeText(queryFieldText(record, term.field), caseSensitive).includes(term.needle);
+      return fieldValueText(queryFieldText(record, term.field)).includes(term.needle);
     case "data":
       // A record without the field does not match, so a negated term keeps it.
       return record.eventData.some(
         (field) =>
           field.name.toLowerCase() === term.name &&
-          normalizeText(field.value, caseSensitive).includes(term.needle)
+          fieldValueText(field.value).includes(term.needle)
       );
   }
 }
@@ -505,7 +516,7 @@ function matchesFieldQuery(
 ): boolean {
   return query.clauses.every((clause) =>
     clause.some((term) => {
-      const matched = termMatches(record, term, query.caseSensitive, matchesText);
+      const matched = termMatches(record, term, matchesText);
       return term.negated ? !matched : matched;
     })
   );

@@ -579,14 +579,50 @@ describe("the fieldQuery quick-filter mode", () => {
 
   it("applies field terms whatever the scope: the term names its field", () => {
     expect(fieldQuick("provider:aad", { scope: "visibleColumns" })).toEqual(["aad"]);
+    // The visible columns are only the message here, so no field these terms name is in scope.
+    expect(
+      fieldQuick("channel:system source:live/ data.param1:update", { scope: "visibleColumns" }),
+    ).toEqual(["service"]);
   });
 
-  it("honours Case for text values, but not for field names, levels or IDs", () => {
-    expect(fieldQuick("token", { caseSensitive: true })).toEqual([]);
-    expect(fieldQuick("Token", { caseSensitive: true })).toEqual(["aad"]);
-    expect(fieldQuick("provider:aad", { caseSensitive: true })).toEqual([]);
-    expect(fieldQuick("PROVIDER:AAD", { caseSensitive: true })).toEqual(["aad"]);
-    expect(fieldQuick("LEVEL:ERROR", { caseSensitive: true })).toEqual(["aad", "mdm"]);
+  it("applies Case to free text only: every field value matches whatever its case (spec 8.3)", () => {
+    const caseOn = { caseSensitive: true };
+    expect(fieldQuick("token", caseOn)).toEqual([]);
+    expect(fieldQuick("Token", caseOn)).toEqual(["aad"]);
+    expect(fieldQuick("provider:aad", caseOn)).toEqual(["aad"]);
+    expect(fieldQuick("PROVIDER:AAD", caseOn)).toEqual(["aad"]);
+    expect(fieldQuick("channel:SYSTEM", caseOn)).toEqual(["power", "service"]);
+    expect(fieldQuick("computer:pc-02", caseOn)).toEqual(["service"]);
+    // source: and data.<Name>: follow the same rule, a recorded addition to spec 8.3.
+    expect(fieldQuick("source:LIVE/aad", caseOn)).toEqual(["aad"]);
+    expect(fieldQuick("data.Error:caa2", caseOn)).toEqual(["aad"]);
+    expect(fieldQuick("data.ERRORCODE:0X8018", caseOn)).toEqual(["mdm"]);
+    expect(fieldQuick("LEVEL:ERROR", caseOn)).toEqual(["aad", "mdm"]);
+  });
+
+  it("still applies Case to the free text of a query that also has field terms", () => {
+    const caseOn = { caseSensitive: true };
+    expect(fieldQuick("provider:aad token", caseOn)).toEqual([]);
+    expect(fieldQuick("provider:aad Token", caseOn)).toEqual(["aad"]);
+  });
+
+  it("ignores Case for field values under negation and inside an OR group", () => {
+    const caseOn = { caseSensitive: true };
+    expect(fieldQuick("-provider:aad", caseOn)).toEqual(["mdm", "power", "service"]);
+    expect(fieldQuick("provider:aad OR channel:system", caseOn)).toEqual([
+      "aad",
+      "power",
+      "service",
+    ]);
+    expect(fieldQuick("-data.errorcode:0x8018 level:error", caseOn)).toEqual(["aad"]);
+  });
+
+  it("ignores Case for field values in a quick filter loaded from a saved filter", () => {
+    const loaded = sanitizeQuickFilter(
+      quick({ mode: "fieldQuery", query: "provider:aad", caseSensitive: true }),
+    );
+    expect(loaded.caseSensitive).toBe(true);
+    expect(searched("", loaded)).toEqual(["aad"]);
   });
 
   it("removes the matches with a hide rule", () => {
@@ -617,9 +653,13 @@ describe("the fieldQuery quick-filter mode", () => {
     ).toBe(false);
   });
 
-  it("compiles with the quick filter's case rule", () => {
-    const compiled = compileFieldQuery("Token", true);
-    expect(compiled.ok && compiled.query.caseSensitive).toBe(true);
+  it("compiles free text with the Case setting and every field value in lower case", () => {
+    const compiled = compileFieldQuery("Token provider:AAD data.Error:CAA2", true);
+    expect(compiled.ok && compiled.query.clauses).toMatchObject([
+      [{ kind: "text", needle: "Token" }],
+      [{ kind: "textField", field: "provider", needle: "aad" }],
+      [{ kind: "data", name: "error", needle: "caa2" }],
+    ]);
   });
 });
 
