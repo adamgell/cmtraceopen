@@ -92,7 +92,7 @@ async function pickPaths(kind: AddLogSourceKind): Promise<string[]> {
 /** What the attempt was asked to read, for the message that names it. */
 function describeRequest(kind: AddLogSourceKind, paths: readonly string[]): string {
   if (kind === "folder") return `folder ${getBaseName(paths[0]) || paths[0]}`;
-  return paths.length === 1 ? getBaseName(paths[0]) || paths[0] : `${paths.length} files`;
+  return nameFiles(paths);
 }
 
 function failed(request: string, reason: string): AddLogSourceOutcome {

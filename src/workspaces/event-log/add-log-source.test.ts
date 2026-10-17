@@ -220,7 +220,23 @@ describe("several files", () => {
 
     expect(outcome).toEqual({
       status: "failed",
-      message: "Could not add 2 files: no text log could be read. No text log is now correlated.",
+      message: "Could not add a.log, b.log: no text log could be read. No text log is now correlated.",
+    });
+  });
+});
+
+describe("a long selection", () => {
+  it("names the first few files and counts the rest", async () => {
+    const many = ["a", "b", "c", "d", "e"].map((name) => `C:\\logs\\${name}.log`);
+    commands.parseFilesBatch.mockRejectedValue(new Error("The parse service stopped."));
+    dialog.open.mockResolvedValue(many);
+
+    const outcome = await addLogSource("file");
+
+    expect(outcome).toEqual({
+      status: "failed",
+      message:
+        "Could not add a.log, b.log, c.log and 2 more: The parse service stopped. No text log is now correlated.",
     });
   });
 });
@@ -332,7 +348,7 @@ describe("a failed load", () => {
 
     expect(outcome).toEqual({
       status: "failed",
-      message: "Could not add 2 files: The parse service stopped. 1 text log is now correlated.",
+      message: "Could not add c.log, d.log: The parse service stopped. 1 text log is now correlated.",
     });
     expect(correlated().map((source) => source.path)).toEqual([A]);
   });

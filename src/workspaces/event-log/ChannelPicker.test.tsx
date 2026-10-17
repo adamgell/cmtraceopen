@@ -830,6 +830,30 @@ describe("the Add log source link", () => {
     expect(link()).toHaveFocus();
   });
 
+  it("leaves focus where the user moved it while the add ran", async () => {
+    const pending = deferred<{ status: "cancelled" }>();
+    addLogSourceMock.mockReturnValue(pending.promise);
+    render(
+      <>
+        <ChannelPicker />
+        <button type="button">elsewhere</button>
+      </>,
+    );
+    openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Add log file\u2026" }));
+    });
+
+    screen.getByRole("button", { name: "elsewhere" }).focus();
+    await act(async () => {
+      pending.resolve({ status: "cancelled" });
+      await pending.promise;
+    });
+
+    expect(screen.getByRole("button", { name: "elsewhere" })).toHaveFocus();
+    expect(link()).not.toHaveFocus();
+  });
+
   it.each([
     ["failed", "Could not add b.log: The file is locked. No text log is now correlated."],
     ["rejected", "Not added: x.reg is a registry file, which opens in the Log workspace. No text log is now correlated."],
@@ -1892,6 +1916,35 @@ describe("contrast of everything the pane renders", () => {
       ).toBeGreaterThanOrEqual(4.5);
       expect(screen.getByRole("button", { name: "Add log source\u2026" }).style.color).toBe("");
       expect(screen.getByRole("button", { name: "Dismiss" }).style.color).toBe("");
+    },
+  );
+
+  it.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
+    "keeps the Add log source menu legible in %s",
+    (_id, theme) => {
+      // Fluent draws a menu item in Foreground2 on the popover's Background1, and in the Hover and
+      // Pressed variants of both. The items set only their font size inline, so these are the pairs
+      // that reach the screen; the harness above cannot read class-based colors.
+      const ratio = (foreground: string, background: string) =>
+        contrastRatio(resolveToken(foreground, theme), resolveToken(background, theme));
+      expect(
+        ratio(tokens.colorNeutralForeground2, tokens.colorNeutralBackground1),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        ratio(tokens.colorNeutralForeground2Hover, tokens.colorNeutralBackground1Hover),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        ratio(tokens.colorNeutralForeground2Pressed, tokens.colorNeutralBackground1Pressed),
+      ).toBeGreaterThanOrEqual(4.5);
+
+      resetPane({ channels: [channel("System", "enabled")] });
+      useUiStore.setState({ themeId: theme.id });
+      render(<ChannelPicker />);
+      fireEvent.click(screen.getByRole("button", { name: "Add log source\u2026" }));
+      for (const item of screen.getAllByRole("menuitem")) {
+        expect(item.style.color).toBe("");
+        expect(item.style.backgroundColor).toBe("");
+      }
     },
   );
 

@@ -34,11 +34,14 @@ export function AddLogSourceControl({ primaryText }: { primaryText: string }) {
   const returnFocus = useRef(false);
 
   // The native dialog and the menu item that started the add are both gone when it finishes, so
-  // focus would otherwise fall to the page. Put it back on the link, whatever the outcome.
+  // focus would otherwise fall to the page. Put it back on the link, whatever the outcome, unless
+  // the user has moved it somewhere since: a folder add can take seconds, and finishing must not
+  // pull focus out of the table they went to.
   useEffect(() => {
     if (!busy && returnFocus.current) {
       returnFocus.current = false;
-      linkRef.current?.focus();
+      const active = document.activeElement;
+      if (active === null || active === document.body) linkRef.current?.focus();
     }
   }, [busy]);
 
