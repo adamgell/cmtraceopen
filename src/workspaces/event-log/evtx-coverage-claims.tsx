@@ -7,8 +7,10 @@
  * (`formatCoverageGap`, `legacyCoverageDisclosureKey`). The grid banner lists only what no surface
  * claims, so nothing is shown twice and nothing is shown nowhere.
  *
- * Claims are registered in a layout effect and read through `useSyncExternalStore`, so the banner
- * re-renders before the browser paints and never shows a frame of gaps a surface is about to claim.
+ * Claims are registered in a layout effect, and the banner subscribes in a layout effect too, so it
+ * re-renders before the browser paints and never shows a frame of gaps a surface is about to claim,
+ * including on first mount. (`useSyncExternalStore` subscribes in a passive effect, after paint, so
+ * a claim registered in the same commit would reach the banner one frame late.)
  * The registry lives in the workspace's provider, so claims reset with the workspace; without a
  * provider every hook is a no-op and nothing is claimed.
  */
@@ -17,7 +19,6 @@ import {
   useContext,
   useLayoutEffect,
   useState,
-  useSyncExternalStore,
   type ReactNode,
 } from "react";
 
@@ -108,14 +109,23 @@ export function useCoverageClaim(claim: CoverageClaim | null): void {
   );
 }
 
-const noSubscription = () => () => undefined;
-const noClaims = () => NO_CLAIMS;
-
-/** Everything claimed by every surface, as one union. */
+/**
+ * Everything claimed by every surface, as one union. Subscribes, then reads, in a layout effect: a
+ * claim registered earlier in the same commit is read at once, and a later one notifies; either
+ * way the update re-renders before paint. The snapshot changes identity only when its content does.
+ */
 export function useCoverageClaims(): CoverageClaims {
   const registry = useContext(ClaimsContext);
-  return useSyncExternalStore(
-    registry?.subscribe ?? noSubscription,
-    registry?.snapshot ?? noClaims,
-  );
+  const [claims, setClaims] = useState<CoverageClaims>(() => registry?.snapshot() ?? NO_CLAIMS);
+  useLayoutEffect(() => {
+    if (registry === null) {
+      setClaims(NO_CLAIMS);
+      return undefined;
+    }
+    const read = () => setClaims(registry.snapshot());
+    const unsubscribe = registry.subscribe(read);
+    read();
+    return unsubscribe;
+  }, [registry]);
+  return claims;
 }
