@@ -3,7 +3,6 @@ import type { EventLogSourceCoverage, EvtxCoverageGap, EvtxCoverageGapKind } fro
 import {
   assertParseResultShape,
   formatCoverageGap,
-  hasUnreadSources,
   mergeCoverageGaps,
   mergeDiagnosisCoverageGaps,
   mergeStructuredCoverageGaps,
@@ -548,11 +547,13 @@ describe("diagnosis coverage gaps", () => {
   });
 });
 
-describe("hasUnreadSources: a source's records were not (all) loaded", () => {
+describe("unreadSourcesFrom, per gap kind: a source's records were not (all) loaded", () => {
   const gap = (kind: EvtxCoverageGapKind): EvtxCoverageGap => ({ source: "System", kind, reason: `a ${kind} gap` });
+  const unread = (...gaps: EvtxCoverageGap[]) =>
+    unreadSourcesFrom({ coverageDetails: gaps, manifestCoverage: [], coverageGaps: [], tailCoverageGaps: [] });
 
   it("is false with no gap at all", () => {
-    expect(hasUnreadSources([])).toBe(false);
+    expect(unread()).toBe(false);
   });
 
   it.each([
@@ -572,12 +573,12 @@ describe("hasUnreadSources: a source's records were not (all) loaded", () => {
     ["empty", false],
     ["provider", false],
   ] as const)("says %s is %s", (kind, expected) => {
-    expect(hasUnreadSources([gap(kind)])).toBe(expected);
+    expect(unread(gap(kind))).toBe(expected);
   });
 
   it("is true when any one gap loses records, whatever else is listed", () => {
-    expect(hasUnreadSources([gap("empty"), gap("provider"), gap("chunk")])).toBe(true);
-    expect(hasUnreadSources([gap("empty"), gap("provider")])).toBe(false);
+    expect(unread(gap("empty"), gap("provider"), gap("chunk"))).toBe(true);
+    expect(unread(gap("empty"), gap("provider"))).toBe(false);
   });
 });
 

@@ -306,10 +306,12 @@ const KINDS_THAT_LOSE_NO_RECORD: ReadonlySet<EvtxCoverageGapKind> = new Set<Evtx
  * Whether any source's records were not (all) loaded, so a surface that reasons about what the
  * loaded events leave out (the correlation dock's "no other entries", its "time only, not linked")
  * must say the data may be incomplete. `gaps` is the merged, typed list (`mergeDiagnosisCoverageGaps`).
+ * Not exported: on a list that is not the merged one it skips the manifest, legacy and live-tail gaps,
+ * so every consumer goes through `unreadSourcesFrom` (or the `useUnreadSources` hook over it).
  * A gap is not evidence that an event did not occur, and the absence of one is not evidence that
  * every source was read: this says only that something is known to be missing.
  */
-export function hasUnreadSources(gaps: readonly EvtxCoverageGap[]): boolean {
+function hasUnreadSources(gaps: readonly EvtxCoverageGap[]): boolean {
   return gaps.some((gap) => !KINDS_THAT_LOSE_NO_RECORD.has(gap.kind));
 }
 
