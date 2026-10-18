@@ -11,12 +11,13 @@ import type { EventLogAnalysisTimelineWindow } from "../../lib/commands";
 import { sessionKeyOf } from "./evtx-correlation-load";
 import type { CorrelationWindowDeps } from "./evtx-correlation-window";
 import {
-  CORRELATION_SELECTION_SETTLE_MS,
   useEvtxCorrelationWindow,
-  type UseEvtxCorrelationWindowOptions,
 } from "./useEvtxCorrelationWindow";
 import { CORRELATION_SETTLE_MS } from "./useEvtxCorrelation";
 
+type WindowOptions = Parameters<typeof useEvtxCorrelationWindow>[0];
+/** A selection change waits 150 ms before the window is read. */
+const SELECTION_SETTLE_MS = 150;
 const SESSION = "00000000-0000-4000-8000-000000000842";
 const STATUS = { sessionId: SESSION, revision: 2 };
 const CENTER = 1_000_000;
@@ -91,9 +92,9 @@ function engine() {
   };
 }
 
-function setup(initial: Partial<UseEvtxCorrelationWindowOptions> = {}) {
+function setup(initial: Partial<WindowOptions> = {}) {
   const fake = engine();
-  const props: UseEvtxCorrelationWindowOptions = {
+  const props: WindowOptions = {
     status: STATUS,
     centerMs: CENTER,
     halfWidthMs: HALF,
@@ -101,10 +102,10 @@ function setup(initial: Partial<UseEvtxCorrelationWindowOptions> = {}) {
     deps: fake.deps,
     ...initial,
   };
-  const view = renderHook((current: UseEvtxCorrelationWindowOptions) => useEvtxCorrelationWindow(current), {
+  const view = renderHook((current: WindowOptions) => useEvtxCorrelationWindow(current), {
     initialProps: props,
   });
-  const update = (next: Partial<UseEvtxCorrelationWindowOptions>) => {
+  const update = (next: Partial<WindowOptions>) => {
     Object.assign(props, next);
     view.rerender({ ...props });
   };
@@ -142,7 +143,7 @@ describe("a collapsed or hidden surface (R5)", () => {
     update({ centerMs: CENTER + 9_000 });
     update({ active: true });
     expect(view.result.current.reading).toBe(true);
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     expect(fake.calls).toHaveLength(1);
     expect(fake.calls[0]).toMatchObject({ startMs: CENTER + 9_000 - HALF, endMs: CENTER + 9_000 + HALF });
     expect(view.result.current.window?.centerMs).toBe(CENTER + 9_000);
@@ -152,7 +153,7 @@ describe("a collapsed or hidden surface (R5)", () => {
   it("stops a read that is waiting or under way when the surface is collapsed, and delivers nothing", async () => {
     const { fake, update, view } = setup();
     fake.hold();
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     expect(fake.calls).toHaveLength(1);
     update({ active: false });
     await act(async () => fake.pending.forEach((entry) => entry.resolve()));
@@ -168,7 +169,7 @@ describe("a collapsed or hidden surface (R5)", () => {
 
   it("keeps what it last read while it is closed", async () => {
     const { update, view } = setup();
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     const first = view.result.current.window;
     expect(first).not.toBeNull();
     update({ active: false });
@@ -180,11 +181,11 @@ describe("the debounce (150 ms for a selection, the session settle for a session
   it("reads once after the last of a burst of selection changes, for the last one", async () => {
     const { fake, update, view } = setup();
     for (let step = 1; step <= 5; step += 1) {
-      await advance(CORRELATION_SELECTION_SETTLE_MS - 50);
+      await advance(SELECTION_SETTLE_MS - 50);
       update({ centerMs: CENTER + step * 1_000 });
     }
     expect(fake.queryWindow).not.toHaveBeenCalled();
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     expect(fake.calls).toHaveLength(1);
     expect(fake.calls[0]).toMatchObject({ startMs: CENTER + 5_000 - HALF, endMs: CENTER + 5_000 + HALF });
     expect(view.result.current.window?.centerMs).toBe(CENTER + 5_000);
@@ -192,7 +193,7 @@ describe("the debounce (150 ms for a selection, the session settle for a session
 
   it("waits the full 150 ms before the first read, not less", async () => {
     const { fake } = setup();
-    await advance(CORRELATION_SELECTION_SETTLE_MS - 1);
+    await advance(SELECTION_SETTLE_MS - 1);
     expect(fake.queryWindow).not.toHaveBeenCalled();
     await advance(1);
     expect(fake.queryWindow).toHaveBeenCalledTimes(1);
@@ -200,9 +201,9 @@ describe("the debounce (150 ms for a selection, the session settle for a session
 
   it("reads again for a new width, after the same wait", async () => {
     const { fake, update } = setup();
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     update({ halfWidthMs: 30_000 });
-    await advance(CORRELATION_SELECTION_SETTLE_MS - 1);
+    await advance(SELECTION_SETTLE_MS - 1);
     expect(fake.calls).toHaveLength(1);
     await advance(1);
     expect(fake.calls).toHaveLength(2);
@@ -211,13 +212,13 @@ describe("the debounce (150 ms for a selection, the session settle for a session
 
   it("waits the session settle after the session changed, so a live tail does not issue IPC per rebuild", async () => {
     const { fake, update } = setup();
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     expect(fake.calls).toHaveLength(1);
     fake.setRevision(3);
     update({ status: { sessionId: SESSION, revision: 3 } });
-    await advance(CORRELATION_SELECTION_SETTLE_MS + 50);
+    await advance(SELECTION_SETTLE_MS + 50);
     expect(fake.calls).toHaveLength(1);
-    await advance(CORRELATION_SETTLE_MS - CORRELATION_SELECTION_SETTLE_MS - 50 - 1);
+    await advance(CORRELATION_SETTLE_MS - SELECTION_SETTLE_MS - 50 - 1);
     expect(fake.calls).toHaveLength(1);
     await advance(1);
     expect(fake.calls).toHaveLength(2);
@@ -225,7 +226,7 @@ describe("the debounce (150 ms for a selection, the session settle for a session
 
   it("reads only the newest of several session changes", async () => {
     const { fake, update } = setup();
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     for (const revision of [3, 4, 5]) {
       fake.setRevision(revision);
       update({ status: { sessionId: SESSION, revision } });
@@ -241,7 +242,7 @@ describe("the debounce (150 ms for a selection, the session settle for a session
 describe("one read per request", () => {
   it("does not read again for a new status object of the same session and revision", async () => {
     const { fake, update } = setup();
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     update({ status: { ...STATUS } });
     update({ deps: { ...fake.deps } });
     await advance(CORRELATION_SETTLE_MS * 2);
@@ -250,7 +251,7 @@ describe("one read per request", () => {
 
   it("does not read again when the surface is closed and reopened with nothing changed", async () => {
     const { fake, update, view } = setup();
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     const first = view.result.current.window;
     update({ active: false });
     update({ active: true });
@@ -262,7 +263,7 @@ describe("one read per request", () => {
 
   it("reads again on reopening when the session changed while it was closed", async () => {
     const { fake, update } = setup();
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     update({ active: false });
     fake.setRevision(3);
     update({ status: { sessionId: SESSION, revision: 3 } });
@@ -287,10 +288,10 @@ describe("a superseded read", () => {
   it("never overwrites a newer one, whichever reply arrives last", async () => {
     const { fake, update, view } = setup();
     fake.hold();
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     expect(fake.calls).toHaveLength(1);
     update({ centerMs: CENTER + 20_000 });
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     expect(fake.calls).toHaveLength(2);
     // The newer reply arrives first, then the older one.
     await act(async () => fake.pending[1]!.resolve());
@@ -304,11 +305,11 @@ describe("a superseded read", () => {
   it("drops the error of a session its own caller closed, instead of showing it as a failed read", async () => {
     const { fake, update, view } = setup();
     fake.fail();
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     // The first call has failed and is backing off; the selection moves on before it gives up.
     update({ centerMs: CENTER + 20_000 });
     fake.answerNow();
-    await advance(CORRELATION_SELECTION_SETTLE_MS + 10_000);
+    await advance(SELECTION_SETTLE_MS + 10_000);
     expect(view.result.current.window?.centerMs).toBe(CENTER + 20_000);
     expect(view.result.current.window?.windowItems).toBe(1);
     expect(view.result.current.window?.error).toBeNull();
@@ -316,7 +317,7 @@ describe("a superseded read", () => {
 
   it("stops at unmount: no read is made and nothing is delivered", async () => {
     const { fake, view } = setup();
-    await advance(CORRELATION_SELECTION_SETTLE_MS - 10);
+    await advance(SELECTION_SETTLE_MS - 10);
     view.unmount();
     await advance(CORRELATION_SETTLE_MS * 2);
     expect(fake.queryWindow).not.toHaveBeenCalled();
@@ -327,13 +328,13 @@ describe("a failed read and Retry", () => {
   it("is asked again when the surface is reopened, since a failure answers nothing", async () => {
     const { fake, update, view } = setup();
     fake.fail();
-    await advance(CORRELATION_SELECTION_SETTLE_MS + 10_000);
+    await advance(SELECTION_SETTLE_MS + 10_000);
     expect(view.result.current.window?.windowItems).toBeNull();
     const callsBefore = fake.calls.length;
     fake.answerNow();
     update({ active: false });
     update({ active: true });
-    await advance(CORRELATION_SELECTION_SETTLE_MS);
+    await advance(SELECTION_SETTLE_MS);
     expect(fake.calls.length).toBe(callsBefore + 1);
     expect(view.result.current.window?.windowItems).toBe(1);
   });
@@ -341,7 +342,7 @@ describe("a failed read and Retry", () => {
   it("keeps the failure, with the request it answered, and Retry reads again at once", async () => {
     const { fake, view } = setup();
     fake.fail();
-    await advance(CORRELATION_SELECTION_SETTLE_MS + 10_000);
+    await advance(SELECTION_SETTLE_MS + 10_000);
     const failed = view.result.current.window;
     expect(failed?.windowItems).toBeNull();
     expect(failed?.error).toMatch(/not found/);

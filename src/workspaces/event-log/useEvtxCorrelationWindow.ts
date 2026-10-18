@@ -34,9 +34,9 @@ import {
 import { CORRELATION_SETTLE_MS } from "./useEvtxCorrelation";
 
 /** Wait after a selection or width change before the window is read. */
-export const CORRELATION_SELECTION_SETTLE_MS = 150;
+const CORRELATION_SELECTION_SETTLE_MS = 150;
 
-export interface UseEvtxCorrelationWindowOptions {
+interface UseEvtxCorrelationWindowOptions {
   /** The published session, or null while none is. */
   status: Pick<EventLogAnalysisSessionStatus, "sessionId" | "revision"> | null;
   /** The selected event's instant, or null when there is nothing to read around (none, or untimed). */
@@ -49,7 +49,7 @@ export interface UseEvtxCorrelationWindowOptions {
   deps?: Partial<CorrelationWindowDeps>;
 }
 
-export interface EvtxCorrelationWindowState {
+interface EvtxCorrelationWindowState {
   /** The last read, whatever it answered; the model decides whether it answers the selection. */
   window: LoadedCorrelationWindow | null;
   /** A read is waiting or under way. */

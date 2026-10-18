@@ -18,12 +18,9 @@ import {
 } from "../../lib/commands";
 import { CorrelationLoadCancelled } from "./evtx-correlation-load";
 import {
-  CORRELATION_WINDOW_LIMIT,
-  CORRELATION_WINDOW_MAX_CALLS,
   DEFAULT_CORRELATION_WINDOW_DEPS,
   loadCorrelationWindow,
   type CorrelationWindowDeps,
-  type LoadCorrelationWindowInput,
 } from "./evtx-correlation-window";
 import { EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT } from "./evtx-timeline-paging";
 import type { TimelineItem } from "./unified-timeline";
@@ -157,7 +154,7 @@ class FakeEngine {
     };
   }
 
-  load(overrides: Partial<LoadCorrelationWindowInput> = {}) {
+  load(overrides: Partial<Parameters<typeof loadCorrelationWindow>[0]> = {}) {
     return loadCorrelationWindow({
       status: STATUS,
       centerMs: CENTER,
@@ -179,9 +176,8 @@ describe("what it asks for", () => {
     const engine = new FakeEngine({ timestamps: everySecond(10) });
     await engine.load({ halfWidthMs: 30_000 });
     expect(engine.windowCalls).toEqual([
-      { startMs: CENTER - 30_000, endMs: CENTER + 30_000, limit: CORRELATION_WINDOW_LIMIT },
+      { startMs: CENTER - 30_000, endMs: CENTER + 30_000, limit: 1_000 },
     ]);
-    expect(CORRELATION_WINDOW_LIMIT).toBe(1_000);
   });
 
   it("passes a smaller limit through, for a reader that wants only the nearest few", async () => {
@@ -291,9 +287,8 @@ describe("a read that stops before it has the window", () => {
   it("stops at the call limit and says exactly how many in-window items it did not read", async () => {
     const engine = new FakeEngine({ timestamps: everySecond(2_500), replyCap: 100 });
     const loaded = await engine.load({ halfWidthMs: 5_000_000 });
-    expect(CORRELATION_WINDOW_MAX_CALLS).toBe(6);
     expect(engine.windowCalls).toHaveLength(1);
-    expect(engine.pageCalls).toHaveLength(CORRELATION_WINDOW_MAX_CALLS - 1);
+    expect(engine.pageCalls).toHaveLength(5);
     expect(loaded).toMatchObject({
       complete: false,
       stoppedBy: "callLimit",
