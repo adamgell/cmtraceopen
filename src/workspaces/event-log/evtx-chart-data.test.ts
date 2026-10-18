@@ -228,10 +228,211 @@ describe("KPIs", () => {
     expect(kpi(none, "chains").sublabel).toBeNull();
   });
 
-  it("never emits a comparative sublabel", () => {
+  it("emits no comparative sublabel and no trend without a comparison (D15)", () => {
     for (const k of data.kpis) {
       expect(k.sublabel ?? "").not.toMatch(/vs |prior|new |▲|▼/);
+      expect(k.trend).toBeNull();
     }
+  });
+});
+
+describe("comparison deltas (spec 8.10, D15)", () => {
+  const ids = (...keys: string[]) => new Set(keys);
+  function compared(
+    errors: { current: number; prior: number },
+    distinct: { current: string[]; prior: string[] } = { current: [], prior: [] },
+    window: "1h" | "24h" | "7d" | "30d" = "24h",
+  ) {
+    return buildEvtxChartData(
+      input([record()], {
+        comparison: {
+          window,
+          current: { errors: errors.current, distinctIds: ids(...distinct.current) },
+          prior: { errors: errors.prior, distinctIds: ids(...distinct.prior) },
+        },
+      }),
+    );
+  }
+  const errorsOf = (data: ReturnType<typeof buildEvtxChartData>) => kpi(data, "errors");
+
+  describe("the Errors tile", () => {
+    it.each([
+      [6, 2, "\u25b2 3\u00d7 vs prior 24 h", "up"],
+      [3, 2, "\u25b2 1.5\u00d7 vs prior 24 h", "up"],
+      [10, 4, "\u25b2 2.5\u00d7 vs prior 24 h", "up"],
+      [100, 7, "\u25b2 14\u00d7 vs prior 24 h", "up"],
+      [21, 20, "\u25b2 1.1\u00d7 vs prior 24 h", "up"],
+      [2, 5, "\u25bc 0.4\u00d7 vs prior 24 h", "down"],
+      [1, 20, "\u25bc 0.1\u00d7 vs prior 24 h", "down"],
+    ] as const)("%i against %i reads %s", (current, prior, text, trend) => {
+      const tile = errorsOf(compared({ current, prior }));
+      expect(tile.sublabel).toBe(text);
+      expect(tile.trend).toBe(trend);
+    });
+
+    it("groups thousands in a large ratio", () => {
+      const tile = errorsOf(compared({ current: 12_340, prior: 10 }));
+      expect(tile.sublabel).toBe(`\u25b2 ${(1234).toLocaleString()}\u00d7 vs prior 24 h`);
+    });
+
+    it("names the window the comparison covered, in the words the Events tile uses", () => {
+      expect(errorsOf(compared({ current: 4, prior: 2 }, undefined, "1h")).sublabel).toBe(
+        "\u25b2 2\u00d7 vs prior 1 h",
+      );
+      expect(errorsOf(compared({ current: 4, prior: 2 }, undefined, "7d")).sublabel).toBe(
+        "\u25b2 2\u00d7 vs prior 7 d",
+      );
+      expect(errorsOf(compared({ current: 4, prior: 2 }, undefined, "30d")).sublabel).toBe(
+        "\u25b2 2\u00d7 vs prior 30 d",
+      );
+    });
+
+    // A prior count of 0 has no ratio. The spec's copy is a count against 0, never an infinity.
+    it("states a count against 0 when the previous period had no errors", () => {
+      const tile = errorsOf(compared({ current: 5, prior: 0 }));
+      expect(tile.sublabel).toBe("5 new vs 0 in prior 24 h");
+      expect(tile.trend).toBeNull();
+      expect(errorsOf(compared({ current: 1234, prior: 0 }, undefined, "7d")).sublabel).toBe(
+        `${(1234).toLocaleString()} new vs 0 in prior 7 d`,
+      );
+    });
+
+    it.each([
+      [0, 0, "0 vs 0 in prior 24 h"],
+      [0, 4, "0 vs 4 in prior 24 h"],
+      [3, 3, "3 vs 3 in prior 24 h"],
+    ] as const)("states the counts when %i is set against %i, with no arrow", (current, prior, text) => {
+      const tile = errorsOf(compared({ current, prior }));
+      expect(tile.sublabel).toBe(text);
+      expect(tile.trend).toBeNull();
+    });
+
+    // A ratio that rounds to 1 or to 0 would put an arrow beside a number that says nothing moved,
+    // or that says everything vanished, so the counts are given instead.
+    it.each([
+      [201, 200],
+      [99, 100],
+      [1, 100],
+      [1000, 1001],
+    ] as const)("falls back to the counts when %i against %i rounds to 1 or to 0", (current, prior) => {
+      const tile = errorsOf(compared({ current, prior }));
+      expect(tile.sublabel).toBe(
+        `${current.toLocaleString()} vs ${prior.toLocaleString()} in prior 24 h`,
+      );
+      expect(tile.trend).toBeNull();
+    });
+
+    it("never produces an infinity, a NaN or an undefined for any pair of counts", () => {
+      for (let current = 0; current <= 40; current += 1) {
+        for (let prior = 0; prior <= 40; prior += 1) {
+          const tile = errorsOf(compared({ current, prior }));
+          expect(tile.sublabel).not.toBeNull();
+          expect(tile.sublabel).not.toMatch(/\u221e|Infinity|NaN|undefined|null|-/);
+          // The arrow, the trend and the numbers always agree.
+          if (tile.trend === "up") {
+            expect(tile.sublabel!.startsWith("\u25b2 ")).toBe(true);
+            expect(current).toBeGreaterThan(prior);
+          } else if (tile.trend === "down") {
+            expect(tile.sublabel!.startsWith("\u25bc ")).toBe(true);
+            expect(current).toBeLessThan(prior);
+          } else {
+            expect(tile.sublabel).not.toMatch(/\u25b2|\u25bc/);
+          }
+        }
+      }
+    });
+  });
+
+  describe("the Distinct event IDs tile", () => {
+    it("counts the IDs of the current period that the previous one did not have", () => {
+      const tile = kpi(
+        compared({ current: 1, prior: 1 }, { current: ["a", "b", "c"], prior: ["a"] }),
+        "distinctIds",
+      );
+      expect(tile.sublabel).toBe("2 new vs prior 24 h");
+      expect(tile.trend).toBeNull();
+    });
+
+    it("is a set difference, not a difference of sizes", () => {
+      // Two IDs came and one went: sizes are equal, and one ID is new.
+      const tile = kpi(
+        compared({ current: 1, prior: 1 }, { current: ["a", "b"], prior: ["b", "c"] }),
+        "distinctIds",
+      );
+      expect(tile.sublabel).toBe("1 new vs prior 24 h");
+    });
+
+    it("says 0 new rather than saying nothing when every ID was seen before", () => {
+      const tile = kpi(
+        compared({ current: 1, prior: 1 }, { current: ["a"], prior: ["a", "b"] }),
+        "distinctIds",
+      );
+      expect(tile.sublabel).toBe("0 new vs prior 24 h");
+    });
+
+    it("counts every ID as new against a previous period that had none, and 0 when neither has any", () => {
+      expect(
+        kpi(compared({ current: 1, prior: 0 }, { current: ["a", "b"], prior: [] }), "distinctIds")
+          .sublabel,
+      ).toBe("2 new vs prior 24 h");
+      expect(
+        kpi(compared({ current: 0, prior: 0 }, { current: [], prior: [] }), "distinctIds").sublabel,
+      ).toBe("0 new vs prior 24 h");
+    });
+
+    it("names the window", () => {
+      expect(
+        kpi(compared({ current: 1, prior: 1 }, { current: ["a"], prior: [] }, "7d"), "distinctIds")
+          .sublabel,
+      ).toBe("1 new vs prior 7 d");
+    });
+  });
+
+  it("reads the delta from the comparison's own current period and leaves the tile's value alone", () => {
+    // The tile counts the rows on the grid; the delta compares the period the comparison measured.
+    const data = buildEvtxChartData(
+      input([record({ level: "Error" }), record({ level: "Error" }), record({ level: "Error" })], {
+        comparison: {
+          window: "24h",
+          current: { errors: 10, distinctIds: ids("a") },
+          prior: { errors: 5, distinctIds: ids("a") },
+        },
+      }),
+    );
+    expect(errorsOf(data).value).toBe(3);
+    expect(errorsOf(data).sublabel).toBe("\u25b2 2\u00d7 vs prior 24 h");
+  });
+
+  it("changes no other tile", () => {
+    const records = [record({ level: "Warning" }), record({ level: "Critical", eventId: 41 })];
+    const without = buildEvtxChartData(input(records));
+    const withComparison = buildEvtxChartData(
+      input(records, {
+        comparison: {
+          window: "24h",
+          current: { errors: 4, distinctIds: ids("a", "b") },
+          prior: { errors: 2, distinctIds: ids("a") },
+        },
+      }),
+    );
+    for (const id of ["events", "warnings", "critical", "chains"]) {
+      expect(kpi(withComparison, id)).toEqual(kpi(without, id));
+    }
+  });
+
+  it("does not move a figure: only the two tiles' sublabels differ", () => {
+    const records = [record({ level: "Error" }), record({ level: "Warning", eventId: 5 })];
+    const without = buildEvtxChartData(input(records));
+    const withComparison = buildEvtxChartData(
+      input(records, {
+        comparison: {
+          window: "24h",
+          current: { errors: 4, distinctIds: ids("a") },
+          prior: { errors: 2, distinctIds: ids() },
+        },
+      }),
+    );
+    expect({ ...withComparison, kpis: [] }).toEqual({ ...without, kpis: [] });
   });
 });
 

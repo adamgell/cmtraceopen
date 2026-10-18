@@ -4,8 +4,11 @@
  *
  * Evidence-first rules this module keeps:
  * - A KPI sublabel exists only when it can be derived from the input (D15).
- *   Comparative sublabels ("vs prior 24 h") need Phase 17b's comparison and
- *   are not produced here.
+ *   Comparative sublabels ("vs prior 24 h") exist only when the input carries
+ *   a comparison, and the caller hands one in only when it is complete and
+ *   current. Without one the sublabel is omitted, never estimated. A ratio
+ *   is never formed from a prior count of 0 (no "infinity"), and one that would
+ *   round to 1 or to 0 is stated as the two counts instead.
  * - An event without a usable timestamp is counted as unplaced. It is never
  *   put in hour 0. "Usable" mirrors the engine (`parsed_timestamp_epoch` in
  *   `src-tauri/src/event_log/timeline.rs`): a non-zero epoch, or text that
@@ -24,8 +27,13 @@
  * - Hide rules that are not understood or that do not filter (an invalid
  *   Event ID list) are not reported as exclusions.
  */
+import type { ComparableWindow } from "./evtx-comparison";
 import type { CorrelationChainModel } from "./evtx-correlation-chains";
-import { parseEventIdSelectors, type EvtxQuickFilter } from "./evtx-filter";
+import {
+  isEventRecord,
+  parseEventIdSelectors,
+  type EvtxQuickFilter,
+} from "./evtx-filter";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import type { EvtxLevel, EvtxRecord, EvtxTimeWindow } from "./types";
 
@@ -65,6 +73,19 @@ export type EvtxChartChainSummary = Pick<
   "counts" | "edgeInputComplete"
 >;
 
+/**
+ * What the delta sublabels need of a comparison (spec 8.16). Supplied only for a comparison that
+ * finished complete and still describes the period the tiles show; a partial, refused, running or
+ * out-of-date comparison supplies none, so no delta is shown for it.
+ */
+export interface EvtxChartComparison {
+  /** The window both periods have, named as the Events tile names it. */
+  window: ComparableWindow;
+  /** Counted over the comparison's own current period, not over the rows the tiles count. */
+  current: { errors: number; distinctIds: ReadonlySet<string> };
+  prior: { errors: number; distinctIds: ReadonlySet<string> };
+}
+
 export interface EvtxChartInput {
   records: readonly EvtxChartRecord[];
   /** Null when no chain model exists yet; the chains KPI then has no value. */
@@ -81,6 +102,8 @@ export interface EvtxChartInput {
   loadedChannelCount: number;
   /** Distinct text-log sources, from `countTextLogSources` (sources, not lines). */
   textLogCount: number;
+  /** A complete, current comparison with the previous period; absent when there is none. */
+  comparison?: EvtxChartComparison | null;
 }
 
 export type EvtxChartKpiId =
@@ -91,6 +114,9 @@ export type EvtxChartKpiId =
   | "distinctIds"
   | "chains";
 
+/** The glyph a trend sublabel starts with, followed by one space. */
+export const TREND_GLYPH = { up: "\u25b2", down: "\u25bc" } as const;
+
 export interface EvtxChartKpi {
   id: EvtxChartKpiId;
   label: string;
@@ -98,6 +124,12 @@ export interface EvtxChartKpi {
   value: number | null;
   /** Present only when derivable from the input. */
   sublabel: string | null;
+  /**
+   * The direction of a ratio sublabel, which then starts with `TREND_GLYPH[trend]` and a space so a
+   * reader that cannot say a glyph can say the direction instead. Null for every other sublabel,
+   * counts included: an arrow only ever sits beside a ratio that says which way it moved.
+   */
+  trend: "up" | "down" | null;
 }
 
 export interface EvtxChartChannelBar {
@@ -191,7 +223,7 @@ export function countTextLogSources(
   const sources = new Set<string>();
   for (const entry of entries) sources.add(entry.filePath);
   for (const record of records) {
-    if (record.originKind === "log") sources.add(record.sourceLabel);
+    if (!isEventRecord(record)) sources.add(record.sourceLabel);
   }
   return sources.size;
 }
@@ -212,7 +244,7 @@ export function loadedChannelCountFor(input: {
   if (input.sourceMode === "live") return input.loadedChannels.size;
   const names = new Set<string>();
   for (const record of input.records) {
-    if (record.originKind !== "log") names.add(record.channel);
+    if (isEventRecord(record)) names.add(record.channel);
   }
   return names.size;
 }
@@ -365,6 +397,51 @@ function bump(tally: Map<string, IdTally>, record: EvtxChartRecord): void {
     });
 }
 
+/** A count as the tiles print it. */
+const count = (value: number) => value.toLocaleString();
+
+/**
+ * The Errors delta: a ratio of the current count to the previous one, or the two counts when no
+ * ratio can be said truthfully.
+ *
+ * The ratio is current over previous for an increase and a decrease alike (a drop to two fifths
+ * reads 0.4, never 2.5 lower), to one decimal below 10 and to a whole number from 10, with ".0"
+ * dropped. It is formed only from two non-zero counts that differ, and only when its rounded form
+ * is neither 1 nor 0, so an arrow is never printed beside a number that says nothing moved or that
+ * everything went. A previous count of 0 has no ratio at all and reads as a count against 0.
+ */
+function errorsDelta(
+  current: number,
+  prior: number,
+  window: string,
+): { sublabel: string; trend: "up" | "down" | null } {
+  const counts = (text: string) => ({ sublabel: text, trend: null });
+  if (prior === 0 && current > 0) {
+    return counts(`${count(current)} new vs 0 in prior ${window}`);
+  }
+  if (current === 0 || prior === 0 || current === prior) {
+    return counts(`${count(current)} vs ${count(prior)} in prior ${window}`);
+  }
+  // Integer arithmetic, so a ratio near a rounding boundary is decided the same way everywhere.
+  const tenths = Math.round((current * 10) / prior);
+  if (tenths === 10 || tenths === 0) {
+    return counts(`${count(current)} vs ${count(prior)} in prior ${window}`);
+  }
+  const ratio = tenths >= 100 ? count(Math.round(current / prior)) : String(tenths / 10);
+  const trend = current > prior ? "up" : "down";
+  return { sublabel: `${TREND_GLYPH[trend]} ${ratio}\u00d7 vs prior ${window}`, trend };
+}
+
+/** The IDs of the current period that the previous one did not have. */
+function newIdCount(
+  current: ReadonlySet<string>,
+  prior: ReadonlySet<string>,
+): number {
+  let fresh = 0;
+  for (const id of current) if (!prior.has(id)) fresh += 1;
+  return fresh;
+}
+
 export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
   const {
     records,
@@ -374,6 +451,7 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
     timeZoneMode,
     loadedChannelCount,
     textLogCount,
+    comparison,
   } = input;
 
   const byLevel: Record<EvtxLevel, number> = {
@@ -401,7 +479,7 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
 
   for (const record of records) {
     byLevel[record.level] += 1;
-    const isEvent = record.originKind !== "log";
+    const isEvent = isEventRecord(record);
     if (isEvent) {
       bump(allIds, record);
       if (record.level === "Warning") bump(warningIds, record);
@@ -513,6 +591,10 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
         ? `${exact} exact`
         : null;
 
+  const windowLabel = comparison ? chartWindowLabel(comparison.window) : "";
+  const errorsSublabel = comparison
+    ? errorsDelta(comparison.current.errors, comparison.prior.errors, windowLabel)
+    : null;
   const kpis: EvtxChartKpi[] = [
     {
       id: "events",
@@ -526,31 +608,44 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
               "text log",
               "text logs",
             )}`,
+      trend: null,
     },
-    { id: "errors", label: "Errors", value: byLevel.Error, sublabel: null },
+    {
+      id: "errors",
+      label: "Errors",
+      value: byLevel.Error,
+      sublabel: errorsSublabel?.sublabel ?? null,
+      trend: errorsSublabel?.trend ?? null,
+    },
     {
       id: "warnings",
       label: "Warnings",
       value: byLevel.Warning,
       sublabel: warningSublabel,
+      trend: null,
     },
     {
       id: "critical",
       label: "Critical",
       value: byLevel.Critical,
       sublabel: topCritical ? `${topCritical.provider} ${topCritical.eventId}` : null,
+      trend: null,
     },
     {
       id: "distinctIds",
       label: "Distinct event IDs",
       value: allIds.size,
-      sublabel: null,
+      sublabel: comparison
+        ? `${count(newIdCount(comparison.current.distinctIds, comparison.prior.distinctIds))} new vs prior ${windowLabel}`
+        : null,
+      trend: null,
     },
     {
       id: "chains",
       label: "Correlation chains",
       value: chainCount,
       sublabel: chainsSublabel,
+      trend: null,
     },
   ];
 
