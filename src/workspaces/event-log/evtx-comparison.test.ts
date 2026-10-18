@@ -46,6 +46,13 @@ const DAY = 24 * HOUR;
 
 /** The sentence spec 8.16 gives the disabled control; a refusal starts with it, as written. */
 const NOT_COVERED = "The loaded files do not cover the previous period.";
+/** What a refusal says when every selected channel has a capture that fails, by why they fail. */
+const NONE_UNSPANNED =
+  "No selected channel can be compared: every one has a capture that does not cover the previous period.";
+const NONE_UNTIMED =
+  "No selected channel can be compared: every one has a capture that cannot show whether it covers the previous period.";
+const NONE_MIXED =
+  "No selected channel can be compared: every one has a capture that does not cover the previous period or cannot show whether it does.";
 
 let nextRecordId = 1;
 function record(overrides: Partial<EvtxRecord> = {}): EvtxRecord {
@@ -934,7 +941,7 @@ describe("what a refusal or a gap says of a capture", () => {
 
     it("does not promise a comparison when no other channel would remain", () => {
       expect(detailOf([untimed("System", "System.evtx")])).toBe(
-        "System.evtx (System) has no event with a usable timestamp, so it cannot show whether it covers the previous period. No other selected channel has entries to compare."
+        `System.evtx (System) has no event with a usable timestamp, so it cannot show whether it covers the previous period. ${NONE_UNTIMED}`
       );
     });
 
@@ -962,13 +969,13 @@ describe("what a refusal or a gap says of a capture", () => {
         record({ channel: "System", sourceLabel: "b.evtx", timestampEpoch: ANCHOR }),
       ];
       expect(detailOf(twoSources)).toBe(
-        `${NOT_COVERED} b.evtx (System) does not span it. No other selected channel has entries to compare.`
+        `${NOT_COVERED} b.evtx (System) does not span it. ${NONE_UNSPANNED}`
       );
     });
 
-    it("names only the captures that fail for the reason it gives", () => {
-      // The first failure is a capture with no timed entry; the one that merely starts late is a
-      // different refusal and is not named under this one.
+    it("names every failing capture under its own reason, the spec's sentence first, when they differ", () => {
+      // The first failure is a capture with no timed entry and Application merely starts late. Both
+      // are refused, so neither is a channel that would remain to compare.
       expect(
         detailOf([
           record({ channel: "System", sourceLabel: "System.evtx", timestampEpoch: 0 }),
@@ -976,7 +983,7 @@ describe("what a refusal or a gap says of a capture", () => {
           record({ channel: "Application", sourceLabel: "Application.evtx", timestampEpoch: ANCHOR }),
         ])
       ).toBe(
-        "System.evtx (System) has no event with a usable timestamp, so it cannot show whether it covers the previous period. Deselect System to compare the other channels."
+        `${NOT_COVERED} Application.evtx (Application) does not span it. System.evtx (System) has no event with a usable timestamp, so it cannot show whether it covers the previous period. ${NONE_MIXED}`
       );
     });
 
@@ -1017,7 +1024,7 @@ describe("what a refusal or a gap says of a capture", () => {
 
     it("says no channel would remain when every selected capture fails", () => {
       expect(detailOf([...short("System", "System.evtx"), ...short("Application", "Application.evtx")])).toBe(
-        `${NOT_COVERED} These do not span it: System.evtx (System), Application.evtx (Application). No other selected channel has entries to compare.`
+        `${NOT_COVERED} These do not span it: System.evtx (System), Application.evtx (Application). ${NONE_UNSPANNED}`
       );
     });
 
@@ -1027,8 +1034,116 @@ describe("what a refusal or a gap says of a capture", () => {
         [...many.flatMap((c) => short(c, `${c}.evtx`)), ...spans("Application", "Application.evtx")],
         new Set([...many, "Application"])
       );
-      expect(detail).toContain("A.evtx (A), B.evtx (B), C.evtx (C), D.evtx (D), E.evtx (E), and 2 more.");
-      expect(detail).not.toContain("F.evtx");
+      expect(detail).toBe(
+        `${NOT_COVERED} These do not span it: A.evtx (A), B.evtx (B), C.evtx (C), D.evtx (D), E.evtx (E), and 2 more. ` +
+          "Deselect A, B, C, D, E, and 2 more to compare the other channels."
+      );
+    });
+  });
+
+  describe("the channels a refusal tells the operator to deselect", () => {
+    const short = (channel: string) => [
+      record({ channel, sourceLabel: `${channel}.evtx`, timestampEpoch: prior.toMs + HOUR }),
+      record({ channel, sourceLabel: `${channel}.evtx`, timestampEpoch: ANCHOR }),
+    ];
+    const failing = (names: string[]) => {
+      const records = [...names.flatMap(short), ...spans("Application", "Application.evtx")];
+      return detailOf(records, new Set([...names, "Application"]));
+    };
+
+    it("lists them all up to the cap, with nothing counted beyond it", () => {
+      const detail = failing(["A", "B", "C", "D", "E"]);
+      expect(detail.endsWith("Deselect A, B, C, D, E to compare the other channels.")).toBe(true);
+      expect(detail).not.toContain("more");
+    });
+
+    it("counts the channels beyond the cap, one past it", () => {
+      const detail = failing(["A", "B", "C", "D", "E", "F"]);
+      expect(detail.endsWith("Deselect A, B, C, D, E, and 1 more to compare the other channels.")).toBe(true);
+    });
+
+    it("names each channel once however many of its captures fail", () => {
+      const detail = detailOf(
+        [...short("System"), ...short("System").map((r) => ({ ...r, sourceLabel: "b.evtx" })), ...spans("Application", "Application.evtx")],
+        new Set(["System", "Application"])
+      );
+      expect(detail.endsWith("Deselect System to compare the other channels.")).toBe(true);
+    });
+  });
+
+  describe("when captures fail for different reasons", () => {
+    const late = (channel: string, sourceLabel: string) => [
+      record({ channel, sourceLabel, timestampEpoch: prior.toMs + HOUR }),
+      record({ channel, sourceLabel, timestampEpoch: ANCHOR }),
+    ];
+    const noTime = [textLogLine({ timestampEpoch: 0 })];
+    const good = spans("Application", "Application.evtx");
+    const system = late("System", "System.evtx");
+    const all = new Set(["System", "Application", "setup.log"]);
+
+    it("says the same whichever capture is read first, naming each reason's captures under it", () => {
+      const groups = [system, noTime, good];
+      const orders = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+      ];
+      const expected =
+        `${NOT_COVERED} System.evtx (System) does not span it. ` +
+        "setup.log has no log line with a usable timestamp, so it cannot show whether it covers the previous period. " +
+        "Deselect System, setup.log to compare the other channels.";
+      for (const order of orders) {
+        expect(detailOf(order.flatMap((index) => groups[index]), all)).toBe(expected);
+      }
+    });
+
+    it("gives the reason code of the capture read first, whatever else fails", () => {
+      const reasonOf = (records: EvtxRecord[]) => {
+        const coverage = checkFilesCoverage(records, all, prior);
+        return coverage.covered ? "covered" : coverage.reason;
+      };
+      expect(reasonOf([...noTime, ...system, ...good])).toBe("noTimedRecords");
+      expect(reasonOf([...system, ...noTime, ...good])).toBe("priorPeriodNotSpanned");
+    });
+
+    it("puts the spec's sentence first whenever any capture fails to span the period", () => {
+      const detail = detailOf([...noTime, ...system, ...good], all);
+      expect(detail.startsWith(NOT_COVERED)).toBe(true);
+    });
+
+    it("does not promise a comparison when every selected channel has a capture that fails", () => {
+      const detail = detailOf([...noTime, ...system], new Set(["System", "setup.log"]));
+      expect(detail).toBe(
+        `${NOT_COVERED} System.evtx (System) does not span it. ` +
+          "setup.log has no log line with a usable timestamp, so it cannot show whether it covers the previous period. " +
+          NONE_MIXED
+      );
+      expect(detail).not.toContain("Deselect");
+    });
+
+    // The advice is a promise, so it is kept: whenever a refusal says to deselect, deselecting
+    // exactly the channels it names leaves a selection that is covered.
+    const advice: Array<[string, EvtxRecord[], string[] | null]> = [
+      ["a late capture and a channel that passes", [...system, ...good], ["System"]],
+      ["an untimed capture and a channel that passes", [...noTime, ...good], ["setup.log"]],
+      ["both reasons and a channel that passes", [...noTime, ...system, ...good], ["System", "setup.log"]],
+      ["both reasons, read in the other order", [...system, ...good, ...noTime], ["System", "setup.log"]],
+      ["both reasons and nothing that passes", [...noTime, ...system], null],
+      ["a late capture and nothing that passes", [...system], null],
+    ];
+    it.each(advice)("%s: the advice is true", (_name, records, leaving) => {
+      const detail = detailOf(records, all);
+      if (leaving === null) {
+        expect(detail).not.toContain("Deselect");
+        expect(detail).toContain("No selected channel can be compared");
+        return;
+      }
+      expect(detail).toContain(`Deselect ${leaving.join(", ")} to compare the other channels.`);
+      const kept = new Set([...all].filter((channel) => !leaving.includes(channel)));
+      expect(checkFilesCoverage(records, kept, prior).covered).toBe(true);
     });
   });
 
@@ -1169,7 +1284,7 @@ describe("compareLoadedFiles", () => {
     expect(outcome).toEqual({
       status: "unavailable",
       reason: "priorPeriodNotSpanned",
-      detail: `${NOT_COVERED} System.evtx (System) does not span it. No other selected channel has entries to compare.`,
+      detail: `${NOT_COVERED} System.evtx (System) does not span it. ${NONE_UNSPANNED}`,
     });
   });
 
@@ -2509,7 +2624,7 @@ describe("resolveFilesPrior", () => {
     expect(resolveFilesPrior([record({ timestampEpoch: ANCHOR })], selected, "24h", ANCHOR)).toEqual({
       status: "unavailable",
       reason: "priorPeriodNotSpanned",
-      detail: `${NOT_COVERED} System.evtx (System) does not span it. No other selected channel has entries to compare.`,
+      detail: `${NOT_COVERED} System.evtx (System) does not span it. ${NONE_UNSPANNED}`,
     });
     expect(resolveFilesPrior([], selected, "24h", ANCHOR)).toEqual({
       status: "unavailable",
