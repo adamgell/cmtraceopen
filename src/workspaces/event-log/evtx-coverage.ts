@@ -290,6 +290,51 @@ export function mergeCoverageGaps(
   return [...new Set([...existing, ...incoming])];
 }
 
+/**
+ * The gap kinds that leave no record out of the loaded set: a source that has no events, and a
+ * provider whose message text could not be resolved (its records are loaded; only the description
+ * is missing). Every other kind names records that were not loaded or may not have been: a file, a
+ * chunk, a record or a rendered value that was rejected, a source that could not be opened, found,
+ * read or parsed, a read that stopped at a limit, and a live read the operator cancelled.
+ */
+const KINDS_THAT_LOSE_NO_RECORD: ReadonlySet<EvtxCoverageGapKind> = new Set<EvtxCoverageGapKind>([
+  "empty",
+  "provider",
+]);
+
+/**
+ * Whether any source's records were not (all) loaded, so a surface that reasons about what the
+ * loaded events leave out (the correlation dock's "no other entries", its "time only, not linked")
+ * must say the data may be incomplete. `gaps` is the merged, typed list (`mergeDiagnosisCoverageGaps`).
+ * Not exported: on a list that is not the merged one it skips the manifest, legacy and live-tail gaps,
+ * so every consumer goes through `unreadSourcesFrom` (or the `useUnreadSources` hook over it).
+ * A gap is not evidence that an event did not occur, and the absence of one is not evidence that
+ * every source was read: this says only that something is known to be missing.
+ */
+function hasUnreadSources(gaps: readonly EvtxCoverageGap[]): boolean {
+  return gaps.some((gap) => !KINDS_THAT_LOSE_NO_RECORD.has(gap.kind));
+}
+
+/** The four coverage inputs the workspace keeps, merged as the diagnosis merges them. */
+interface CoverageState {
+  coverageDetails: readonly EvtxCoverageGap[];
+  manifestCoverage: readonly EventLogSourceCoverage[];
+  coverageGaps: readonly string[];
+  tailCoverageGaps: readonly string[];
+}
+
+/** `hasUnreadSources` over the store's coverage state, structured, manifest, legacy and live-tail. */
+export function unreadSourcesFrom(state: CoverageState): boolean {
+  return hasUnreadSources(
+    mergeDiagnosisCoverageGaps(
+      state.coverageDetails,
+      state.manifestCoverage,
+      state.coverageGaps,
+      state.tailCoverageGaps,
+    ),
+  );
+}
+
 /** Wording for the legacy string banner summary. */
 export function summarizeCoverageGaps(gaps: readonly string[]): string {
   return gaps.length === 1 ? "1 gap in this view" : `${gaps.length} gaps in this view`;

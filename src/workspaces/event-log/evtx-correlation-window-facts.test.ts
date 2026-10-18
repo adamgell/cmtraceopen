@@ -1,14 +1,14 @@
 /**
  * What the dock and the Details context both read first: which entry of a window is the selected
  * event, whether the counts belong to the window, and what may be shown (#842, #843). Both surfaces
- * call `readWindowFacts`, `windowCenterOf` and `compareByDistance`, so the ruled ladder has one
+ * call `readWindowFacts`, `dockCenterMs` and `compareByDistance`, so the ruled ladder has one
  * definition. `buildDockModel`'s own tests pin the same behaviour through the dock.
  */
 import { describe, expect, it } from "vitest";
 import {
   compareByDistance,
   readWindowFacts,
-  windowCenterOf,
+  dockCenterMs,
   type DockModelInput,
   type WindowRead,
 } from "./evtx-correlation-dock-model";
@@ -43,9 +43,13 @@ function scene(extra: Partial<DockModelInput> = {}): DockModelInput & { items: T
   };
 }
 
-describe("windowCenterOf: the one definition of the instant a window is read around", () => {
+describe("dockCenterMs: the one definition of the instant a window is read around", () => {
+  it("is null for no record", () => {
+    expect(dockCenterMs(null)).toBeNull();
+  });
+
   it("is the epoch of a record with a usable whole-millisecond timestamp", () => {
-    expect(windowCenterOf(recordFor(1))).toBe(T0 + 1_000);
+    expect(dockCenterMs(recordFor(1))).toBe(T0 + 1_000);
   });
 
   it.each([
@@ -55,7 +59,7 @@ describe("windowCenterOf: the one definition of the instant a window is read aro
     ["an infinite epoch", Number.POSITIVE_INFINITY],
     ["an epoch that is not a whole number of milliseconds", T0 + 0.5],
   ])("is null for %s", (_why, epoch) => {
-    expect(windowCenterOf({ ...recordFor(1), timestampEpoch: epoch })).toBeNull();
+    expect(dockCenterMs({ ...recordFor(1), timestampEpoch: epoch })).toBeNull();
   });
 });
 

@@ -6,14 +6,18 @@
  *
  * Test code only: nothing outside a test file imports it.
  */
+import { tokens } from "@fluentui/react-components";
+import type { CMTraceTheme } from "../../lib/themes/types";
 import fixtureDocument from "./__fixtures__/correlation-edges.json";
-import { buildCorrelationChains } from "./evtx-correlation-chains";
+import { STRENGTH_ORDER, buildCorrelationChains } from "./evtx-correlation-chains";
+import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import { classifyCoverageGaps, type CorrelationGaps } from "./evtx-correlation-gaps";
 import { itemsByOriginId, linkPartnerCounts, originLookup } from "./evtx-correlation-origin-index";
 import { UNAVAILABLE_CORRELATION, type EvtxCorrelationData } from "./useEvtxCorrelation";
 import type { EvtxRecord } from "./types";
 import {
   assertUnifiedTimelineShape,
+  timelineOriginId,
   type TimelineCorrelationEdge,
   type TimelineItem,
   type TimelineSeverity,
@@ -135,8 +139,9 @@ export interface DataOptions {
   unplaced?: Partial<EvtxCorrelationData["unplaced"]>;
   /**
    * The unplaced list and its count; by default an empty list the session counts as empty. Null is
-   * NO RUN, as in the hook: the data's list is null and so are its counts, because there are no
-   * counts without a run. (A run whose count is unknown is `{ items: [], total: null }`.)
+   * NO RUN, as in the hook: `makeData` then returns the unavailable shape (no model, no counts, a
+   * null list). A run whose count is unknown is `{ items: [], total: null }`. The `unplaced`
+   * evidence is derived from the list, as the hook derives it.
    */
   unplacedList?: EvtxCorrelationData["unplacedList"];
   edgeState?: Partial<EvtxCorrelationData["edges"]>;
@@ -151,8 +156,24 @@ export interface DataOptions {
 /** Nine events loaded and nine visible, no text logs: nothing narrowed. */
 export const UNNARROWED_SCOPE = { visibleCount: 9, loadedCount: 9, textLogCount: 0 } as const;
 
+/**
+ * The colors the overview strip's wash must keep 3:1 against, read straight from the token map, for
+ * a test to measure what the code under test decided. It is deliberately not the code's own palette.
+ */
+export function tokenPalette(theme: CMTraceTheme) {
+  const visual = buildEvtxVisualTokens(theme);
+  const resolve = (value: string) => resolveToken(value, theme);
+  return {
+    surface: resolve(tokens.colorNeutralBackground1),
+    fill: resolve(tokens.colorNeutralBackground1Selected),
+    bars: STRENGTH_ORDER.map((strength) => resolve(visual.strengthBars[strength])),
+    border: resolve(tokens.colorNeutralStrokeAccessible),
+    focus: resolve(tokens.colorStrokeFocus2),
+  };
+}
+
 /** An unplaced list the session counts as empty: no item, and a trusted count of 0. */
-export const EMPTY_UNPLACED_LIST: NonNullable<EvtxCorrelationData["unplacedList"]> = { items: [], total: 0 };
+const EMPTY_UNPLACED_LIST: NonNullable<EvtxCorrelationData["unplacedList"]> = { items: [], total: 0 };
 
 /** The edge total the hook would store: a count, or null when none can be trusted. */
 function knownEdgeTotal(total: number): number | null {
@@ -195,16 +216,6 @@ export function makeCounts(
 }
 
 /**
- * The counts the hook would hold beside this data: none when there is no run (an unplaced list of
- * null), because the hook has no counts without a run.
- */
-function countsFor(options: DataOptions): EvtxCorrelationData["counts"] {
-  return options.unplacedList === null
-    ? null
-    : makeCounts({ ...options, unplacedList: options.unplacedList });
-}
-
-/**
  * Shared data as the hook would store it: the real chain model over these items and edges.
  *
  * A default here is written `??` only where null is NOT a state of that field (a count, a flag, a
@@ -213,6 +224,17 @@ function countsFor(options: DataOptions): EvtxCorrelationData["counts"] {
  * neighbouring value such as a counted zero.
  */
 export function makeData(options: DataOptions): EvtxCorrelationData {
+  // No run (an unplaced list of null) is the hook's unavailable shape: no model, no items, no
+  // counts, no evidence. It is not a "ready" model with the list taken away.
+  if (options.unplacedList === null) {
+    return {
+      ...UNAVAILABLE_CORRELATION,
+      stage: options.stage === "pending" ? "pending" : "unavailable",
+      error: options.error ?? null,
+      retry: options.retry ?? UNAVAILABLE_CORRELATION.retry,
+    };
+  }
+  const list = options.unplacedList === undefined ? EMPTY_UNPLACED_LIST : options.unplacedList;
   const hasItems = options.hasItems ?? true;
   const items = hasItems ? options.items : [];
   const model = buildCorrelationChains({
@@ -240,15 +262,18 @@ export function makeData(options: DataOptions): EvtxCorrelationData {
     scope: options.scope === undefined ? UNNARROWED_SCOPE : options.scope,
     scan: { state: "complete", progress: null, stoppedBy: null, error: null, ...options.scan },
     nextScan: options.nextScan ?? null,
+    // The evidence is derived from the list as the hook derives it: complete only when the count is
+    // known and equals the items listed, and the ids are the listed items'. A test that wants a
+    // contradiction (a complete list with an unknown count) has to say so with `unplaced`.
     unplaced: {
       scanComplete: true,
-      unplacedListComplete: true,
-      unplacedIds: new Set(),
+      unplacedListComplete: list.total !== null && list.items.length === list.total,
+      unplacedIds: new Set(list.items.map((item) => timelineOriginId(item.origin))),
       ...options.unplaced,
     },
-    unplacedList: options.unplacedList === undefined ? EMPTY_UNPLACED_LIST : options.unplacedList,
+    unplacedList: list,
     linkPartners: linkPartnerCounts(model.linkedPairs),
-    counts: options.counts !== undefined ? options.counts : countsFor(options),
+    counts: options.counts !== undefined ? options.counts : makeCounts({ ...options, unplacedList: list }),
     updating: options.updating ?? false,
     error: options.error ?? null,
     retry: options.retry ?? (() => undefined),

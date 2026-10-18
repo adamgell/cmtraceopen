@@ -20,14 +20,10 @@ import {
   unmatchableNote,
 } from "./evtx-correlation-copy";
 import {
-  DOCK_MAX_LANES,
-  DOCK_NEARBY_LINE_CAP,
-  DOCK_NEARBY_MARKER_CAP,
-  DOCK_STEP_CAP,
   buildDockModel,
-  chainInWindow,
+  dockCenterMs,
   dockMarkerName,
-  type DockModelInput,
+  resolveMarkerClick,
   type DockReady,
 } from "./evtx-correlation-dock-model";
 import vectorDocument from "./__fixtures__/engine-compaction-vectors.json";
@@ -53,6 +49,9 @@ import type { LoadedCorrelationWindow } from "./evtx-correlation-window";
 import type { EvtxRecord } from "./types";
 import type { TimelineCorrelationEdge, TimelineItem } from "./unified-timeline";
 import { timelineOriginId } from "./unified-timeline";
+
+/** What `buildDockModel` is given. */
+type DockModelInput = Parameters<typeof buildDockModel>[0];
 
 const HALF = 75_000;
 const SESSION_KEY = "session:1";
@@ -166,81 +165,6 @@ describe("which state the dock is in", () => {
       stoppedBy: "callLimit",
     });
     expect(buildDockModel({ ...input, window }).kind).toBe("ready");
-  });
-});
-
-describe("chainInWindow (the adapter between a row and the plot)", () => {
-  const t = recordFor(1).timestampEpoch;
-  const mapOf = (...items: TimelineItem[]) => new Map(items.map((item) => [timelineOriginId(item.origin), item]));
-  const row = (memberIds: string[], unresolvedMemberIds: string[] = []) => {
-    const edges = [synthetic("e1", rid(1), rid(2)), synthetic("e2", rid(2), rid(3))];
-    const model = buildCorrelationChains({ items: [], timelineEdges: edges, totalTimelineEdges: 2, findings: [] });
-    const full = model.chains[0]!;
-    return { ...full, memberIds, unresolvedMemberIds };
-  };
-
-  it("places the members that have an item, in time order, and lists the rest as having none", () => {
-    const part = chainInWindow(row([], [rid(3), rid(1), rid(2)]), rid(1), mapOf(eventItem(1, t + 5_000), eventItem(3, t)));
-    expect(part.memberIds).toEqual([rid(3), rid(1)]);
-    expect(part.unresolvedMemberIds).toEqual([rid(2)]);
-  });
-
-  it("gives the same part for a counts-only row (every member unresolved) and a full row (members resolved)", () => {
-    const items = mapOf(eventItem(1, t), eventItem(2, t + 1_000), eventItem(3, t + 2_000));
-    const countsOnly = chainInWindow(row([], [rid(1), rid(2), rid(3)]), rid(1), items);
-    const full = chainInWindow(row([rid(1), rid(2), rid(3)], []), rid(1), items);
-    expect(full).toEqual(countsOnly);
-    expect(full.memberIds).toEqual([rid(1), rid(2), rid(3)]);
-    expect(full.unresolvedMemberIds).toEqual([]);
-  });
-
-  it("takes the span from the placed members only, never from members that have no item", () => {
-    const part = chainInWindow(row([], [rid(1), rid(2), rid(3)]), rid(1), mapOf(eventItem(1, t + 4_000), eventItem(2, t + 9_000)));
-    expect(part.startMs).toBe(t + 4_000);
-    expect(part.endMs).toBe(t + 9_000);
-    expect(part.unresolvedMemberIds).toEqual([rid(3)]);
-  });
-
-  it("breaks a tie on time by id, so the order does not depend on the row's own order", () => {
-    const items = mapOf(eventItem(2, t), eventItem(1, t), eventItem(3, t));
-    const forward = chainInWindow(row([], [rid(1), rid(2), rid(3)]), rid(1), items);
-    const reversed = chainInWindow(row([], [rid(3), rid(2), rid(1)]), rid(1), items);
-    expect(forward.memberIds).toEqual([rid(1), rid(2), rid(3)]);
-    expect(reversed).toEqual(forward);
-  });
-
-  it("hands the row's edges and evidence over untouched, and does not change the row", () => {
-    const given = row([], [rid(1), rid(2), rid(3)]);
-    const before = JSON.stringify(given);
-    const part = chainInWindow(given, rid(1), mapOf(eventItem(1, t)));
-    expect(part.edges).toBe(given.edges);
-    expect(part.evidence).toBe(given.evidence);
-    expect(JSON.stringify(given)).toBe(before);
-  });
-
-  it("is the origin alone, with no edge, no evidence and nothing unresolved, when the event is in no row", () => {
-    expect(chainInWindow(null, rid(1), mapOf(eventItem(1, t + 3_000), eventItem(2, t)))).toEqual({
-      memberIds: [rid(1)],
-      unresolvedMemberIds: [],
-      edges: [],
-      evidence: [],
-      startMs: t + 3_000,
-      endMs: t + 3_000,
-    });
-  });
-
-  it("is empty, with no span, when there is no row and no origin, or the origin has no item", () => {
-    const empty = { memberIds: [], unresolvedMemberIds: [], edges: [], evidence: [], startMs: null, endMs: null };
-    expect(chainInWindow(null, null, mapOf(eventItem(1, t)))).toEqual(empty);
-    expect(chainInWindow(null, rid(9), mapOf(eventItem(1, t)))).toEqual(empty);
-  });
-
-  it("lists every member as having no item, with no span, when none has one", () => {
-    const part = chainInWindow(row([], [rid(1), rid(2)]), rid(1), new Map());
-    expect(part.memberIds).toEqual([]);
-    expect(part.unresolvedMemberIds).toEqual([rid(1), rid(2)]);
-    expect(part.startMs).toBeNull();
-    expect(part.endMs).toBeNull();
   });
 });
 
@@ -789,7 +713,6 @@ describe("the row of the selected event", () => {
     const edges = [1, 2, 3, 4, 5, 6].slice(1).map((n) => synthetic(`e${n}`, rid(1), rid(n + 0)));
     const items = [1, 2, 3, 4, 5, 6].map((n) => eventItem(n, record.timestampEpoch + (6 - n) * 1_000));
     const model = ready({ record, window: windowAround(record, items), counts: counts(edges), unreadSources: false });
-    expect(DOCK_STEP_CAP).toBe(4);
     expect(model.steps).toHaveLength(4);
     expect(model.steps.map((step) => step.timestampMs)).toEqual([...model.steps.map((s) => s.timestampMs)].sort((a, b) => a - b));
     expect(model.moreSteps).toBe(2);
@@ -1056,7 +979,6 @@ describe("context: the other entries of the window, by time and no more", () => 
   it("names the nearest entries first, four at most, and counts the rest", () => {
     const context = [9, 10, 11, 12, 13, 14].map((n, i) => eventItem(n, t + 10_000 + i * 1_000));
     const model = build(context);
-    expect(DOCK_NEARBY_LINE_CAP).toBe(4);
     expect(model.nearby.map((entry) => entry.id)).toEqual([rid(9), rid(10), rid(11), rid(12)]);
     expect(model.nearby.map((entry) => entry.deltaMs)).toEqual([10_000, 11_000, 12_000, 13_000]);
     expect(model.moreNearby).toBe(2);
@@ -1074,7 +996,6 @@ describe("context: the other entries of the window, by time and no more", () => 
       return eventItem(100 + i, t + side * (10_000 + i * 100));
     });
     const model = build(context);
-    expect(DOCK_NEARBY_MARKER_CAP).toBe(60);
     expect(model.plot.nearby).toHaveLength(60);
     const drawn = new Set(model.plot.nearby.map((marker) => marker.id));
     const distance = (item: TimelineItem) => Math.abs(item.timestampMs - t);
@@ -1084,7 +1005,7 @@ describe("context: the other entries of the window, by time and no more", () => 
     expect(model.notices).toContain("40 more nearby entries not drawn.");
   });
 
-  it("draws a text-log line as context on its own lane, whose click selects no record", () => {
+  it("draws a log entry as context on its own lane, named by what activating it does", () => {
     const log: TimelineItem = {
       timestampMs: t + 2_000,
       severity: "warning",
@@ -1094,8 +1015,8 @@ describe("context: the other entries of the window, by time and no more", () => 
     const model = build([log]);
     expect(model.plot.lanes.map((lane) => lane.label)).toEqual(["System", "AppEnforce.log"]);
     const marker = model.plot.nearby[0]!;
-    expect(model.facts.get(marker.id)?.selectability).toBe("log");
-    expect(dockMarkerName(model, marker, "utc")).toContain("a text-log line, not an event record, so activating it selects nothing");
+    expect(model.facts.get(marker.id)?.selectability).toBe("logLine");
+    expect(dockMarkerName(model, marker, "utc")).toContain("activate to select this log line's record when exactly one is loaded");
   });
 
   it("dedupes entries that share an origin, keeping the first", () => {
@@ -1129,7 +1050,6 @@ describe("the lanes: five at most, the event's first", () => {
       counts: counts(fixtureEdges("exactPair")),
       unreadSources: false,
     });
-    expect(DOCK_MAX_LANES).toBe(5);
     const labels = model.plot.lanes.map((lane) => lane.label);
     expect(labels).toHaveLength(5);
     expect(labels).toContain("Zulu");
@@ -1358,6 +1278,10 @@ describe("marker names", () => {
     expect(nameOf(rid(9), "notLoaded")).toMatch(/no loaded record matches, so activating it selects nothing$/);
   });
 
+  it("says an entry with no usable record identity selects nothing", () => {
+    expect(nameOf(rid(9), "noIdentity")).toMatch(/it has no usable record identity, so activating it selects nothing$/);
+  });
+
   it("names a member of an ambiguous row as establishing no link", () => {
     const edge = synthetic("a", rid(1), rid(2), "ambiguous");
     const ambiguous = ready({ record, window: windowAround(record, items.slice(0, 2)), counts: counts([edge]), unreadSources: false });
@@ -1504,5 +1428,161 @@ describe("what the model and the loader may import", () => {
     expect(withoutComments(modelSource)).not.toMatch(/setTimeout|setInterval|requestAnimationFrame/);
     const timers = withoutComments(windowSource).match(/setTimeout|setInterval/g) ?? [];
     expect(timers).toEqual(["setTimeout"]);
+  });
+});
+
+describe("what a click on a marker does (#842, A1 ruling 6)", () => {
+  const origin = (n: number) => eventItem(n, T0).origin;
+
+  it("selects the record when exactly one loaded record matches the entry", () => {
+    const click = resolveMarkerClick(origin(1), [recordFor(1), recordFor(2)]);
+    expect(click).toEqual({ kind: "select", recordId: recordFor(1).id });
+  });
+
+  it("selects nothing when no loaded record matches, and says so", () => {
+    expect(resolveMarkerClick(origin(1), [recordFor(2)])).toEqual({
+      kind: "nothing",
+      selectability: "notLoaded",
+    });
+    expect(resolveMarkerClick(origin(1), [])).toEqual({ kind: "nothing", selectability: "notLoaded" });
+  });
+
+  it("selects nothing when several loaded records match, never the first of them", () => {
+    const twin: EvtxRecord = { ...recordFor(1), id: recordFor(1).id + 1000 };
+    expect(resolveMarkerClick(origin(1), [recordFor(1), twin])).toEqual({
+      kind: "nothing",
+      selectability: "ambiguous",
+    });
+  });
+
+  it("selects nothing for an event entry the join can never name, and says it has no identity", () => {
+    const item = eventItem(1, T0);
+    if (item.origin.kind !== "event") throw new Error("an event origin");
+    const bare = { ...item.origin, recordId: 0, recordIdText: null };
+    expect(resolveMarkerClick(bare, [recordFor(1)])).toEqual({
+      kind: "nothing",
+      selectability: "noIdentity",
+    });
+  });
+
+  describe("an entry of a log file (F0, Main's ruling on the A2 review)", () => {
+    const FILE = "C:\\Logs\\AppEnforce.log";
+    /** An archive text row as `text_entry_to_record` builds it. */
+    const archiveRow = (line: number, overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
+      ...recordFor(7),
+      id: 700 + line,
+      eventRecordId: line,
+      eventRecordIdText: String(line),
+      originKind: "log",
+      eventId: 0,
+      sourceLabel: FILE,
+      channel: FILE,
+      provider: "CcmExec",
+      computer: "",
+      ...overrides,
+    });
+    /** The origin the engine builds from that row (`origin_of`'s Log arm). */
+    const logOrigin = (line: number, file = FILE): TimelineItem["origin"] => ({
+      kind: "log",
+      file,
+      component: "CcmExec",
+      line,
+      source: file,
+      machine: null,
+      bundle: null,
+      recordId: line,
+    });
+
+    it("selects the archive row when exactly one loaded row matches, the way an event is selected", () => {
+      const rows = [archiveRow(3), archiveRow(4), recordFor(1)];
+      expect(resolveMarkerClick(logOrigin(4), rows)).toEqual({ kind: "select", recordId: archiveRow(4).id });
+      expect(resolveMarkerClick(logOrigin(3), rows)).toEqual({ kind: "select", recordId: archiveRow(3).id });
+    });
+
+    it("says ambiguous when two identical archive rows match, and selects neither", () => {
+      const twin = archiveRow(4, { id: 999 });
+      expect(resolveMarkerClick(logOrigin(4), [archiveRow(4), twin, archiveRow(3)])).toEqual({
+        kind: "nothing",
+        selectability: "ambiguous",
+      });
+    });
+
+    it("says notLoaded when the file's rows are loaded and this line's is not", () => {
+      expect(resolveMarkerClick(logOrigin(9), [archiveRow(3), archiveRow(4)])).toEqual({
+        kind: "nothing",
+        selectability: "notLoaded",
+      });
+      // The row is there but another machine's: the strict matcher does not name it.
+      expect(resolveMarkerClick(logOrigin(4), [archiveRow(4, { computer: "OTHER-HOST" })])).toEqual({
+        kind: "nothing",
+        selectability: "notLoaded",
+      });
+    });
+
+    it("says log for a line of a Log Viewer file, which the grid has no record of", () => {
+      // Other archive rows are loaded, but none is of this file.
+      const viewerLine = logOrigin(3, "C:\\Logs\\FromTheLogViewer.log");
+      expect(resolveMarkerClick(viewerLine, [archiveRow(3), recordFor(1)])).toEqual({ kind: "nothing", selectability: "log" });
+      expect(resolveMarkerClick(viewerLine, [])).toEqual({ kind: "nothing", selectability: "log" });
+      // And an event record never stands in for a log file's line.
+      expect(resolveMarkerClick(logOrigin(1), [recordFor(1)])).toEqual({ kind: "nothing", selectability: "log" });
+      // Not even one that shares the file's label: only archive text rows are the file's rows.
+      expect(resolveMarkerClick(logOrigin(1), [{ ...recordFor(1), sourceLabel: FILE }])).toEqual({
+        kind: "nothing",
+        selectability: "log",
+      });
+    });
+
+    it("compares a label the engine compacted through the same matcher as the selected record's identification", () => {
+      const long = `C:\\Logs\\${"x".repeat(300)}.log`;
+      const compacted = timelineReference(long);
+      expect(compacted).not.toBe(long);
+      const row = archiveRow(5, { sourceLabel: long, channel: long });
+      expect(resolveMarkerClick(logOrigin(5, compacted), [row])).toEqual({ kind: "select", recordId: row.id });
+      // The same matcher decides which entry is the SELECTED one.
+      const record = { ...row, timestampEpoch: T0 + 2_000 };
+      const model = ready({
+        record,
+        window: windowAround(record, [{ timestampMs: T0 + 2_000, severity: "info", message: "x", origin: logOrigin(5, compacted) }]),
+        counts: null,
+        unreadSources: false,
+      });
+      expect(model.selected.status).toBe("found");
+    });
+
+    it("names the marker by what activating it does, before a click and after each result", () => {
+      const record = recordFor(1);
+      const t = record.timestampEpoch;
+      const line: TimelineItem = { timestampMs: t + 2_000, severity: "warning", message: "log line 4", origin: logOrigin(4) };
+      const model = ready({ record, window: windowAround(record, [eventItem(1, t), line]), counts: null, unreadSources: false });
+      const marker = [...model.plot.members, ...model.plot.nearby].find((m) => m.kind === "log")!;
+      expect(model.facts.get(marker.id)?.selectability).toBe("logLine");
+      const before = dockMarkerName(model, marker, "utc");
+      expect(before).toMatch(/activate to select this log line's record when exactly one is loaded$/);
+      // An archive row is selectable: nothing in the name calls it something that cannot be selected.
+      expect(before).not.toMatch(/not an event record|selects nothing/);
+      expect(dockMarkerName(model, marker, "utc", "log")).toMatch(
+        /it is a line of a log file with no record in the grid, so activating it selects nothing$/,
+      );
+      expect(dockMarkerName(model, marker, "utc", "notLoaded")).toMatch(/no loaded record matches, so activating it selects nothing$/);
+      expect(dockMarkerName(model, marker, "utc", "ambiguous")).toMatch(/more than one loaded record matches/);
+    });
+  });
+});
+
+describe("the instant the dock centers on", () => {
+  it("is the selected event's timestamp, and nothing for no selection or an event with none", () => {
+    const record = recordFor(1);
+    expect(dockCenterMs(record)).toBe(record.timestampEpoch);
+    expect(dockCenterMs(null)).toBeNull();
+    for (const epoch of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
+      expect(dockCenterMs({ ...record, timestampEpoch: epoch }), String(epoch)).toBeNull();
+    }
+  });
+
+  it("is what makes an event untimed in the model, so the reader and the model cannot disagree", () => {
+    const untimed = { ...recordFor(1), timestampEpoch: 0 };
+    expect(buildDockModel({ record: untimed, window: null, counts: null, unreadSources: false })).toEqual({ kind: "untimed" });
+    expect(buildDockModel({ record: null, window: null, counts: null, unreadSources: false })).toEqual({ kind: "noSelection" });
   });
 });

@@ -369,7 +369,7 @@ export function sourcesText(sourceCount: number, complete: boolean): string {
   return `${complete ? "" : "at least "}${count(sourceCount)} ${noun}`;
 }
 
-export interface DockSubtitleInput {
+interface DockSubtitleInput {
   eventId: number;
   /** The event's time, formatted by the caller in the operator's time zone. */
   timeText: string;
@@ -400,8 +400,20 @@ export const NO_SELECTION_TEXT = "Select an event to see what happened around it
  */
 export const UNTIMED_TEXT = "This event has no timestamp; it cannot be placed.";
 
-/** The dock body when there is no analysis session to read. */
+/**
+ * The body of a surface that reads the analysis session, while there is no session and none is on
+ * the way: nothing was loaded, or the analysis could not be built.
+ */
 export const NO_SESSION_TEXT = "No event analysis is available. Load events to see what is around an event.";
+
+/**
+ * The same surfaces' body while the session IS on the way: the events are loaded and the analysis is
+ * being built (or rebuilt), so there is no session yet. "Pending" is not "none": this says to wait,
+ * where `NO_SESSION_TEXT` says there is nothing to wait for. Shared by the correlation dock and the
+ * Details context (#843).
+ */
+export const ANALYSIS_BUILDING_TEXT =
+  "The event analysis is being built, so the entries around this event are not available yet.";
 
 /** The dock body while the first read of a window is under way. */
 export const READING_WINDOW_TEXT = "Reading the entries around this event...";
@@ -440,7 +452,7 @@ export function windowNotice(
   return `Showing ${count(window.items.length)} of ${count(window.windowItems)} entries within ${windowWidthLabel(window.halfWidthMs)}; reading stopped at ${why}, so entries and sources may be missing.`;
 }
 
-export interface EmptyWindowInput {
+interface EmptyWindowInput {
   halfWidthMs: number;
   /** The session was built from fewer events than are loaded, or from a scope that is not known. */
   narrowed: boolean;

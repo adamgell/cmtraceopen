@@ -54,10 +54,10 @@ import {
 import type { TimelineItem } from "./unified-timeline";
 
 /** Rows asked for per call: the most one call can return (`MAX_ANALYSIS_TIMELINE_PAGE_ITEMS`). */
-export const CORRELATION_WINDOW_LIMIT = EVENT_LOG_TIMELINE_PAGE_SIZE;
+const CORRELATION_WINDOW_LIMIT = EVENT_LOG_TIMELINE_PAGE_SIZE;
 
 /** Calls in one read: the window call and at most five continuation pages (the issue's 6-page cap). */
-export const CORRELATION_WINDOW_MAX_CALLS = 6;
+const CORRELATION_WINDOW_MAX_CALLS = 6;
 
 export interface CorrelationWindowDeps {
   queryWindow: (
@@ -81,7 +81,7 @@ export const DEFAULT_CORRELATION_WINDOW_DEPS: CorrelationWindowDeps = {
 };
 
 /** Why a read stopped before it had every in-window item. */
-export type WindowStopReason = "callLimit" | "budget" | "error";
+type WindowStopReason = "callLimit" | "budget" | "error";
 
 export interface LoadedCorrelationWindow {
   /** The session and revision the items were read from (`sessionKeyOf`). */
@@ -106,7 +106,7 @@ export interface LoadedCorrelationWindow {
   calls: number;
 }
 
-export interface LoadCorrelationWindowInput {
+interface LoadCorrelationWindowInput {
   status: Pick<EventLogAnalysisSessionStatus, "sessionId" | "revision">;
   centerMs: number;
   halfWidthMs: number;

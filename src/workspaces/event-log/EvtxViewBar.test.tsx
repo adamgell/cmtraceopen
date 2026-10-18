@@ -11,7 +11,7 @@ vi.mock("./event-export-session", () => ({ streamEventLogExport: exportMock.stre
 import { EvtxViewBar } from "./EvtxViewBar";
 import { EVTX_EXPORT_FORMATS } from "./evtx-export";
 import { defaultColumnConfig } from "./evtx-columns";
-import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
+import { evtxPanelToggleId, sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
 import { useUiStore } from "../../stores/ui-store";
 import type { EvtxRecord } from "./types";
@@ -112,7 +112,7 @@ describe("EvtxViewBar", () => {
     expect(useEvtxLayoutStore.getState().panels.channels).toBe(false);
   });
 
-  it("ships Insights as a normal toggle and the Correlation dock disabled, with the reason as a description", () => {
+  it("ships Insights and the Correlation dock as normal toggles: pressed state, no reason, each with its own id", () => {
     seedChannels();
     render(<EvtxViewBar nowEpoch={0} />);
     const insights = screen.getByRole("button", { name: "Insights" });
@@ -124,20 +124,22 @@ describe("EvtxViewBar", () => {
     fireEvent.click(insights);
     expect(insights).toHaveAttribute("aria-pressed", "true");
 
-    const reason = "Available when the correlation dock ships";
     const dock = screen.getByRole("button", { name: "Correlation dock" });
+    // Off by default (R4), and nothing about it is unavailable.
     expect(dock).toHaveAttribute("aria-pressed", "false");
-    expect(dock).toHaveAttribute("aria-disabled", "true");
-    expect(dock).not.toHaveAttribute("title");
-    expect(dock).toHaveAccessibleDescription(reason);
-    expect(screen.getAllByText(reason)).toHaveLength(1);
+    expect(dock).not.toHaveAttribute("aria-disabled");
+    expect(dock).not.toHaveAccessibleDescription();
+    expect(screen.queryByText(/Available when the correlation dock ships/)).toBeNull();
+    fireEvent.click(dock);
+    expect(dock).toHaveAttribute("aria-pressed", "true");
+    expect(useEvtxLayoutStore.getState().panels).toEqual({ channels: true, insights: true, dock: true });
     fireEvent.click(dock);
     expect(dock).toHaveAttribute("aria-pressed", "false");
-    expect(useEvtxLayoutStore.getState().panels).toEqual({
-      channels: true,
-      insights: true,
-      dock: false,
-    });
+    expect(useEvtxLayoutStore.getState().panels.dock).toBe(false);
+    // The ids the dock's Close uses to give focus back.
+    expect(dock.id).toBe(evtxPanelToggleId("dock"));
+    expect(insights.id).toBe(evtxPanelToggleId("insights"));
+    expect(dock.id).not.toBe(insights.id);
   });
 
   it("makes the Channels toggle unavailable, with a reason, when no channels are loaded", () => {

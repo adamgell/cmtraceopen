@@ -28,8 +28,9 @@
  * - Every cap says how much it left out: nothing is hidden silently, and an unknown count is never
  *   shown as 0.
  */
-import { buildEvidenceIndex } from "./evtx-insights-data";
+import { buildEvidenceIndex, timelineTextMatches } from "./evtx-insights-data";
 import {
+  compareStrings,
   derivedTitle,
   messageHead,
   type CorrelationChain,
@@ -77,24 +78,24 @@ import {
   shortEntryId,
   type ChainPlot,
   type KeyHeader,
-  type PlotChain,
   type PlotMarker,
 } from "./evtx-correlation-view-model";
 import type { LoadedCorrelationWindow } from "./evtx-correlation-window";
+import { chainInWindow } from "./evtx-correlation-chain-in-window";
 import { hasUsableTimestamp } from "./evtx-filter";
 import { formatClock, type EvtxTimeZoneMode } from "./evtx-time";
 import type { EvtxRecord } from "./types";
 import type { CorrelationCounts } from "./useEvtxCorrelation";
-import { timelineOriginId, type TimelineItem } from "./unified-timeline";
+import { timelineOriginId, type TimelineItem, type TimelineOrigin } from "./unified-timeline";
 
 /** Spec 8.12: up to five lanes. */
-export const DOCK_MAX_LANES = 5;
+const DOCK_MAX_LANES = 5;
 /** Context markers drawn at most, nearest the selected event first. */
-export const DOCK_NEARBY_MARKER_CAP = 60;
+const DOCK_NEARBY_MARKER_CAP = 60;
 /** Spec 8.12: the chain's members as steps, up to four. */
-export const DOCK_STEP_CAP = 4;
+const DOCK_STEP_CAP = 4;
 /** Entries named on the "Also nearby" line. */
-export const DOCK_NEARBY_LINE_CAP = 4;
+const DOCK_NEARBY_LINE_CAP = 4;
 
 /** The part of the counts-only model the dock reads: one session's rows, partners, gaps and scope. */
 export type DockCounts = Pick<
@@ -113,7 +114,7 @@ export interface DockModelInput {
   unreadSources: boolean;
 }
 
-export interface DockStep {
+interface DockStep {
   id: string;
   timestampMs: number;
   /** The event ID, or the log file and line. */
@@ -121,7 +122,7 @@ export interface DockStep {
   message: string;
 }
 
-export interface DockNearbyEntry {
+interface DockNearbyEntry {
   id: string;
   /** "{eventId} · {channel}" or "{file} · line {n}". */
   entry: string;
@@ -130,7 +131,7 @@ export interface DockNearbyEntry {
   reason: NearbyReason;
 }
 
-export interface DockRow {
+interface DockRow {
   id: string;
   strength: CorrelationChain["strength"];
   title: string;
@@ -169,10 +170,20 @@ export type DockSelected =
   | { status: "notRead" };
 
 /** What activating a marker can do: select its record, or nothing, and why. */
-export type MarkerSelectability = "event" | "log" | "selected" | "ambiguous" | "notLoaded";
+export type MarkerSelectability =
+  /** Before a click: an event entry, selected if exactly one loaded record matches. */
+  | "event"
+  /** Before a click: a log entry, selected if exactly one loaded archive text row matches. */
+  | "logLine"
+  /** After a click: a line of a log file that has no record in the grid (a Log Viewer file). */
+  | "log"
+  | "selected"
+  | "ambiguous"
+  | "notLoaded"
+  | "noIdentity";
 
 /** What the dock knows about one drawn marker, for its accessible name. */
-export interface MarkerFacts {
+interface MarkerFacts {
   role: "selected" | "member" | "nearby";
   /** The words after "time only", for a nearby marker. */
   reason: NearbyReason | null;
@@ -233,10 +244,6 @@ export type DockModel =
   | { kind: "failed"; error: string | null }
   | DockReady;
 
-function compareStrings(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
 function isLinking(strength: CorrelationChain["strength"]): boolean {
   return strength === "exact" || strength === "candidate";
 }
@@ -274,44 +281,6 @@ function originsNaming(record: EvtxRecord, items: readonly TimelineItem[]): Set<
 }
 
 /**
- * The adapter between a row of the model and the lane plot: the part of the row whose entries have
- * an item in `itemsById` (the items the dock can draw), in time order, with the rest listed as
- * members that have no item. The plot places `memberIds` and counts `unresolvedMemberIds` as
- * entries with no item to draw; it never gives those a position.
- *
- * `row` is a row of the counts-only model, whose every member is unresolved, or of a full one; both
- * give the same part. With no row (the event is in none), the one member is the origin itself, with
- * no edge and no evidence, and nothing is unresolved: there is no chain to be partial. With neither
- * a row nor an origin the part is empty. The span is that of the placed members only.
- */
-export function chainInWindow(
-  row: Pick<CorrelationChain, "memberIds" | "unresolvedMemberIds" | "edges" | "evidence"> | null,
-  originId: string | null,
-  itemsById: ReadonlyMap<string, TimelineItem>,
-): PlotChain {
-  const wanted =
-    row === null
-      ? originId === null
-        ? []
-        : [originId]
-      : [...new Set([...row.memberIds, ...row.unresolvedMemberIds])];
-  const timeOf = (id: string) => (itemsById.get(id) as TimelineItem).timestampMs;
-  const placed = wanted
-    .filter((id) => itemsById.has(id))
-    .sort((a, b) => timeOf(a) - timeOf(b) || compareStrings(a, b));
-  const placedSet = new Set(placed);
-  return {
-    memberIds: placed,
-    unresolvedMemberIds:
-      row === null ? [] : wanted.filter((id) => !placedSet.has(id)).sort(compareStrings),
-    edges: row === null ? [] : row.edges,
-    evidence: row === null ? [] : row.evidence,
-    startMs: placed.length === 0 ? null : timeOf(placed[0] as string),
-    endMs: placed.length === 0 ? null : timeOf(placed[placed.length - 1] as string),
-  };
-}
-
-/**
  * Why "Open in Correlation view" has no row to open. What is known of the selected event comes
  * first: it is true whether or not the links are in. Only an identified event waits for them.
  */
@@ -329,13 +298,15 @@ function openDisabledReason(selected: DockSelected, paired: boolean): OpenDisabl
 
 /**
  * The instant a window is read around for `record`: its epoch, when it is a usable whole number of
- * milliseconds, else null (the record is untimed and has no window). The one definition, for the
- * model and for whoever asks for the read.
+ * milliseconds, else null (no selection, or an event that cannot be placed). The ONE definition: the
+ * reader of the window (the dock's and the Details context's) and `readWindowFacts` decide it with
+ * the same predicate, the one the time-range criterion uses.
  */
-export function windowCenterOf(record: EvtxRecord): number | null {
-  return hasUsableTimestamp(record) && Number.isSafeInteger(record.timestampEpoch)
-    ? record.timestampEpoch
-    : null;
+export function dockCenterMs(record: EvtxRecord | null): number | null {
+  if (record === null || !hasUsableTimestamp(record) || !Number.isSafeInteger(record.timestampEpoch)) {
+    return null;
+  }
+  return record.timestampEpoch;
 }
 
 /**
@@ -410,7 +381,7 @@ export type WindowFacts =
 export function readWindowFacts(input: DockModelInput): WindowFacts {
   const { record, window, counts } = input;
   if (record === null) return { kind: "noSelection" };
-  const center = windowCenterOf(record);
+  const center = dockCenterMs(record);
   if (center === null) return { kind: "untimed" };
   // A window answers one center. Another selection's window is never shown under this record.
   if (window === null || window.centerMs !== center) return { kind: "unread" };
@@ -618,7 +589,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
     const resolution: MarkerSelectability = isSelected
       ? "selected"
       : marker.kind === "log"
-        ? "log"
+        ? "logLine"
         : "event";
     facts.set(marker.id, {
       role: isSelected ? "selected" : marker.role === "member" ? "member" : "nearby",
@@ -735,15 +706,60 @@ function selectabilityPhrase(selectability: MarkerSelectability): string {
   switch (selectability) {
     case "event":
       return "activate to select this event";
+    case "logLine":
+      return "activate to select this log line's record when exactly one is loaded";
     case "log":
-      return "a text-log line, not an event record, so activating it selects nothing";
+      return "it is a line of a log file with no record in the grid, so activating it selects nothing";
     case "selected":
       return "the selected event";
     case "ambiguous":
       return "more than one loaded record matches, so activating it selects nothing";
     case "notLoaded":
       return "no loaded record matches, so activating it selects nothing";
+    case "noIdentity":
+      return "it has no usable record identity, so activating it selects nothing";
   }
+}
+
+/** What activating a marker found: the one record to select, or why there is none. */
+type MarkerClick =
+  | { kind: "select"; recordId: number }
+  | { kind: "nothing"; selectability: Exclude<MarkerSelectability, "event" | "logLine" | "selected"> };
+
+/**
+ * What a click on a marker does, decided from the loaded records (`records`, scanned when the click
+ * needs it): it selects the record only when EXACTLY ONE loaded record matches the entry's origin.
+ * An entry with no usable identity names none, and no or several matches would be a guess; each of
+ * those selects nothing and says why, and the reason goes into the marker's accessible name
+ * (`dockMarkerName`'s `selectability`).
+ *
+ * An event entry is matched by the origin join (`resolveOriginRecords`). A log entry is matched by the
+ * strict log matcher (`logOriginNamesRecord`) against the loaded archive text rows, the same matcher
+ * that identifies the SELECTED record when it is such a row, so one definition decides both. A log
+ * entry that no row matches is `notLoaded` when some loaded row is of its file (the file is in the
+ * grid, this line is not), and `log` when none is: a line of a Log Viewer file, which the grid has no
+ * record of.
+ */
+export function resolveMarkerClick(origin: TimelineOrigin, records: readonly EvtxRecord[]): MarkerClick {
+  if (origin.kind === "log") {
+    const rows = records.filter((record) => record.originKind === "log");
+    const named = rows.filter((row) => logOriginNamesRecord(origin, row));
+    if (named.length === 1) return { kind: "select", recordId: (named[0] as EvtxRecord).id };
+    if (named.length > 1) return { kind: "nothing", selectability: "ambiguous" };
+    return {
+      kind: "nothing",
+      selectability: rows.some((row) => timelineTextMatches(origin.file, row.sourceLabel)) ? "notLoaded" : "log",
+    };
+  }
+  const resolution = resolveOriginRecords(origin, buildEvidenceIndex(records));
+  if (resolution.kind === "noUsableIdentity") return { kind: "nothing", selectability: "noIdentity" };
+  if (resolution.kind === "matches" && resolution.records.length === 1) {
+    return { kind: "select", recordId: (resolution.records[0] as EvtxRecord).id };
+  }
+  return {
+    kind: "nothing",
+    selectability: resolution.kind === "matches" && resolution.records.length > 1 ? "ambiguous" : "notLoaded",
+  };
 }
 
 /**

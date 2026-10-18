@@ -14,6 +14,7 @@ import {
   LINKS_LOADING_TEXT,
   NOT_IN_TIMELINE_NOTE,
   NOT_READ_NOTE,
+  ANALYSIS_BUILDING_TEXT,
   NO_SELECTION_TEXT,
   NO_SESSION_TEXT,
   READING_WINDOW_TEXT,
@@ -547,6 +548,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "LINKS_LOADING_TEXT",
     "NOT_IN_TIMELINE_NOTE",
     "NOT_READ_NOTE",
+    "ANALYSIS_BUILDING_TEXT",
     "NO_SELECTION_TEXT",
     "NO_SESSION_TEXT",
     "READING_WINDOW_TEXT",
@@ -664,6 +666,7 @@ describe("no string claims an entry is unplaced without proof", () => {
       NOT_IN_TIMELINE_NOTE,
       NOT_READ_NOTE,
       NO_SELECTION_TEXT,
+      ANALYSIS_BUILDING_TEXT,
       NO_SESSION_TEXT,
       READING_WINDOW_TEXT,
       UNREAD_SOURCES_NOTE,
@@ -1188,6 +1191,7 @@ describe("the dock's words (spec 8.12, #842)", () => {
       LINKS_LOADING_TEXT,
       NOT_IN_TIMELINE_NOTE,
       NO_SELECTION_TEXT,
+      ANALYSIS_BUILDING_TEXT,
       NO_SESSION_TEXT,
       READING_WINDOW_TEXT,
       UNREAD_SOURCES_NOTE,
@@ -1284,5 +1288,21 @@ describe("the note about entries read from an origin more than once (#843)", () 
   it("is not said when there is nothing to say, and never for a negative count", () => {
     expect(sharedOriginNote(0)).toBeNull();
     expect(sharedOriginNote(-2)).toBeNull();
+  });
+});
+
+describe("the two session states a surface that reads the analysis session can be in", () => {
+  it("says to wait while the analysis is on the way, and does not tell anyone to load events they have loaded", () => {
+    expect(ANALYSIS_BUILDING_TEXT).toBe(
+      "The event analysis is being built, so the entries around this event are not available yet.",
+    );
+    expect(ANALYSIS_BUILDING_TEXT).not.toMatch(/\bload\b/i);
+    expect(ANALYSIS_BUILDING_TEXT).toMatch(/\bbeing built\b/);
+  });
+
+  it("says there is nothing to wait for when no analysis is on the way, in other words", () => {
+    expect(NO_SESSION_TEXT).toBe("No event analysis is available. Load events to see what is around an event.");
+    expect(NO_SESSION_TEXT).not.toBe(ANALYSIS_BUILDING_TEXT);
+    expect(NO_SESSION_TEXT).not.toMatch(/being built|yet\b/);
   });
 });

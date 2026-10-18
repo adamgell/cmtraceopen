@@ -6,7 +6,7 @@ import storeSource from "./evtx-correlation-store.ts?raw";
 const CHAIN = "6:chain1|57:source4:Live|machine10:DESKTOP-01|channel6:System|record1";
 
 beforeEach(() => {
-  useEvtxCorrelationStore.setState({ selectedChainId: null, unplacedOpen: false });
+  useEvtxCorrelationStore.setState({ selectedChainId: null, unplacedOpen: false, openedCount: 0 });
   useEvtxLayoutStore.setState({ activeView: "table", railTab: "insights" });
   localStorage.clear();
 });
@@ -18,6 +18,36 @@ describe("the chain selection", () => {
     expect(useEvtxCorrelationStore.getState().selectedChainId).toBe(CHAIN);
     useEvtxCorrelationStore.getState().selectChain(null);
     expect(useEvtxCorrelationStore.getState().selectedChainId).toBeNull();
+  });
+});
+
+describe("a chain opened from outside the view (#842, the dock's Open)", () => {
+  it("is selected like any other, leaves the Not placed pane, and is counted", () => {
+    const store = useEvtxCorrelationStore;
+    store.getState().showUnplaced();
+    store.getState().openChain(CHAIN);
+    expect(store.getState().selectedChainId).toBe(CHAIN);
+    expect(store.getState().unplacedOpen).toBe(false);
+    expect(store.getState().openedCount).toBe(1);
+    store.getState().openChain(CHAIN);
+    expect(store.getState().openedCount).toBe(2);
+  });
+
+  it("is the one selection that counts: the view's own selectChain does not", () => {
+    const store = useEvtxCorrelationStore;
+    store.getState().selectChain(CHAIN);
+    store.getState().selectChain(null);
+    store.getState().showUnplaced();
+    expect(store.getState().openedCount).toBe(0);
+  });
+
+  it("is what openCorrelationView does with a chain, and only with a chain", () => {
+    openCorrelationView(CHAIN);
+    expect(useEvtxCorrelationStore.getState().openedCount).toBe(1);
+    openCorrelationView();
+    openCorrelationView(null);
+    openUnplacedList();
+    expect(useEvtxCorrelationStore.getState().openedCount).toBe(1);
   });
 });
 

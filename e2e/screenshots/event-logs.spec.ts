@@ -340,6 +340,39 @@ test.describe("event-logs screenshots", () => {
       path: outPath("event-logs-table.png"),
       animations: "disabled",
     });
+
+    // The unified timeline strip is a fixed-height column: a header, the correlation details, and
+    // the list. Opening the details to their cap must not take the list's last pixel. A scroll
+    // container's automatic minimum size is 0, so a list that is only `flex: 1` collapses to
+    // nothing once the rest fills the strip; it keeps three rows (or all it has) instead, and the
+    // details give way. jsdom does no layout, so this is measured here.
+    const strip = page.getByTestId("unified-timeline");
+    const toggle = strip.getByText("Show correlation details");
+    const region = page.getByRole("region", { name: "Correlation details" });
+    await toggle.click();
+    await expect(region).toBeVisible();
+    await expect(async () => {
+      const layout = await page.evaluate(async () => {
+        const { getLogListMetrics } = await import("/src/lib/log-accessibility.ts");
+        const { useUiStore } = await import("/src/stores/ui-store.ts");
+        const rowPx = getLogListMetrics(useUiStore.getState().logListFontSize).rowHeight + 2;
+        const list = document.querySelector<HTMLElement>('[data-testid="unified-timeline-list"]');
+        const details = document.querySelector<HTMLElement>('[role="region"][aria-label="Correlation details"]');
+        if (!list || !details) throw new Error("the strip's list or details region is missing");
+        return {
+          threeRows: 3 * rowPx,
+          listClient: list.clientHeight,
+          listScroll: list.scrollHeight,
+          regionClient: details.clientHeight,
+          regionScroll: details.scrollHeight,
+        };
+      });
+      // Not vacuous: the region is full, so it scrolls.
+      expect(layout.regionScroll).toBeGreaterThan(layout.regionClient);
+      expect(layout.listClient).toBeGreaterThanOrEqual(Math.min(layout.listScroll, layout.threeRows) - 1);
+    }).toPass({ timeout: 5_000 });
+    await toggle.click();
+    await expect(region).toBeHidden();
   });
 
   test("event-logs selected record", async ({ page }) => {
@@ -445,6 +478,42 @@ test.describe("event-logs screenshots", () => {
       path: outPath("event-logs-correlation.png"),
       animations: "disabled",
     });
+
+    // The detail column scrolls when it is taller than the window, and the lane plot must keep its
+    // height (up to its own cap) while it does. A scroll container's automatic minimum size is 0,
+    // so a plot that is an auto row of that column collapses to a sliver instead of the column
+    // scrolling; jsdom does no layout, so only a browser shows it. The shorter window makes the
+    // column overflow whatever sits above or inside it. The cap is read from the figure itself.
+    const tallWindow = page.viewportSize();
+    expect(tallWindow).not.toBeNull();
+    await page.setViewportSize({ width: 1440, height: 560 });
+    await expect(async () => {
+      const layout = await plot.evaluate((figure) => {
+        const style = getComputedStyle(figure);
+        const borders = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+        const frame = figure.getBoundingClientRect();
+        const marker = figure.querySelector("button[data-marker]")?.getBoundingClientRect();
+        return {
+          cap: parseFloat(style.maxHeight),
+          borders,
+          clientHeight: figure.clientHeight,
+          scrollHeight: figure.scrollHeight,
+          frameTop: frame.top,
+          frameBottom: frame.bottom,
+          markerTop: marker?.top ?? Number.NaN,
+          markerBottom: marker?.bottom ?? Number.NaN,
+        };
+      });
+      expect(layout.cap).toBeGreaterThan(0);
+      // The plot shows its whole content, or the cap when the content is taller.
+      expect(layout.clientHeight).toBeGreaterThanOrEqual(
+        Math.min(layout.scrollHeight, layout.cap - layout.borders) - 1,
+      );
+      // And the first marker lies inside the box it is drawn in, not past a collapsed edge.
+      expect(layout.markerTop).toBeGreaterThanOrEqual(layout.frameTop - 0.5);
+      expect(layout.markerBottom).toBeLessThanOrEqual(layout.frameBottom + 0.5);
+    }).toPass({ timeout: 5_000 });
+    await page.setViewportSize(tallWindow as { width: number; height: number });
 
     // An Ambiguous group labels no link between its entries, so its plot draws no connector.
     // Wait for the group's three markers first: until they are drawn, zero connectors would only

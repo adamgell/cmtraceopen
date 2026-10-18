@@ -20,8 +20,8 @@ import {
   CorrelationLegend,
   EvtxCorrelationLanes,
   PINNED_FILL_OPACITY,
-  correlationSizes,
 } from "./EvtxCorrelationLanes";
+import { correlationSizes } from "./evtx-correlation-sizes";
 import { buildCorrelationChains, type CorrelationChain } from "./evtx-correlation-chains";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import { pickRailTextColors } from "./evtx-rail-text";
@@ -228,13 +228,6 @@ describe("the lanes and markers", () => {
       (document.querySelector(selector) as HTMLElement).firstElementChild as HTMLElement;
     expect(glyph('[data-kind="event"]').style.borderRadius).toBe("50%");
     expect(glyph('[data-kind="log"]').style.borderRadius).toBe("3px");
-  });
-
-  it("sizes the text by spec 7.1 from the log list font size: literal numbers at the default 13 px, and at both ends", () => {
-    // f - 2 for lane labels, max(10, f - 3) for captions, max(9, f - 4) for axis ticks.
-    expect(correlationSizes(13)).toEqual({ f: 13, lane: 11, label: 10, tick: 9 });
-    expect(correlationSizes(11)).toEqual({ f: 11, lane: 9, label: 10, tick: 9 });
-    expect(correlationSizes(20)).toEqual({ f: 20, lane: 18, label: 17, tick: 16 });
   });
 
   it("paints the lane label, marker label and axis tick at those sizes at the default 13 px", () => {
@@ -548,6 +541,154 @@ describe("keyboard", () => {
   });
 });
 
+/** A chain pair on System plus context on four other sources: five lanes, as the dock draws at most. */
+const dockItems = () => [
+  ...pair(),
+  eventItem(3, T0 + 1_000, "info", "Application"),
+  eventItem(4, T0 + 2_000, "info", "Security"),
+  eventItem(5, T0 + 3_000, "warning", "Setup"),
+  logItem("C:\\Logs\\AppEnforce.log", 6, T0 + 4_000),
+];
+const dockPlot = () => {
+  const items = dockItems();
+  return buildChainPlot({
+    chain: chainOf(fixtureEdges("exactPair"), pair()),
+    itemsById: mapOf(items),
+    ...VIEW,
+    window: { startMs: T0 - 75_000, endMs: T0 + 75_000 },
+    nearby: items.slice(2),
+  });
+};
+describe("the dock variant (spec 8.12, #842)", () => {
+  const drawDock = (extra: Partial<Parameters<typeof EvtxCorrelationLanes>[0]> = {}) =>
+    draw(dockPlot(), { variant: "dock", ...extra });
+  const figure = () => screen.getByRole("figure") as HTMLElement;
+
+  it("draws a 12 px glyph in the same 24 px box, where the view draws 14", () => {
+    drawDock();
+    const button = document.querySelector<HTMLElement>("button[data-marker]")!;
+    expect(button.className).toBeTruthy();
+    const glyph = button.firstElementChild as HTMLElement;
+    expect(glyph.style.width).toBe("12px");
+    expect(glyph.style.height).toBe("12px");
+    expect(CORRELATION_MARKER_HIT_PX).toBe(24);
+    cleanup();
+    draw(dockPlot());
+    expect(((document.querySelector("button[data-marker]") as HTMLElement).firstElementChild as HTMLElement).style.width).toBe(
+      "14px",
+    );
+  });
+
+  it("draws a nearby marker's dotted outline at 12 px too", () => {
+    drawDock();
+    const nearby = document.querySelector<HTMLElement>('[data-role="nearby"]')!;
+    const glyph = nearby.firstElementChild as HTMLElement;
+    expect(glyph.style.width).toBe("12px");
+    expect(glyph.style.border).toContain("1px dotted");
+  });
+
+  it("makes the label column 170 px and sets the lane labels at max(10, f - 3)", () => {
+    drawDock({ sizes: correlationSizes(13) });
+    const column = (document.querySelector("[data-lane-label]") as HTMLElement).parentElement as HTMLElement;
+    expect(column.style.width).toBe("170px");
+    // f - 3 would be 10 at 13 px; the view's f - 2 is 11.
+    expect((document.querySelector("[data-lane-label]") as HTMLElement).style.fontSize).toBe("10px");
+    cleanup();
+    drawDock({ sizes: correlationSizes(11) });
+    // The floor: f - 3 = 8 is raised to 10.
+    expect((document.querySelector("[data-lane-label]") as HTMLElement).style.fontSize).toBe("10px");
+    cleanup();
+    drawDock({ sizes: correlationSizes(20) });
+    expect((document.querySelector("[data-lane-label]") as HTMLElement).style.fontSize).toBe("17px");
+    cleanup();
+    draw(dockPlot(), { sizes: correlationSizes(13) });
+    expect((document.querySelector("[data-lane-label]") as HTMLElement).parentElement!.style.width).toBe("184px");
+  });
+
+  it("makes each lane 24 px tall with no label row under it, so five lanes take 120 px", () => {
+    drawDock({ sizes: correlationSizes(13) });
+    const lanes = Array.from(document.querySelectorAll<HTMLElement>("[data-lane]"));
+    expect(lanes).toHaveLength(5);
+    for (const lane of lanes) expect(lane.style.height).toBe("24px");
+    expect(lanes.map((lane) => lane.style.top)).toEqual(["0px", "24px", "48px", "72px", "96px"]);
+    const track = lanes[0]!.parentElement as HTMLElement;
+    expect(track.style.height).toBe("120px");
+    expect(document.querySelectorAll("[data-lane-label]")).toHaveLength(5);
+    for (const label of document.querySelectorAll<HTMLElement>("[data-lane-label]")) {
+      expect(label.style.height).toBe("24px");
+    }
+    // The size that sets the view's lane height does not set the dock's.
+    cleanup();
+    drawDock({ sizes: correlationSizes(20) });
+    expect((document.querySelector("[data-lane]") as HTMLElement).style.height).toBe("24px");
+  });
+
+  it("has no height cap and does not scroll, where the view caps the figure at 240 px", () => {
+    drawDock();
+    expect(figure().style.maxHeight).toBe("");
+    expect(figure().style.overflowY).not.toBe("auto");
+    expect(figure().getAttribute("data-variant")).toBe("dock");
+    cleanup();
+    draw(dockPlot());
+    expect(figure().style.maxHeight).toBe("240px");
+    expect(figure().style.overflowY).toBe("auto");
+    expect(figure().getAttribute("data-variant")).toBe("view");
+  });
+
+  it("draws no text under a marker; the accessible name and the tooltip carry it", () => {
+    drawDock();
+    expect(document.querySelectorAll("[data-marker-label]")).toHaveLength(0);
+    const first = document.querySelector<HTMLElement>("button[data-marker]")!;
+    expect(first.getAttribute("aria-label")).toBeTruthy();
+    expect(first.getAttribute("title")).toBe(first.getAttribute("aria-label"));
+    cleanup();
+    draw(dockPlot());
+    expect(document.querySelectorAll("[data-marker-label]").length).toBeGreaterThan(0);
+  });
+
+  it("draws a 1 px rule at 50% of the track in the accessible stroke, behind the markers, in the dock only", () => {
+    drawDock();
+    const rule = document.querySelector<HTMLElement>("[data-center-rule]")!;
+    expect(rule).not.toBeNull();
+    expect(rule.getAttribute("aria-hidden")).toBe("true");
+    expect(rule.style.left).toBe("50%");
+    expect(rule.style.width).toBe("1px");
+    expect(rule.style.backgroundColor).toBe(tokens.colorNeutralStrokeAccessible);
+    // Behind: it comes before the connector layer and the markers in the track.
+    const track = rule.parentElement as HTMLElement;
+    const children = Array.from(track.children);
+    expect(children.indexOf(rule)).toBeLessThan(children.indexOf(track.querySelector("svg") as Element));
+    expect(children.indexOf(rule)).toBeLessThan(children.indexOf(track.querySelector("[data-lane]") as Element));
+    cleanup();
+    draw(dockPlot());
+    expect(document.querySelector("[data-center-rule]")).toBeNull();
+  });
+
+  it("keeps the view's keyboard: one tab stop, arrows, Home and End, Escape to the host", () => {
+    const onEscape = vi.fn();
+    drawDock({ onEscape });
+    const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("button[data-marker]"));
+    expect(buttons).toHaveLength(6);
+    expect(buttons.filter((button) => button.tabIndex === 0)).toHaveLength(1);
+    buttons[0]!.focus();
+    fireEvent.keyDown(buttons[0]!, { key: "ArrowRight" });
+    expect(buttons[1]).toHaveFocus();
+    fireEvent.keyDown(buttons[1]!, { key: "End" });
+    expect(buttons[5]).toHaveFocus();
+    expect(fireEvent.keyDown(buttons[5]!, { key: "Escape" })).toBe(false);
+    expect(onEscape).toHaveBeenCalledTimes(1);
+  });
+
+  it("activates a marker on click and names each with the host's name", () => {
+    const onActivate = vi.fn();
+    drawDock({ onActivate, markerName: (marker) => `dock name for ${marker.entry}` });
+    const first = document.querySelector<HTMLButtonElement>("button[data-marker]")!;
+    expect(first.getAttribute("aria-label")).toMatch(/^dock name for /);
+    fireEvent.click(first);
+    expect(onActivate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("colors are tokens, never literals", () => {
   it("has no color literal in the component source", () => {
     expect(lanesSource).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
@@ -615,6 +756,38 @@ describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
       expect(error.firstElementChild?.getAttribute("style")).toContain(visuals.levels.Error.dotColor);
       const nearby = document.querySelector<HTMLElement>('[data-role="nearby"]')!;
       expect((nearby.firstElementChild as HTMLElement).style.border).toContain(visuals.strengths.notCausal.border);
+    });
+
+    it("keeps the dock's center rule at 3:1 on the plot, in the token it is painted with", () => {
+      atLeast("center rule", tokens.colorNeutralStrokeAccessible, tokens.colorNeutralBackground1, 3);
+      draw(dockPlot(), { variant: "dock" });
+      expect((document.querySelector("[data-center-rule]") as HTMLElement).style.backgroundColor).toBe(
+        tokens.colorNeutralStrokeAccessible,
+      );
+    });
+
+    it("reads the dock's lane labels and axis at 4.5:1 on the plot, at max(10, f - 3)", () => {
+      const rail = pickRailTextColors(theme);
+      draw(dockPlot(), { variant: "dock", sizes: correlationSizes(13) });
+      const label = document.querySelector("[data-lane-label]") as HTMLElement;
+      expect(label.style.color).toBe(tokens.colorNeutralForeground2);
+      expect(label.style.fontSize).toBe("10px");
+      atLeast("dock lane label", tokens.colorNeutralForeground2, tokens.colorNeutralBackground1, 4.5);
+      atLeast("dock axis", rail.cardSecondary, tokens.colorNeutralBackground1, 4.5);
+      expect(((document.querySelector("[data-axis]") as HTMLElement).firstElementChild as HTMLElement).style.color).toBe(
+        rail.cardSecondary,
+      );
+    });
+
+    it("paints the dock's rings and dotted outline with the same tokens as the view, at 3:1", () => {
+      const visuals = buildEvtxVisualTokens(theme);
+      draw(dockPlot(), { variant: "dock" });
+      const member = document.querySelector<HTMLElement>(`[data-marker="${rid(1)}"]`)!;
+      expect(member.firstElementChild?.getAttribute("style")).toContain(visuals.levels.Information.dotColor);
+      const nearby = document.querySelector<HTMLElement>('[data-role="nearby"]')!;
+      expect((nearby.firstElementChild as HTMLElement).style.border).toContain(visuals.strengths.notCausal.border);
+      atLeast("member ring", visuals.levels.Information.dotColor, tokens.colorNeutralBackground1, 3);
+      atLeast("nearby outline", visuals.strengths.notCausal.border, tokens.colorNeutralBackground1, 3);
     });
 
     it("reads the lane labels, marker labels and axis at 4.5:1 on the plot", () => {

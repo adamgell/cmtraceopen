@@ -18,12 +18,13 @@
  *   `[]`, there is no producer, and those markers never join a chain or a connector.
  */
 import { getBaseName, getDirectoryName } from "../../lib/file-paths";
-import type {
-  CorrelationChain,
-  CorrelationChainEdge,
-  CorrelationChainModel,
-  CorrelationChainStrength,
-  CorrelationEvidenceRow,
+import {
+  compareStrings,
+  type CorrelationChain,
+  type CorrelationChainEdge,
+  type CorrelationChainModel,
+  type CorrelationChainStrength,
+  type CorrelationEvidenceRow,
 } from "./evtx-correlation-chains";
 import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
 import {
@@ -57,10 +58,6 @@ export const CORRELATION_SEQUENCE_INITIAL = 200;
 export const CORRELATION_AXIS_TICKS = 5;
 /** Spec 8.11: the key value is truncated in the middle to 12 characters. */
 export const KEY_VALUE_DISPLAY_CHARS = 12;
-
-function compareStrings(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
 
 export function levelOfSeverity(severity: TimelineSeverity): EvtxLevel {
   switch (severity) {
@@ -130,7 +127,7 @@ export function axisTicks(window: TimeWindow, count = CORRELATION_AXIS_TICKS): n
   );
 }
 
-export interface TickLabelOptions {
+interface TickLabelOptions {
   /**
    * Seconds on every label. By default they are shown when the ticks are less than a minute apart,
    * so two neighbours never read as the same minute.
