@@ -402,7 +402,14 @@ test.describe("event-logs screenshots", () => {
   test("event-logs correlation", async ({ page }) => {
     // The fixture's synthetic identity (event-log-data.ts, `assignCorrelationIdentity`) gives the
     // real engine seven edges, which the view reads as five chains: three Exact pairs, one
-    // Ambiguous group of three and one Coverage blocked pair.
+    // Ambiguous group of three and one Coverage blocked pair. Every one of them has a timeline
+    // position (all members are timed events), so the overview strip draws five bars.
+    //
+    // This capture is the Correlation overview capture (#840): the strip sits between the chain
+    // header and the lane plot. The fixture holds NO unplaced item (the replies' first page has
+    // totalUnplaced 0 and an empty preview), and the shared fixture is not changed for this view
+    // (R6), so the Not placed row and the pane are covered by component tests with engine-shaped
+    // items, and here the end of the test only asserts their ABSENCE.
     //
     // A brushed range is set first, so the Escape check below has something to protect. It covers
     // every record: a range that hid one would change the events the analysis is built from, and
@@ -440,6 +447,32 @@ test.describe("event-logs screenshots", () => {
     await expect(markers).toHaveCount(2);
     await expect(plot.locator('line[data-connector][data-strength="exact"]')).toHaveCount(1);
 
+    // The overview strip (spec 8.11): drawn above the lane plot, 48 px tall, one bar per chain with
+    // the selected chain's bar solid, five ticks, the sentence that its extent is only the chains
+    // shown, and a zoom band that is one named slider.
+    const overview = page.getByTestId("correlation-overview");
+    await expect(overview).toBeVisible();
+    const strip = overview.getByTestId("overview-box");
+    const stripBox = await strip.boundingBox();
+    expect(Math.round(stripBox?.height ?? 0)).toBe(48);
+    const plotBox = await plot.boundingBox();
+    expect((stripBox?.y ?? 0) + (stripBox?.height ?? 0)).toBeLessThanOrEqual((plotBox?.y ?? 0) + 1);
+    await expect(overview.locator("[data-bar]")).toHaveCount(5);
+    await expect(overview.getByTestId("overview-undrawn")).toHaveCount(0);
+    const selectedBar = overview.locator('[data-bar][data-selected="true"]');
+    await expect(selectedBar).toHaveCount(1);
+    await expect(selectedBar).toHaveAttribute("data-strength", "exact");
+    await expect(selectedBar).toHaveAttribute("data-bar", (await exact.getAttribute("data-chain-id")) ?? "");
+    await expect(overview.getByTestId("overview-caption")).toContainText(
+      "Spans the chains shown, not the whole session.",
+    );
+    await expect(overview.getByTestId("overview-axis").locator("span")).toHaveCount(5);
+    const band = overview.getByRole("slider", { name: "Zoom window of the lane plot" });
+    await expect(band).toBeVisible();
+    await expect(band).toHaveAttribute("aria-valuetext", /^.+ to .+, .+ wide$/);
+    // The handles and bars are not tab stops: the band is the strip's only one.
+    await expect(overview.locator("[tabindex]")).toHaveCount(1);
+
     // The view has two polite regions: the announcer and the reply to the operator's own action.
     await expect(page.getByTestId("correlation-view").getByRole("status")).toHaveCount(2);
     await assertNoHostPaths(page);
@@ -447,6 +480,23 @@ test.describe("event-logs screenshots", () => {
       path: outPath("event-logs-correlation.png"),
       animations: "disabled",
     });
+
+    // The band is the lane plot's window and nothing else: a key moves it, Home brings it back to the
+    // chain's default, and Escape on it belongs to the band, so the workspace's own Escape (which
+    // clears the time range) is unspent and the brushed range stays. This comes after the capture, so
+    // the keyboard focus ring is not in the picture, and before the next chain is chosen, which would
+    // start from that chain's own default window anyway.
+    const defaultBand = await band.getAttribute("aria-valuetext");
+    await band.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(band).not.toHaveAttribute("aria-valuetext", defaultBand ?? "");
+    await expect(brushed).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(band).toBeFocused();
+    await expect(brushed).toBeVisible();
+    await page.keyboard.press("Home");
+    await expect(band).toHaveAttribute("aria-valuetext", defaultBand ?? "");
+    await expect(brushed).toBeVisible();
 
     // An Ambiguous group labels no link between its entries, so its plot draws no connector.
     // Wait for the group's three markers first: until they are drawn, zero connectors would only
@@ -480,5 +530,18 @@ test.describe("event-logs screenshots", () => {
     // top covers every record) and that the afterEach fails the test if any replay guard tripped.
     await expect(page.getByTestId("correlation-card-headline")).toHaveText(/^4 chains$/);
     await expect(page.getByRole("alert")).toHaveCount(0);
+
+    // The fixture holds no unplaced item, and the card's counts are loaded (the headline above reads
+    // them), so a session that counted none shows nothing about them: no Not placed option in the
+    // chain list (whose name is exactly the one without the extra clause), no pane, no unplaced line
+    // on the Insights Correlations card, and no link to review them. Absence is the claim here: a
+    // card that read "0 items" or "not known" for this session would also fail the testid check.
+    // A string is matched whole here, so the name that gains ", and items that are not placed" fails.
+    await expect(list).toHaveAccessibleName("Correlation chains, strongest first");
+    await expect(page.getByRole("option", { name: /^Not placed/ })).toHaveCount(0);
+    await expect(page.locator("[data-unplaced-option]")).toHaveCount(0);
+    await expect(page.getByTestId("unplaced-pane")).toHaveCount(0);
+    await expect(page.getByTestId("correlation-card-unplaced")).toHaveCount(0);
+    await expect(page.getByText("Review unplaced lines")).toHaveCount(0);
   });
 });
