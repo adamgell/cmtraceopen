@@ -9,6 +9,15 @@
  * neutral `user01`. Timestamps are anchored to a fixed base date so captures are deterministic;
  * nothing reads the wall clock.
  *
+ * Correlation identity (#839)
+ * ---------------------------
+ * A handful of EXISTING DeviceManagement records carry synthetic correlation identifiers
+ * (`assignCorrelationIdentity`), so the real engine has something to correlate and the Correlation
+ * view has chains to show: Exact pairs, one Ambiguous group and one Coverage blocked pair. No record
+ * is added or removed (the count stays 1,331), none is untimed, and no user SID is set: the engine
+ * falls back from `user_id` to `user_sid`, so one shared SID would fan every record into a single
+ * group. Every identifier is invented for this fixture.
+ *
  * Provider convention
  * -------------------
  * Channel names and provider names are the real ones, because a real .evtx file carries both:
@@ -80,6 +89,24 @@ export const ENGINE_SESSION_ID = "00000000-0000-4000-8000-000000000828";
 
 const DM_PROVIDER = "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider";
 
+/**
+ * When each "MDM Enroll: auto-enrollment triggered by policy" (72) and "Auto MDM Enroll: Failed"
+ * (76) happened, in seconds after the base time. The generator pairs them in order, so 72 number i
+ * and 76 number i are 6 or 7 seconds apart; the 72 list is longer by two unpaired events.
+ */
+const ENROLL_TRIGGERED_AT = [82312, 82558, 83200, 84059, 79794, 76194, 72594, 68994, 57994, 44994, 29994, 20000, 10000];
+const ENROLL_FAILED_AT = [82318, 82565, 83207, 84065, 79800, 76200, 72600, 69000, 58000, 45000, 30000];
+
+/** Synthetic correlation identity of one record (see `assignCorrelationIdentity`). */
+interface FixtureIdentity {
+  /** The record's header ActivityID (`EvtxRecord.activityId`). */
+  activityId?: string;
+  /** The record's explicit session id (`EvtxRecord.sessionId`). */
+  sessionId?: string;
+  /** An `ActivityId` EventData field that disagrees with the header one: an identity conflict. */
+  eventDataActivityId?: string;
+}
+
 interface GeneratedEvent {
   chKey: ChannelKey;
   id: string;
@@ -88,6 +115,7 @@ interface GeneratedEvent {
   msg: string;
   s: number;
   rec: number;
+  identity?: FixtureIdentity;
 }
 
 function generateEvents(): GeneratedEvent[] {
@@ -161,8 +189,8 @@ function generateEvents(): GeneratedEvent[] {
     ["aad", "1104", "Information", "Microsoft-Windows-AAD", "AAD Cloud AP plugin call Plugin initialize returned success.", 90, spread],
     ["aad", "1081", "Information", "Microsoft-Windows-AAD", "OAuth response received for resource https://enrollment.manage.microsoft.com/.", 60, spread],
     ["aad", "1097", "Warning", "Microsoft-Windows-AAD", "Http request status: 400. Method: POST.", 36, late],
-    ["dm", "76", "Error", DM_PROVIDER, "Auto MDM Enroll: Failed", 11, at([82318, 82565, 83207, 84065, 79800, 76200, 72600, 69000, 58000, 45000, 30000])],
-    ["dm", "72", "Information", DM_PROVIDER, "MDM Enroll: auto-enrollment triggered by policy", 13, at([82312, 82558, 83200, 84059, 79794, 76194, 72594, 68994, 57994, 44994, 29994, 20000, 10000])],
+    ["dm", "76", "Error", DM_PROVIDER, "Auto MDM Enroll: Failed", 11, at(ENROLL_FAILED_AT)],
+    ["dm", "72", "Information", DM_PROVIDER, "MDM Enroll: auto-enrollment triggered by policy", 13, at(ENROLL_TRIGGERED_AT)],
     ["dm", "813", "Information", DM_PROVIDER, "MDM PolicyManager: Set policy int, Area: (DeviceLock).", 50, spread],
     ["dm", "404", "Error", DM_PROVIDER, "MDM ConfigurationManager: Command failure status. Configuration Source: (MDM).", 3, late],
   ];
@@ -180,7 +208,77 @@ function generateEvents(): GeneratedEvent[] {
   ev.forEach((e, i) => {
     e.rec = 88213 + (ev.length - i) * 3;
   });
+  assignCorrelationIdentity(ev);
   return ev;
+}
+
+/**
+ * A GUID-shaped identifier made of words, not random bits, so that it is recognizably invented.
+ *
+ * It holds no run of four decimal digits on purpose. The diagnosis scans every record's text, raw
+ * XML included, for error codes, and reads `-4000` or `-0001` as a signed decimal one. A
+ * conventional `{00000839-0001-4000-...}` would hand six records bogus error tokens, push their
+ * nested rows past the diagnosis response bound, and add a "Capped" placeholder finding to a
+ * dataset that has none. `series` and `n` are single digits, so each only ever adds a short run.
+ *
+ * That is a workaround. A real ActivityID is a random GUID and can hold such a run, which the scan
+ * should not read as an error code: tracked as #964. When it is fixed, this can become a realistic
+ * GUID.
+ */
+const syntheticGuid = (series: number, n: number): string =>
+  `{5ee0a1d${series}-a${series}0b-4c${series}d-8e${series}f-c0de0a0b0c0${n}}`;
+
+/**
+ * Gives a few existing DeviceManagement records synthetic correlation identifiers (#839), so the
+ * REAL engine correlates them when the replies are captured. Nothing is added: the same records
+ * carry two more fields. What the engine makes of them is in the replies, not asserted here.
+ *
+ * - EXACT: the first three "triggered" (72) and "failed" (76) pairs each share one ActivityID. Two
+ *   records with one ActivityID on one machine are an exact pair.
+ * - AMBIGUOUS: the 72 and 76 of the eleventh pair and the DeviceManagement event nearest to them
+ *   share one ActivityID. Three records on one key give every record two exact partners, so the
+ *   engine labels no link between any two of them (decision C: exact chains are pairs).
+ * - COVERAGE BLOCKED: the fourth pair shares a SessionId (an exact edge), but its 72 also says one
+ *   ActivityID in its header and another in its EventData. The engine drops that record's
+ *   ActivityID key as conflicted and records a coverage gap for it, so the exact edge between the
+ *   two carries a gap: a link the engine cannot vouch for.
+ * - No UserId or user SID is set anywhere (user_id falls back to user_sid and would fan out).
+ */
+function assignCorrelationIdentity(events: GeneratedEvent[]): void {
+  const dm = (id: string, s: number): GeneratedEvent => {
+    const found = events.find((e) => e.chKey === "dm" && e.id === id && e.s === s);
+    if (!found) throw new Error(`[event-logs fixture] no DeviceManagement ${id} at ${s} s`);
+    return found;
+  };
+  const used = new Set<GeneratedEvent>();
+  const give = (event: GeneratedEvent, identity: FixtureIdentity): void => {
+    if (used.has(event)) throw new Error("[event-logs fixture] a record was given two identities");
+    used.add(event);
+    event.identity = identity;
+  };
+
+  for (let pair = 0; pair < 3; pair += 1) {
+    const activityId = syntheticGuid(1, pair + 1);
+    give(dm("72", ENROLL_TRIGGERED_AT[pair]), { activityId });
+    give(dm("76", ENROLL_FAILED_AT[pair]), { activityId });
+  }
+
+  const sessionId = "fixture-session-alpha";
+  give(dm("72", ENROLL_TRIGGERED_AT[3]), {
+    sessionId,
+    activityId: syntheticGuid(3, 1),
+    eventDataActivityId: syntheticGuid(3, 2),
+  });
+  give(dm("76", ENROLL_FAILED_AT[3]), { sessionId });
+
+  const groupActivityId = syntheticGuid(2, 1);
+  const anchor = ENROLL_FAILED_AT[10];
+  const first = dm("72", ENROLL_TRIGGERED_AT[10]);
+  const second = dm("76", anchor);
+  const third = events
+    .filter((e) => e.chKey === "dm" && !used.has(e) && e !== first && e !== second)
+    .sort((a, b) => Math.abs(a.s - anchor) - Math.abs(b.s - anchor) || a.rec - b.rec)[0];
+  for (const member of [first, second, third]) give(member, { activityId: groupActivityId });
 }
 
 function xmlEscape(value: string): string {
@@ -200,6 +298,18 @@ function toRecord(e: GeneratedEvent): EvtxRecord {
   const channel = CHANNELS[e.chKey].name;
   const epoch = BASE_EPOCH_MS + e.s * 1000;
   const timestamp = new Date(epoch).toISOString();
+  const identity = e.identity;
+  const correlationXml =
+    identity?.activityId === undefined ? "" : `<Correlation ActivityID="${identity.activityId}"/>`;
+  // The named EventData fields an identity adds; the XML below is written from the same list.
+  const identityFields: { name: string; value: string }[] = [];
+  if (identity?.sessionId !== undefined) identityFields.push({ name: "SessionId", value: identity.sessionId });
+  if (identity?.eventDataActivityId !== undefined) {
+    identityFields.push({ name: "ActivityId", value: identity.eventDataActivityId });
+  }
+  const identityXml = identityFields
+    .map((field) => `<Data Name="${field.name}">${xmlEscape(field.value)}</Data>`)
+    .join("");
   return {
     id: 0,
     eventRecordId: e.rec,
@@ -212,12 +322,12 @@ function toRecord(e: GeneratedEvent): EvtxRecord {
     level: e.lvl,
     computer: COMPUTER,
     message: e.msg,
-    eventData: [{ name: "Data", value: e.msg }],
+    eventData: [{ name: "Data", value: e.msg }, ...identityFields],
     rawXml:
       `<Event><System><Provider Name="${e.prov}"/><EventID>${e.id}</EventID>` +
       `<EventRecordID>${e.rec}</EventRecordID><TimeCreated SystemTime="${timestamp}"/>` +
-      `<Channel>${channel}</Channel><Computer>${COMPUTER}</Computer></System>` +
-      `<EventData><Data>${xmlEscape(e.msg)}</Data></EventData></Event>`,
+      `${correlationXml}<Channel>${channel}</Channel><Computer>${COMPUTER}</Computer></System>` +
+      `<EventData><Data>${xmlEscape(e.msg)}</Data>${identityXml}</EventData></Event>`,
     sourceLabel: channelPath(e.chKey),
     originKind: "event",
     task: null,
@@ -227,6 +337,10 @@ function toRecord(e: GeneratedEvent): EvtxRecord {
     userSid: null,
     keywords: null,
     mapped: [],
+    // The identity the engine correlates on. Absent (not null) for every other record, so the
+    // JSON of every other record is unchanged.
+    ...(identity?.activityId === undefined ? {} : { activityId: identity.activityId }),
+    ...(identity?.sessionId === undefined ? {} : { sessionId: identity.sessionId }),
   };
 }
 

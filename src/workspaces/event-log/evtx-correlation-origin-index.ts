@@ -6,15 +6,21 @@
  * the per-record links count.
  *
  * Nothing in the engine's reply names the record an origin came from. The join therefore compares
- * the ORIGIN'S OWN FIELDS with the record's, with the same matchers finding evidence uses
- * (`buildEvidenceIndex`, `redactedValueMatches`). It never reads, parses or rebuilds a stable id
+ * the ORIGIN'S OWN FIELDS with the record's. It never reads, parses or rebuilds a stable id
  * string: an origin whose record has no usable identity is recognised from `recordIdText` and
  * `recordId`, not from the `|missing` marker the stable id would carry.
  *
+ * The origin is what the ENGINE made of the record, and the engine changes three things on the way
+ * (event_log/timeline.rs, analysis_session.rs): it compacts every identity text over 256 UTF-8 bytes
+ * into its own `...[{len} bytes; digest={hex}]` form, it trims machine and component and drops
+ * placeholder words BEFORE it compacts them, and it rewrites a record identity it refuses before it
+ * builds the origin. The join reproduces each (`timelineTextMatches`, `provenanceAgrees`,
+ * `engineTimelineRecordIdentity`) and does not compare text any other way.
+ *
  * Rules, all enforced here:
- * - A record names the origin only when the event ID, the record identity (the engine's order: a
- *   usable `recordIdText`, then a non-zero `recordId`), the provider, the channel, the source label
- *   and the normalized machine ALL agree.
+ * - A record names the origin only when the event ID, the record identity (the engine's order, as
+ *   the engine left it on the origin), the provider, the channel, the source label and the
+ *   normalized machine ALL agree.
  * - Several matching records are ONE ambiguous reference. Every candidate is kept and counted, and
  *   none is guessed. Identical duplicates, such as the same archive loaded twice, are therefore
  *   reported as ambiguous.
@@ -32,9 +38,9 @@ import type { CorrelationChain } from "./evtx-correlation-chains";
 import { countScopeReferences, type EvtxRecordScopeCounts } from "./evtx-filter";
 import {
   engineRecordIdentity,
-  recordIdentityText,
-  recordsForIdentity,
-  redactedValueMatches,
+  engineTimelineRecordIdentity,
+  recordsForOriginIdentity,
+  timelineTextMatches,
   type EvidenceIndex,
 } from "./evtx-insights-data";
 import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
@@ -93,12 +99,35 @@ const NO_PROVENANCE = new Set([
   "not_applicable",
 ]);
 
-/** The engine's machine normalization: trimmed, and nothing for empty or a placeholder word. */
-function normalizedMachine(value: string): string | null {
+/**
+ * The engine's machine and component normalization (`normalized_provenance`): trimmed, and nothing
+ * for empty or a placeholder word. It runs BEFORE the 256-byte compaction.
+ */
+export function normalizedProvenance(value: string): string | null {
   const trimmed = value.trim();
   if (trimmed === "") return null;
   const lowered = trimmed.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
   return NO_PROVENANCE.has(lowered) ? null : trimmed;
+}
+
+/**
+ * Whether an origin's machine (or a log origin's component) is the record's. The engine normalizes
+ * the record's value first and compacts what is left (`origin_of`, then `compact_timeline_origin`),
+ * so the record's value is normalized here BEFORE it is compared: a name that is padded past 256
+ * bytes and fits once trimmed is not compacted at all, and comparing before trimming would find
+ * another length and digest. `null` on the origin means the engine found no usable value.
+ *
+ * A record the transport projected (over 8 MiB) reached the engine already bounded to the identity
+ * limit, so the engine normalized the BOUNDED text; that order is accepted too.
+ */
+export function provenanceAgrees(origin: string | null, record: string): boolean {
+  const normalized = normalizedProvenance(record);
+  if (origin === null) return normalized === null;
+  if (normalized !== null && timelineTextMatches(origin, normalized)) return true;
+  const seen = normalizedProvenance(
+    boundUtf8WithDigest(record, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT),
+  );
+  return seen !== null && seen === origin;
 }
 
 /**
@@ -113,28 +142,17 @@ export function originIdentityText(origin: EventOrigin): string | null {
 
 /**
  * Whether the origin's own fields, other than its identity, agree with the record's. The engine
- * copies provider, channel and source label from the record after bounding each to the transport's
- * identity limit, and normalizes the machine, so the comparison goes through `redactedValueMatches`
- * (which reproduces the bounding) and the same machine normalization.
+ * copies provider, channel and source label from the record and compacts each over 256 UTF-8 bytes
+ * into its own form (a record the transport projected arrives already bounded in the transport's
+ * form), so those go through `timelineTextMatches`; the machine is normalized first and then
+ * compared (`provenanceAgrees`), which is the engine's order.
  */
 function fieldsAgree(origin: EventOrigin, record: EvtxRecord): boolean {
   if (origin.eventId !== record.eventId) return false;
-  if (!redactedValueMatches(origin.provider, record.provider)) return false;
-  if (!redactedValueMatches(origin.channel, record.channel)) return false;
-  if (!redactedValueMatches(origin.source, record.sourceLabel)) return false;
-  return normalizedAgrees(origin.machine, record.computer);
-}
-
-/**
- * Whether an origin's machine or component, which the engine normalizes (`normalized_provenance`:
- * trimmed, and nothing for empty or a placeholder word), is what the record's own value gives. The
- * engine normalizes the value after bounding it to the transport's identity limit, so this does too.
- */
-function normalizedAgrees(originValue: string | null, recordValue: string): boolean {
-  const seen = normalizedMachine(
-    boundUtf8WithDigest(recordValue, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT),
-  );
-  return originValue === null ? seen === null : seen !== null && seen === originValue;
+  if (!timelineTextMatches(origin.provider, record.provider)) return false;
+  if (!timelineTextMatches(origin.channel, record.channel)) return false;
+  if (!timelineTextMatches(origin.source, record.sourceLabel)) return false;
+  return provenanceAgrees(origin.machine, record.computer);
 }
 
 /** The largest line number a log origin carries (`u32::MAX`): a larger record id is clamped to it. */
@@ -204,12 +222,29 @@ export function bundleOfSource(source: string): string | null {
 }
 
 /**
+ * Whether a log origin's bundle is the one the engine derived from the record's source label
+ * (`bundle_from_source`, then `compact_timeline_origin`). The engine derives it from the label it
+ * RECEIVED: the whole label for a record it received whole, and the transport's bounded label for
+ * one the transport projected (over 8 MiB), whose file the engine then holds in that bounded form.
+ * Which of the two applies is read off the origin's own file, so the bundle is judged against one
+ * label and not against whichever agrees. A label with no bundle is the empty value, which agrees
+ * only with an origin that has none; a bundle id the engine compacted is compared as it left it.
+ */
+function bundleAgrees(origin: Extract<TimelineOrigin, { kind: "log" }>, sourceLabel: string): boolean {
+  const bounded = boundUtf8WithDigest(sourceLabel, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
+  const received = bounded !== sourceLabel && origin.file === bounded ? bounded : sourceLabel;
+  return provenanceAgrees(origin.bundle, bundleOfSource(received) ?? "");
+}
+
+/**
  * Whether a log origin is the one the engine built from an archive text row (`originKind` "log"):
  * `origin_of` in src-tauri/src/event_log/timeline.rs sets file and source to the record's source
  * label, the line to its EventRecordID clamped to a u32, the record id to the EventRecordID, the
- * machine and component to the normalized computer and provider, and the bundle from the source.
- * EVERY one of them must agree, each through the matcher that reproduces the engine's bounding or
- * normalization; a record id that is not a safe non-negative integer matches nothing.
+ * machine and component to the normalized computer and provider, and the bundle from the source;
+ * `compact_timeline_origin` then compacts every text over 256 bytes.
+ * EVERY one of them must agree, each through the matcher that reproduces what the engine did:
+ * `timelineTextMatches` for file and source, `provenanceAgrees` (normalize first, then compare) for
+ * machine, component and bundle. A record id that is not a safe non-negative integer matches nothing.
  */
 export function logOriginNamesRecord(origin: TimelineOrigin, record: EvtxRecord): boolean {
   if (origin.kind !== "log" || record.originKind !== "log") return false;
@@ -217,23 +252,24 @@ export function logOriginNamesRecord(origin: TimelineOrigin, record: EvtxRecord)
   if (!Number.isSafeInteger(id) || id < 0) return false;
   if (origin.recordId !== id) return false;
   if (origin.line !== Math.min(id, LOG_LINE_MAX)) return false;
-  if (!redactedValueMatches(origin.file, record.sourceLabel)) return false;
-  if (!redactedValueMatches(origin.source, record.sourceLabel)) return false;
-  if (!normalizedAgrees(origin.machine, record.computer)) return false;
-  if (!normalizedAgrees(origin.component, record.provider)) return false;
-  const bounded = boundUtf8WithDigest(record.sourceLabel, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
-  return bundleOfSource(bounded) === origin.bundle;
+  if (!timelineTextMatches(origin.file, record.sourceLabel)) return false;
+  if (!timelineTextMatches(origin.source, record.sourceLabel)) return false;
+  if (!provenanceAgrees(origin.machine, record.computer)) return false;
+  if (!provenanceAgrees(origin.component, record.provider)) return false;
+  return bundleAgrees(origin, record.sourceLabel);
 }
 
 /**
- * Whether the event join can never name `record`, whatever the timeline holds: an EVENT record with
- * no usable record identity (the provider never numbered it). The engine still places such a record
- * and gives it an origin, but the join matches events by identity and an origin with none matches
- * nothing (`resolveOriginRecords`: "noUsableIdentity"). The same predicate the join uses, so there is
- * no second definition. A log-kind record is matched by `logOriginNamesRecord`, not by identity.
+ * Whether the event join can never name `record`, whatever the timeline holds: an EVENT record whose
+ * timeline origin carries no usable record identity. The engine still places such a record and gives
+ * it an origin, but the join matches events by the identity the origin carries and an origin with
+ * none matches nothing (`resolveOriginRecords`: "noUsableIdentity"). The origin's identity is what
+ * `engineTimelineRecordIdentity` predicts, which is the join's own mirror of the engine's refusal of
+ * a malformed identity, so there is one definition. A log-kind record is matched by
+ * `logOriginNamesRecord`, not by identity.
  */
 export function isUnmatchableEvent(record: EvtxRecord): boolean {
-  return record.originKind !== "log" && recordIdentityText(record) === null;
+  return record.originKind !== "log" && engineTimelineRecordIdentity(record) === null;
 }
 
 export type OriginResolution =
@@ -260,7 +296,7 @@ export function resolveOriginRecords(
   if (identity === null) return { kind: "noUsableIdentity" };
   return {
     kind: "matches",
-    records: recordsForIdentity(index, origin.eventId, identity).filter((record) =>
+    records: recordsForOriginIdentity(index, origin.eventId, identity).filter((record) =>
       fieldsAgree(origin, record),
     ),
   };
@@ -490,8 +526,8 @@ export function linkCountsByRecord(
     for (const record of options.records) {
       for (const origin of unknownLanes.values()) {
         if (
-          redactedValueMatches(origin.source, record.sourceLabel) &&
-          redactedValueMatches(origin.channel, record.channel)
+          timelineTextMatches(origin.source, record.sourceLabel) &&
+          timelineTextMatches(origin.channel, record.channel)
         ) {
           unknownRecords.add(record);
           break;

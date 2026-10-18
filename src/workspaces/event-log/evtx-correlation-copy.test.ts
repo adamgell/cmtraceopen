@@ -535,8 +535,9 @@ describe("chainCopyText", () => {
 /**
  * G2: no string may say an entry is not placed, has no timeline position or no timestamp unless the
  * scan finished and the id is on a complete unplaced list. Every string-producing export is run
- * over each way the proof can fail; the manifest below makes a new export fail this file until it
- * is classified, so a new string cannot slip past the audit.
+ * over each way the proof can fail. The manifest below makes a new export fail this file until it
+ * is named, by hand, as producing text or not; it does not show that a path inside an existing
+ * export is reached by the audit, or that a name is in the right set.
  */
 describe("no string claims an entry is unplaced without proof", () => {
   const STRING_EXPORTS = new Set([
@@ -629,7 +630,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "reconcileSelection",
   ]);
 
-  it("classifies every runtime export of both modules, so a new string is audited", () => {
+  it("names every runtime export of both modules in one of the two sets", () => {
     const exported = [...Object.keys(copyExports), ...Object.keys(viewModelExports)];
     const unclassified = exported.filter((name) => !STRING_EXPORTS.has(name) && !NOT_STRINGS.has(name));
     expect(unclassified).toEqual([]);
@@ -799,11 +800,13 @@ describe("no string claims an entry is unplaced without proof", () => {
   });
 
   it("calls every string-producing export, by name, in the helper", () => {
-    // The manifest proves each export is classified; this proves every one classified as producing
-    // text is really called by the audit, so an edit to one of them is audited too. The list is
-    // the manifest itself, so an export added to it and never called here fails. Only
-    // UNPLACED_ENTRY is left out: it is the one string that may say "not placed", and only with
-    // proof, so the audit cannot print it without defeating its own purpose.
+    // The manifest check shows each export is named in one of the two sets, not that it is named
+    // in the right one. This reads the helper's source as text and fails unless every export named
+    // as producing text is called (a function) or read (a constant) in it; a call in a branch that
+    // never runs would also pass. The list is the manifest itself, so an export added to it and
+    // never called here fails. Only UNPLACED_ENTRY is left out: it is the one string that may say
+    // "not placed", and only with proof, so the audit cannot print it without defeating its own
+    // purpose.
     const called = everyString.toString() + dockStrings.toString();
     const producers = [...STRING_EXPORTS].filter((name) => name !== "UNPLACED_ENTRY");
     expect(producers.length).toBeGreaterThan(20);

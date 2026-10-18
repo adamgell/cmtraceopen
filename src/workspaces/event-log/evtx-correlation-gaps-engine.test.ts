@@ -1,11 +1,12 @@
 /**
- * Drift guard: every coverage-gap source the engine can write is classified here (L1).
+ * Drift guard: every coverage-gap source this text scan finds in the engine is classified here
+ * (L1). The limits of the scan are listed below.
  *
  * `classifyCoverageGaps` files any source it does not know as a candidate ORIGIN ID. That is safe
  * for the links index (an unfound origin clears completeness) but not for the chain plot, which
  * has no origin lookup: a session-level source mistaken for an origin never withdraws "Not
- * linked". So a fixed source the engine adds must be classified as global or display before this
- * file passes, not discovered later.
+ * linked". So a fixed source the engine adds, in a place the scan reads, must be classified as
+ * global or display before this file passes, not discovered later.
  *
  * The engine's Rust sources are read as text (`?raw`, like evtx-correlation-store.test.ts does for
  * a TypeScript module) and scanned for the three ways a gap gets its `source`: a `*_SOURCE: &str`
