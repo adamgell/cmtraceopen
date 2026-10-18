@@ -42,7 +42,6 @@ import {
   DETAIL_CONTEXT_KINDS_LABEL,
   DETAIL_CONTEXT_TITLE,
   buildDetailContext,
-  directLinks,
   type DetailContextInput,
 } from "./evtx-detail-context-model";
 import {
@@ -340,9 +339,12 @@ describe("the link icon marks a DIRECT Exact or Candidate edge between the entry
   });
 
   it("has no icon for a transitive member of the event's chain, which has no direct edge to it", () => {
-    const model = linked([exactTo(21), synthetic("t", rid(21), rid(22))]);
+    // 22 and 23 sit behind the partner, 23 two edges away: an edge that does not touch the event marks neither end.
+    const model = linked([exactTo(21), synthetic("t", rid(21), rid(22)), synthetic("u", rid(22), rid(23))]);
+    expect(model.rows.map((row) => row.id)).toEqual(expect.arrayContaining([rid(21), rid(22), rid(23)]));
     expect(linkOf(model, 21)?.strength).toBe("exact");
     expect(linkOf(model, 22)).toBeNull();
+    expect(linkOf(model, 23)).toBeNull();
   });
 
   it("has no icon on the selected event's own row", () => {
@@ -383,23 +385,38 @@ describe("the link icon marks a DIRECT Exact or Candidate edge between the entry
     expect(model.notices).toContain(UPDATING_CORRELATION_TEXT);
   });
 
-  it("finds the partners of an origin in every row that holds it, the weaker label when two disagree", () => {
-    const edge = (right: string, strength: "exact" | "candidate" | "ambiguous", kind = "activityId") => ({
-      left: rid(20),
-      right,
-      strength,
-      keys: [{ kind: kind as "activityId", value: "k" }],
-    });
-    const rows = [
-      { edges: [edge(rid(21), "exact"), edge(rid(23), "ambiguous"), { ...edge(rid(24), "exact"), right: null }] },
-      { edges: [edge(rid(21), "candidate"), { ...edge(rid(22), "exact"), left: rid(22), right: rid(20) }] },
-    ];
-    const partners = directLinks(rows, rid(20));
-    expect([...partners.keys()].sort()).toEqual([rid(21), rid(22)].sort());
-    expect(partners.get(rid(21))?.strength).toBe("candidate");
-    expect(partners.get(rid(22))?.strength).toBe("exact");
-    expect(directLinks(rows, rid(30)).size).toBe(0);
-    expect(directLinks([], rid(20)).size).toBe(0);
+  it("marks the partner whichever end of the pair the event is", () => {
+    // The chain model orders a pair's endpoints, so the event is the right end for record 19.
+    const model = linked([synthetic("l", rid(19), rid(20)), synthetic("r", rid(20), rid(21))]);
+    expect(linkOf(model, 19)?.strength).toBe("exact");
+    expect(linkOf(model, 21)?.strength).toBe("exact");
+  });
+
+  it("reads one relation per pair, the weakest label: an exact and a candidate sighting of one pair are Candidate", () => {
+    // evtx-correlation-chains.ts reduces every observation of a pair to one relation (the weakest
+    // label), so a pair is in one row once, and the icon needs no merge of its own.
+    const model = linked([exactTo(21), synthetic("c21", rid(20), rid(21), "candidate")]);
+    expect(linkOf(model, 21)).toEqual({ strength: "candidate", name: "Candidate link to this event by ActivityId" });
+    const vetoed = linked([exactTo(21), synthetic("a21", rid(20), rid(21), "ambiguous")]);
+    expect(linkOf(vetoed, 21)).toBeNull();
+  });
+
+  it("keeps the link search private: only buildDetailContext reads the chain model's edges", () => {
+    const sources = import.meta.glob("./*.{ts,tsx}", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+    const exporting = Object.entries(sources)
+      .filter(([, text]) => /export\s+(?:async\s+)?function\s+directLinks\b|export\s*\{[^}]*\bdirectLinks\b/.test(text))
+      .map(([path]) => path);
+    expect(exporting).toEqual([]);
+    const importing = Object.entries(sources)
+      .filter(([path, text]) => !path.endsWith("evtx-detail-context-model.ts") && /\bdirectLinks\b/.test(text.replace(/\/\/.*$/gm, "")))
+      .map(([path]) => path);
+    expect(importing).toEqual([]);
+  });
+
+  it("marks nothing for an event that no row holds", () => {
+    const model = linked([synthetic("x", rid(30), rid(31))]);
+    expect(model.rows.every((row) => row.link === null)).toBe(true);
+    expect(model.legend).toBeNull();
   });
 });
 

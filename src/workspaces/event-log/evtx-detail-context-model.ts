@@ -176,10 +176,14 @@ function isLinkingStrength(strength: string): strength is "exact" | "candidate" 
 /**
  * The entries that share an Exact or Candidate edge with `originId`, in the rows that hold it. Only
  * a pair's own reduced edge counts: a member of the same chain with no edge to the origin is not a
- * partner, and an Ambiguous or Coverage blocked edge links nothing. When two rows disagree about a
- * pair the weaker label is kept, and a key kind they do not share is dropped.
+ * partner, and an Ambiguous or Coverage blocked edge links nothing.
+ *
+ * A partner is set once, with no merge of two readings of one pair, because the chain model reduces
+ * every observation of a pair to ONE relation before a row is built (evtx-correlation-chains.ts: the
+ * header, and reduceByPair). A pair therefore has one edge in every row that holds it, and the label
+ * a row gives it is already the weakest one seen.
  */
-export function directLinks(
+function directLinks(
   rows: readonly { edges: readonly CorrelationChain["edges"][number][] }[],
   originId: string,
 ): Map<string, DirectLink> {
@@ -191,16 +195,7 @@ export function directLinks(
       if (other === null || other === originId) continue;
       const labels = new Set(edge.keys.map((key) => keyKindLabel(key.kind)));
       const keyLabel = labels.size === 1 ? ([...labels][0] as string) : null;
-      const known = partners.get(other);
-      partners.set(
-        other,
-        known === undefined
-          ? { strength: edge.strength, keyLabel }
-          : {
-              strength: known.strength === "candidate" || edge.strength === "candidate" ? "candidate" : "exact",
-              keyLabel: known.keyLabel === keyLabel ? keyLabel : null,
-            },
-      );
+      partners.set(other, { strength: edge.strength, keyLabel });
     }
   }
   return partners;
