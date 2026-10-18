@@ -342,6 +342,51 @@
       "malformed": true,
       "originRecordIdText": null,
       "originRecordId": 9
+    },
+    {
+      "name": "outside-u64-with-unsafe-number",
+      "originKind": "event",
+      "text": "99999999999999999999",
+      "id": 9007199254740992,
+      "malformed": true,
+      "originRecordIdText": null,
+      "originRecordId": 0
+    },
+    {
+      "name": "padded-text-with-unsafe-number",
+      "originKind": "event",
+      "text": " 7",
+      "id": 9007199254740992,
+      "malformed": true,
+      "originRecordIdText": null,
+      "originRecordId": 0
+    },
+    {
+      "name": "non-digit-text-with-unsafe-number",
+      "originKind": "event",
+      "text": "abc",
+      "id": 9007199254740992,
+      "malformed": true,
+      "originRecordIdText": null,
+      "originRecordId": 0
+    },
+    {
+      "name": "empty-text-with-unsafe-number",
+      "originKind": "event",
+      "text": "",
+      "id": 9007199254740992,
+      "malformed": true,
+      "originRecordIdText": null,
+      "originRecordId": 0
+    },
+    {
+      "name": "conflicting-text-with-unsafe-number",
+      "originKind": "event",
+      "text": "5",
+      "id": 9007199254740992,
+      "malformed": false,
+      "originRecordIdText": "5",
+      "originRecordId": 9007199254740992
     }
   ]
 }

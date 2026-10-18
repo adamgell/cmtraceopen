@@ -2787,7 +2787,7 @@ mod tests {
 
         let vectors = engine_compaction_vectors();
         let cases = vectors["identities"].as_array().expect("identity cases");
-        assert!(cases.len() >= 18, "the vectors lost cases");
+        assert!(cases.len() >= 23, "the vectors lost cases");
         for case in cases {
             let name = case["name"].as_str().expect("case name");
             let mut source = record(1, 1_000, "m");
