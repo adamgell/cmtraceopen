@@ -328,6 +328,26 @@ describe("the selected chain's header and plot", () => {
     expect(document.querySelectorAll("line[data-connector]")).toHaveLength(1);
   });
 
+  it("lets the detail column scroll instead of squeezing the lane plot: its rows are max-content (Z1)", () => {
+    // jsdom does no layout, so this pins the style; e2e/screenshots/event-logs.spec.ts measures the
+    // plot in a browser at a window shorter than the column. A scroll container is a grid item whose
+    // automatic minimum size is 0, so any row of the column that holds one must not be an `auto` row.
+    show(pairData());
+    const column = screen.getByTestId("correlation-detail");
+    const plot = screen.getByTestId("lane-plot");
+    expect(plot.parentElement).toBe(column);
+    expect(column.style.display).toBe("grid");
+    expect(column.style.overflowY).toBe("auto");
+    expect(column.style.gridAutoRows).toBe("max-content");
+    expect(plot.style.overflowY).toBe("auto");
+    expect(plot.style.maxHeight).toBe("240px");
+    // And the rule behind it, for whatever else is put in the column later.
+    const scrollItems = Array.from(column.children).filter(
+      (child) => !["", "visible"].includes((child as HTMLElement).style.overflowY),
+    );
+    expect(scrollItems).toContain(plot);
+  });
+
   it("gives an ambiguous row markers and no connector, headed as not a link", () => {
     const data = mixedData();
     const ambiguous = data.model!.chains.findIndex((chain) => chain.strength === "ambiguous");

@@ -284,6 +284,28 @@ function CardHeading({ children, palette }: { children: string; palette: Palette
   );
 }
 
+/**
+ * The detail column scrolls, and its rows are `max-content`, not `auto`. The lane plot is a scroll
+ * container (a `maxHeight` and `overflowY: auto`), and a scroll container's automatic minimum size
+ * is 0: as an `auto` row it is squeezed to a sliver when the column is taller than the window,
+ * instead of the column scrolling. Whatever sits above or inside the column can make it taller (a
+ * long Sequence, a large log font, a short window, the histogram above the views). A `max-content`
+ * row is as tall as the item's own content up to the item's cap, so the plot keeps its height and
+ * the column scrolls. When the column fits, `max-content` and `auto` rows measure the same
+ * (`alignContent: start` stretches neither), so nothing else moves. A min-height on the plot
+ * could not say "its content height, up to the cap" in CSS; this does, for every row at once.
+ */
+const DETAIL_COLUMN_STYLE = {
+  flex: 1,
+  minWidth: 0,
+  overflowY: "auto",
+  padding: "10px 14px",
+  display: "grid",
+  gridAutoRows: "max-content",
+  gap: "10px",
+  alignContent: "start",
+} as const;
+
 const cardStyle = {
   flex: "1 1 300px",
   minWidth: 0,
@@ -696,7 +718,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
         )}
       </div>
 
-      <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "10px 14px", display: "grid", gap: "10px", alignContent: "start" }}>
+      <div data-testid="correlation-detail" style={DETAIL_COLUMN_STYLE}>
         {(data.updating || reading) && (
           // Not a live region: the scan reports a page at a time, which would queue an announcement
           // per page. The announcer says "Updating" once, throttled.

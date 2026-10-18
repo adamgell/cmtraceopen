@@ -424,6 +424,42 @@ test.describe("event-logs screenshots", () => {
       animations: "disabled",
     });
 
+    // The detail column scrolls when it is taller than the window, and the lane plot must keep its
+    // height (up to its own cap) while it does. A scroll container's automatic minimum size is 0,
+    // so a plot that is an auto row of that column collapses to a sliver instead of the column
+    // scrolling; jsdom does no layout, so only a browser shows it. The shorter window makes the
+    // column overflow whatever sits above or inside it. The cap is read from the figure itself.
+    const tallWindow = page.viewportSize();
+    expect(tallWindow).not.toBeNull();
+    await page.setViewportSize({ width: 1440, height: 560 });
+    await expect(async () => {
+      const layout = await plot.evaluate((figure) => {
+        const style = getComputedStyle(figure);
+        const borders = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+        const frame = figure.getBoundingClientRect();
+        const marker = figure.querySelector("button[data-marker]")?.getBoundingClientRect();
+        return {
+          cap: parseFloat(style.maxHeight),
+          borders,
+          clientHeight: figure.clientHeight,
+          scrollHeight: figure.scrollHeight,
+          frameTop: frame.top,
+          frameBottom: frame.bottom,
+          markerTop: marker?.top ?? Number.NaN,
+          markerBottom: marker?.bottom ?? Number.NaN,
+        };
+      });
+      expect(layout.cap).toBeGreaterThan(0);
+      // The plot shows its whole content, or the cap when the content is taller.
+      expect(layout.clientHeight).toBeGreaterThanOrEqual(
+        Math.min(layout.scrollHeight, layout.cap - layout.borders) - 1,
+      );
+      // And the first marker lies inside the box it is drawn in, not past a collapsed edge.
+      expect(layout.markerTop).toBeGreaterThanOrEqual(layout.frameTop - 0.5);
+      expect(layout.markerBottom).toBeLessThanOrEqual(layout.frameBottom + 0.5);
+    }).toPass({ timeout: 5_000 });
+    await page.setViewportSize(tallWindow as { width: number; height: number });
+
     // An Ambiguous group labels no link between its entries, so its plot draws no connector.
     // Wait for the group's three markers first: until they are drawn, zero connectors would only
     // mean the plot had not been replaced yet.
