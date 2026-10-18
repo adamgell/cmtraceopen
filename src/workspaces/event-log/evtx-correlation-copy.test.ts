@@ -1491,8 +1491,17 @@ describe("the words the Correlation view and the Chains tab share (#841)", () =>
     });
   });
 
-  it("are not spelled out again by the Correlation view, which says them from this module", () => {
-    for (const phrase of [
+  describe("are said by this module alone", () => {
+    /** Every source of the workspace that is not a test, a test helper or a fixture. */
+    const workspaceSources = Object.fromEntries(
+      Object.entries(
+        import.meta.glob("./**/*.{ts,tsx}", { query: "?raw", import: "default", eager: true }) as Record<string, string>,
+      )
+        .filter(([path]) => !/\.test\.tsx?$|-test-helpers\.|-test-fixtures\.|\/__fixtures__\//.test(path))
+        .map(([path, source]) => [path.replace(/^\.\//, ""), source]),
+    );
+
+    const PHRASES = [
       "No event analysis is available",
       "Reading correlation edges",
       "could not be built",
@@ -1505,9 +1514,47 @@ describe("the words the Correlation view and the Chains tab share (#841)", () =>
       "No chains were found",
       "Reading the timeline",
       "timeline items...",
-    ]) {
-      expect(viewSource, phrase).not.toContain(phrase);
-    }
+    ];
+
+    /** A file that holds a phrase for a reason of its own: a different sentence, or a comment. */
+    const ALLOWED: Record<string, Record<string, string>> = {
+      "EventLogWorkspace.tsx": {
+        "could not be built": "the diagnosis and unified-timeline failures, which are other sentences than the correlation one",
+      },
+      "EventDiagnosisPanel.tsx": {
+        "could not be built": '"Diagnosis could not be built.", the diagnosis panel\'s own failure',
+      },
+      "evtx-correlation-view-model.ts": {
+        "their order is not established": "a doc comment on SequenceEntry.sameTimeAsPrevious, not a sentence anything says",
+      },
+    };
+
+    it("is read from every source of the workspace, including the view and this module", () => {
+      expect(Object.keys(workspaceSources).length).toBeGreaterThan(50);
+      expect(workspaceSources["EvtxCorrelationView.tsx"]).toBeDefined();
+      expect(workspaceSources["evtx-correlation-copy.ts"]).toContain("Reading correlation edges");
+    });
+
+    it("is spelled by no other source of the workspace than this module, the allow-list apart", () => {
+      const spelled = Object.entries(workspaceSources)
+        .filter(([file]) => file !== "evtx-correlation-copy.ts")
+        .flatMap(([file, source]) =>
+          PHRASES.filter((phrase) => source.includes(phrase) && ALLOWED[file]?.[phrase] === undefined).map(
+            (phrase) => `${file}: ${phrase}`,
+          ),
+        );
+      expect(spelled).toEqual([]);
+    });
+
+    it("keeps its allow-list live: every entry still holds its phrase", () => {
+      for (const [file, phrases] of Object.entries(ALLOWED)) {
+        for (const phrase of Object.keys(phrases)) expect(workspaceSources[file], `${file}: ${phrase}`).toContain(phrase);
+      }
+    });
+
+    it("says the same-time sentence once, in this module, for the Sequence line and the copied text alike", () => {
+      expect(workspaceSources["evtx-correlation-copy.ts"]!.split("their order is not established")).toHaveLength(2);
+    });
   });
 });
 

@@ -202,8 +202,11 @@ export const WAIT_FOR_ENTRIES_REASON = "Wait for the entries of this chain to be
 /** Said once above a list of entries in time order: a sequence is not a cause. */
 export const SEQUENCE_ORDER_NOTE = "Ordered by recorded time. Order is not evidence of cause.";
 
-/** Said beside an entry whose timestamp equals the entry above it: time does not order the two. */
-export const SAME_TIME_NOTE = "(same timestamp as the entry above; their order is not established)";
+/** The sentence said of an entry whose timestamp equals the entry above it: time does not order the two. */
+const SAME_TIME_SENTENCE = "same timestamp as the entry above; their order is not established";
+
+/** `SAME_TIME_SENTENCE` as the note beside an entry in a list. */
+export const SAME_TIME_NOTE = `(${SAME_TIME_SENTENCE})`;
 
 /** A failure that is not a load result: the model could not be built, or could not be updated. */
 export function correlationFailureText(error: string, phase: "built" | "updated"): string {
@@ -422,7 +425,7 @@ export function chainCopyText(input: ChainCopyInput): string {
       `  ${entry.index + 1}. ${when}  ${entry.level}  ${entry.entry}  [${entry.laneLabel}]  ${indented(entry.message)}`,
     );
     if (entry.sameTimeAsPrevious) {
-      lines.push("      same timestamp as the entry above; their order is not established");
+      lines.push(`      ${SAME_TIME_SENTENCE}`);
     }
   }
   for (const [heading, ids] of [
