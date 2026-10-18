@@ -465,25 +465,21 @@ export function checkFilesCoverage(
     };
   }
   // Every capture that fails is collected, whatever its reason, so the refusal names all that stand
-  // in the way and its advice is judged against all of them. The first to fail gives the reason code.
-  let reason: "noTimedRecords" | "priorPeriodNotSpanned" | null = null;
+  // in the way and its advice is judged against all of them.
   const unspanned: FilesCapture[] = [];
   const untimed: FilesCapture[] = [];
   for (const capture of captures.values()) {
-    const failure =
-      capture.earliestMs === Number.POSITIVE_INFINITY
-        ? "noTimedRecords"
-        : capture.earliestMs > prior.fromMs || capture.latestMs < prior.toMs
-          ? "priorPeriodNotSpanned"
-          : null;
-    if (failure === null) continue;
-    reason ??= failure;
-    (failure === "noTimedRecords" ? untimed : unspanned).push(capture);
+    if (capture.earliestMs === Number.POSITIVE_INFINITY) untimed.push(capture);
+    else if (capture.earliestMs > prior.fromMs || capture.latestMs < prior.toMs) {
+      unspanned.push(capture);
+    }
   }
-  if (reason !== null) {
+  if (unspanned.length > 0 || untimed.length > 0) {
     return {
       covered: false,
-      reason,
+      // The code follows the lead sentence: any capture that does not span the period opens the
+      // refusal with the spec's sentence, so it does not depend on the order the records came in.
+      reason: unspanned.length > 0 ? "priorPeriodNotSpanned" : "noTimedRecords",
       detail: refusalDetail(unspanned, untimed, [...captures.values()]),
     };
   }
@@ -504,9 +500,19 @@ function entryNoun(capture: Pick<FilesCapture, "holdsEvents">, number: "one" | "
 /** The most captures, or channels, one refusal names; the rest are counted. */
 const MAX_NAMED_CAPTURES = 5;
 
+/** Character-code order, the same in every locale, so what a refusal names never depends on one. */
+function byCharacterCode(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * The names a refusal shows, sorted so the order the records came in cannot change them (nor which
+ * five appear under the cap), at most `MAX_NAMED_CAPTURES` of them, then the rest counted.
+ */
 function nameUpToTheCap(names: readonly string[]): string {
-  const rest = names.length - MAX_NAMED_CAPTURES;
-  const shown = names.slice(0, MAX_NAMED_CAPTURES).join(", ");
+  const sorted = [...names].sort(byCharacterCode);
+  const rest = sorted.length - MAX_NAMED_CAPTURES;
+  const shown = sorted.slice(0, MAX_NAMED_CAPTURES).join(", ");
   return rest > 0 ? `${shown}, and ${rest} more` : shown;
 }
 
@@ -532,8 +538,9 @@ function unspannedSentence(unspanned: readonly FilesCapture[]): string {
  * period. The one action that exists is deselecting a channel (a selection is by channel, so a
  * channel's other sources go with it). It is promised as "to compare the other channels" only when,
  * with every failing capture's channel deselected, a selected channel remains, and every capture of
- * such a channel passes. When none remains it says that no channel can be compared, in words that
- * hold whichever reasons the captures failed for.
+ * such a channel passes. When none remains it says only that no selected channel has entries that
+ * can be compared: true of a channel whose captures fail, and of a selected channel that has no
+ * entries at all, and the sentences before it already say why each capture fails.
  */
 function refusalDetail(
   unspanned: readonly FilesCapture[],
@@ -548,17 +555,11 @@ function refusalDetail(
   // A channel with any failing capture is leaving, so a channel that remains has only passing ones.
   const leaving = [...new Set([...unspanned, ...untimed].map((capture) => capture.channel))];
   const remaining = all.some((capture) => !leaving.includes(capture.channel));
-  if (remaining) {
-    sentences.push(`Deselect ${nameUpToTheCap(leaving)} to compare the other channels.`);
-  } else {
-    const why =
-      untimed.length === 0
-        ? "does not cover the previous period"
-        : unspanned.length === 0
-          ? "cannot show whether it covers the previous period"
-          : "does not cover the previous period or cannot show whether it does";
-    sentences.push(`No selected channel can be compared: every one has a capture that ${why}.`);
-  }
+  sentences.push(
+    remaining
+      ? `Deselect ${nameUpToTheCap(leaving)} to compare the other channels.`
+      : "No selected channel has entries that can be compared."
+  );
   return sentences.join(" ");
 }
 
