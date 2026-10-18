@@ -403,6 +403,37 @@ describe("comparison deltas (spec 8.10, D15)", () => {
     expect(errorsOf(data).sublabel).toBe("\u25b2 2\u00d7 vs prior 24 h");
   });
 
+  it("marks a sublabel as comparative exactly when it is a delta, so the view can colour it for contrast", () => {
+    const without = buildEvtxChartData(input([record({ level: "Error" })]));
+    expect(without.kpis.map((k) => k.comparative)).toEqual([false, false, false, false, false, false]);
+    const withComparison = buildEvtxChartData(
+      input([record({ level: "Error" })], {
+        comparison: {
+          window: "24h",
+          current: { errors: 4, distinctIds: ids("a") },
+          prior: { errors: 2, distinctIds: ids() },
+        },
+      }),
+    );
+    expect(withComparison.kpis.filter((k) => k.comparative).map((k) => k.id)).toEqual([
+      "errors",
+      "distinctIds",
+    ]);
+    // Never a flag without the text it describes, and the counts form is comparative too.
+    for (const k of withComparison.kpis) if (k.comparative) expect(k.sublabel).not.toBeNull();
+    const counts = buildEvtxChartData(
+      input([record({ level: "Error" })], {
+        comparison: {
+          window: "24h",
+          current: { errors: 4, distinctIds: ids("a") },
+          prior: { errors: 0, distinctIds: ids("a") },
+        },
+      }),
+    );
+    expect(kpi(counts, "errors").trend).toBeNull();
+    expect(kpi(counts, "errors").comparative).toBe(true);
+  });
+
   it("changes no other tile", () => {
     const records = [record({ level: "Warning" }), record({ level: "Critical", eventId: 41 })];
     const without = buildEvtxChartData(input(records));

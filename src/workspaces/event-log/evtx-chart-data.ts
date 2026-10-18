@@ -130,6 +130,8 @@ export interface EvtxChartKpi {
    * counts included: an arrow only ever sits beside a ratio that says which way it moved.
    */
   trend: "up" | "down" | null;
+  /** True exactly when the sublabel is a comparison delta, so the view can colour it for contrast. */
+  comparative: boolean;
 }
 
 export interface EvtxChartChannelBar {
@@ -609,6 +611,7 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
               "text logs",
             )}`,
       trend: null,
+      comparative: false,
     },
     {
       id: "errors",
@@ -616,6 +619,7 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
       value: byLevel.Error,
       sublabel: errorsSublabel?.sublabel ?? null,
       trend: errorsSublabel?.trend ?? null,
+      comparative: errorsSublabel !== null,
     },
     {
       id: "warnings",
@@ -623,6 +627,7 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
       value: byLevel.Warning,
       sublabel: warningSublabel,
       trend: null,
+      comparative: false,
     },
     {
       id: "critical",
@@ -630,6 +635,7 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
       value: byLevel.Critical,
       sublabel: topCritical ? `${topCritical.provider} ${topCritical.eventId}` : null,
       trend: null,
+      comparative: false,
     },
     {
       id: "distinctIds",
@@ -639,6 +645,7 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
         ? `${count(newIdCount(comparison.current.distinctIds, comparison.prior.distinctIds))} new vs prior ${windowLabel}`
         : null,
       trend: null,
+      comparative: comparison !== null && comparison !== undefined,
     },
     {
       id: "chains",
@@ -646,6 +653,7 @@ export function buildEvtxChartData(input: EvtxChartInput): EvtxChartData {
       value: chainCount,
       sublabel: chainsSublabel,
       trend: null,
+      comparative: false,
     },
   ];
 
