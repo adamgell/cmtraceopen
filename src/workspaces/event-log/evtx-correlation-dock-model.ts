@@ -100,7 +100,7 @@ export type DockCounts = Pick<
   "model" | "builtFor" | "linkPartners" | "gaps" | "scope" | "unplacedList" | "updating"
 >;
 
-export interface DockModelInput {
+interface DockModelInput {
   /** The selected record, or null for none. */
   record: EvtxRecord | null;
   /** What was read around the record, or null before any read. */

@@ -24,7 +24,6 @@ import {
   dockCenterMs,
   dockMarkerName,
   resolveMarkerClick,
-  type DockModelInput,
   type DockReady,
 } from "./evtx-correlation-dock-model";
 import vectorDocument from "./__fixtures__/engine-compaction-vectors.json";
@@ -51,6 +50,9 @@ import type { EvtxRecord } from "./types";
 import type { TimelineCorrelationEdge, TimelineItem } from "./unified-timeline";
 import { timelineOriginId } from "./unified-timeline";
 import { buildEvidenceIndex } from "./evtx-insights-data";
+
+/** What `buildDockModel` is given. */
+type DockModelInput = Parameters<typeof buildDockModel>[0];
 
 const HALF = 75_000;
 const SESSION_KEY = "session:1";
