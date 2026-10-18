@@ -41,7 +41,6 @@ import {
 } from "./evtx-correlation-copy";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import {
-  EVTX_PANELS_AVAILABLE,
   evtxPanelToggleId,
   evtxViewTabId,
   sanitizeLayout,
@@ -173,7 +172,6 @@ const idle = () =>
     await new Promise((resolve) => setTimeout(resolve, 40));
   });
 
-let originalDockAvailability: boolean;
 beforeEach(() => {
   modelBuilds.mockClear();
   localStorage.clear();
@@ -185,13 +183,9 @@ beforeEach(() => {
     activeView: "table",
     panels: { channels: true, insights: true, dock: true },
   });
-  // The dock is unavailable until the enable commit; Close needs the panel to be settable.
-  originalDockAvailability = EVTX_PANELS_AVAILABLE.dock;
-  EVTX_PANELS_AVAILABLE.dock = true;
   seedRecords(allRecords(), 1);
 });
 afterEach(() => {
-  EVTX_PANELS_AVAILABLE.dock = originalDockAvailability;
   cleanup();
   vi.useRealTimers();
 });

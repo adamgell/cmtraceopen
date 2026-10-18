@@ -77,7 +77,7 @@ import {
   fixtureEdges,
   recordFor,
 } from "./evtx-correlation-test-fixtures";
-import { EVTX_PANELS_AVAILABLE, evtxViewTabId, sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
+import { evtxViewTabId, sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { useEvtxStore } from "./evtx-store";
 import { deferred } from "../../test-utils/deferred";
@@ -434,11 +434,9 @@ describe("the Correlation view in the workspace", () => {
 
 /**
  * The correlation dock in the workspace (spec 8.12, #842): mounted only while it is shown, given the
- * workspace's own session, reading nothing while hidden or collapsed, and sized by its slot. The dock
- * is unavailable until the enable commit, so these tests make the panel available for their duration.
+ * workspace's own session, reading nothing while hidden or collapsed, and sized by its slot.
  */
 describe("the correlation dock in the workspace", () => {
-  let originalDockAvailability: boolean;
   const showDock = (on: boolean) =>
     act(() => useEvtxLayoutStore.setState({ panels: { channels: true, insights: true, dock: on } }));
   const region = () => document.querySelector<HTMLElement>('[data-evtx-region="dock"]')!;
@@ -449,13 +447,10 @@ describe("the correlation dock in the workspace", () => {
   const selectRecord = (id: number | null) => act(() => useEvtxStore.getState().setSelectedRecordId(id));
 
   beforeEach(() => {
-    originalDockAvailability = EVTX_PANELS_AVAILABLE.dock;
-    EVTX_PANELS_AVAILABLE.dock = true;
     useEvtxLayoutStore.setState({ ...sanitizeLayout(undefined), activeView: "table", dockCollapsed: false });
     useEvtxStore.setState({ selectedRecordId: 1 });
   });
   afterEach(() => {
-    EVTX_PANELS_AVAILABLE.dock = originalDockAvailability;
     useEvtxLayoutStore.setState({ ...sanitizeLayout(undefined), dockCollapsed: false });
   });
 
