@@ -81,6 +81,7 @@ const TALLY = {
   errors: 6,
   distinctIds: new Set([eventIdentityKey("A", 1), eventIdentityKey("C", 3)]),
   tailExcluded: 0,
+  unplacedRecords: 0,
 };
 
 function input(overrides: Partial<ComparisonPresentationInput> = {}): ComparisonPresentationInput {
@@ -242,6 +243,46 @@ describe("complete and current", () => {
   });
 });
 
+describe("withheld, when the current period has entries that could not be placed", () => {
+  const withheld = (unplacedRecords: number, tailExcluded = 0) =>
+    buildComparisonPresentation(
+      input({
+        state: settledState(filesOutcome()),
+        countCurrent: () => ({ ...TALLY, unplacedRecords, tailExcluded }),
+      }),
+    );
+
+  it("shows no delta, and says in one true sentence why: the entries could not be placed", () => {
+    const view = withheld(3);
+    expect(view).toMatchObject({
+      phase: "withheld",
+      label: PRIOR_LABEL,
+      deltas: null,
+      action: null,
+      canClear: true,
+      status:
+        "3 loaded entries have no usable timestamp or level and could not be placed in the current period, so no change is shown.",
+    });
+  });
+
+  it("says entry and has for one", () => {
+    expect(withheld(1).status).toBe(
+      "1 loaded entry has no usable timestamp or level and could not be placed in the current period, so no change is shown.",
+    );
+  });
+
+  it("keeps the comparison's notes and the tail events left out beside the reason", () => {
+    const view = withheld(2, 4);
+    expect(view.notes).toContain("Left out of the current period: 4 events appended by the live tail.");
+  });
+
+  it("is not triggered by an unplaced count of zero, which leaves the delta", () => {
+    const view = withheld(0);
+    expect(view.phase).toBe("complete");
+    expect(view.deltas).not.toBeNull();
+  });
+});
+
 describe("partial", () => {
   function partial(): ComparisonOutcome {
     // An event with no usable timestamp may belong to either period, so the counts are not whole.
@@ -396,6 +437,10 @@ describe("every state", () => {
       },
     ],
     ["complete", { state: settledState(complete) }],
+    [
+      "withheld",
+      { state: settledState(complete), countCurrent: () => ({ ...TALLY, unplacedRecords: 2 }) },
+    ],
     ["partial", { state: settledState(partial) }],
     ["unavailable", { state: settledState({ status: "unavailable", reason: "queryFailed", detail: "System: the query failed" }) }],
     ["stale", { state: settledState(complete), snapshotEpoch: ANCHOR + 5 * HOUR }],
@@ -432,6 +477,7 @@ describe("every state", () => {
     expect(offered).toEqual([
       "running",
       "complete",
+      "withheld",
       "partial",
       "unavailable",
       "stale",

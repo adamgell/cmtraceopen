@@ -39,6 +39,11 @@ export interface CurrentPeriodFigures {
   distinctIds: ReadonlySet<string>;
   /** Tail events the count set aside, from the same rows as the other figures. */
   tailExcluded: number;
+  /**
+   * Visible entries with no usable timestamp or level, which the count placed nowhere. They may
+   * belong to the current period, so the figures above may be low and no delta is formed from them.
+   */
+  unplacedRecords: number;
 }
 
 export interface ComparisonPresentationInput {
@@ -63,7 +68,7 @@ export interface ComparisonAction {
 }
 
 export interface ComparisonPresentation {
-  phase: "off" | "running" | "complete" | "partial" | "unavailable" | "stale";
+  phase: "off" | "running" | "complete" | "withheld" | "partial" | "unavailable" | "stale";
   /** "Comparing with {start} to {end} ({zone})": the previous period, while one is running or on show. */
   label: string | null;
   status: string | null;
@@ -173,6 +178,18 @@ function onShow(
     notes.push(
       `Left out of the current period: ${plural(current.tailExcluded, "event", "events")} appended by the live tail.`,
     );
+  }
+  if (current.unplacedRecords > 0) {
+    // A count that left entries out may be low, and "unknown is never zero": no delta, and the
+    // reason in one sentence that says only what the tally knows.
+    return {
+      ...NOTHING,
+      phase: "withheld",
+      label,
+      status: `${plural(current.unplacedRecords, "loaded entry has", "loaded entries have")} no usable timestamp or level and could not be placed in the current period, so no change is shown.`,
+      notes,
+      canClear: true,
+    };
   }
   return {
     ...NOTHING,
