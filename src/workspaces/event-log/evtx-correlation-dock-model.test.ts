@@ -20,10 +20,6 @@ import {
   unmatchableNote,
 } from "./evtx-correlation-copy";
 import {
-  DOCK_MAX_LANES,
-  DOCK_NEARBY_LINE_CAP,
-  DOCK_NEARBY_MARKER_CAP,
-  DOCK_STEP_CAP,
   buildDockModel,
   dockCenterMs,
   dockMarkerName,
@@ -716,7 +712,6 @@ describe("the row of the selected event", () => {
     const edges = [1, 2, 3, 4, 5, 6].slice(1).map((n) => synthetic(`e${n}`, rid(1), rid(n + 0)));
     const items = [1, 2, 3, 4, 5, 6].map((n) => eventItem(n, record.timestampEpoch + (6 - n) * 1_000));
     const model = ready({ record, window: windowAround(record, items), counts: counts(edges), unreadSources: false });
-    expect(DOCK_STEP_CAP).toBe(4);
     expect(model.steps).toHaveLength(4);
     expect(model.steps.map((step) => step.timestampMs)).toEqual([...model.steps.map((s) => s.timestampMs)].sort((a, b) => a - b));
     expect(model.moreSteps).toBe(2);
@@ -983,7 +978,6 @@ describe("context: the other entries of the window, by time and no more", () => 
   it("names the nearest entries first, four at most, and counts the rest", () => {
     const context = [9, 10, 11, 12, 13, 14].map((n, i) => eventItem(n, t + 10_000 + i * 1_000));
     const model = build(context);
-    expect(DOCK_NEARBY_LINE_CAP).toBe(4);
     expect(model.nearby.map((entry) => entry.id)).toEqual([rid(9), rid(10), rid(11), rid(12)]);
     expect(model.nearby.map((entry) => entry.deltaMs)).toEqual([10_000, 11_000, 12_000, 13_000]);
     expect(model.moreNearby).toBe(2);
@@ -1001,7 +995,6 @@ describe("context: the other entries of the window, by time and no more", () => 
       return eventItem(100 + i, t + side * (10_000 + i * 100));
     });
     const model = build(context);
-    expect(DOCK_NEARBY_MARKER_CAP).toBe(60);
     expect(model.plot.nearby).toHaveLength(60);
     const drawn = new Set(model.plot.nearby.map((marker) => marker.id));
     const distance = (item: TimelineItem) => Math.abs(item.timestampMs - t);
@@ -1056,7 +1049,6 @@ describe("the lanes: five at most, the event's first", () => {
       counts: counts(fixtureEdges("exactPair")),
       unreadSources: false,
     });
-    expect(DOCK_MAX_LANES).toBe(5);
     const labels = model.plot.lanes.map((lane) => lane.label);
     expect(labels).toHaveLength(5);
     expect(labels).toContain("Zulu");

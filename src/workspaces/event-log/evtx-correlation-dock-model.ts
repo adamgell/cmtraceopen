@@ -86,13 +86,13 @@ import type { CorrelationCounts } from "./useEvtxCorrelation";
 import { timelineOriginId, type TimelineItem, type TimelineOrigin } from "./unified-timeline";
 
 /** Spec 8.12: up to five lanes. */
-export const DOCK_MAX_LANES = 5;
+const DOCK_MAX_LANES = 5;
 /** Context markers drawn at most, nearest the selected event first. */
-export const DOCK_NEARBY_MARKER_CAP = 60;
+const DOCK_NEARBY_MARKER_CAP = 60;
 /** Spec 8.12: the chain's members as steps, up to four. */
-export const DOCK_STEP_CAP = 4;
+const DOCK_STEP_CAP = 4;
 /** Entries named on the "Also nearby" line. */
-export const DOCK_NEARBY_LINE_CAP = 4;
+const DOCK_NEARBY_LINE_CAP = 4;
 
 /** The part of the counts-only model the dock reads: one session's rows, partners, gaps and scope. */
 export type DockCounts = Pick<
@@ -111,7 +111,7 @@ export interface DockModelInput {
   unreadSources: boolean;
 }
 
-export interface DockStep {
+interface DockStep {
   id: string;
   timestampMs: number;
   /** The event ID, or the log file and line. */
@@ -119,7 +119,7 @@ export interface DockStep {
   message: string;
 }
 
-export interface DockNearbyEntry {
+interface DockNearbyEntry {
   id: string;
   /** "{eventId} · {channel}" or "{file} · line {n}". */
   entry: string;
@@ -128,7 +128,7 @@ export interface DockNearbyEntry {
   reason: NearbyReason;
 }
 
-export interface DockRow {
+interface DockRow {
   id: string;
   strength: CorrelationChain["strength"];
   title: string;
@@ -159,7 +159,7 @@ export interface DockRow {
  * - `notRead`: none does in what was read, and the read stopped early: the event may be in the part
  *   that was not read, so nothing is said about whether it is in the timeline.
  */
-export type DockSelected =
+type DockSelected =
   | { status: "found"; originId: string }
   | { status: "ambiguous"; candidates: number }
   | { status: "unmatchable" }
@@ -176,7 +176,7 @@ export type MarkerSelectability =
   | "noIdentity";
 
 /** What the dock knows about one drawn marker, for its accessible name. */
-export interface MarkerFacts {
+interface MarkerFacts {
   role: "selected" | "member" | "nearby";
   /** The words after "time only", for a nearby marker. */
   reason: NearbyReason | null;
@@ -616,7 +616,7 @@ function selectabilityPhrase(selectability: MarkerSelectability): string {
 }
 
 /** What activating a marker found: the one record to select, or why there is none. */
-export type MarkerClick =
+type MarkerClick =
   | { kind: "select"; recordId: number }
   | { kind: "nothing"; selectability: Exclude<MarkerSelectability, "event" | "selected"> };
 

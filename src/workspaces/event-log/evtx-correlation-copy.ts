@@ -369,7 +369,7 @@ export function sourcesText(sourceCount: number, complete: boolean): string {
   return `${complete ? "" : "at least "}${count(sourceCount)} ${noun}`;
 }
 
-export interface DockSubtitleInput {
+interface DockSubtitleInput {
   eventId: number;
   /** The event's time, formatted by the caller in the operator's time zone. */
   timeText: string;
@@ -440,7 +440,7 @@ export function windowNotice(
   return `Showing ${count(window.items.length)} of ${count(window.windowItems)} entries within ${windowWidthLabel(window.halfWidthMs)}; reading stopped at ${why}, so entries and sources may be missing.`;
 }
 
-export interface EmptyWindowInput {
+interface EmptyWindowInput {
   halfWidthMs: number;
   /** The session was built from fewer events than are loaded, or from a scope that is not known. */
   narrowed: boolean;
