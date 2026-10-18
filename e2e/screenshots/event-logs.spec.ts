@@ -706,74 +706,147 @@ test.describe("event-logs screenshots", () => {
       Math.abs((markerBox?.x ?? 0) + (markerBox?.width ?? 0) / 2 - ((ruleBox?.x ?? 0) + (ruleBox?.width ?? 0) / 2)),
     ).toBeLessThanOrEqual(1);
 
-    // Z1 and Z2 (jsdom does no layout, so only a browser shows them): with the dock open, the lane
-    // plot keeps the height of its content and every marker lies in its frame, the dock lies inside
-    // the main region, and the Table grid keeps at least one row. Measured at the capture's own
-    // window height and at a shorter one.
+    // Z1 and Z2 (jsdom does no layout, so only a browser shows them), ruled in #842: the Table grid
+    // keeps a floor of five rows in every layout, with the dock open and closed. The dock is the
+    // panel that gives way: it is drawn at the height the user chose while the window has room for
+    // it and the Table's floor, then clamps down to its header and one lane, and past that the
+    // main column scrolls. Nothing collapses to 0. The chosen height itself is never rewritten.
     const measureLayout = () =>
       page.evaluate(async () => {
         const { getLogListMetrics } = await import("/src/lib/log-accessibility.ts");
         const { useUiStore } = await import("/src/stores/ui-store.ts");
+        const { useEvtxLayoutStore } = await import("/src/workspaces/event-log/evtx-layout-store.ts");
         const rowPx = getLogListMetrics(useUiStore.getState().logListFontSize).rowHeight + 2;
-        const box = (selector: string) => {
-          const element = document.querySelector<HTMLElement>(selector);
+        const find = (selector: string) => document.querySelector<HTMLElement>(selector);
+        const need = (selector: string) => {
+          const element = find(selector);
           if (!element) throw new Error(`${selector} is missing`);
           return element;
         };
-        const main = box('[data-evtx-region="main"]').getBoundingClientRect();
-        const dockSlot = box('[data-evtx-region="dock"]').getBoundingClientRect();
-        const figure = box('[data-testid="lane-plot"]');
-        const frame = figure.getBoundingClientRect();
-        const markers = [...figure.querySelectorAll("button[data-marker]")].map((marker) =>
-          marker.getBoundingClientRect(),
-        );
-        return {
+        const main = need('[data-evtx-region="main"]');
+        const layout = {
           rowPx,
-          gridClient: box('[role="grid"]').clientHeight,
-          mainTop: main.top,
-          mainBottom: main.bottom,
-          slotTop: dockSlot.top,
-          slotBottom: dockSlot.bottom,
-          figureClient: figure.clientHeight,
-          figureScroll: figure.scrollHeight,
-          frameTop: frame.top,
-          frameBottom: frame.bottom,
-          markersTop: Math.min(...markers.map((marker) => marker.top)),
-          markersBottom: Math.max(...markers.map((marker) => marker.bottom)),
+          chosenDockHeight: useEvtxLayoutStore.getState().dockHeight,
+          gridClient: need('[role="grid"]').clientHeight,
+          gridBottom: need('[role="grid"]').getBoundingClientRect().bottom,
+          panelBottom: need('[data-evtx-region="main"] [role="tabpanel"]').getBoundingClientRect().bottom,
+          stripClient: need('[data-testid="unified-timeline"]').parentElement?.clientHeight ?? 0,
+          mainOverflowY: getComputedStyle(main).overflowY,
+          mainOverflowPx: main.scrollHeight - main.clientHeight,
+          dock: null as null | {
+            slotHeight: number;
+            slotTop: number;
+            slotBottom: number;
+            mainTop: number;
+            mainBottom: number;
+            headerTop: number;
+            headerBottom: number;
+            scrollerTop: number;
+            scrollerBottom: number;
+            firstMarkerTop: number;
+            firstMarkerBottom: number;
+            figureClient: number;
+            figureScroll: number;
+            frameTop: number;
+            frameBottom: number;
+            markersTop: number;
+            markersBottom: number;
+          },
         };
+        const slot = need('[data-evtx-region="dock"]');
+        if (getComputedStyle(slot).display !== "none") {
+          // Scrolled to the end, where the dock is, so that its box is what the operator can reach.
+          main.scrollTop = main.scrollHeight;
+          const rect = (element: Element) => element.getBoundingClientRect();
+          const figure = need('[data-testid="lane-plot"]');
+          const markers = [...figure.querySelectorAll("button[data-marker]")].map(rect);
+          const firstMarker = figure.querySelector("button[data-marker]");
+          layout.dock = {
+            slotHeight: rect(slot).height,
+            slotTop: rect(slot).top,
+            slotBottom: rect(slot).bottom,
+            mainTop: rect(main).top,
+            mainBottom: rect(main).bottom,
+            headerTop: rect(need('[data-testid="correlation-dock-header"]')).top,
+            headerBottom: rect(need('[data-testid="correlation-dock-header"]')).bottom,
+            scrollerTop: rect(need("[data-evtx-dock-scroll]")).top,
+            scrollerBottom: rect(need("[data-evtx-dock-scroll]")).bottom,
+            firstMarkerTop: firstMarker ? rect(firstMarker).top : Number.NaN,
+            firstMarkerBottom: firstMarker ? rect(firstMarker).bottom : Number.NaN,
+            figureClient: figure.clientHeight,
+            figureScroll: figure.scrollHeight,
+            frameTop: rect(figure).top,
+            frameBottom: rect(figure).bottom,
+            markersTop: Math.min(...markers.map((marker) => marker.top)),
+            markersBottom: Math.max(...markers.map((marker) => marker.bottom)),
+          };
+          main.scrollTop = 0;
+        }
+        return layout;
       });
-    const tallWindow = page.viewportSize();
-    expect(tallWindow).not.toBeNull();
-    for (const height of [tallWindow?.height ?? 900, 700]) {
+    type Layout = Awaited<ReturnType<typeof measureLayout>>;
+    // `scrolls`: the floors do not fit at this window height, so the column is taller than its box.
+    const checkLayout = async (height: number, scrolls: boolean, dockOpen: boolean): Promise<Layout> => {
       await page.setViewportSize({ width: 1440, height });
-      let layout: Awaited<ReturnType<typeof measureLayout>> | null = null;
+      let layout: Layout | null = null;
       await expect(async () => {
         layout = await measureLayout();
-        // The plot shows its whole content, and its markers lie inside its frame.
-        expect(layout.figureClient).toBeGreaterThanOrEqual(layout.figureScroll - 1);
-        expect(layout.markersTop).toBeGreaterThanOrEqual(layout.frameTop - 0.5);
-        expect(layout.markersBottom).toBeLessThanOrEqual(layout.frameBottom + 0.5);
-        // The dock is drawn inside the main region, not pushed past its bottom edge, and the frame
-        // is inside the dock (the slot scrolls, it does not clip the lanes away).
-        expect(layout.slotTop).toBeGreaterThanOrEqual(layout.mainTop - 0.5);
-        expect(layout.slotBottom).toBeLessThanOrEqual(layout.mainBottom + 0.5);
-        expect(layout.frameTop).toBeGreaterThanOrEqual(layout.slotTop - 0.5);
-        expect(layout.frameBottom).toBeLessThanOrEqual(layout.slotBottom + 0.5);
+        // The Table keeps five grid rows and its strip, and the column scrolls instead of clipping.
+        expect(layout.gridClient).toBeGreaterThanOrEqual(5 * layout.rowPx);
+        // ... and is drawn whole: its view is not shorter than it, which would clip it away.
+        expect(layout.gridBottom).toBeLessThanOrEqual(layout.panelBottom + 0.5);
+        // The strip is 320 px, never under 240 and never over half the window; reading it also
+        // waits for the workspace to have taken the new window height.
+        expect(layout.stripClient).toBe(Math.max(240, Math.min(320, height / 2)));
+        expect(layout.mainOverflowY).toBe("auto");
+        if (scrolls) expect(layout.mainOverflowPx).toBeGreaterThan(1);
+        else expect(layout.mainOverflowPx).toBeLessThanOrEqual(1);
+        // Clamping the dock is not rewriting the height the user chose.
+        expect(layout.chosenDockHeight).toBe(210);
+        if (!dockOpen) {
+          expect(layout.dock).toBeNull();
+          return;
+        }
+        const dockLayout = layout.dock;
+        expect(dockLayout).not.toBeNull();
+        if (dockLayout === null) return;
+        // Not clipped: the dock lies inside the main column once it is scrolled to, its header
+        // and its first lane lie inside the dock, and the plot keeps the height of its content with
+        // every marker in its frame.
+        expect(dockLayout.slotTop).toBeGreaterThanOrEqual(dockLayout.mainTop - 0.5);
+        expect(dockLayout.slotBottom).toBeLessThanOrEqual(dockLayout.mainBottom + 0.5);
+        expect(dockLayout.headerTop).toBeGreaterThanOrEqual(dockLayout.slotTop - 0.5);
+        expect(dockLayout.headerBottom).toBeLessThanOrEqual(dockLayout.slotBottom + 0.5);
+        expect(dockLayout.firstMarkerTop).toBeGreaterThanOrEqual(dockLayout.scrollerTop - 0.5);
+        expect(dockLayout.firstMarkerBottom).toBeLessThanOrEqual(dockLayout.scrollerBottom + 0.5);
+        expect(dockLayout.figureClient).toBeGreaterThanOrEqual(dockLayout.figureScroll - 1);
+        expect(dockLayout.markersTop).toBeGreaterThanOrEqual(dockLayout.frameTop - 0.5);
+        expect(dockLayout.markersBottom).toBeLessThanOrEqual(dockLayout.frameBottom + 0.5);
       }).toPass({ timeout: 5_000 });
-      const measured = layout as Awaited<ReturnType<typeof measureLayout>> | null;
-      expect(measured).not.toBeNull();
+      const measured = layout as Layout | null;
+      if (measured === null) throw new Error("the layout was never measured");
       test.info().annotations.push({
-        type: `table grid at ${height}px, dock open`,
-        description: `clientHeight ${measured?.gridClient} (one row is ${measured?.rowPx})`,
+        type: `${height}px, dock ${dockOpen ? "open" : "closed"}`,
+        description:
+          `grid ${measured.gridClient} (five rows are ${5 * measured.rowPx}), strip ${measured.stripClient}, ` +
+          `column overflow ${measured.mainOverflowPx}` +
+          (measured.dock === null ? "" : `, dock ${measured.dock.slotHeight}`),
       });
-      if (height === (tallWindow?.height ?? 900)) {
-        // The grid keeps a floor beside the dock at the capture's window height.
-        expect(measured?.gridClient ?? 0).toBeGreaterThanOrEqual(measured?.rowPx ?? Number.POSITIVE_INFINITY);
-      }
-      // At 700 px the grid is not asserted: it reaches 0 there with the dock open (62 px without it,
-      // under the unified timeline strip's fixed 320 px). Whether that is a defect is Main's ruling
-      // (ambiguity 11); the measurement above is recorded on the test until it is made.
-    }
+      return measured;
+    };
+    const tallWindow = page.viewportSize();
+    expect(tallWindow).not.toBeNull();
+    // At 900 px the dock fits beside the Table's floor by giving up part of its 210 px; at 700 and
+    // 600 px nothing fits, the dock is at its minimum, and the column scrolls.
+    const openAt900 = await checkLayout(900, false, true);
+    expect(openAt900.dock?.slotHeight ?? Number.POSITIVE_INFINITY).toBeLessThan(210);
+    const openAt700 = await checkLayout(700, true, true);
+    const openAt600 = await checkLayout(600, true, true);
+    // The minimum is one height, not a function of the window.
+    expect(openAt700.dock?.slotHeight).toBe(openAt600.dock?.slotHeight);
+    expect(openAt700.dock?.slotHeight ?? Number.POSITIVE_INFINITY).toBeLessThan(
+      openAt900.dock?.slotHeight ?? 0,
+    );
     await page.setViewportSize(tallWindow as { width: number; height: number });
     await expect(grid).toBeVisible();
 
@@ -798,6 +871,12 @@ test.describe("event-logs screenshots", () => {
     await expect(slot).toBeHidden();
     await expect(toggle).toBeFocused();
     await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    // Closed, the Table keeps its five rows as well: at 700 px the grid was 62 px, and it is not
+    // the dock that took the rest.
+    await checkLayout(900, false, false);
+    await checkLayout(700, true, false);
+    await checkLayout(600, true, false);
+    await page.setViewportSize(tallWindow as { width: number; height: number });
     await select(contextRecord);
     await quiet();
     expect(await queries()).toEqual([requestOf(dockCapture)]);
