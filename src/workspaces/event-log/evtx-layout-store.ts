@@ -121,6 +121,25 @@ export function clampDockHeight(value: unknown, viewportHeight?: number): number
   return clampNumber(value, DEFAULT_DOCK_HEIGHT, MIN_DOCK_HEIGHT, max);
 }
 
+/**
+ * The Chains tab is on show: the Insights rail is visible and on that tab. A hidden rail shows no
+ * tab, whatever tab it was left on.
+ */
+export function chainsTabShown(layout: Pick<EvtxPersistedLayout, "panels" | "railTab">): boolean {
+  return layout.panels.insights && layout.railTab === "chains";
+}
+
+/**
+ * Whether the correlation entries (titles, spans and positions) must be read: the two surfaces that
+ * list entries are the Correlation view and the Chains tab. The counts-only consumers (the Insights
+ * card, the tab's number) never cause a scan. The one rule: the workspace asks the hook with it.
+ */
+export function correlationItemsNeeded(
+  layout: Pick<EvtxPersistedLayout, "activeView" | "panels" | "railTab">,
+): boolean {
+  return layout.activeView === "correlation" || chainsTabShown(layout);
+}
+
 function isOneOf<T extends string>(list: readonly T[], value: unknown): value is T {
   return typeof value === "string" && (list as readonly string[]).includes(value);
 }

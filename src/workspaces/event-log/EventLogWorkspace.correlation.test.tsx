@@ -180,7 +180,11 @@ beforeEach(() => {
       serializedBytes: 1_024,
     };
   });
-  useEvtxLayoutStore.setState({ activeView: "table" });
+  useEvtxLayoutStore.setState({
+    activeView: "table",
+    railTab: "insights",
+    panels: { channels: true, insights: true, dock: false },
+  });
   useEvtxCorrelationStore.setState({ selectedChainId: null });
   useLogStore.setState({ entries: [], activeSource: null, sourceOpenMode: "merged" });
   seed();
@@ -226,6 +230,41 @@ describe("what the workspace gives the shared hook", () => {
     await waitFor(() => expect(lastHookCall().needItems).toBe(false));
     fireEvent.click(tab("Charts"));
     expect(lastHookCall().needItems).toBe(false);
+  });
+
+  it("also asks for them while the Chains tab is the one the visible rail shows (#841)", async () => {
+    render(<EventLogWorkspace />);
+    await waitFor(() => expect(lastHookCall().status).not.toBeNull());
+    expect(lastHookCall().needItems).toBe(false);
+    // The Chains tab lists titles, spans and steps, which only the entries give.
+    act(() => useEvtxLayoutStore.getState().setRailTab("chains"));
+    await waitFor(() => expect(lastHookCall().needItems).toBe(true));
+    // On any main view, not only the Table.
+    fireEvent.click(tab("Charts"));
+    expect(lastHookCall().needItems).toBe(true);
+    // A rail that is hidden shows no tab, so it asks for nothing.
+    act(() => useEvtxLayoutStore.getState().setPanel("insights", false));
+    await waitFor(() => expect(lastHookCall().needItems).toBe(false));
+    act(() => useEvtxLayoutStore.getState().setPanel("insights", true));
+    await waitFor(() => expect(lastHookCall().needItems).toBe(true));
+    // Another rail tab asks for nothing.
+    act(() => useEvtxLayoutStore.getState().setRailTab("details"));
+    await waitFor(() => expect(lastHookCall().needItems).toBe(false));
+    act(() => useEvtxLayoutStore.getState().setRailTab("insights"));
+    await waitFor(() => expect(lastHookCall().needItems).toBe(false));
+  });
+
+  it("asks for them for the Correlation view whatever the rail shows", async () => {
+    render(<EventLogWorkspace />);
+    await waitFor(() => expect(lastHookCall().status).not.toBeNull());
+    act(() => useEvtxLayoutStore.getState().setPanel("insights", false));
+    fireEvent.click(tab("Correlation"));
+    await waitFor(() => expect(lastHookCall().needItems).toBe(true));
+  });
+
+  it("decides it with the layout store's one rule, not a rule of its own", () => {
+    expect(workspaceSource).toMatch(/\bcorrelationItemsNeeded\b/);
+    expect(workspaceSource).not.toMatch(/activeView === "correlation"[^\n]*needItems|needItems:\s*activeView/);
   });
 });
 
