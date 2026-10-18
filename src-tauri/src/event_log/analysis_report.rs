@@ -19,16 +19,21 @@
 // The renderer is wired to the Tauri command by a later commit of the same lane.
 #![allow(dead_code)]
 
-use std::collections::BTreeSet;
+use std::borrow::Cow;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use cmtraceopen_parser::diagnosis::{
-    redacted_display_projection, CoverageGap, CoverageState, DiagnosisFinding, DiagnosisSummary,
-    EvidenceRef, FindingClass, FindingConfidence, FindingSeverity,
+    adapt_timeline_edge, CorrelationEdge, CoverageGap, CoverageState, DiagnosisFinding,
+    DiagnosisSummary, EvidenceRef, FindingClass, FindingConfidence, FindingSeverity,
 };
-use cmtraceopen_parser::unified_timeline::{TimelineItem, TimelineOrigin, TimelineSeverity};
+use cmtraceopen_parser::unified_timeline::{
+    origin_id, TimelineCorrelationCoverageState, TimelineCorrelationEdge,
+    TimelineCorrelationKeyKind, TimelineCorrelationStrength, TimelineItem, TimelineOrigin,
+    TimelineSeverity, UnifiedTimeline,
+};
 use serde::Deserialize;
 
-use self::safe::{Doc, Redactor, Safe, MIN_SUBSTITUTED_MACHINE_CHARS};
+use self::safe::{Doc, Projected, Redactor, Safe, MIN_SUBSTITUTED_MACHINE_CHARS};
 use super::analysis_session::{EventLogAnalysisSessionStatus, TIMELINE_GAP_SOURCE_PREFIX};
 use super::models::{EvtxCoverageGap, EvtxLevel};
 use super::timeline::MAX_TIMELINE_MESSAGE_BYTES;
@@ -55,6 +60,15 @@ const REPORT_CHANNEL_NAMES_SHOWN: usize = 10;
 
 /// Request bounds. The request carries ids, enums and numbers, so these only stop a malformed
 /// caller from asking for an unbounded amount of work.
+/// Chains listed, entry lines and evidence lines per chain. The rest are counted, not listed.
+pub(crate) const REPORT_CHAIN_ROW_CAP: usize = 100;
+const REPORT_CHAIN_MEMBER_LINES: usize = 12;
+const REPORT_CHAIN_EVIDENCE_LINES: usize = 8;
+const MAX_REPORT_CHAIN_MEMBER_IDS: usize = 50;
+const MAX_REPORT_CHAIN_PAIRS: usize = 20;
+const MAX_REPORT_PAIR_KEYS: usize = 16;
+const MAX_REPORT_ID_BYTES: usize = 2 * 1024;
+const MAX_REPORT_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const MAX_REPORT_CHANNELS: usize = 64;
 const MAX_REPORT_CHANNEL_BYTES: usize = 512;
 const MAX_REPORT_EVENT_ID_SELECTORS: usize = 64;
@@ -77,6 +91,9 @@ pub struct EventLogAnalysisReportRequest {
     #[serde(default)]
     pub coverage_gaps: Vec<EvtxCoverageGap>,
     pub scope: ReportScope,
+    /// The chains the app built from the session's correlation edges, or `null` when it had not
+    /// loaded them. Unknown is sent as `null`, never as an empty list.
+    pub chains: Option<ReportChains>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -174,6 +191,75 @@ pub enum ReportRecordScopeKind {
     Chain,
 }
 
+/// Chain structure by reference. The app reduces the session's correlation edges to chains; the
+/// backend takes only the references (origin ids, and the identifier each relation rests on) and
+/// confirms every one against the session's own edges before it prints anything.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportChains {
+    /// Correlation edges the app loaded to build the chains. The session knows how many it has.
+    pub loaded_edge_count: u64,
+    pub correlation_gaps: ReportCorrelationGaps,
+    /// Chains per strength, before the app's row cap.
+    pub counts: ReportChainCounts,
+    /// The Exact and Candidate chains, in the app's order.
+    pub rows: Vec<ReportChainRow>,
+}
+
+/// What the engine's correlation coverage gaps say about completeness, as the app classified them.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportCorrelationGaps {
+    /// A limit or truncation left some events uncorrelated.
+    pub global: bool,
+    /// Not every gap was shown to the app, so which events are affected cannot be told.
+    pub preview_cut: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportChainCounts {
+    pub exact: u64,
+    pub candidate: u64,
+    pub ambiguous: u64,
+    pub coverage_blocked: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReportLinkStrength {
+    Exact,
+    Candidate,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportChainRow {
+    pub strength: ReportLinkStrength,
+    /// Every member of the chain, resolved or not.
+    pub member_count: u64,
+    /// Origin ids of the members the app listed, at most [`MAX_REPORT_CHAIN_MEMBER_IDS`].
+    pub member_ids: Vec<String>,
+    /// The reduced pairs the chain is made of, at most [`MAX_REPORT_CHAIN_PAIRS`].
+    pub pairs: Vec<ReportChainPair>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportChainPair {
+    pub left: String,
+    pub right: String,
+    pub keys: Vec<ReportKeyRef>,
+}
+
+/// The identifier a relation rests on. Used to find the session's edge, never printed from here.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportKeyRef {
+    pub kind: TimelineCorrelationKeyKind,
+    pub value: String,
+}
+
 impl EventLogAnalysisReportRequest {
     /// Refuses a request that cannot be true. Errors name the field, never its content.
     pub(crate) fn validate(&self) -> Result<(), String> {
@@ -254,8 +340,64 @@ impl EventLogAnalysisReportRequest {
         {
             return Err("report filters: the time range ends before it starts".to_owned());
         }
+        if let Some(chains) = &self.chains {
+            validate_chains(chains)?;
+        }
         Ok(())
     }
+}
+
+fn validate_chains(chains: &ReportChains) -> Result<(), String> {
+    if chains.rows.len() > REPORT_CHAIN_ROW_CAP {
+        return Err("report chains: too many chain rows".to_owned());
+    }
+    let exact = chains
+        .rows
+        .iter()
+        .filter(|row| row.strength == ReportLinkStrength::Exact)
+        .count() as u64;
+    let candidate = chains.rows.len() as u64 - exact;
+    if exact > chains.counts.exact || candidate > chains.counts.candidate {
+        return Err("report chains: more rows than chains counted".to_owned());
+    }
+    let mut bytes = 0usize;
+    let mut measure = |text: &str| -> Result<(), String> {
+        if text.len() > MAX_REPORT_ID_BYTES {
+            return Err("report chains: an identifier is too long".to_owned());
+        }
+        bytes = bytes.saturating_add(text.len());
+        Ok(())
+    };
+    for row in &chains.rows {
+        if row.member_ids.len() > MAX_REPORT_CHAIN_MEMBER_IDS
+            || row.pairs.len() > MAX_REPORT_CHAIN_PAIRS
+        {
+            return Err("report chains: a chain lists too many references".to_owned());
+        }
+        if row.member_count < row.member_ids.len() as u64 {
+            return Err("report chains: a chain lists more members than it has".to_owned());
+        }
+        for id in &row.member_ids {
+            measure(id)?;
+        }
+        for pair in &row.pairs {
+            if pair.left == pair.right
+                || pair.keys.is_empty()
+                || pair.keys.len() > MAX_REPORT_PAIR_KEYS
+            {
+                return Err("report chains: a pair is impossible".to_owned());
+            }
+            measure(&pair.left)?;
+            measure(&pair.right)?;
+            for key in &pair.keys {
+                measure(&key.value)?;
+            }
+        }
+    }
+    if bytes > MAX_REPORT_REQUEST_BYTES {
+        return Err("report chains: the references are too large".to_owned());
+    }
+    Ok(())
 }
 
 /// What the backend gathered from the session for one report, under the session lock.
@@ -274,6 +416,144 @@ pub(crate) struct ReportSnapshot {
     pub machines: BTreeSet<String>,
     /// What the engine recorded about shortening what it holds.
     pub engine_notes: EngineNotes,
+    /// The entries the chains name, by origin id: members and the origins of evidence rows.
+    pub entries: HashMap<String, Entry>,
+    /// One per chain row of the request, in the same order.
+    pub chains: Vec<ResolvedChain>,
+}
+
+/// A timeline entry the report looked up by origin id.
+#[derive(Debug, Clone)]
+pub(crate) enum Entry {
+    Placed(Box<TimelineItem>),
+    /// In the session's unplaced list: it carries no usable timestamp.
+    Unplaced,
+}
+
+/// The session's own edges behind one chain row, each confirmed to exist.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ResolvedChain {
+    pub edges: Vec<TimelineCorrelationEdge>,
+}
+
+const UNKNOWN_RELATION: &str =
+    "the report names a correlation relation the analysis session does not hold";
+const NOT_A_LINK: &str =
+    "a report chain contains a relation the engine labels ambiguous or coverage blocked";
+const WEAKER_THAN_EXACT: &str =
+    "an Exact report chain rests on a relation the engine does not label Exact";
+
+fn ordered<'a>(left: &'a str, right: &'a str) -> (&'a str, &'a str) {
+    if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    }
+}
+
+/// Confirms each reference of each chain against the session's edges, and looks up the entries the
+/// chains name. A reference the session does not hold is an error: the report never prints a link
+/// the engine did not produce, and never prints one the engine calls ambiguous or blocked.
+pub(crate) fn collect_chains(
+    timeline: &UnifiedTimeline,
+    chains: &ReportChains,
+) -> Result<(Vec<ResolvedChain>, HashMap<String, Entry>), String> {
+    let mut by_pair: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    for (index, edge) in timeline.edges.iter().enumerate() {
+        if let Some(to) = edge.to_id.as_deref() {
+            by_pair
+                .entry(ordered(&edge.from_id, to))
+                .or_default()
+                .push(index);
+        }
+    }
+    let mut resolved = Vec::with_capacity(chains.rows.len());
+    let mut wanted: HashSet<&str> = HashSet::new();
+    for row in &chains.rows {
+        let mut picked: Vec<usize> = Vec::new();
+        for pair in &row.pairs {
+            let candidates = by_pair
+                .get(&ordered(&pair.left, &pair.right))
+                .map_or(&[][..], Vec::as_slice);
+            for key in &pair.keys {
+                let index = candidates
+                    .iter()
+                    .copied()
+                    .find(|&index| {
+                        let edge = &timeline.edges[index];
+                        edge.key.kind == key.kind && edge.key.value == key.value
+                    })
+                    .ok_or_else(|| UNKNOWN_RELATION.to_owned())?;
+                confirm_link(row.strength, &timeline.edges[index])?;
+                if !picked.contains(&index) {
+                    picked.push(index);
+                }
+            }
+        }
+        picked.sort_unstable();
+        wanted.extend(row.member_ids.iter().map(String::as_str));
+        let mut edges = Vec::with_capacity(picked.len());
+        for index in picked {
+            let edge = &timeline.edges[index];
+            wanted.extend(edge.evidence.iter().map(|row| row.origin_id.as_str()));
+            edges.push(edge.clone());
+        }
+        resolved.push(ResolvedChain { edges });
+    }
+    Ok((resolved, look_up_entries(timeline, &wanted)))
+}
+
+fn confirm_link(
+    strength: ReportLinkStrength,
+    edge: &TimelineCorrelationEdge,
+) -> Result<(), String> {
+    let linking = matches!(
+        edge.strength,
+        TimelineCorrelationStrength::Exact | TimelineCorrelationStrength::Candidate
+    ) && matches!(
+        edge.coverage.state,
+        TimelineCorrelationCoverageState::Covered
+    );
+    if !linking {
+        return Err(NOT_A_LINK.to_owned());
+    }
+    if strength == ReportLinkStrength::Exact
+        && (!matches!(edge.strength, TimelineCorrelationStrength::Exact)
+            || edge.key.kind == TimelineCorrelationKeyKind::Secondary)
+    {
+        return Err(WEAKER_THAN_EXACT.to_owned());
+    }
+    Ok(())
+}
+
+/// The origin id the engine's edges use for this origin, without copying an event's.
+fn origin_key(origin: &TimelineOrigin) -> Cow<'_, str> {
+    match origin {
+        TimelineOrigin::Event { stable_id, .. } => Cow::Borrowed(stable_id),
+        other => Cow::Owned(origin_id(other)),
+    }
+}
+
+fn look_up_entries(timeline: &UnifiedTimeline, wanted: &HashSet<&str>) -> HashMap<String, Entry> {
+    let mut entries = HashMap::new();
+    if wanted.is_empty() {
+        return entries;
+    }
+    for item in &timeline.items {
+        let key = origin_key(&item.origin);
+        if wanted.contains(key.as_ref()) {
+            entries
+                .entry(key.into_owned())
+                .or_insert_with(|| Entry::Placed(Box::new(item.clone())));
+        }
+    }
+    for unplaced in &timeline.unplaced {
+        let key = origin_key(&unplaced.origin);
+        if wanted.contains(key.as_ref()) {
+            entries.entry(key.into_owned()).or_insert(Entry::Unplaced);
+        }
+    }
+    entries
 }
 
 /// Facts about the timeline's own compaction. The engine records these as timeline coverage gaps
@@ -305,12 +585,14 @@ fn render_report_within(input: &ReportInput<'_>, limit: usize) -> Result<String,
     let request = input.request;
     let snapshot = input.snapshot;
     let redactor = Redactor::new(&snapshot.machines);
-    let summary = redacted_display_projection(input.summary.clone());
+    let summary = Projected::new(input.summary.clone());
     let mut doc = Doc::new();
     render_title(&mut doc);
     render_scope(&mut doc, &redactor, request, snapshot);
     render_coverage(&mut doc, &redactor, snapshot, &summary);
     render_findings(&mut doc, &redactor, &summary);
+    render_chains(&mut doc, &redactor, request, snapshot)?;
+    render_nearby(&mut doc);
     render_top_event_ids(&mut doc, &request.scope);
     render_level_mix(&mut doc, &request.scope);
     render_events(&mut doc, &redactor, snapshot);
@@ -323,7 +605,8 @@ fn render_title(doc: &mut Doc) {
         "> Values that match known patterns, and machine names found in the loaded events, are \
          replaced by tokens such as [host:0123456789abcdef]. Free text can still contain \
          identifiers that no pattern recognizes, for example a computer name inside a sentence, \
-         a bare tenant ID or a folder name in a path. Review this file before sharing it.",
+         an account name after a label such as Account Name, a bare tenant ID or a folder name \
+         in a path. Review this file before sharing it.",
     )
     .nl()
     .nl();
@@ -574,8 +857,9 @@ fn render_coverage(
     doc: &mut Doc,
     redactor: &Redactor,
     snapshot: &ReportSnapshot,
-    summary: &DiagnosisSummary,
+    projected: &Projected,
 ) {
+    let summary = projected.summary();
     doc.lit("## Coverage and limits").nl().nl();
     let (timeline_gaps, listed): (Vec<&CoverageGap>, Vec<&CoverageGap>) = summary
         .coverage_gaps
@@ -598,9 +882,13 @@ fn render_coverage(
             doc.lit("  - ")
                 .lit(coverage_state_word(gap.state))
                 .lit(": ")
-                .safe(&redactor.text(display_source(&gap.source), REPORT_NAME_CHARS))
+                .safe(&redactor.projected(
+                    projected,
+                    display_source(&gap.source),
+                    REPORT_NAME_CHARS,
+                ))
                 .lit(": ")
-                .safe(&redactor.text(&gap.detail, REPORT_COVERAGE_DETAIL_CHARS))
+                .safe(&redactor.projected(projected, &gap.detail, REPORT_COVERAGE_DETAIL_CHARS))
                 .nl();
         }
     }
@@ -660,10 +948,15 @@ fn render_coverage(
     doc.nl();
 }
 
-fn render_findings(doc: &mut Doc, redactor: &Redactor, summary: &DiagnosisSummary) {
+fn render_findings(doc: &mut Doc, redactor: &Redactor, projected: &Projected) {
+    let summary = projected.summary();
     doc.lit("## Findings").nl().nl();
     doc.lit("Engine summary: ")
-        .safe(&redactor.text(&summary.overview.headline, REPORT_FINDING_TEXT_CHARS))
+        .safe(&redactor.projected(
+            projected,
+            &summary.overview.headline,
+            REPORT_FINDING_TEXT_CHARS,
+        ))
         .nl()
         .nl();
     let mut actionable: Vec<&DiagnosisFinding> = summary
@@ -701,13 +994,18 @@ fn render_findings(doc: &mut Doc, redactor: &Redactor, summary: &DiagnosisSummar
             .nl();
     }
     for finding in actionable {
-        render_finding(doc, redactor, finding);
+        render_finding(doc, redactor, projected, finding);
     }
 }
 
-fn render_finding(doc: &mut Doc, redactor: &Redactor, finding: &DiagnosisFinding) {
+fn render_finding(
+    doc: &mut Doc,
+    redactor: &Redactor,
+    projected: &Projected,
+    finding: &DiagnosisFinding,
+) {
     doc.lit("### ")
-        .safe(&redactor.text(&finding.title, REPORT_FINDING_TITLE_CHARS))
+        .safe(&redactor.projected(projected, &finding.title, REPORT_FINDING_TITLE_CHARS))
         .nl()
         .nl();
     doc.lit("- Class: ")
@@ -718,7 +1016,7 @@ fn render_finding(doc: &mut Doc, redactor: &Redactor, finding: &DiagnosisFinding
         .lit(finding_confidence_word(finding.confidence))
         .nl();
     doc.lit("- Summary: ")
-        .safe(&redactor.text(&finding.summary, REPORT_FINDING_TEXT_CHARS))
+        .safe(&redactor.projected(projected, &finding.summary, REPORT_FINDING_TEXT_CHARS))
         .nl();
     if !finding.evidence.is_empty() {
         doc.lit("- Evidence: ");
@@ -731,7 +1029,7 @@ fn render_finding(doc: &mut Doc, redactor: &Redactor, finding: &DiagnosisFinding
             if index > 0 {
                 doc.lit("; ");
             }
-            write_evidence_label(doc, redactor, evidence);
+            write_evidence_label(doc, redactor, projected, evidence);
         }
         if finding.evidence.len() > REPORT_FINDING_EVIDENCE_LABELS {
             doc.lit("; and ")
@@ -741,8 +1039,11 @@ fn render_finding(doc: &mut Doc, redactor: &Redactor, finding: &DiagnosisFinding
         doc.nl();
     }
     if let Some(first) = finding.recommended_checks.first() {
-        doc.lit("- Recommended check: ")
-            .safe(&redactor.text(first, REPORT_FINDING_TEXT_CHARS));
+        doc.lit("- Recommended check: ").safe(&redactor.projected(
+            projected,
+            first,
+            REPORT_FINDING_TEXT_CHARS,
+        ));
         if finding.recommended_checks.len() > 1 {
             doc.lit("; and ")
                 .count((finding.recommended_checks.len() - 1) as u64)
@@ -754,24 +1055,31 @@ fn render_finding(doc: &mut Doc, redactor: &Redactor, finding: &DiagnosisFinding
 }
 
 /// How an evidence reference names its record, without the source path or the machine.
-fn write_evidence_label(doc: &mut Doc, redactor: &Redactor, evidence: &EvidenceRef) {
+fn write_evidence_label(
+    doc: &mut Doc,
+    redactor: &Redactor,
+    projected: &Projected,
+    evidence: &EvidenceRef,
+) {
     match evidence {
         EvidenceRef::Event(event) => {
             doc.count(u64::from(event.event_id)).lit(" \u{b7} ");
             let place = event.channel.as_deref().unwrap_or(&event.provider);
-            doc.safe(&redactor.text(place, REPORT_NAME_CHARS))
+            doc.safe(&redactor.projected(projected, place, REPORT_NAME_CHARS))
                 .lit(" \u{b7} ");
             let numbered = event
                 .record_id_text
                 .as_deref()
                 .filter(|text| text.chars().any(|digit| digit != '0'));
             if let Some(text) = numbered {
-                doc.lit("record ").safe(&redactor.text(text, 40));
+                doc.lit("record ")
+                    .safe(&redactor.projected(projected, text, 40));
             } else if let Some(fallback) =
                 event.fallback_identity.as_deref().filter(|f| !f.is_empty())
             {
                 let head: String = fallback.chars().take(8).collect();
-                doc.lit("ref ").safe(&redactor.text(&head, 16));
+                doc.lit("ref ")
+                    .safe(&redactor.projected(projected, &head, 16));
             } else if event.record_id != 0 {
                 doc.lit("record ").count(event.record_id);
             } else {
@@ -779,9 +1087,13 @@ fn write_evidence_label(doc: &mut Doc, redactor: &Redactor, evidence: &EvidenceR
             }
         }
         EvidenceRef::TextLog(log) => {
-            doc.safe(&redactor.text(display_source(&log.file_path), REPORT_NAME_CHARS))
-                .lit(" \u{b7} line ")
-                .count(u64::from(log.line_number));
+            doc.safe(&redactor.projected(
+                projected,
+                display_source(&log.file_path),
+                REPORT_NAME_CHARS,
+            ))
+            .lit(" \u{b7} line ")
+            .count(u64::from(log.line_number));
         }
         _ => {
             doc.lit("a source-specific evidence reference");
@@ -851,6 +1163,416 @@ fn coverage_state_word(state: CoverageState) -> &'static str {
         CoverageState::ProviderDescriptionUnavailable => "provider description unavailable",
         _ => "other",
     }
+}
+
+fn render_chains(
+    doc: &mut Doc,
+    redactor: &Redactor,
+    request: &EventLogAnalysisReportRequest,
+    snapshot: &ReportSnapshot,
+) -> Result<(), String> {
+    doc.lit("## Correlation chains").nl().nl();
+    let Some(chains) = &request.chains else {
+        doc.lit(
+            "Correlation chains were not loaded when this report was made. Chains may exist; \
+             none are listed here, and that says nothing about whether any exist.",
+        )
+        .nl()
+        .nl();
+        return Ok(());
+    };
+    if snapshot.chains.len() != chains.rows.len() {
+        return Err("the report's chain references were not resolved".to_owned());
+    }
+    let total_edges = snapshot.status.total_edges;
+    let edges_complete = chains.loaded_edge_count == total_edges;
+    let gaps_clear = !(chains.correlation_gaps.global || chains.correlation_gaps.preview_cut);
+    let complete = edges_complete && gaps_clear;
+    let counts = chains.counts;
+    let linking = counts.exact.saturating_add(counts.candidate);
+
+    doc.lit(
+        "Chains are built from exact or candidate shared identifiers on one machine. Time \
+             alone never links two entries. Exact: every link rests on an exact shared \
+             identifier. Candidate: at least one link rests on a weaker identifier.",
+    )
+    .nl()
+    .nl();
+    doc.lit("- Chains listed: ")
+        .count(chains.rows.len() as u64)
+        .lit(" of ")
+        .count(linking)
+        .lit(" Exact or Candidate chains the app built (Exact ")
+        .count(counts.exact)
+        .lit(", Candidate ")
+        .count(counts.candidate)
+        .lit(").");
+    if (chains.rows.len() as u64) < linking {
+        doc.lit(" The app lists at most ")
+            .count(REPORT_CHAIN_ROW_CAP as u64)
+            .lit(" chains; ")
+            .count(linking - chains.rows.len() as u64)
+            .lit(" are not listed.");
+    }
+    doc.nl();
+    if edges_complete {
+        doc.lit("- Built from all ")
+            .count(total_edges)
+            .lit(" correlation edges of the events in scope.")
+            .nl();
+    } else if chains.loaded_edge_count < total_edges {
+        doc.lit("- Built from ")
+            .count(chains.loaded_edge_count)
+            .lit(" of ")
+            .count(total_edges)
+            .lit(" correlation edges (")
+            .count(total_edges - chains.loaded_edge_count)
+            .lit(" not loaded), so more chains may exist.")
+            .nl();
+    } else {
+        doc.lit("- The app reported ")
+            .count(chains.loaded_edge_count)
+            .lit(" loaded correlation edges and the session holds ")
+            .count(total_edges)
+            .lit(", so this list cannot be trusted as complete.")
+            .nl();
+    }
+    if !gaps_clear {
+        doc.lit(
+            "- The engine did not correlate every event (it hit a limit or truncated its \
+             output), or not every correlation gap was shown, so a chain may be missing.",
+        )
+        .nl();
+    }
+    if linking == 0 {
+        if complete {
+            doc.lit(
+                "- The engine produced no Exact or Candidate link among the events in scope. \
+                 Events outside the scope were not considered.",
+            )
+            .nl();
+        } else {
+            doc.lit(
+                "- No Exact or Candidate chain is listed. The correlation input is incomplete, \
+                 so this does not show that none exist.",
+            )
+            .nl();
+        }
+    }
+    doc.lit(if complete {
+        "- Not listed as chains (counts only): "
+    } else {
+        "- Not listed as chains (counts only, at least): "
+    })
+    .count(counts.ambiguous)
+    .lit(" Ambiguous and ")
+    .count(counts.coverage_blocked)
+    .lit(" Coverage blocked relations.")
+    .nl()
+    .nl();
+
+    let adapted: Vec<CorrelationEdge> = snapshot
+        .chains
+        .iter()
+        .flat_map(|chain| chain.edges.iter().map(adapt_timeline_edge))
+        .collect();
+    let projected = Projected::new(DiagnosisSummary {
+        correlations: adapted,
+        ..DiagnosisSummary::default()
+    });
+    let mut cursor = 0usize;
+    for (index, (row, resolved)) in chains.rows.iter().zip(&snapshot.chains).enumerate() {
+        let projected_edges =
+            &projected.summary().correlations[cursor..cursor + resolved.edges.len()];
+        cursor += resolved.edges.len();
+        render_chain(
+            doc,
+            &ChainContext {
+                redactor,
+                snapshot,
+                projected: &projected,
+            },
+            index as u64 + 1,
+            row,
+            resolved,
+            projected_edges,
+        );
+    }
+    Ok(())
+}
+
+/// What every chain is rendered with.
+struct ChainContext<'a> {
+    redactor: &'a Redactor,
+    snapshot: &'a ReportSnapshot,
+    projected: &'a Projected,
+}
+
+fn render_chain(
+    doc: &mut Doc,
+    context: &ChainContext<'_>,
+    number: u64,
+    row: &ReportChainRow,
+    resolved: &ResolvedChain,
+    projected_edges: &[CorrelationEdge],
+) {
+    let ChainContext {
+        redactor,
+        snapshot,
+        projected,
+    } = *context;
+    doc.lit("### Chain ")
+        .count(number)
+        .lit(": ")
+        .lit(match row.strength {
+            ReportLinkStrength::Exact => "Exact",
+            ReportLinkStrength::Candidate => "Candidate",
+        })
+        .lit(", ")
+        .count(row.member_count)
+        .lit(" entries")
+        .nl()
+        .nl();
+
+    let mut supplied: Vec<&str> = row.member_ids.iter().map(String::as_str).collect();
+    supplied.sort_unstable();
+    supplied.dedup();
+    let mut placed: Vec<&TimelineItem> = Vec::new();
+    let (mut unplaced, mut unknown) = (0u64, 0u64);
+    for id in &supplied {
+        match snapshot.entries.get(*id) {
+            Some(Entry::Placed(item)) => placed.push(item.as_ref()),
+            Some(Entry::Unplaced) => unplaced += 1,
+            None => unknown += 1,
+        }
+    }
+    placed.sort_by_key(|item| item.timestamp_ms);
+    doc.lit("- Entries: ")
+        .count(row.member_count)
+        .lit(" in the chain; the app listed ")
+        .count(supplied.len() as u64)
+        .lit(". Of those listed, ")
+        .count(placed.len() as u64)
+        .lit(" are on the placed timeline, ")
+        .count(unplaced)
+        .lit(" have no usable timestamp and ")
+        .count(unknown)
+        .lit(" are not in this session.")
+        .nl();
+    match (placed.first(), placed.last()) {
+        (Some(first), Some(last)) => {
+            doc.lit("- Span of the listed entries on the timeline: ")
+                .safe(&Safe::utc(first.timestamp_ms))
+                .lit(" to ")
+                .safe(&Safe::utc(last.timestamp_ms))
+                .nl();
+        }
+        _ => {
+            doc.lit("- No listed entry has a usable timestamp.").nl();
+        }
+    }
+    let mut kinds: Vec<&'static str> = resolved
+        .edges
+        .iter()
+        .map(|edge| key_word(&edge.key.kind))
+        .collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    doc.lit("- Links rest on: ");
+    for (position, kind) in kinds.iter().enumerate() {
+        if position > 0 {
+            doc.lit(", ");
+        }
+        doc.lit(kind);
+    }
+    doc.nl();
+
+    let mut lines: Vec<Safe> = Vec::new();
+    for (edge, projected_edge) in resolved.edges.iter().zip(projected_edges) {
+        for (raw, safe_row) in edge.evidence.iter().zip(&projected_edge.evidence) {
+            let line = evidence_line(
+                redactor,
+                snapshot,
+                projected,
+                &raw.origin_id,
+                &raw.field,
+                &safe_row.value,
+            );
+            if !lines.contains(&line) {
+                lines.push(line);
+            }
+        }
+    }
+    if lines.is_empty() {
+        doc.lit("- Link evidence: none was available for the references the app listed.")
+            .nl();
+    } else {
+        doc.lit("- Link evidence (")
+            .count(lines.len() as u64)
+            .lit(" lines):")
+            .nl();
+        for line in lines.iter().take(REPORT_CHAIN_EVIDENCE_LINES) {
+            doc.lit("  - ").safe(line).nl();
+        }
+        if lines.len() > REPORT_CHAIN_EVIDENCE_LINES {
+            doc.lit("  - and ")
+                .count((lines.len() - REPORT_CHAIN_EVIDENCE_LINES) as u64)
+                .lit(" more evidence lines")
+                .nl();
+        }
+    }
+    doc.nl();
+    if placed.is_empty() {
+        return;
+    }
+    doc.lit(ITEM_TABLE_HEADER).nl();
+    doc.lit(ITEM_TABLE_RULE).nl();
+    for item in placed.iter().take(REPORT_CHAIN_MEMBER_LINES) {
+        write_item_row(doc, redactor, item);
+    }
+    if placed.len() > REPORT_CHAIN_MEMBER_LINES {
+        doc.nl()
+            .lit("and ")
+            .count((placed.len() - REPORT_CHAIN_MEMBER_LINES) as u64)
+            .lit(" more listed entries on the timeline, not shown here")
+            .nl();
+    }
+    doc.nl();
+}
+
+/// How the report names an entry: an event by ID, channel and record, a text-log line by its
+/// file's last path segment and line. Never by origin id, which names a machine and a path.
+fn entry_label(redactor: &Redactor, entry: Option<&Entry>) -> Safe {
+    match entry {
+        Some(Entry::Placed(item)) => match &item.origin {
+            TimelineOrigin::Event {
+                event_id,
+                channel,
+                record_id,
+                record_id_text,
+                ..
+            } => {
+                let record = record_id_text
+                    .clone()
+                    .unwrap_or_else(|| record_id.to_string());
+                Safe::join(&[
+                    Safe::count(u64::from(*event_id)),
+                    Safe::literal(" \u{b7} "),
+                    redactor.text(channel, REPORT_NAME_CHARS),
+                    Safe::literal(" \u{b7} record "),
+                    redactor.text(&record, 40),
+                ])
+            }
+            TimelineOrigin::Log { file, line, .. } => Safe::join(&[
+                redactor.text(display_source(file), REPORT_NAME_CHARS),
+                Safe::literal(" \u{b7} line "),
+                Safe::count(u64::from(*line)),
+            ]),
+            _ => Safe::literal("an entry of a kind this report does not name"),
+        },
+        Some(Entry::Unplaced) => Safe::literal("an entry with no usable timestamp"),
+        None => Safe::literal("an entry that is not in this session"),
+    }
+}
+
+/// One line of link evidence. The identifier's value is printed only for the kinds that are
+/// correlation ids, as a token for the kinds that identify a person or a device, and never for
+/// the kinds whose value holds a source path. A kind this build does not know prints no value.
+fn evidence_line(
+    redactor: &Redactor,
+    snapshot: &ReportSnapshot,
+    projected: &Projected,
+    origin: &str,
+    field: &str,
+    projected_value: &str,
+) -> Safe {
+    let label = entry_label(redactor, snapshot.entries.get(origin));
+    let Some(kind) = field_kind(field) else {
+        return Safe::join(&[label, Safe::literal(": an identifier (value not printed)")]);
+    };
+    let word = Safe::literal(key_word(&kind));
+    match value_policy(&kind) {
+        ValuePolicy::Print => Safe::join(&[
+            label,
+            Safe::literal(": "),
+            word,
+            Safe::literal(" = "),
+            redactor.projected(projected, projected_value, REPORT_NAME_CHARS),
+        ]),
+        ValuePolicy::Token => {
+            let value = if safe::token_len_at(projected_value, 0) == Some(projected_value.len()) {
+                redactor.projected(projected, projected_value, REPORT_NAME_CHARS)
+            } else {
+                Safe::literal("(masked)")
+            };
+            Safe::join(&[
+                label,
+                Safe::literal(": "),
+                word,
+                Safe::literal(" = "),
+                value,
+            ])
+        }
+        ValuePolicy::Withheld => Safe::join(&[
+            label,
+            Safe::literal(": "),
+            word,
+            Safe::literal(" (value not printed)"),
+        ]),
+    }
+}
+
+enum ValuePolicy {
+    /// A correlation id or a process start: printed after redaction.
+    Print,
+    /// Identifies a device or a person: printed only if the projection reduced it to a token.
+    Token,
+    /// Its value holds a source path, or this build does not know the kind.
+    Withheld,
+}
+
+fn value_policy(kind: &TimelineCorrelationKeyKind) -> ValuePolicy {
+    match kind {
+        TimelineCorrelationKeyKind::ActivityId
+        | TimelineCorrelationKeyKind::RelatedActivityId
+        | TimelineCorrelationKeyKind::SessionId
+        | TimelineCorrelationKeyKind::ProcessStart => ValuePolicy::Print,
+        TimelineCorrelationKeyKind::DeviceId | TimelineCorrelationKeyKind::UserId => {
+            ValuePolicy::Token
+        }
+        _ => ValuePolicy::Withheld,
+    }
+}
+
+/// An evidence row's `field` is the engine's label for a key kind, which is the kind's own serde
+/// name, so the parser's enum is the one list of them.
+fn field_kind(field: &str) -> Option<TimelineCorrelationKeyKind> {
+    serde_json::from_value(serde_json::Value::String(field.to_owned())).ok()
+}
+
+fn key_word(kind: &TimelineCorrelationKeyKind) -> &'static str {
+    match kind {
+        TimelineCorrelationKeyKind::ActivityId => "ActivityId",
+        TimelineCorrelationKeyKind::RelatedActivityId => "RelatedActivityId",
+        TimelineCorrelationKeyKind::ProviderChannelEventRecord => "provider, channel and record",
+        TimelineCorrelationKeyKind::ProcessStart => "process start",
+        TimelineCorrelationKeyKind::SessionId => "SessionId",
+        TimelineCorrelationKeyKind::DeviceId => "DeviceId",
+        TimelineCorrelationKeyKind::UserId => "UserId",
+        TimelineCorrelationKeyKind::Secondary => "secondary identifier",
+        _ => "identifier",
+    }
+}
+
+fn render_nearby(doc: &mut Doc) {
+    doc.lit("## Nearby, not linked").nl().nl();
+    doc.lit(
+        "Nearby context is not produced in this version of the report. This section says \
+         nothing about whether nearby events exist, and nothing in this report links two \
+         entries by time alone.",
+    )
+    .nl()
+    .nl();
 }
 
 fn render_top_event_ids(doc: &mut Doc, scope: &ReportScope) {
@@ -950,35 +1672,59 @@ fn render_events(doc: &mut Doc, redactor: &Redactor, snapshot: &ReportSnapshot) 
             .lit(" omitted.");
     }
     doc.nl().nl();
-    doc.lit("| Time (UTC) | Level | ID | Channel | Provider | Message |")
-        .nl();
-    doc.lit("| --- | --- | --- | --- | --- | --- |").nl();
+    doc.lit(ITEM_TABLE_HEADER).nl();
+    doc.lit(ITEM_TABLE_RULE).nl();
     for item in snapshot.event_rows.iter().take(REPORT_EVENT_ROW_CAP) {
-        let TimelineOrigin::Event {
+        write_item_row(doc, redactor, item);
+    }
+    doc.nl();
+}
+
+const ITEM_TABLE_HEADER: &str = "| Time (UTC) | Level | ID | Channel | Provider | Message |";
+const ITEM_TABLE_RULE: &str = "| --- | --- | --- | --- | --- | --- |";
+
+/// One timeline item as a table row: an event by its ID, channel and provider, a text-log line by
+/// its file's last path segment and its line number.
+fn write_item_row(doc: &mut Doc, redactor: &Redactor, item: &TimelineItem) {
+    doc.lit("| ")
+        .safe(&Safe::utc(item.timestamp_ms))
+        .lit(" | ")
+        .lit(severity_word(item.severity))
+        .lit(" | ");
+    match &item.origin {
+        TimelineOrigin::Event {
             event_id,
             channel,
             provider,
             ..
-        } = &item.origin
-        else {
-            continue;
-        };
-        doc.lit("| ")
-            .safe(&Safe::utc(item.timestamp_ms))
-            .lit(" | ")
-            .lit(severity_word(item.severity))
-            .lit(" | ")
-            .count(u64::from(*event_id))
-            .lit(" | ")
-            .safe(&redactor.text(channel, REPORT_NAME_CHARS))
-            .lit(" | ")
-            .safe(&redactor.text(provider, REPORT_NAME_CHARS))
-            .lit(" | ")
-            .safe(&redactor.text(&item.message, REPORT_MESSAGE_CHARS))
-            .lit(" |")
-            .nl();
+        } => {
+            doc.count(u64::from(*event_id))
+                .lit(" | ")
+                .safe(&redactor.text(channel, REPORT_NAME_CHARS))
+                .lit(" | ")
+                .safe(&redactor.text(provider, REPORT_NAME_CHARS));
+        }
+        TimelineOrigin::Log {
+            file,
+            component,
+            line,
+            ..
+        } => {
+            doc.lit("log line ")
+                .count(u64::from(*line))
+                .lit(" | ")
+                .safe(&redactor.text(display_source(file), REPORT_NAME_CHARS))
+                .lit(" | ")
+                .safe(&redactor.text(component.as_deref().unwrap_or(""), REPORT_NAME_CHARS));
+        }
+        _ => {
+            doc.lit("n/a | n/a | n/a");
+        }
     }
-    doc.nl();
+    doc.lit(" | ")
+        .safe(&redactor.text(&item.message, REPORT_MESSAGE_CHARS))
+        .lit(" |")
+        .nl();
 }
 
 fn level_word(level: EvtxLevel) -> &'static str {
@@ -1006,6 +1752,7 @@ mod safe {
 
     use std::collections::HashMap;
 
+    use cmtraceopen_parser::diagnosis::{redacted_display_projection, DiagnosisSummary};
     use cmtraceopen_parser::intune::apps::windows::common::redact_field_value;
 
     use crate::event_log::export::redact_export_text;
@@ -1028,6 +1775,11 @@ mod safe {
             Self(value.to_string())
         }
 
+        /// Concatenation of values that are already safe is safe.
+        pub(super) fn join(parts: &[Safe]) -> Self {
+            Self(parts.iter().map(|part| part.0.as_str()).collect())
+        }
+
         /// A UTC time, ISO 8601 with milliseconds and `Z`. A value no calendar can hold is
         /// reported as unavailable; it is never shown as 1970.
         pub(super) fn utc(epoch_ms: i64) -> Self {
@@ -1043,6 +1795,20 @@ mod safe {
         }
 
         pub(super) fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    /// A diagnosis summary after `redacted_display_projection`. The report reads findings and
+    /// evidence only through one of these, so it cannot print a summary that was not projected.
+    pub(super) struct Projected(DiagnosisSummary);
+
+    impl Projected {
+        pub(super) fn new(summary: DiagnosisSummary) -> Self {
+            Self(redacted_display_projection(summary))
+        }
+
+        pub(super) fn summary(&self) -> &DiagnosisSummary {
             &self.0
         }
     }
@@ -1139,8 +1905,19 @@ mod safe {
         /// change the text the redaction patterns read; cutting first could split a value the
         /// patterns would have caught.
         pub(super) fn text(&self, raw: &str, max_chars: usize) -> Safe {
-            let redacted = redact_export_text(raw);
-            let substituted = self.substitute(&redacted);
+            self.finish(&redact_export_text(raw), max_chars)
+        }
+
+        /// Text read from a projected summary. The projection is the diagnosis' own redaction, so
+        /// the export pass is not run over it again: that pass rewrites the tokens the projection
+        /// wrote (`[account:..]` would become `[account:[sensitive:Account]]`).
+        pub(super) fn projected(&self, _from: &Projected, text: &str, max_chars: usize) -> Safe {
+            self.finish(text, max_chars)
+        }
+
+        /// Substitute known machines, flatten, cut, escape.
+        fn finish(&self, redacted: &str, max_chars: usize) -> Safe {
+            let substituted = self.substitute(redacted);
             let flat = flatten(&substituted);
             Safe(escape(&cut_chars(&flat, max_chars)))
         }
@@ -1332,6 +2109,7 @@ mod safe {
 #[cfg(test)]
 mod tests {
     use super::safe::{cut_chars, escape, flatten, token_len_at, Doc, Redactor, Safe};
+    use super::{collect_chains, REPORT_CHAIN_ROW_CAP};
     use super::{
         render_report, render_report_within, EngineNotes, EventLogAnalysisReportRequest,
         ReportInput, ReportSnapshot, MAX_REPORT_BYTES, REPORT_EVENT_ROW_CAP,
@@ -1342,9 +2120,15 @@ mod tests {
         EvidenceRef, FindingClass, FindingConfidence, FindingSeverity, TextLogEvidenceRef,
     };
     use cmtraceopen_parser::intune::apps::windows::common::redact_field_value;
-    use cmtraceopen_parser::unified_timeline::{TimelineItem, TimelineOrigin, TimelineSeverity};
+    use cmtraceopen_parser::unified_timeline::{
+        origin_id, TimelineCorrelationConfidence, TimelineCorrelationCoverage,
+        TimelineCorrelationCoverageState, TimelineCorrelationEdge, TimelineCorrelationEvidence,
+        TimelineCorrelationKey, TimelineCorrelationKeyKind, TimelineCorrelationStrength,
+        TimelineItem, TimelineOrigin, TimelineSeverity, UnifiedTimeline, UnplacedItem,
+        UnplacedReason,
+    };
     use serde_json::json;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeSet, HashMap};
 
     fn redactor(names: &[&str]) -> Redactor {
         let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
@@ -1515,6 +2299,7 @@ mod tests {
             "expectedRevision": 3,
             "generatedAtMs": FIXTURE_NOW_MS,
             "coverageGaps": [],
+            "chains": null,
             "scope": {
                 "sourceMode": "files",
                 "loadedRecordCount": 10,
@@ -1636,6 +2421,8 @@ mod tests {
             span_ms: Some((FIXTURE_NOW_MS, FIXTURE_NOW_MS + 1000)),
             machines,
             engine_notes: EngineNotes::default(),
+            entries: HashMap::new(),
+            chains: Vec::new(),
         }
     }
 
@@ -2394,5 +3181,755 @@ mod tests {
             summary_line.len()
         );
         assert!(!summary_line.contains("second line"));
+    }
+
+    // ---- chains and the nearby statement -------------------------------------------------------
+
+    const GUID_A: &str = "00000000-0000-4000-8000-0000000000a1";
+
+    fn stable(record: u64) -> String {
+        format!(
+            "source30:C:\\Cases\\CASE-0002\\A.evtx|machine9:HOST-0005|channel30:Fixture/Admin|record{record}"
+        )
+    }
+
+    fn chain_item(record: u64, event_id: u32, offset_s: i64, message: &str) -> TimelineItem {
+        let mut item = event_item(
+            FIXTURE_NOW_MS + offset_s * 1000,
+            TimelineSeverity::Info,
+            event_id,
+            "Microsoft-Windows-Fixture/Admin",
+            "Fixture.Provider",
+            Some("HOST-0005"),
+            record,
+            message,
+        );
+        if let TimelineOrigin::Event { stable_id, .. } = &mut item.origin {
+            *stable_id = stable(record);
+        }
+        item
+    }
+
+    fn edge(
+        from: &str,
+        to: &str,
+        kind: TimelineCorrelationKeyKind,
+        field: &str,
+        value: &str,
+        strength: TimelineCorrelationStrength,
+    ) -> TimelineCorrelationEdge {
+        TimelineCorrelationEdge {
+            id: format!("edge|{from}|{to}|{field}|{value}"),
+            from_id: from.to_owned(),
+            to_id: Some(to.to_owned()),
+            key: TimelineCorrelationKey {
+                kind,
+                value: value.to_owned(),
+            },
+            strength,
+            confidence: TimelineCorrelationConfidence::High,
+            candidate_ids: Vec::new(),
+            evidence: vec![
+                TimelineCorrelationEvidence {
+                    origin_id: from.to_owned(),
+                    field: field.to_owned(),
+                    value: value.to_owned(),
+                },
+                TimelineCorrelationEvidence {
+                    origin_id: to.to_owned(),
+                    field: field.to_owned(),
+                    value: value.to_owned(),
+                },
+            ],
+            coverage: TimelineCorrelationCoverage {
+                state: TimelineCorrelationCoverageState::Covered,
+                gap: None,
+            },
+        }
+    }
+
+    fn exact_edge(from: &str, to: &str, value: &str) -> TimelineCorrelationEdge {
+        edge(
+            from,
+            to,
+            TimelineCorrelationKeyKind::ActivityId,
+            "activityId",
+            value,
+            TimelineCorrelationStrength::Exact,
+        )
+    }
+
+    fn timeline_of(
+        items: Vec<TimelineItem>,
+        edges: Vec<TimelineCorrelationEdge>,
+    ) -> UnifiedTimeline {
+        UnifiedTimeline {
+            items,
+            unplaced: Vec::new(),
+            edges,
+            coverage_gaps: Vec::new(),
+        }
+    }
+
+    fn row(strength: &str, members: &[String], pairs: serde_json::Value) -> serde_json::Value {
+        json!({
+            "strength": strength,
+            "memberCount": members.len(),
+            "memberIds": members,
+            "pairs": pairs,
+        })
+    }
+
+    fn pair(left: &str, right: &str, keys: &[(&str, &str)]) -> serde_json::Value {
+        json!({
+            "left": left,
+            "right": right,
+            "keys": keys
+                .iter()
+                .map(|(kind, value)| json!({"kind": kind, "value": value}))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    fn chains_value(
+        loaded: u64,
+        counts: (u64, u64, u64, u64),
+        rows: Vec<serde_json::Value>,
+    ) -> serde_json::Value {
+        json!({
+            "loadedEdgeCount": loaded,
+            "correlationGaps": {"global": false, "previewCut": false},
+            "counts": {
+                "exact": counts.0,
+                "candidate": counts.1,
+                "ambiguous": counts.2,
+                "coverageBlocked": counts.3
+            },
+            "rows": rows,
+        })
+    }
+
+    fn chain_report_for(
+        timeline: &UnifiedTimeline,
+        chains: serde_json::Value,
+    ) -> Result<String, String> {
+        let mut value = request_json();
+        value["chains"] = chains;
+        let request = request_from(value);
+        request.validate()?;
+        let (chains, entries) = collect_chains(timeline, request.chains.as_ref().unwrap())?;
+        let mut snapshot = snapshot_of(Vec::new(), 0);
+        snapshot.machines.insert("HOST-0005".to_owned());
+        snapshot.status.total_edges = timeline.edges.len() as u64;
+        snapshot.entries = entries;
+        snapshot.chains = chains;
+        render_report(&ReportInput {
+            request: &request,
+            snapshot: &snapshot,
+            summary: &DiagnosisSummary::default(),
+        })
+    }
+
+    fn two_event_timeline() -> (UnifiedTimeline, String, String) {
+        let (a, b) = (stable(1), stable(2));
+        let timeline = timeline_of(
+            vec![
+                chain_item(1, 76, 0, "Enrollment started on HOST-0005."),
+                chain_item(2, 77, 9, "Enrollment failed."),
+            ],
+            vec![exact_edge(&a, &b, GUID_A)],
+        );
+        (timeline, a, b)
+    }
+
+    fn section<'a>(report: &'a str, heading: &str) -> &'a str {
+        let start = report.find(heading).expect("the section exists");
+        let rest = &report[start + heading.len()..];
+        &report[start..start + heading.len() + rest.find("\n## ").unwrap_or(rest.len())]
+    }
+
+    #[test]
+    fn a_chain_is_confirmed_against_the_sessions_edges_and_rendered_from_them() {
+        let (timeline, a, b) = two_event_timeline();
+        let chains = chains_value(
+            1,
+            (1, 0, 0, 0),
+            vec![row(
+                "exact",
+                &[a.clone(), b.clone()],
+                json!([pair(&a, &b, &[("activityId", GUID_A)])]),
+            )],
+        );
+        let report = chain_report_for(&timeline, chains).expect("the chain renders");
+        assert!(report.contains("### Chain 1: Exact, 2 entries"), "{report}");
+        assert!(report.contains("- Links rest on: ActivityId"));
+        assert!(report.contains("- Link evidence (2 lines):"));
+        assert!(report.contains(&format!(
+            "  - 76 \u{b7} Microsoft-Windows-Fixture/Admin \u{b7} record 1: ActivityId = {GUID_A}"
+        )));
+        assert!(report.contains(
+            "- Span of the listed entries on the timeline: 2026-10-06T10:20:47.123Z to \
+             2026-10-06T10:20:56.123Z"
+        ));
+        assert_eq!(table_rows(section(&report, "## Correlation chains")), 2);
+        // The message names the machine; ids carry the machine and a source path.
+        assert!(report.contains(&format!("Enrollment started on {}.", host("HOST-0005"))));
+        for leak in ["HOST-0005", "CASE-0002", "A.evtx", "machine9", "record1|"] {
+            assert!(!report.contains(leak), "{leak} leaked:\n{report}");
+        }
+    }
+
+    #[test]
+    fn a_reference_the_session_does_not_hold_is_refused_and_named_nowhere() {
+        let (timeline, a, b) = two_event_timeline();
+        let members = [a.clone(), b.clone()];
+        let wrong_value = chains_value(
+            1,
+            (1, 0, 0, 0),
+            vec![row(
+                "exact",
+                &members,
+                json!([pair(
+                    &a,
+                    &b,
+                    &[("activityId", "00000000-0000-4000-8000-0000000000ff")]
+                )]),
+            )],
+        );
+        let wrong_kind = chains_value(
+            1,
+            (1, 0, 0, 0),
+            vec![row(
+                "exact",
+                &members,
+                json!([pair(&a, &b, &[("sessionId", GUID_A)])]),
+            )],
+        );
+        let wrong_pair = chains_value(
+            1,
+            (1, 0, 0, 0),
+            vec![row(
+                "exact",
+                &members,
+                json!([pair(&a, &stable(3), &[("activityId", GUID_A)])]),
+            )],
+        );
+        for chains in [wrong_value, wrong_kind, wrong_pair] {
+            let error = chain_report_for(&timeline, chains).expect_err("refused");
+            assert!(error.contains("does not hold"), "{error}");
+            for name in ["HOST-0005", "CASE-0002", GUID_A, "ff"] {
+                assert!(!error.contains(name), "{name} in {error}");
+            }
+        }
+        // The pair may be written either way round.
+        let reversed = chains_value(
+            1,
+            (1, 0, 0, 0),
+            vec![row(
+                "exact",
+                &members,
+                json!([pair(&b, &a, &[("activityId", GUID_A)])]),
+            )],
+        );
+        assert!(chain_report_for(&timeline, reversed).is_ok());
+    }
+
+    #[test]
+    fn a_relation_the_engine_calls_ambiguous_or_blocked_is_never_a_chain_link() {
+        let (a, b) = (stable(1), stable(2));
+        let items = vec![chain_item(1, 76, 0, "m"), chain_item(2, 77, 9, "m")];
+        let mut ambiguous = exact_edge(&a, &b, GUID_A);
+        ambiguous.strength = TimelineCorrelationStrength::Ambiguous;
+        let mut blocked = exact_edge(&a, &b, GUID_A);
+        blocked.coverage.state = TimelineCorrelationCoverageState::Gap;
+        for bad in [ambiguous, blocked] {
+            let timeline = timeline_of(items.clone(), vec![bad]);
+            let chains = chains_value(
+                1,
+                (0, 1, 0, 0),
+                vec![row(
+                    "candidate",
+                    &[a.clone(), b.clone()],
+                    json!([pair(&a, &b, &[("activityId", GUID_A)])]),
+                )],
+            );
+            let error = chain_report_for(&timeline, chains).expect_err("refused");
+            assert!(error.contains("ambiguous or coverage blocked"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_chain_is_never_stronger_than_the_edges_it_rests_on() {
+        let (a, b) = (stable(1), stable(2));
+        let items = vec![chain_item(1, 76, 0, "m"), chain_item(2, 77, 9, "m")];
+        let members = [a.clone(), b.clone()];
+        let candidate_edge = edge(
+            &a,
+            &b,
+            TimelineCorrelationKeyKind::ActivityId,
+            "activityId",
+            GUID_A,
+            TimelineCorrelationStrength::Candidate,
+        );
+        let secondary_edge = edge(
+            &a,
+            &b,
+            TimelineCorrelationKeyKind::Secondary,
+            "secondary",
+            "pid-1",
+            TimelineCorrelationStrength::Exact,
+        );
+        let weak = [
+            (candidate_edge.clone(), ("activityId", GUID_A)),
+            (secondary_edge.clone(), ("secondary", "pid-1")),
+        ];
+        for (weaker, key) in weak {
+            let timeline = timeline_of(items.clone(), vec![weaker]);
+            let exact = chains_value(
+                1,
+                (1, 0, 0, 0),
+                vec![row("exact", &members, json!([pair(&a, &b, &[key])]))],
+            );
+            let error = chain_report_for(&timeline, exact).expect_err("refused");
+            assert!(error.contains("does not label Exact"), "{error}");
+        }
+        // The same edges are fine under a Candidate row, which prints as Candidate.
+        let timeline = timeline_of(items, vec![candidate_edge, secondary_edge]);
+        let candidate = chains_value(
+            2,
+            (0, 1, 0, 0),
+            vec![row(
+                "candidate",
+                &members,
+                json!([pair(
+                    &a,
+                    &b,
+                    &[("activityId", GUID_A), ("secondary", "pid-1")]
+                )]),
+            )],
+        );
+        let report = chain_report_for(&timeline, candidate).expect("renders");
+        assert!(report.contains("### Chain 1: Candidate, 2 entries"));
+        assert!(!report.contains("### Chain 1: Exact"));
+        assert!(report.contains("- Links rest on: ActivityId, secondary identifier"));
+    }
+
+    #[test]
+    fn identifier_values_follow_the_print_policy() {
+        let (a, b, c) = (stable(1), stable(2), stable(3));
+        let provider_value =
+            format!("source30:C:\\Cases\\CASE-0002\\A.evtx|provider|HOST-0005|1|{b}");
+        let timeline = timeline_of(
+            vec![
+                chain_item(1, 76, 0, "m"),
+                chain_item(2, 77, 9, "m"),
+                chain_item(3, 78, 20, "m"),
+            ],
+            vec![
+                exact_edge(&a, &b, GUID_A),
+                edge(
+                    &a,
+                    &b,
+                    TimelineCorrelationKeyKind::DeviceId,
+                    "deviceId",
+                    "DEVICE-0001",
+                    TimelineCorrelationStrength::Exact,
+                ),
+                edge(
+                    &a,
+                    &b,
+                    TimelineCorrelationKeyKind::UserId,
+                    "userId",
+                    "user_0001",
+                    TimelineCorrelationStrength::Exact,
+                ),
+                edge(
+                    &b,
+                    &c,
+                    TimelineCorrelationKeyKind::ProviderChannelEventRecord,
+                    "providerChannelEventRecord",
+                    &provider_value,
+                    TimelineCorrelationStrength::Exact,
+                ),
+                edge(
+                    &b,
+                    &c,
+                    TimelineCorrelationKeyKind::Secondary,
+                    "secondary",
+                    "HOST-0005|pid-9",
+                    TimelineCorrelationStrength::Candidate,
+                ),
+            ],
+        );
+        let chains = chains_value(
+            5,
+            (1, 1, 0, 0),
+            vec![
+                row(
+                    "exact",
+                    &[a.clone(), b.clone()],
+                    json!([pair(
+                        &a,
+                        &b,
+                        &[
+                            ("activityId", GUID_A),
+                            ("deviceId", "DEVICE-0001"),
+                            ("userId", "user_0001")
+                        ]
+                    )]),
+                ),
+                row(
+                    "candidate",
+                    &[b.clone(), c.clone()],
+                    json!([pair(
+                        &b,
+                        &c,
+                        &[
+                            ("providerChannelEventRecord", provider_value.as_str()),
+                            ("secondary", "HOST-0005|pid-9")
+                        ]
+                    )]),
+                ),
+            ],
+        );
+        let report = chain_report_for(&timeline, chains).expect("renders");
+        for leak in [
+            "DEVICE-0001",
+            "user_0001",
+            "CASE-0002",
+            "HOST-0005",
+            "pid-9",
+        ] {
+            assert!(!report.contains(leak), "{leak} leaked:\n{report}");
+        }
+        assert!(report.contains(&format!("ActivityId = {GUID_A}")));
+        for word in ["DeviceId", "UserId"] {
+            let line = report
+                .lines()
+                .find(|line| line.contains(&format!(": {word} = ")))
+                .unwrap_or_else(|| panic!("no {word} line:\n{report}"));
+            let value = line.split(" = ").nth(1).unwrap();
+            assert!(
+                value.starts_with('[') && value.ends_with(']') || value == "(masked)",
+                "{line}"
+            );
+        }
+        assert!(report.contains(": provider, channel and record (value not printed)"));
+        assert!(report.contains(": secondary identifier (value not printed)"));
+    }
+
+    #[test]
+    fn the_ladder_says_what_the_chain_list_can_and_cannot_support() {
+        let (timeline, a, b) = two_event_timeline();
+        let members = [a.clone(), b.clone()];
+        let one_row = || {
+            row(
+                "exact",
+                &members,
+                json!([pair(&a, &b, &[("activityId", GUID_A)])]),
+            )
+        };
+
+        let complete =
+            chain_report_for(&timeline, chains_value(1, (1, 0, 2, 3), vec![one_row()])).unwrap();
+        assert!(complete.contains(
+            "- Chains listed: 1 of 1 Exact or Candidate chains the app built (Exact 1, Candidate 0)."
+        ));
+        assert!(complete.contains("- Built from all 1 correlation edges of the events in scope."));
+        assert!(complete.contains(
+            "- Not listed as chains (counts only): 2 Ambiguous and 3 Coverage blocked relations."
+        ));
+        assert!(!complete.contains("may exist"));
+
+        let empty = timeline_of(Vec::new(), Vec::new());
+        let none = chain_report_for(&empty, chains_value(0, (0, 0, 0, 0), Vec::new())).unwrap();
+        assert!(none.contains(
+            "- The engine produced no Exact or Candidate link among the events in scope. Events \
+             outside the scope were not considered."
+        ));
+
+        // Edges the app did not load: a shortfall is stated with both numbers, and an empty list
+        // is not read as "no chains".
+        let three_edges = timeline_of(
+            Vec::new(),
+            vec![
+                exact_edge("x1", "x2", "v1"),
+                exact_edge("x3", "x4", "v2"),
+                exact_edge("x5", "x6", "v3"),
+            ],
+        );
+        let short =
+            chain_report_for(&three_edges, chains_value(1, (0, 0, 0, 0), Vec::new())).unwrap();
+        assert!(short.contains(
+            "- Built from 1 of 3 correlation edges (2 not loaded), so more chains may exist."
+        ));
+        assert!(short.contains(
+            "- No Exact or Candidate chain is listed. The correlation input is incomplete, so \
+             this does not show that none exist."
+        ));
+        assert!(!short.contains("The engine produced no Exact or Candidate link"));
+        assert!(short.contains("(counts only, at least): 0 Ambiguous"));
+
+        // The engine's own gaps make an empty list unprovable even when every edge was loaded.
+        for gap in ["global", "previewCut"] {
+            let mut chains = chains_value(0, (0, 0, 0, 0), Vec::new());
+            chains["correlationGaps"][gap] = json!(true);
+            let report = chain_report_for(&empty, chains).unwrap();
+            assert!(report.contains("did not correlate every event"), "{gap}");
+            assert!(!report.contains("The engine produced no Exact or Candidate link"));
+            assert!(report.contains("(counts only, at least)"));
+        }
+
+        // The app and the session disagree about the edge count.
+        let disagree = chain_report_for(&empty, chains_value(4, (0, 0, 0, 0), Vec::new())).unwrap();
+        assert!(disagree.contains(
+            "- The app reported 4 loaded correlation edges and the session holds 0, so this list \
+             cannot be trusted as complete."
+        ));
+
+        // Fewer rows than chains: the rest are counted, and nothing says none exist.
+        let capped =
+            chain_report_for(&timeline, chains_value(1, (3, 0, 0, 0), vec![one_row()])).unwrap();
+        assert!(capped.contains("- Chains listed: 1 of 3 Exact or Candidate chains"));
+        assert!(capped.contains("The app lists at most 100 chains; 2 are not listed."));
+    }
+
+    #[test]
+    fn chains_that_were_not_loaded_are_never_reported_as_none() {
+        let report = render(&base_request(), &snapshot_of(Vec::new(), 0));
+        let chains = section(&report, "## Correlation chains");
+        assert!(chains.contains("Correlation chains were not loaded when this report was made."));
+        assert!(chains.contains("that says nothing about whether any exist"));
+        for claim in [
+            "no Exact or Candidate",
+            "Chains listed",
+            "0 Exact",
+            "Built from",
+        ] {
+            assert!(!chains.contains(claim), "{claim}");
+        }
+    }
+
+    #[test]
+    fn members_and_evidence_are_capped_and_the_rest_counted() {
+        let ids: Vec<String> = (1..=50).map(stable).collect();
+        let items: Vec<TimelineItem> = (1..=50)
+            .map(|record| chain_item(record, 100 + record as u32, record as i64, "m"))
+            .collect();
+        let edges: Vec<TimelineCorrelationEdge> = (0..5)
+            .map(|index| exact_edge(&ids[index], &ids[index + 1], &format!("guid-{index}")))
+            .collect();
+        let pairs: Vec<serde_json::Value> = (0..5)
+            .map(|index| {
+                let value = format!("guid-{index}");
+                pair(
+                    &ids[index],
+                    &ids[index + 1],
+                    &[("activityId", value.as_str())],
+                )
+            })
+            .collect();
+        let timeline = timeline_of(items, edges);
+        let chains = chains_value(5, (1, 0, 0, 0), vec![row("exact", &ids, json!(pairs))]);
+        let report = chain_report_for(&timeline, chains).expect("renders");
+        assert!(report.contains("### Chain 1: Exact, 50 entries"));
+        assert!(report.contains("- Link evidence (10 lines):"));
+        assert!(report.contains("  - and 2 more evidence lines"));
+        assert_eq!(report.matches("\n  - 10").count(), 8);
+        assert_eq!(table_rows(section(&report, "## Correlation chains")), 12);
+        assert!(report.contains("and 38 more listed entries on the timeline, not shown here"));
+    }
+
+    #[test]
+    fn entries_the_session_cannot_place_are_counted_and_never_listed() {
+        let (mut timeline, a, b) = two_event_timeline();
+        let placeless = stable(7);
+        timeline.unplaced.push(UnplacedItem {
+            origin: chain_item(7, 99, 0, "m").origin,
+            reason: UnplacedReason::MissingTimestamp,
+        });
+        let missing = stable(8);
+        let members = [a.clone(), placeless.clone(), missing.clone()];
+        let chains = chains_value(
+            1,
+            (1, 0, 0, 0),
+            vec![row(
+                "exact",
+                &members,
+                json!([pair(&a, &b, &[("activityId", GUID_A)])]),
+            )],
+        );
+        let report = chain_report_for(&timeline, chains).expect("renders");
+        assert!(report.contains(
+            "- Entries: 3 in the chain; the app listed 3. Of those listed, 1 are on the placed \
+             timeline, 1 have no usable timestamp and 1 are not in this session."
+        ));
+        assert_eq!(table_rows(section(&report, "## Correlation chains")), 1);
+    }
+
+    #[test]
+    fn a_text_log_member_is_named_by_its_file_and_line_only() {
+        let (mut timeline, a, _) = two_event_timeline();
+        let log_origin = TimelineOrigin::Log {
+            file: r"C:\Cases\CASE-0002\Logs\IntuneManagementExtension.log".to_owned(),
+            component: Some("Sync".to_owned()),
+            line: 12,
+            source: "IntuneManagementExtension.log".to_owned(),
+            machine: Some("HOST-0005".to_owned()),
+            bundle: None,
+            record_id: 12,
+        };
+        let log_id = origin_id(&log_origin);
+        timeline.items.push(TimelineItem {
+            timestamp_ms: FIXTURE_NOW_MS + 3000,
+            severity: TimelineSeverity::Warning,
+            message: "Policy sync retried on HOST-0005.".to_owned(),
+            origin: log_origin,
+        });
+        timeline.edges.push(exact_edge(
+            &a,
+            &log_id,
+            "00000000-0000-4000-8000-0000000000b2",
+        ));
+        let chains = chains_value(
+            2,
+            (1, 0, 0, 0),
+            vec![row(
+                "exact",
+                &[a.clone(), log_id.clone()],
+                json!([pair(
+                    &a,
+                    &log_id,
+                    &[("activityId", "00000000-0000-4000-8000-0000000000b2")]
+                )]),
+            )],
+        );
+        let report = chain_report_for(&timeline, chains).expect("renders");
+        assert!(report.contains("| log line 12 | IntuneManagementExtension.log | Sync |"));
+        assert!(report.contains("IntuneManagementExtension.log \u{b7} line 12: ActivityId ="));
+        for leak in ["CASE-0002", "HOST-0005", "Logs\\"] {
+            assert!(!report.contains(leak), "{leak} leaked:\n{report}");
+        }
+    }
+
+    #[test]
+    fn nearby_context_is_stated_as_not_produced_and_never_as_none() {
+        let report = render(&base_request(), &snapshot_of(Vec::new(), 0));
+        let nearby = section(&report, "## Nearby, not linked");
+        assert_eq!(
+            nearby.trim_end(),
+            "## Nearby, not linked\n\nNearby context is not produced in this version of the \
+             report. This section says nothing about whether nearby events exist, and nothing in \
+             this report links two entries by time alone."
+        );
+        let lower = nearby.to_lowercase();
+        for forbidden in ["none", "no nearby", "empty", "0 "] {
+            assert!(!lower.contains(forbidden), "{forbidden}");
+        }
+    }
+
+    #[test]
+    fn chain_references_are_bounded_before_any_work_is_done() {
+        let (_, a, b) = two_event_timeline();
+        let ok_row = || {
+            row(
+                "exact",
+                &[a.clone(), b.clone()],
+                json!([pair(&a, &b, &[("activityId", GUID_A)])]),
+            )
+        };
+        let cases: Vec<(&str, serde_json::Value)> = vec![
+            (
+                "too many chain rows",
+                chains_value(
+                    1,
+                    (200, 0, 0, 0),
+                    (0..=REPORT_CHAIN_ROW_CAP).map(|_| ok_row()).collect(),
+                ),
+            ),
+            (
+                "more rows than chains counted",
+                chains_value(1, (0, 0, 0, 0), vec![ok_row()]),
+            ),
+            ("too many references", {
+                let ids: Vec<String> = (0..51).map(|index| format!("id-{index}")).collect();
+                chains_value(1, (1, 0, 0, 0), vec![row("exact", &ids, json!([]))])
+            }),
+            ("lists more members than it has", {
+                let mut value = ok_row();
+                value["memberCount"] = json!(1);
+                chains_value(1, (1, 0, 0, 0), vec![value])
+            }),
+            ("a pair is impossible", {
+                chains_value(
+                    1,
+                    (1, 0, 0, 0),
+                    vec![row(
+                        "exact",
+                        &[a.clone(), b.clone()],
+                        json!([pair(&a, &a, &[("activityId", GUID_A)])]),
+                    )],
+                )
+            }),
+            ("a pair is impossible", {
+                chains_value(
+                    1,
+                    (1, 0, 0, 0),
+                    vec![row(
+                        "exact",
+                        &[a.clone(), b.clone()],
+                        json!([pair(&a, &b, &[])]),
+                    )],
+                )
+            }),
+            ("an identifier is too long", {
+                let long = "x".repeat(2049);
+                chains_value(
+                    1,
+                    (1, 0, 0, 0),
+                    vec![row("exact", &[long.clone(), b.clone()], json!([]))],
+                )
+            }),
+        ];
+        for (expected, chains) in cases {
+            let mut value = request_json();
+            value["chains"] = chains;
+            let error = request_from(value).validate().expect_err(expected);
+            assert!(error.contains(expected), "{expected}: {error}");
+        }
+        // A row may not claim a strength the type does not have.
+        let mut value = request_json();
+        value["chains"] = chains_value(1, (1, 0, 0, 0), vec![row("ambiguous", &[], json!([]))]);
+        assert!(serde_json::from_value::<EventLogAnalysisReportRequest>(value).is_err());
+    }
+
+    #[test]
+    fn tokens_the_projection_wrote_are_not_rewritten_by_the_export_pass() {
+        // The export pass reads `[account:` as a key named Account and masks what follows it, so
+        // running it over projected text would turn the token into `[account:[sensitive:..]]`.
+        let mut one = finding(
+            "a",
+            FindingClass::Symptom,
+            FindingSeverity::Info,
+            FindingConfidence::Low,
+            "Sign-in",
+        );
+        one.summary = "UserName=jdoe-0001 was rejected".to_owned();
+        let summary = summary_of(vec![one], Vec::new());
+        let report = render_with(&base_request(), &snapshot_of(Vec::new(), 0), &summary);
+        let line = report
+            .lines()
+            .find(|line| line.starts_with("- Summary: "))
+            .unwrap();
+        assert!(!line.contains("jdoe-0001"), "{line}");
+        assert!(!line.contains("sensitive"), "{line}");
+        // The account rule takes the rest of the line as the value, so the token covers it all.
+        assert_eq!(
+            *line,
+            format!(
+                "- Summary: UserName={}",
+                redact_field_value("account", "jdoe-0001 was rejected")
+            )
+        );
     }
 }
