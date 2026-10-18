@@ -2846,7 +2846,8 @@ mod screenshot_replies {
     const REGENERATE: &str = "regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`";
 
     /// Replays the UI's call sequence over `input`: create, append in chunks, finalize, every
-    /// timeline page, diagnose. Builds the session directly (no Tauri runtime).
+    /// timeline page, every timeline window the specs ask for, diagnose. Builds the session
+    /// directly (no Tauri runtime).
     fn engine_replies_for_input(input: &serde_json::Value) -> serde_json::Value {
         let records: Vec<EvtxRecord> = serde_json::from_value(input["records"].clone()).unwrap();
         let gaps: Vec<EvtxCoverageGap> =
@@ -2883,6 +2884,29 @@ mod screenshot_replies {
                 None => break,
             }
         }
+        // The windows a spec asks for, each answered by `window` as `evtx_query_analysis_timeline_window`
+        // answers it. The requests are in the input (built from named fixture records), so the
+        // engine, not the spec, decides what is in each window.
+        let windows: Vec<serde_json::Value> = input["timelineWindows"]
+            .as_array()
+            .expect("the engine input has `timelineWindows`")
+            .iter()
+            .map(|request| {
+                let start_ms = request["startMs"].as_i64().unwrap();
+                let end_ms = request["endMs"].as_i64().unwrap();
+                let limit = request["limit"].as_u64().unwrap() as u32;
+                let window = session.window(start_ms, end_ms, limit).unwrap();
+                serde_json::json!({
+                    "name": request["name"],
+                    "centerMs": request["centerMs"],
+                    "halfWidthMs": request["halfWidthMs"],
+                    "startMs": start_ms,
+                    "endMs": end_ms,
+                    "limit": limit,
+                    "window": window,
+                })
+            })
+            .collect();
         let diagnosis = session
             .diagnosis_snapshot()
             .unwrap()
@@ -2896,6 +2920,7 @@ mod screenshot_replies {
             "append": append,
             "finalize": finalize,
             "timelinePages": pages,
+            "timelineWindows": windows,
             "diagnosis": diagnosis,
         })
     }
@@ -2938,6 +2963,86 @@ mod screenshot_replies {
         let text = read_fixture_text(name);
         serde_json::from_str(&text)
             .unwrap_or_else(|error| panic!("parse {name}: {error}; {REGENERATE}"))
+    }
+
+    /// Always on: each committed window is the one its request names, read whole, around a center
+    /// that is an item of the timeline, with nothing outside its bounds.
+    #[test]
+    fn committed_window_replies_are_the_windows_they_were_asked_for() {
+        let input = read_fixture("event-log-engine-input.json");
+        let replies = read_fixture("event-log-engine-replies.json");
+        let requests = input["timelineWindows"]
+            .as_array()
+            .expect("window requests");
+        let answers = replies["timelineWindows"]
+            .as_array()
+            .expect("window replies");
+        assert_eq!(
+            requests.len(),
+            answers.len(),
+            "one reply per request; {REGENERATE}"
+        );
+        assert!(
+            !requests.is_empty(),
+            "the specs ask for at least one window"
+        );
+        for (request, answer) in requests.iter().zip(answers) {
+            let name = request["name"].as_str().unwrap();
+            let center = request["centerMs"].as_i64().unwrap();
+            let half = request["halfWidthMs"].as_i64().unwrap();
+            assert_eq!(
+                answer["name"], request["name"],
+                "{name}: replies are in request order"
+            );
+            assert_eq!(
+                request["startMs"].as_i64(),
+                Some(center - half),
+                "{name} start"
+            );
+            assert_eq!(request["endMs"].as_i64(), Some(center + half), "{name} end");
+            let window = &answer["window"];
+            assert_eq!(
+                window["startMs"].as_i64(),
+                Some(center - half),
+                "{name}: reply start"
+            );
+            assert_eq!(
+                window["endMs"].as_i64(),
+                Some(center + half),
+                "{name}: reply end"
+            );
+            // Read whole: the dataset is small, so a window is never cut by the row or byte bound.
+            assert_eq!(
+                window["omittedItems"].as_u64(),
+                Some(0),
+                "{name}: omitted items"
+            );
+            assert!(window["nextOffset"].is_null(), "{name}: next offset");
+            let items = window["items"].as_array().expect("window items");
+            assert_eq!(
+                window["windowItems"].as_u64(),
+                Some(items.len() as u64),
+                "{name}: window items"
+            );
+            let times: Vec<i64> = items
+                .iter()
+                .map(|item| item["timestampMs"].as_i64().unwrap())
+                .collect();
+            assert!(
+                times.windows(2).all(|pair| pair[0] <= pair[1]),
+                "{name}: items are in time order"
+            );
+            assert!(
+                times
+                    .iter()
+                    .all(|time| (center - half..=center + half).contains(time)),
+                "{name}: every item lies inside the closed window"
+            );
+            assert!(
+                times.contains(&center),
+                "{name}: the record the window is centered on is one of its items"
+            );
+        }
     }
 
     /// Always on: the committed replies must be exactly what the engine answers for the committed
