@@ -26,6 +26,7 @@ import {
   type TimelineSeverity,
   type UnifiedTimeline,
 } from "./unified-timeline";
+import { timelineStripLayout } from "./evtx-timeline-strip";
 
 const UNPLACED_PREVIEW_LIMIT = 100;
 
@@ -301,6 +302,10 @@ export function UnifiedTimelineView({
     overscan: 12,
   });
 
+  // One row as the list measures it (the virtualizer's estimate), and what the strip keeps of it.
+  const rowPx = metrics.rowHeight + 2;
+  const { floorPx, detailsMaxPx } = timelineStripLayout(rowPx);
+
   const virtualRows = virtualizer.getVirtualItems();
   const firstVirtualIndex = virtualRows[0]?.index ?? 0;
   const lastVirtualIndex =
@@ -551,7 +556,10 @@ export function UnifiedTimelineView({
   const monoFontSize = Math.max(10, fontSize - 1);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+    <div
+      data-testid="unified-timeline"
+      style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
+    >
       <div
         style={{
           display: "flex",
@@ -680,7 +688,7 @@ export function UnifiedTimelineView({
               display: "grid",
               gap: "4px",
               padding: "0 12px 6px",
-              maxHeight: "min(320px, 40vh)",
+              maxHeight: `min(${detailsMaxPx}px, 40vh)`,
               overflowY: "auto",
               overflowWrap: "anywhere",
             }}
@@ -763,7 +771,11 @@ export function UnifiedTimelineView({
 
       {totalItems === 0 ? (
         <div
+          data-testid="unified-timeline-empty"
           style={{
+            // A floor, not a size: it can still grow, and shrink only down to three rows.
+            minHeight: `${floorPx}px`,
+            boxSizing: "border-box",
             padding: "24px",
             textAlign: "center",
             color: tokens.colorNeutralForeground3,
@@ -866,10 +878,12 @@ export function UnifiedTimelineView({
       ) : (
         <div
           ref={parentRef}
+          data-testid="unified-timeline-list"
           style={{
             overflowY: "auto",
             flex: 1,
-            minHeight: 0,
+            // Three rows, or all it has when that is less. Not 0: see evtx-timeline-strip.ts.
+            minHeight: `${Math.min(floorPx, virtualizer.getTotalSize())}px`,
             backgroundColor: tokens.colorNeutralBackground1,
             fontFamily: LOG_UI_FONT_FAMILY,
           }}

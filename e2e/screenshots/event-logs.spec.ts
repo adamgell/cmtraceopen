@@ -318,6 +318,39 @@ test.describe("event-logs screenshots", () => {
       path: outPath("event-logs-table.png"),
       animations: "disabled",
     });
+
+    // The unified timeline strip is a fixed-height column: a header, the correlation details, and
+    // the list. Opening the details to their cap must not take the list's last pixel. A scroll
+    // container's automatic minimum size is 0, so a list that is only `flex: 1` collapses to
+    // nothing once the rest fills the strip; it keeps three rows (or all it has) instead, and the
+    // details give way. jsdom does no layout, so this is measured here.
+    const strip = page.getByTestId("unified-timeline");
+    const toggle = strip.getByText("Show correlation details");
+    const region = page.getByRole("region", { name: "Correlation details" });
+    await toggle.click();
+    await expect(region).toBeVisible();
+    await expect(async () => {
+      const layout = await page.evaluate(async () => {
+        const { getLogListMetrics } = await import("/src/lib/log-accessibility.ts");
+        const { useUiStore } = await import("/src/stores/ui-store.ts");
+        const rowPx = getLogListMetrics(useUiStore.getState().logListFontSize).rowHeight + 2;
+        const list = document.querySelector<HTMLElement>('[data-testid="unified-timeline-list"]');
+        const details = document.querySelector<HTMLElement>('[role="region"][aria-label="Correlation details"]');
+        if (!list || !details) throw new Error("the strip's list or details region is missing");
+        return {
+          threeRows: 3 * rowPx,
+          listClient: list.clientHeight,
+          listScroll: list.scrollHeight,
+          regionClient: details.clientHeight,
+          regionScroll: details.scrollHeight,
+        };
+      });
+      // Not vacuous: the region is full, so it scrolls.
+      expect(layout.regionScroll).toBeGreaterThan(layout.regionClient);
+      expect(layout.listClient).toBeGreaterThanOrEqual(Math.min(layout.listScroll, layout.threeRows) - 1);
+    }).toPass({ timeout: 5_000 });
+    await toggle.click();
+    await expect(region).toBeHidden();
   });
 
   test("event-logs selected record", async ({ page }) => {
