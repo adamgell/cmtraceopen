@@ -13,6 +13,12 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
 }));
 
+// The real model, counted: "is the list rebuilt?" is a question about calls, not about DOM nodes.
+vi.mock("./evtx-detail-context-model", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./evtx-detail-context-model")>();
+  return { ...actual, buildDetailContext: vi.fn(actual.buildDetailContext) };
+});
+
 import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes, type ThemeId } from "../../lib/themes";
 import {
@@ -30,6 +36,7 @@ import {
   DETAIL_CONTEXT_TITLE,
   LINKS_MAY_BE_MISSING_TEXT,
   LINK_LEGEND_TEXT,
+  buildDetailContext,
 } from "./evtx-detail-context-model";
 import {
   countsFor,
@@ -86,6 +93,7 @@ const section = () => screen.getByRole("group", { name: DETAIL_CONTEXT_TITLE });
 const rows = () => within(section()).getAllByRole("listitem");
 
 beforeEach(() => {
+  vi.mocked(buildDetailContext).mockClear();
   useUiStore.setState({ themeId: "light" as ThemeId, logListFontSize: 14 });
   useEvtxLayoutStore.setState({ activeView: "table" });
   useEvtxCorrelationStore.setState({ selectedChainId: null, unplacedOpen: false });
@@ -290,12 +298,42 @@ describe("a section follows its inputs", () => {
     });
   });
 
-  it("does not rebuild for a new counts object that holds the same model", () => {
+  describe("does not rebuild the model when nothing it reads has changed", () => {
+    // One window, one record and one counts object for every render, so only the part under test
+    // can change what the model is given. The hook hands over a NEW counts object on every run
+    // change, scan progress included, and each of those must cost nothing.
     const counts = countsFor(edges());
-    const view = render(<EvtxDetailContext {...props({ counts })} />);
-    const first = within(section()).getAllByRole("listitem")[0];
-    view.rerender(<EvtxDetailContext {...props({ counts: { ...counts } })} />);
-    expect(within(section()).getAllByRole("listitem")[0]).toBe(first);
+    const fixed = props({ counts });
+    const builds = () => vi.mocked(buildDetailContext).mock.calls.length;
+
+    it("builds once for the first render, and not again for the same props", () => {
+      const view = render(<EvtxDetailContext {...fixed} />);
+      expect(builds()).toBe(1);
+      view.rerender(<EvtxDetailContext {...fixed} />);
+      expect(builds()).toBe(1);
+    });
+
+    it("does not rebuild for a new counts object that holds the same parts", () => {
+      const view = render(<EvtxDetailContext {...fixed} />);
+      view.rerender(<EvtxDetailContext {...fixed} counts={{ ...counts }} />);
+      view.rerender(<EvtxDetailContext {...fixed} counts={{ ...counts }} />);
+      expect(builds()).toBe(1);
+    });
+
+    it("does not rebuild for what the model does not read: link partners, the time zone", () => {
+      const view = render(<EvtxDetailContext {...fixed} />);
+      view.rerender(<EvtxDetailContext {...fixed} counts={{ ...counts, linkPartners: new Map([["x", 1]]) }} />);
+      view.rerender(<EvtxDetailContext {...fixed} counts={{ ...counts }} timeZoneMode="local" />);
+      expect(builds()).toBe(1);
+    });
+
+    it("does rebuild when a part it reads changes, so the count above can fail", () => {
+      const view = render(<EvtxDetailContext {...fixed} />);
+      view.rerender(<EvtxDetailContext {...fixed} counts={{ ...counts, updating: true }} />);
+      expect(builds()).toBe(2);
+      view.rerender(<EvtxDetailContext {...fixed} counts={{ ...counts, updating: true }} unreadSources />);
+      expect(builds()).toBe(3);
+    });
   });
 });
 
