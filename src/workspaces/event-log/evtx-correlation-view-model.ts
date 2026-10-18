@@ -451,6 +451,50 @@ export type PlotChain = Pick<
   "memberIds" | "unresolvedMemberIds" | "edges" | "evidence" | "startMs" | "endMs"
 >;
 
+/**
+ * What decides the word for an entry that is not in the row it is compared with: whether the
+ * session can speak for an absence of a link, the engine's coverage gaps, and the entries that have
+ * a loaded partner.
+ */
+export interface NearbyLabelRule {
+  /**
+   * `sessionSpeaksForAbsence` over the members of the row the entry is compared with. A list that
+   * is compared with no row (the rail's, which is session-level) asks it with no members.
+   */
+  chainClear: boolean;
+  /** A gap that names the entry's own origin withdraws "Not linked" for it alone. */
+  gaps: Pick<CorrelationGaps, "originIds">;
+  /** Distinct exact and candidate partners per origin id (`linkPartnerCounts`). */
+  linkPartners?: ReadonlyMap<string, number>;
+  /** See `ChainPlotInput.selectionIdentified`. Defaults to true. */
+  selectionIdentified?: boolean;
+}
+
+/**
+ * The word for ONE entry that is not a member of the row: "In another chain" (or, when the plot's
+ * selected entry is not identified, `LINK_TO_EVENT_UNKNOWN_LABEL`) for an entry with a loaded
+ * partner, a fact whatever else is incomplete; "Not linked" only when the session can speak for an
+ * absence and no gap names the entry; otherwise "No loaded link".
+ */
+export function nearbyLinkLabel(originId: string, rule: NearbyLabelRule): string {
+  if ((rule.linkPartners?.get(originId) ?? 0) > 0) {
+    return rule.selectionIdentified === false ? LINK_TO_EVENT_UNKNOWN_LABEL : IN_ANOTHER_CHAIN_LABEL;
+  }
+  return rule.chainClear && !rule.gaps.originIds.has(originId) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
+}
+
+/**
+ * The ONE legend word for the dotted entry: it says "Not linked" only if every entry it stands for
+ * may be called that and the session speaks. It drops to "Not in this chain" when any of them is
+ * linked elsewhere, which is all they then have in common, and says the link to the event is not
+ * known when any of them is. With no entry it is what the session can say about an absence.
+ */
+export function notLinkedLegendLabel(labels: readonly (string | null)[], chainClear: boolean): string {
+  if (labels.some((label) => label === LINK_TO_EVENT_UNKNOWN_LABEL)) return LINK_TO_EVENT_UNKNOWN_LABEL;
+  if (labels.some((label) => label === IN_ANOTHER_CHAIN_LABEL)) return NOT_IN_THIS_CHAIN_LABEL;
+  return chainClear && labels.every((label) => label === NOT_LINKED_LABEL) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
+}
+
 export interface ChainPlotInput {
   chain: PlotChain;
   itemsById: ReadonlyMap<string, TimelineItem>;
@@ -533,20 +577,19 @@ export function sessionSpeaksForAbsence(input: AbsenceInput): boolean {
 
 export function buildChainPlot(input: ChainPlotInput): ChainPlot {
   const { chain, itemsById } = input;
-  // A gap that names an entry's own origin withdraws "Not linked" for that entry alone (`labelFor`);
-  // the rest of the rule is `sessionSpeaksForAbsence`.
+  // A gap that names an entry's own origin withdraws "Not linked" for that entry alone
+  // (`nearbyLinkLabel`); the rest of the rule is `sessionSpeaksForAbsence`.
   const chainClear = sessionSpeaksForAbsence({
     edgeInputComplete: input.edgeInputComplete,
     narrowed: input.narrowed,
     gaps: input.gaps,
     memberIds: [...chain.memberIds, ...chain.unresolvedMemberIds],
   });
-  const labelFor = (originId: string) => {
-    // A loaded partner is a fact, whatever else is incomplete: say it first.
-    if ((input.linkPartners?.get(originId) ?? 0) > 0) {
-      return input.selectionIdentified === false ? LINK_TO_EVENT_UNKNOWN_LABEL : IN_ANOTHER_CHAIN_LABEL;
-    }
-    return chainClear && !input.gaps.originIds.has(originId) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
+  const labelRule: NearbyLabelRule = {
+    chainClear,
+    gaps: input.gaps,
+    linkPartners: input.linkPartners,
+    selectionIdentified: input.selectionIdentified,
   };
   const markerCap = input.markerCap ?? CORRELATION_MARKER_CAP;
   const connectorCap = input.connectorCap ?? CORRELATION_CONNECTOR_CAP;
@@ -575,7 +618,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     omittedConnectors: 0,
     membersWithoutItem,
     showsNotLinkedLegend: false,
-    notLinkedLabel: chainClear ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL,
+    notLinkedLabel: notLinkedLegendLabel([], chainClear),
   };
   if (window === null) return empty;
 
@@ -618,7 +661,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
           ? null
           : `${shortEntryId(item, lane)} · ${formatDelta(placement.outsideMs)} ${placement.pinned === "before" ? "earlier" : "later"}`,
       sequenceIndex,
-      linkLabel: role === "nearby" ? labelFor(id) : null,
+      linkLabel: role === "nearby" ? nearbyLinkLabel(id, labelRule) : null,
     };
   };
 
@@ -673,16 +716,11 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     omittedConnectors,
     membersWithoutItem,
     showsNotLinkedLegend: nearby.length > 0,
-    // One legend entry for the dotted marker: it says "Not linked" only if every marker it stands
-    // for may be called that, and it drops to "Not in this chain" when any of them is linked
-    // elsewhere, which is all that they then have in common.
-    notLinkedLabel: nearby.some((marker) => marker.linkLabel === LINK_TO_EVENT_UNKNOWN_LABEL)
-      ? LINK_TO_EVENT_UNKNOWN_LABEL
-      : nearby.some((marker) => marker.linkLabel === IN_ANOTHER_CHAIN_LABEL)
-        ? NOT_IN_THIS_CHAIN_LABEL
-        : chainClear && nearby.every((marker) => marker.linkLabel === NOT_LINKED_LABEL)
-          ? NOT_LINKED_LABEL
-          : NO_LOADED_LINK_LABEL,
+    // One legend entry for the dotted marker, in the one word every marker it stands for may carry.
+    notLinkedLabel: notLinkedLegendLabel(
+      nearby.map((marker) => marker.linkLabel),
+      chainClear,
+    ),
   };
 }
 

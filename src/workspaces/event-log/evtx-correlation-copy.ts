@@ -16,6 +16,9 @@ import type {
 } from "./evtx-correlation-chains";
 import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
 import {
+  IN_ANOTHER_CHAIN_LABEL,
+  LINK_TO_EVENT_UNKNOWN_LABEL,
+  NOT_LINKED_LABEL,
   chainAccessibleName,
   chainSequence,
   chainTitle,
@@ -747,6 +750,17 @@ export function nearbyReason(reason: NearbyReason): string {
     case "coverageBlockedWithEvent":
       return "coverage blocked with this event";
   }
+}
+
+/**
+ * The reason that goes with the label `nearbyLinkLabel` gave a context entry. A label that is not
+ * one of the three this reads, or none, is the weakest claim: no loaded link.
+ */
+export function nearbyReasonOfLabel(label: string | null): NearbyReason {
+  if (label === NOT_LINKED_LABEL) return "notLinked";
+  if (label === IN_ANOTHER_CHAIN_LABEL) return "inAnotherChain";
+  if (label === LINK_TO_EVENT_UNKNOWN_LABEL) return "linkUnknownToEvent";
+  return "noLoadedLink";
 }
 
 /** The line after the dock's plot when a cap left entries, sources or connectors undrawn. */

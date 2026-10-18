@@ -44,6 +44,7 @@ import {
   emptyWindowText,
   keyKindLabel,
   nearbyReason,
+  nearbyReasonOfLabel,
   noChainsFoundText,
   openDisabledText,
   moreText,
@@ -655,6 +656,10 @@ describe("no string claims an entry is unplaced without proof", () => {
     "levelOfSeverity",
     "listedRows",
     "memberLinkSummary",
+    // They pick one of the label constants above, which the audit prints; they write no text.
+    "nearbyLinkLabel",
+    "nearbyReasonOfLabel",
+    "notLinkedLegendLabel",
     "partitionUnplaced",
     "placeInWindow",
     "reconcileSelection",
@@ -1503,5 +1508,27 @@ describe("the words the Correlation view and the Chains tab share (#841)", () =>
     ]) {
       expect(viewSource, phrase).not.toContain(phrase);
     }
+  });
+});
+
+describe("nearbyReasonOfLabel, the reason beside a context entry for the label the plot gave it (#841)", () => {
+  it.each([
+    [NOT_LINKED_LABEL, "notLinked", "time only, not linked"],
+    [IN_ANOTHER_CHAIN_LABEL, "inAnotherChain", "time only; in another chain"],
+    [LINK_TO_EVENT_UNKNOWN_LABEL, "linkUnknownToEvent", "linked, but its link to this event is not known"],
+    [NO_LOADED_LINK_LABEL, "noLoadedLink", "time only, no loaded link"],
+  ] as const)("reads %s as %s", (label, reason, text) => {
+    expect(nearbyReasonOfLabel(label)).toBe(reason);
+    expect(nearbyReason(nearbyReasonOfLabel(label))).toBe(text);
+  });
+
+  it("reads a label it does not know, and no label, as the weakest claim: no loaded link", () => {
+    expect(nearbyReasonOfLabel(null)).toBe("noLoadedLink");
+    expect(nearbyReasonOfLabel(NOT_IN_THIS_CHAIN_LABEL)).toBe("noLoadedLink");
+    expect(nearbyReasonOfLabel("anything else")).toBe("noLoadedLink");
+  });
+
+  it("never reads 'No loaded link' as 'not linked'", () => {
+    expect(nearbyReason(nearbyReasonOfLabel(NO_LOADED_LINK_LABEL))).not.toMatch(/not linked/);
   });
 });

@@ -4,6 +4,7 @@
  * yet produce (a log-line member, a mixed Exact and Candidate chain, an edge with no evidence).
  */
 import { describe, expect, it, vi } from "vitest";
+import viewModelSource from "./evtx-correlation-view-model.ts?raw";
 import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import {
   buildCorrelationChains,
@@ -45,6 +46,8 @@ import {
   chainAccessibleName,
   isProvenUnplaced,
   listedRows,
+  nearbyLinkLabel,
+  notLinkedLegendLabel,
   partitionUnplaced,
   sessionSpeaksForAbsence,
 } from "./evtx-correlation-view-model";
@@ -1370,5 +1373,113 @@ describe("sessionSpeaksForAbsence", () => {
     expect(labelWith({ narrowed: true })).toBe(NO_LOADED_LINK_LABEL);
     expect(labelWith({ gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) })).toBe(NO_LOADED_LINK_LABEL);
     expect(labelWith({ gaps: classifyCoverageGaps([{ source: rid(2), reason: "x" }], 1) })).toBe(NO_LOADED_LINK_LABEL);
+  });
+});
+
+describe("nearbyLinkLabel, the word for one entry that is not in the row (#841)", () => {
+  const clear = classifyCoverageGaps([], 0);
+  const speaks = { chainClear: true, gaps: clear };
+
+  it("says 'Not linked' only when the session can speak for an absence and no gap names the entry", () => {
+    expect(nearbyLinkLabel(rid(9), speaks)).toBe(NOT_LINKED_LABEL);
+  });
+
+  it("says 'No loaded link' when the session cannot speak for an absence", () => {
+    expect(nearbyLinkLabel(rid(9), { ...speaks, chainClear: false })).toBe(NO_LOADED_LINK_LABEL);
+  });
+
+  it("says 'No loaded link' for an entry a gap names, whatever the rest of the session says", () => {
+    const named = classifyCoverageGaps([{ source: rid(9), reason: "x" }], 1);
+    expect(nearbyLinkLabel(rid(9), { chainClear: true, gaps: named })).toBe(NO_LOADED_LINK_LABEL);
+    expect(nearbyLinkLabel(rid(8), { chainClear: true, gaps: named })).toBe(NOT_LINKED_LABEL);
+  });
+
+  it("says 'In another chain' for an entry with a loaded partner, first and whatever else is incomplete", () => {
+    const partners = new Map([[rid(9), 2]]);
+    expect(nearbyLinkLabel(rid(9), { ...speaks, linkPartners: partners })).toBe(IN_ANOTHER_CHAIN_LABEL);
+    expect(nearbyLinkLabel(rid(9), { chainClear: false, gaps: classifyCoverageGaps([], null), linkPartners: partners })).toBe(
+      IN_ANOTHER_CHAIN_LABEL,
+    );
+    expect(nearbyLinkLabel(rid(8), { ...speaks, linkPartners: partners })).toBe(NOT_LINKED_LABEL);
+  });
+
+  it("does not say 'In another chain' for an entry whose partner count is 0 or absent", () => {
+    expect(nearbyLinkLabel(rid(9), { ...speaks, linkPartners: new Map([[rid(9), 0]]) })).toBe(NOT_LINKED_LABEL);
+  });
+
+  it("says the link to the event is not known when the selection is not identified and the entry has a partner", () => {
+    const partners = new Map([[rid(9), 1]]);
+    expect(nearbyLinkLabel(rid(9), { ...speaks, linkPartners: partners, selectionIdentified: false })).toBe(
+      LINK_TO_EVENT_UNKNOWN_LABEL,
+    );
+    // "Not linked" is a fact about the entry itself, so an unidentified selection does not change it.
+    expect(nearbyLinkLabel(rid(8), { ...speaks, linkPartners: partners, selectionIdentified: false })).toBe(NOT_LINKED_LABEL);
+    expect(nearbyLinkLabel(rid(9), { ...speaks, linkPartners: partners, selectionIdentified: true })).toBe(IN_ANOTHER_CHAIN_LABEL);
+  });
+});
+
+describe("notLinkedLegendLabel, the one word for the dotted entry (#841)", () => {
+  it("is 'Not linked' only when the session speaks and every entry is called that", () => {
+    expect(notLinkedLegendLabel([NOT_LINKED_LABEL, NOT_LINKED_LABEL], true)).toBe(NOT_LINKED_LABEL);
+  });
+
+  it("falls to 'No loaded link' when the session cannot speak, or any entry cannot be called 'Not linked'", () => {
+    expect(notLinkedLegendLabel([NOT_LINKED_LABEL, NOT_LINKED_LABEL], false)).toBe(NO_LOADED_LINK_LABEL);
+    expect(notLinkedLegendLabel([NOT_LINKED_LABEL, NO_LOADED_LINK_LABEL], true)).toBe(NO_LOADED_LINK_LABEL);
+  });
+
+  it("says 'Not in this chain' when any entry is linked elsewhere, which is all they then have in common", () => {
+    expect(notLinkedLegendLabel([NOT_LINKED_LABEL, IN_ANOTHER_CHAIN_LABEL], true)).toBe(NOT_IN_THIS_CHAIN_LABEL);
+    expect(notLinkedLegendLabel([NO_LOADED_LINK_LABEL, IN_ANOTHER_CHAIN_LABEL], false)).toBe(NOT_IN_THIS_CHAIN_LABEL);
+  });
+
+  it("says the link to the event is not known when any entry is, before anything else", () => {
+    expect(notLinkedLegendLabel([IN_ANOTHER_CHAIN_LABEL, LINK_TO_EVENT_UNKNOWN_LABEL], true)).toBe(
+      LINK_TO_EVENT_UNKNOWN_LABEL,
+    );
+  });
+
+  it("is, for no entry at all, what the session can say about the absence of a link", () => {
+    expect(notLinkedLegendLabel([], true)).toBe(NOT_LINKED_LABEL);
+    expect(notLinkedLegendLabel([], false)).toBe(NO_LOADED_LINK_LABEL);
+  });
+});
+
+describe("the plot says what the extracted rules say (#841)", () => {
+  const T0 = Date.UTC(2026, 9, 6, 10, 20, 0);
+  const items = [eventItem(1, T0), eventItem(2, T0 + 6_000)];
+  const chain = chainOf(fixtureEdges("exactPair"), items);
+  const nearby = [eventItem(8, T0 + 1_000), eventItem(9, T0 + 2_000), eventItem(7, T0 + 3_000)];
+
+  it("labels every nearby marker with nearbyLinkLabel and the legend with notLinkedLegendLabel", () => {
+    const gaps = classifyCoverageGaps([{ source: rid(9), reason: "x" }], 1);
+    const linkPartners = new Map([[rid(7), 1]]);
+    for (const view of [{ gaps, linkPartners }, { gaps: classifyCoverageGaps([], 0), linkPartners }, { gaps: classifyCoverageGaps([], 0) }]) {
+      const plot = buildChainPlot({ ...VIEW, ...view, chain, itemsById: mapOf(items), nearby });
+      const chainClear = sessionSpeaksForAbsence({
+        edgeInputComplete: VIEW.edgeInputComplete,
+        narrowed: VIEW.narrowed,
+        gaps: view.gaps,
+        memberIds: [...chain.memberIds, ...chain.unresolvedMemberIds],
+      });
+      const labels = plot.nearby.map((marker) =>
+        nearbyLinkLabel(marker.id, { chainClear, gaps: view.gaps, linkPartners: "linkPartners" in view ? view.linkPartners : undefined }),
+      );
+      expect(plot.nearby.map((marker) => marker.linkLabel)).toEqual(labels);
+      expect(plot.notLinkedLabel).toBe(notLinkedLegendLabel(labels, chainClear));
+    }
+  });
+
+  it("says what the session can say when no marker is drawn", () => {
+    const empty = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items), window: null });
+    expect(empty.notLinkedLabel).toBe(notLinkedLegendLabel([], true));
+    const narrowed = buildChainPlot({ ...VIEW, narrowed: true, chain, itemsById: mapOf(items), window: null });
+    expect(narrowed.notLinkedLabel).toBe(notLinkedLegendLabel([], false));
+  });
+
+  it("keeps the rules in these exports: the plot holds no label rule of its own", () => {
+    expect(viewModelSource).toMatch(/\bnearbyLinkLabel\(/);
+    expect(viewModelSource).toMatch(/\bnotLinkedLegendLabel\(/);
+    expect(viewModelSource).not.toMatch(/const labelFor\b/);
   });
 });

@@ -48,6 +48,7 @@ import {
   emptyWindowText,
   keyKindLabel,
   nearbyReason,
+  nearbyReasonOfLabel,
   outsideWindowNote,
   partialChainTitle,
   scopeDisclosure,
@@ -68,9 +69,6 @@ import {
   resolveOriginRecords,
 } from "./evtx-correlation-origin-index";
 import {
-  IN_ANOTHER_CHAIN_LABEL,
-  LINK_TO_EVENT_UNKNOWN_LABEL,
-  NOT_LINKED_LABEL,
   buildChainPlot,
   describeLanes,
   keyHeader,
@@ -246,14 +244,6 @@ export type DockModel =
 
 function isLinking(strength: CorrelationChain["strength"]): boolean {
   return strength === "exact" || strength === "candidate";
-}
-
-/** The words for a context marker's label, which `buildChainPlot` decided. */
-function reasonOfLabel(label: string | null): NearbyReason {
-  if (label === NOT_LINKED_LABEL) return "notLinked";
-  if (label === IN_ANOTHER_CHAIN_LABEL) return "inAnotherChain";
-  if (label === LINK_TO_EVENT_UNKNOWN_LABEL) return "linkUnknownToEvent";
-  return "noLoadedLink";
 }
 
 /**
@@ -536,7 +526,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
     }
   }
   const reasonFor = (marker: PlotMarker): NearbyReason =>
-    annotations.get(marker.id) ?? reasonOfLabel(marker.linkLabel);
+    annotations.get(marker.id) ?? nearbyReasonOfLabel(marker.linkLabel);
 
   const nearby: DockNearbyEntry[] = [...plot.nearby]
     .sort(compareByDistance<PlotMarker>(record.timestampEpoch, (marker) => marker.id))
