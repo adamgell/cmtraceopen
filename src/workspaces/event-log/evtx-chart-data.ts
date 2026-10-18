@@ -35,7 +35,7 @@ export const TOP_EVENT_ID_LIMIT = 9;
 export const CHANNEL_ROW_LIMIT = 12;
 export const HOURS_PER_DAY = 24;
 /** Matches `heatSteps.length` in the visual tokens (six fixed steps, D11). */
-export const HEAT_STEP_COUNT = 6;
+const HEAT_STEP_COUNT = 6;
 const QUALIFIER_QUERY_LIMIT = 32;
 /** Off-order channels spread over this many color indexes after the ordered ones. */
 const OFF_ORDER_SPAN = 6;
@@ -247,7 +247,7 @@ function dayExists(text: string): boolean {
  * module header). A day beyond its month's length is rejected before parsing,
  * as chrono does. Never `Date.parse` on a display string.
  */
-export function placedEpochMs(
+function placedEpochMs(
   record: Pick<EvtxChartRecord, "timestamp" | "timestampEpoch">,
 ): number | null {
   const epoch = record.timestampEpoch;
