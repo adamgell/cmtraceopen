@@ -1410,3 +1410,87 @@ describe("an origin the engine rewrote because it refused the record's identity"
     expect(result.counts.get(a)).toBe(1);
   });
 });
+
+describe("timeline text is never redacted: a label shaped like a redaction token is that label", () => {
+  // The engine redacts diagnosis evidence, never a timeline origin, so `[case:...]` in a folder name
+  // is a folder name. Two exported copies of one log in such folders must stay two records.
+  const TOKEN_A = "D:\\Cases\\[case:0f1e2d3c4b5a6978]\\Security.evtx";
+  const TOKEN_B = "D:\\Cases\\[case:8a7b6c5d4e3f2a1b]\\Security.evtx";
+
+  it.each([
+    ["source label", (value: string) => ({ sourceLabel: value })],
+    ["channel", (value: string) => ({ channel: value })],
+    ["provider", (value: string) => ({ provider: value })],
+  ])("names exactly one of two records that differ only in a token-shaped %s", (_field, make) => {
+    const a = record(42, make(TOKEN_A));
+    const b = record(42, make(TOKEN_B));
+    const index = indexOf([a, b]);
+    for (const [origin, wanted] of [
+      [engineOriginOf(a), a],
+      [engineOriginOf(b), b],
+      [originOf(a), a],
+      [originOf(b), b],
+    ] as const) {
+      expect(resolveOriginRecords(origin, index)).toEqual({ kind: "matches", records: [wanted] });
+    }
+  });
+
+  it("does not take a token as a wildcard for any text", () => {
+    const other = record(42, { sourceLabel: "D:\\Cases\\anything\\Security.evtx" });
+    expect(resolveOriginRecords(engineOriginOf(record(42, { sourceLabel: TOKEN_A })), indexOf([other]))).toEqual({
+      kind: "matches",
+      records: [],
+    });
+  });
+
+  it("scopes a chain to the one copy, not to both", () => {
+    const a = fixturePair(1);
+    const aCopy = record(1, { eventId: 101, sourceLabel: TOKEN_B });
+    const labelled = record(1, { eventId: 101, sourceLabel: TOKEN_A });
+    const item = itemOf(engineOriginOf(labelled, { stableId: rid(1) }), 1_000);
+    const scope = scopeForChain(
+      { memberIds: [rid(1)], unresolvedMemberIds: [] },
+      originLookup([item], []),
+      indexOf([labelled, aCopy, a.source]),
+      { edgeInputComplete: true },
+    );
+    expect(scope.records).toEqual([labelled]);
+    expect(scope.counts).toMatchObject({ ambiguous: 0, notLoaded: 0 });
+  });
+
+  it("marks only the records of the same token-shaped lane unknown when an origin there has no usable identity", () => {
+    const unidentified = record(7, { sourceLabel: TOKEN_A, eventRecordId: 0, eventRecordIdText: null });
+    const sameLane = record(8, { sourceLabel: TOKEN_A });
+    const siblingLane = record(9, { sourceLabel: TOKEN_B });
+    const partner = fixturePair(1);
+    const loaded = [sameLane, siblingLane, partner.source];
+    const result = linkCountsByRecord(
+      linkPartnerCounts([{ left: rid(7), right: rid(1) }]),
+      originLookup(
+        [itemOf(engineOriginOf(unidentified, { recordId: 0, recordIdText: null, stableId: rid(7) })), partner.item],
+        [],
+      ),
+      indexOf(loaded),
+      { records: loaded, edgeInputComplete: true, scanComplete: true, gaps: CLEAR_GAPS },
+    );
+    expect(result.unknownRecords.has(sameLane)).toBe(true);
+    expect(result.unknownRecords.has(siblingLane)).toBe(false);
+  });
+
+  it("matches a token-shaped label under the transport's bound only exactly", () => {
+    const long = `D:\\Cases\\[case:0f1e2d3c4b5a6978]\\${"x".repeat(300)}.evtx`;
+    const sibling = long.replace("0f1e2d3c4b5a6978", "8a7b6c5d4e3f2a1b");
+    const wanted = record(42, { sourceLabel: long });
+    const twin = record(42, { sourceLabel: sibling });
+    const projected = originOf(wanted);
+    expect(projected.source).toMatch(/\u2026\[truncated:[0-9a-f]{16}\]$/);
+    expect(resolveOriginRecords(projected, indexOf([wanted, twin]))).toEqual({ kind: "matches", records: [wanted] });
+    // The digest names the wanted record's whole text. A prefix with another token has to fail on the
+    // prefix, so it is forged: the right digest, the sibling's token.
+    const forged = originOf(wanted, {
+      source: projected.source.replace("0f1e2d3c4b5a6978", "8a7b6c5d4e3f2a1b"),
+    });
+    expect(forged.source).not.toBe(projected.source);
+    expect(resolveOriginRecords(forged, indexOf([wanted, twin]))).toEqual({ kind: "matches", records: [] });
+  });
+});

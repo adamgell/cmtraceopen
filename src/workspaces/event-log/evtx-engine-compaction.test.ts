@@ -231,6 +231,48 @@ describe("timelineTextMatches: an origin text the engine compacted", () => {
   });
 });
 
+describe("timelineTextMatches reads no redaction token as a wildcard, evidenceTextMatches does", () => {
+  const A = "D:\\Cases\\[case:0f1e2d3c4b5a6978]\\Security.evtx";
+  const B = "D:\\Cases\\[case:8a7b6c5d4e3f2a1b]\\Security.evtx";
+
+  it("keeps short text exact, token-shaped or not", () => {
+    expect(timelineTextMatches(A, A)).toBe(true);
+    expect(timelineTextMatches(A, B)).toBe(false);
+    expect(timelineTextMatches(B, A)).toBe(false);
+    expect(timelineTextMatches(A, "D:\\Cases\\anything\\Security.evtx")).toBe(false);
+    expect(timelineTextMatches("[host:0123456789abcdef]", "LAB-PC-07")).toBe(false);
+    expect(timelineTextMatches("Remote: [host:0123456789abcdef]", "Remote: LAB-PC-07")).toBe(false);
+  });
+
+  it("keeps the same token-shaped text exact under the engine's compaction and the transport's bound", () => {
+    const long = `D:\\Cases\\[case:0f1e2d3c4b5a6978]\\${"x".repeat(300)}.evtx`;
+    const sibling = long.replace("0f1e2d3c4b5a6978", "8a7b6c5d4e3f2a1b");
+    const compacted = timelineReference(long);
+    expect(timelineTextMatches(compacted, long)).toBe(true);
+    expect(timelineTextMatches(compacted, sibling)).toBe(false);
+    // Same digest and length, another token in the prefix: only a token wildcard would accept it.
+    expect(timelineTextMatches(compacted.replace("0f1e2d3c4b5a6978", "8a7b6c5d4e3f2a1b"), long)).toBe(false);
+    const projected = boundUtf8WithDigest(long, 256);
+    expect(timelineTextMatches(projected, long)).toBe(true);
+    expect(timelineTextMatches(projected, sibling)).toBe(false);
+    expect(timelineTextMatches(projected.replace("0f1e2d3c4b5a6978", "8a7b6c5d4e3f2a1b"), long)).toBe(false);
+  });
+
+  it("keeps a token-shaped machine exact", () => {
+    expect(provenanceAgrees("HOST-[host:0123456789abcdef]", "  HOST-[host:0123456789abcdef]  ")).toBe(true);
+    expect(provenanceAgrees("HOST-[host:0123456789abcdef]", "HOST-[host:fedcba9876543210]")).toBe(false);
+    expect(provenanceAgrees("HOST-[host:0123456789abcdef]", "HOST-LAB-PC-07")).toBe(false);
+  });
+
+  it("leaves diagnosis evidence its wildcards, because that is where the engine really redacts", () => {
+    expect(evidenceTextMatches(A, A)).toBe(true);
+    expect(evidenceTextMatches(A, B)).toBe(true);
+    expect(evidenceTextMatches(A, "D:\\Cases\\anything\\Security.evtx")).toBe(true);
+    expect(evidenceTextMatches(A, "D:\\Other\\anything\\Security.evtx")).toBe(false);
+    expect(evidenceTextMatches("Remote: [host:0123456789abcdef]", "Remote: LAB-PC-07")).toBe(true);
+  });
+});
+
 describe("provenanceAgrees: machine and component are normalized, then compared", () => {
   const origins = vectors.origins;
   const byName = (name: string) => origins.find((c) => c.name === name) as OriginCase;

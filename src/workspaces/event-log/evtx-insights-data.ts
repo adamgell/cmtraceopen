@@ -200,11 +200,32 @@ function matchesWithTokens(evidence: string, raw: string): boolean {
 }
 
 /**
+ * Compares a value that may carry the transport's bound (`boundUtf8WithDigest`) with the record's
+ * raw value. Null when `value` carries no `\u2026[truncated:hex16]` suffix, so the caller applies
+ * its own rule for text that was not bounded. With the suffix, the record's value is bounded the
+ * same way, the digests must be equal, and `prefixMatches` decides the text before the suffix.
+ */
+function matchesTransportBound(
+  value: string,
+  recordValue: string,
+  prefixMatches: (valuePrefix: string, boundedPrefix: string) => boolean,
+): boolean | null {
+  const truncated = TRUNCATED_SUFFIX.exec(value);
+  if (!truncated) return null;
+  const bounded = boundUtf8WithDigest(recordValue, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
+  const boundedSuffix = TRUNCATED_SUFFIX.exec(bounded);
+  if (!boundedSuffix || boundedSuffix[1] !== truncated[1]) return false;
+  return prefixMatches(value.slice(0, truncated.index), bounded.slice(0, boundedSuffix.index));
+}
+
+/**
  * Whether an evidence value from the redacted display projection names the record's raw value.
- * The engine redacts identifiers partially: a profile segment or a machine name inside a longer
- * string becomes a `[kind:hex16]` token (`C:\Users\[user:...]\Downloads\System.evtx`,
- * `Remote: [host:...]`). A value with tokens is compared with each token as a non-empty wildcard
- * and the rest literal; a value without tokens must be equal.
+ * This is for DIAGNOSIS EVIDENCE ONLY, the one surface where the engine really redacts: it
+ * redacts identifiers partially, so a profile segment or a machine name inside a longer string
+ * becomes a `[kind:hex16]` token (`C:\Users\[user:...]\Downloads\System.evtx`, `Remote: [host:...]`).
+ * A value with tokens is compared with each token as a non-empty wildcard and the rest literal; a
+ * value without tokens must be equal. Timeline origins are never redacted, so their text goes
+ * through `timelineTextMatches`, which never reads a token as a wildcard.
  *
  * An identity field over the transport's byte limit reaches the engine digest-bounded: a prefix
  * plus `\u2026[truncated:hex16]`. When the EVIDENCE carries that suffix, the record's value is
@@ -213,14 +234,9 @@ function matchesWithTokens(evidence: string, raw: string): boolean {
  * were bounded.
  */
 export function redactedValueMatches(evidenceValue: string, recordValue: string): boolean {
-  const truncated = TRUNCATED_SUFFIX.exec(evidenceValue);
-  if (!truncated) return matchesWithTokens(evidenceValue, recordValue);
-  const bounded = boundUtf8WithDigest(recordValue, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
-  const boundedSuffix = TRUNCATED_SUFFIX.exec(bounded);
-  if (!boundedSuffix || boundedSuffix[1] !== truncated[1]) return false;
-  return matchesWithTokens(
-    evidenceValue.slice(0, truncated.index),
-    bounded.slice(0, boundedSuffix.index),
+  return (
+    matchesTransportBound(evidenceValue, recordValue, matchesWithTokens) ??
+    matchesWithTokens(evidenceValue, recordValue)
   );
 }
 
@@ -267,13 +283,21 @@ function isEngineCompactionOf(
 }
 
 /**
- * Whether a timeline origin's text names the record's raw value. Either the engine compacted it
- * (`compact_timeline_text`: the record reached the engine whole, the common case), or it is the
- * transport's bound on a record the transport projected (`redactedValueMatches`), or it is short
- * and equal. Machine and component must be NORMALIZED before they are compared (see
- * `provenanceAgrees`): the engine trims them before it compacts them.
+ * Whether a timeline origin's text names the record's raw value. Exactly one of three holds, and
+ * none reads a redaction token as a wildcard, because the engine never redacts a timeline origin
+ * (`origin_of` copies the source label, channel and provider raw; redaction is for the diagnosis
+ * summary only), so a folder named `[case:0f1e2d3c4b5a6978]` is that folder and nothing else:
+ * - the texts are equal (short text stays exact);
+ * - the engine compacted it (`compact_timeline_text`: the record reached the engine whole, the
+ *   common case), and the length, the digest and the exact prefix agree;
+ * - it is the transport's bound on a record the transport projected, and the digest and the exact
+ *   prefix agree.
+ * Machine and component must be NORMALIZED before they are compared (see `provenanceAgrees`): the
+ * engine trims them before it compacts them.
  */
 export function timelineTextMatches(originValue: string, recordValue: string): boolean {
+  if (originValue === recordValue) return true;
+  const exactPrefix = (valuePrefix: string, otherPrefix: string) => valuePrefix === otherPrefix;
   return (
     isEngineCompactionOf(
       originValue,
@@ -281,8 +305,8 @@ export function timelineTextMatches(originValue: string, recordValue: string): b
       ENGINE_TIMELINE_IDENTITY_TEXT_BYTES,
       ENGINE_TIMELINE_SUFFIX,
       true,
-      (compactedPrefix, rawPrefix) => compactedPrefix === rawPrefix,
-    ) || redactedValueMatches(originValue, recordValue)
+      exactPrefix,
+    ) || matchesTransportBound(originValue, recordValue, exactPrefix) === true
   );
 }
 
