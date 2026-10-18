@@ -1504,8 +1504,7 @@ describe("the words the Correlation view and the Chains tab share (#841)", () =>
     const PHRASES = [
       "No event analysis is available",
       "Reading correlation edges",
-      "could not be built",
-      "could not be updated",
+      "Correlation could not be",
       "No loaded timeline position",
       "Wait for the entries of this chain",
       "Order is not evidence of cause",
@@ -1516,14 +1515,13 @@ describe("the words the Correlation view and the Chains tab share (#841)", () =>
       "timeline items...",
     ];
 
-    /** A file that holds a phrase for a reason of its own: a different sentence, or a comment. */
+    /**
+     * A file that holds a phrase for a reason of its own: a comment, not a sentence anything says. A
+     * generic phrase would force entries for other sentences ("Diagnosis could not be built.") that
+     * hide a real re-spelling in those files, which is why the failure phrase is the distinctive
+     * "Correlation could not be" and not "could not be built".
+     */
     const ALLOWED: Record<string, Record<string, string>> = {
-      "EventLogWorkspace.tsx": {
-        "could not be built": "the diagnosis and unified-timeline failures, which are other sentences than the correlation one",
-      },
-      "EventDiagnosisPanel.tsx": {
-        "could not be built": '"Diagnosis could not be built.", the diagnosis panel\'s own failure',
-      },
       "evtx-correlation-view-model.ts": {
         "their order is not established": "a doc comment on SequenceEntry.sameTimeAsPrevious, not a sentence anything says",
       },
@@ -1544,6 +1542,10 @@ describe("the words the Correlation view and the Chains tab share (#841)", () =>
           ),
         );
       expect(spelled).toEqual([]);
+    });
+
+    it("lists only phrases this module holds, so a phrase that is reworded cannot leave the guard empty", () => {
+      for (const phrase of PHRASES) expect(workspaceSources["evtx-correlation-copy.ts"], phrase).toContain(phrase);
     });
 
     it("keeps its allow-list live: every entry still holds its phrase", () => {
