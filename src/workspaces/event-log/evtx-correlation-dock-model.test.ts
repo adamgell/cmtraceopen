@@ -49,7 +49,6 @@ import type { LoadedCorrelationWindow } from "./evtx-correlation-window";
 import type { EvtxRecord } from "./types";
 import type { TimelineCorrelationEdge, TimelineItem } from "./unified-timeline";
 import { timelineOriginId } from "./unified-timeline";
-import { buildEvidenceIndex } from "./evtx-insights-data";
 
 /** What `buildDockModel` is given. */
 type DockModelInput = Parameters<typeof buildDockModel>[0];
@@ -1006,7 +1005,7 @@ describe("context: the other entries of the window, by time and no more", () => 
     expect(model.notices).toContain("40 more nearby entries not drawn.");
   });
 
-  it("draws a text-log line as context on its own lane, whose click selects no record", () => {
+  it("draws a log entry as context on its own lane, named by what activating it does", () => {
     const log: TimelineItem = {
       timestampMs: t + 2_000,
       severity: "warning",
@@ -1016,8 +1015,8 @@ describe("context: the other entries of the window, by time and no more", () => 
     const model = build([log]);
     expect(model.plot.lanes.map((lane) => lane.label)).toEqual(["System", "AppEnforce.log"]);
     const marker = model.plot.nearby[0]!;
-    expect(model.facts.get(marker.id)?.selectability).toBe("log");
-    expect(dockMarkerName(model, marker, "utc")).toContain("a text-log line, not an event record, so activating it selects nothing");
+    expect(model.facts.get(marker.id)?.selectability).toBe("logLine");
+    expect(dockMarkerName(model, marker, "utc")).toContain("activate to select this log line's record when exactly one is loaded");
   });
 
   it("dedupes entries that share an origin, keeping the first", () => {
@@ -1436,36 +1435,23 @@ describe("what a click on a marker does (#842, A1 ruling 6)", () => {
   const origin = (n: number) => eventItem(n, T0).origin;
 
   it("selects the record when exactly one loaded record matches the entry", () => {
-    const click = resolveMarkerClick(origin(1), buildEvidenceIndex([recordFor(1), recordFor(2)]));
+    const click = resolveMarkerClick(origin(1), [recordFor(1), recordFor(2)]);
     expect(click).toEqual({ kind: "select", recordId: recordFor(1).id });
   });
 
   it("selects nothing when no loaded record matches, and says so", () => {
-    expect(resolveMarkerClick(origin(1), buildEvidenceIndex([recordFor(2)]))).toEqual({
+    expect(resolveMarkerClick(origin(1), [recordFor(2)])).toEqual({
       kind: "nothing",
       selectability: "notLoaded",
     });
-    expect(resolveMarkerClick(origin(1), buildEvidenceIndex([]))).toEqual({ kind: "nothing", selectability: "notLoaded" });
+    expect(resolveMarkerClick(origin(1), [])).toEqual({ kind: "nothing", selectability: "notLoaded" });
   });
 
   it("selects nothing when several loaded records match, never the first of them", () => {
     const twin: EvtxRecord = { ...recordFor(1), id: recordFor(1).id + 1000 };
-    expect(resolveMarkerClick(origin(1), buildEvidenceIndex([recordFor(1), twin]))).toEqual({
+    expect(resolveMarkerClick(origin(1), [recordFor(1), twin])).toEqual({
       kind: "nothing",
       selectability: "ambiguous",
-    });
-  });
-
-  it("selects nothing for a text-log line, which is not an event record", () => {
-    const line: TimelineItem = {
-      timestampMs: T0,
-      severity: "info",
-      message: "log line",
-      origin: { kind: "log", file: "C:\\Logs\\A.log", component: null, line: 3, source: "A.log", machine: null, bundle: null, recordId: 3 },
-    };
-    expect(resolveMarkerClick(line.origin, buildEvidenceIndex([recordFor(1)]))).toEqual({
-      kind: "nothing",
-      selectability: "log",
     });
   });
 
@@ -1473,9 +1459,113 @@ describe("what a click on a marker does (#842, A1 ruling 6)", () => {
     const item = eventItem(1, T0);
     if (item.origin.kind !== "event") throw new Error("an event origin");
     const bare = { ...item.origin, recordId: 0, recordIdText: null };
-    expect(resolveMarkerClick(bare, buildEvidenceIndex([recordFor(1)]))).toEqual({
+    expect(resolveMarkerClick(bare, [recordFor(1)])).toEqual({
       kind: "nothing",
       selectability: "noIdentity",
+    });
+  });
+
+  describe("an entry of a log file (F0, Main's ruling on the A2 review)", () => {
+    const FILE = "C:\\Logs\\AppEnforce.log";
+    /** An archive text row as `text_entry_to_record` builds it. */
+    const archiveRow = (line: number, overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
+      ...recordFor(7),
+      id: 700 + line,
+      eventRecordId: line,
+      eventRecordIdText: String(line),
+      originKind: "log",
+      eventId: 0,
+      sourceLabel: FILE,
+      channel: FILE,
+      provider: "CcmExec",
+      computer: "",
+      ...overrides,
+    });
+    /** The origin the engine builds from that row (`origin_of`'s Log arm). */
+    const logOrigin = (line: number, file = FILE): TimelineItem["origin"] => ({
+      kind: "log",
+      file,
+      component: "CcmExec",
+      line,
+      source: file,
+      machine: null,
+      bundle: null,
+      recordId: line,
+    });
+
+    it("selects the archive row when exactly one loaded row matches, the way an event is selected", () => {
+      const rows = [archiveRow(3), archiveRow(4), recordFor(1)];
+      expect(resolveMarkerClick(logOrigin(4), rows)).toEqual({ kind: "select", recordId: archiveRow(4).id });
+      expect(resolveMarkerClick(logOrigin(3), rows)).toEqual({ kind: "select", recordId: archiveRow(3).id });
+    });
+
+    it("says ambiguous when two identical archive rows match, and selects neither", () => {
+      const twin = archiveRow(4, { id: 999 });
+      expect(resolveMarkerClick(logOrigin(4), [archiveRow(4), twin, archiveRow(3)])).toEqual({
+        kind: "nothing",
+        selectability: "ambiguous",
+      });
+    });
+
+    it("says notLoaded when the file's rows are loaded and this line's is not", () => {
+      expect(resolveMarkerClick(logOrigin(9), [archiveRow(3), archiveRow(4)])).toEqual({
+        kind: "nothing",
+        selectability: "notLoaded",
+      });
+      // The row is there but another machine's: the strict matcher does not name it.
+      expect(resolveMarkerClick(logOrigin(4), [archiveRow(4, { computer: "OTHER-HOST" })])).toEqual({
+        kind: "nothing",
+        selectability: "notLoaded",
+      });
+    });
+
+    it("says log for a line of a Log Viewer file, which the grid has no record of", () => {
+      // Other archive rows are loaded, but none is of this file.
+      const viewerLine = logOrigin(3, "C:\\Logs\\FromTheLogViewer.log");
+      expect(resolveMarkerClick(viewerLine, [archiveRow(3), recordFor(1)])).toEqual({ kind: "nothing", selectability: "log" });
+      expect(resolveMarkerClick(viewerLine, [])).toEqual({ kind: "nothing", selectability: "log" });
+      // And an event record never stands in for a log file's line.
+      expect(resolveMarkerClick(logOrigin(1), [recordFor(1)])).toEqual({ kind: "nothing", selectability: "log" });
+      // Not even one that shares the file's label: only archive text rows are the file's rows.
+      expect(resolveMarkerClick(logOrigin(1), [{ ...recordFor(1), sourceLabel: FILE }])).toEqual({
+        kind: "nothing",
+        selectability: "log",
+      });
+    });
+
+    it("compares a label the engine compacted through the same matcher as the selected record's identification", () => {
+      const long = `C:\\Logs\\${"x".repeat(300)}.log`;
+      const compacted = timelineReference(long);
+      expect(compacted).not.toBe(long);
+      const row = archiveRow(5, { sourceLabel: long, channel: long });
+      expect(resolveMarkerClick(logOrigin(5, compacted), [row])).toEqual({ kind: "select", recordId: row.id });
+      // The same matcher decides which entry is the SELECTED one.
+      const record = { ...row, timestampEpoch: T0 + 2_000 };
+      const model = ready({
+        record,
+        window: windowAround(record, [{ timestampMs: T0 + 2_000, severity: "info", message: "x", origin: logOrigin(5, compacted) }]),
+        counts: null,
+        unreadSources: false,
+      });
+      expect(model.selected.status).toBe("found");
+    });
+
+    it("names the marker by what activating it does, before a click and after each result", () => {
+      const record = recordFor(1);
+      const t = record.timestampEpoch;
+      const line: TimelineItem = { timestampMs: t + 2_000, severity: "warning", message: "log line 4", origin: logOrigin(4) };
+      const model = ready({ record, window: windowAround(record, [eventItem(1, t), line]), counts: null, unreadSources: false });
+      const marker = [...model.plot.members, ...model.plot.nearby].find((m) => m.kind === "log")!;
+      expect(model.facts.get(marker.id)?.selectability).toBe("logLine");
+      const before = dockMarkerName(model, marker, "utc");
+      expect(before).toMatch(/activate to select this log line's record when exactly one is loaded$/);
+      // An archive row is selectable: nothing in the name calls it something that cannot be selected.
+      expect(before).not.toMatch(/not an event record|selects nothing/);
+      expect(dockMarkerName(model, marker, "utc", "log")).toMatch(
+        /it is a line of a log file with no record in the grid, so activating it selects nothing$/,
+      );
+      expect(dockMarkerName(model, marker, "utc", "notLoaded")).toMatch(/no loaded record matches, so activating it selects nothing$/);
+      expect(dockMarkerName(model, marker, "utc", "ambiguous")).toMatch(/more than one loaded record matches/);
     });
   });
 });

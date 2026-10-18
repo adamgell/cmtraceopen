@@ -719,6 +719,79 @@ describe("a click on a marker (A1 ruling 6)", () => {
   });
 });
 
+describe("a click on the marker of a log entry (F0)", () => {
+  const FILE = "C:\\Logs\\AppEnforce.log";
+  const archiveRow = (line: number, overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
+    ...recordFor(7),
+    id: 800 + line,
+    eventRecordId: line,
+    eventRecordIdText: String(line),
+    originKind: "log",
+    eventId: 0,
+    sourceLabel: FILE,
+    channel: FILE,
+    provider: "CcmExec",
+    computer: "",
+    timestampEpoch: T + 2_000,
+    ...overrides,
+  });
+  const logItem = (line: number, file = FILE): TimelineItem => ({
+    timestampMs: T + 2_000,
+    severity: "info",
+    message: `log line ${line}`,
+    origin: { kind: "log", file, component: "CcmExec", line, source: file, machine: null, bundle: null, recordId: line },
+  });
+  const logMarker = () => document.querySelector<HTMLButtonElement>('button[data-kind="log"]')!;
+
+  it("names the marker by what activating it does, not as something that cannot be selected", async () => {
+    seedRecords([...allRecords(), archiveRow(4)], 1);
+    renderDock({ items: [...scene(), logItem(4)] });
+    await ready();
+    expect(logMarker()).toHaveAccessibleName(/activate to select this log line's record when exactly one is loaded$/);
+    expect(logMarker().getAttribute("aria-label")).not.toMatch(/not an event record/);
+  });
+
+  it("selects the archive row when exactly one loaded row matches, shows Details, and recenters on it", async () => {
+    seedRecords([...allRecords(), archiveRow(4)], 1);
+    const { queryWindow } = renderDock({ items: [...scene(), logItem(4)] });
+    await ready();
+    fireEvent.click(logMarker());
+    expect(useEvtxStore.getState().selectedRecordId).toBe(archiveRow(4).id);
+    expect(useEvtxLayoutStore.getState().railTab).toBe("details");
+    await waitFor(() => expect(queryWindow).toHaveBeenCalledTimes(2));
+    expect(queryWindow.mock.calls[1]![1]).toBe(T + 2_000 - 75_000);
+  });
+
+  it("selects nothing when two identical archive rows match, and says so", async () => {
+    seedRecords([...allRecords(), archiveRow(4), archiveRow(4, { id: 899 })], 1);
+    renderDock({ items: [...scene(), logItem(4)] });
+    await ready();
+    fireEvent.click(logMarker());
+    expect(useEvtxStore.getState().selectedRecordId).toBe(1);
+    expect(logMarker()).toHaveAccessibleName(/more than one loaded record matches, so activating it selects nothing$/);
+  });
+
+  it("selects nothing for a line of a Log Viewer file, which the grid has no record of, and says so", async () => {
+    seedRecords([...allRecords(), archiveRow(4)], 1);
+    renderDock({ items: [...scene(), logItem(3, "C:\\Logs\\FromTheLogViewer.log")] });
+    await ready();
+    fireEvent.click(logMarker());
+    expect(useEvtxStore.getState().selectedRecordId).toBe(1);
+    expect(logMarker()).toHaveAccessibleName(
+      /it is a line of a log file with no record in the grid, so activating it selects nothing$/,
+    );
+  });
+
+  it("says no loaded record matches for a line of a file whose rows are loaded but not this one", async () => {
+    seedRecords([...allRecords(), archiveRow(9)], 1);
+    renderDock({ items: [...scene(), logItem(4)] });
+    await ready();
+    fireEvent.click(logMarker());
+    expect(useEvtxStore.getState().selectedRecordId).toBe(1);
+    expect(logMarker()).toHaveAccessibleName(/no loaded record matches, so activating it selects nothing$/);
+  });
+});
+
 describe("no live region of its own (R7)", () => {
   it("has no role=status in any state it can be in", async () => {
     const states: (() => void)[] = [

@@ -67,7 +67,7 @@ import {
   evtxViewTabId,
   useEvtxLayoutStore,
 } from "./evtx-layout-store";
-import { buildEvidenceIndex, findRecordById } from "./evtx-insights-data";
+import { findRecordById } from "./evtx-insights-data";
 import { useRailTextColors } from "./evtx-rail-text";
 import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
@@ -178,7 +178,7 @@ export default function EvtxCorrelationDock({
       const item = windowItems.get(marker.id);
       if (item === undefined || ready === null) return;
       if (ready.facts.get(marker.id)?.selectability === "selected") return;
-      const click = resolveMarkerClick(item.origin, buildEvidenceIndex(useEvtxStore.getState().records));
+      const click = resolveMarkerClick(item.origin, useEvtxStore.getState().records);
       if (click.kind === "select") {
         selectRecordAndShowDetails(click.recordId);
         return;

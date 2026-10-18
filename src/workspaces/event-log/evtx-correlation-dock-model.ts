@@ -25,7 +25,7 @@
  * - Every cap says how much it left out: nothing is hidden silently, and an unknown count is never
  *   shown as 0.
  */
-import { buildEvidenceIndex, type EvidenceIndex } from "./evtx-insights-data";
+import { buildEvidenceIndex, timelineTextMatches } from "./evtx-insights-data";
 import {
   compareStrings,
   derivedTitle,
@@ -168,7 +168,11 @@ type DockSelected =
 
 /** What activating a marker can do: select its record, or nothing, and why. */
 export type MarkerSelectability =
+  /** Before a click: an event entry, selected if exactly one loaded record matches. */
   | "event"
+  /** Before a click: a log entry, selected if exactly one loaded archive text row matches. */
+  | "logLine"
+  /** After a click: a line of a log file that has no record in the grid (a Log Viewer file). */
   | "log"
   | "selected"
   | "ambiguous"
@@ -485,7 +489,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
     const resolution: MarkerSelectability = isSelected
       ? "selected"
       : marker.kind === "log"
-        ? "log"
+        ? "logLine"
         : "event";
     facts.set(marker.id, {
       role: isSelected ? "selected" : marker.role === "member" ? "member" : "nearby",
@@ -602,8 +606,10 @@ function selectabilityPhrase(selectability: MarkerSelectability): string {
   switch (selectability) {
     case "event":
       return "activate to select this event";
+    case "logLine":
+      return "activate to select this log line's record when exactly one is loaded";
     case "log":
-      return "a text-log line, not an event record, so activating it selects nothing";
+      return "it is a line of a log file with no record in the grid, so activating it selects nothing";
     case "selected":
       return "the selected event";
     case "ambiguous":
@@ -618,21 +624,42 @@ function selectabilityPhrase(selectability: MarkerSelectability): string {
 /** What activating a marker found: the one record to select, or why there is none. */
 type MarkerClick =
   | { kind: "select"; recordId: number }
-  | { kind: "nothing"; selectability: Exclude<MarkerSelectability, "event" | "selected"> };
+  | { kind: "nothing"; selectability: Exclude<MarkerSelectability, "event" | "logLine" | "selected"> };
 
 /**
- * What a click on a marker does, decided from the loaded records (`index`, built when the click
+ * What a click on a marker does, decided from the loaded records (`records`, scanned when the click
  * needs it): it selects the record only when EXACTLY ONE loaded record matches the entry's origin.
- * A text-log line is not an event record, an entry with no usable identity names none, and no or
- * several matches would be a guess; each of those selects nothing and says why, and the reason goes
- * into the marker's accessible name (`dockMarkerName`'s `selectability`).
+ * An entry with no usable identity names none, and no or several matches would be a guess; each of
+ * those selects nothing and says why, and the reason goes into the marker's accessible name
+ * (`dockMarkerName`'s `selectability`).
+ *
+ * An event entry is matched by the origin join (`resolveOriginRecords`). A log entry is matched by the
+ * strict log matcher (`logOriginNamesRecord`) against the loaded archive text rows, the same matcher
+ * that identifies the SELECTED record when it is such a row, so one definition decides both. A log
+ * entry that no row matches is `notLoaded` when some loaded row is of its file (the file is in the
+ * grid, this line is not), and `log` when none is: a line of a Log Viewer file, which the grid has no
+ * record of.
  */
-export function resolveMarkerClick(origin: TimelineOrigin, index: EvidenceIndex): MarkerClick {
-  const resolution = resolveOriginRecords(origin, index);
-  if (resolution.kind === "notEvent") return { kind: "nothing", selectability: "log" };
+export function resolveMarkerClick(origin: TimelineOrigin, records: readonly EvtxRecord[]): MarkerClick {
+  if (origin.kind === "log") {
+    const rows = records.filter((record) => record.originKind === "log");
+    const named = rows.filter((row) => logOriginNamesRecord(origin, row));
+    if (named.length === 1) return { kind: "select", recordId: (named[0] as EvtxRecord).id };
+    if (named.length > 1) return { kind: "nothing", selectability: "ambiguous" };
+    return {
+      kind: "nothing",
+      selectability: rows.some((row) => timelineTextMatches(origin.file, row.sourceLabel)) ? "notLoaded" : "log",
+    };
+  }
+  const resolution = resolveOriginRecords(origin, buildEvidenceIndex(records));
   if (resolution.kind === "noUsableIdentity") return { kind: "nothing", selectability: "noIdentity" };
-  if (resolution.records.length === 1) return { kind: "select", recordId: (resolution.records[0] as EvtxRecord).id };
-  return { kind: "nothing", selectability: resolution.records.length === 0 ? "notLoaded" : "ambiguous" };
+  if (resolution.kind === "matches" && resolution.records.length === 1) {
+    return { kind: "select", recordId: (resolution.records[0] as EvtxRecord).id };
+  }
+  return {
+    kind: "nothing",
+    selectability: resolution.kind === "matches" && resolution.records.length > 1 ? "ambiguous" : "notLoaded",
+  };
 }
 
 /**
