@@ -24,7 +24,7 @@
  * - "{n} nearby, not linked": Phase 10c (Chains tab data).
  * - The coverage note with its Elevate action: Phase 4b.
  */
-import { memo, useId, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useMemo, useState, type CSSProperties } from "react";
 import {
   createFocusOutlineStyle,
   Link,
@@ -32,9 +32,9 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { ArrowRight12Regular } from "@fluentui/react-icons";
-import { LOG_MONOSPACE_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
-import { useUiStore } from "../../stores/ui-store";
+import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
+import { Disclosure, RailCard, useRailSizes, type RailSizes } from "./EvtxRailParts";
 import { useRailTextColors } from "./evtx-rail-text";
 import { correlationChainCount } from "./evtx-correlation-chains";
 import { edgeInputNotice } from "./evtx-correlation-copy";
@@ -227,21 +227,6 @@ function evidenceLabel(evidence: DiagnosisEvidence, includeOrigin = false): stri
 
 function evidenceText(evidence: DiagnosisEvidence[]): string {
   return evidence.map((item) => evidenceLabel(item)).join("; ");
-}
-
-interface RailSizes {
-  /** Base size: the user's log list font size. */
-  f: number;
-  small: number;
-  caption: number;
-}
-
-function useRailSizes(): RailSizes {
-  const logListFontSize = useUiStore((s) => s.logListFontSize);
-  return useMemo(() => {
-    const f = getLogListMetrics(logListFontSize).fontSize;
-    return { f, small: Math.max(10, f - 2), caption: Math.max(10, f - 3) };
-  }, [logListFontSize]);
 }
 
 function Count({ value }: { value: number }) {
@@ -579,59 +564,6 @@ function OverviewBlock({
   );
 }
 
-function RailCard({
-  title,
-  sizes,
-  stale = false,
-  caption,
-  children,
-}: {
-  title: string;
-  sizes: RailSizes;
-  /** Its numbers are from the previous build: dimmed and marked busy. */
-  stale?: boolean;
-  /** Said at the right of the title, in the muted card color (spec 8.13: "click to filter"). */
-  caption?: string;
-  children: ReactNode;
-}) {
-  const { cardSecondary } = useRailTextColors();
-  return (
-    <section
-      aria-label={title}
-      aria-busy={stale || undefined}
-      style={{
-        opacity: stale ? 0.6 : 1,
-        display: "grid",
-        gap: "8px",
-        padding: "10px 12px",
-        borderRadius: "6px",
-        backgroundColor: tokens.colorNeutralBackground1,
-        border: `1px solid ${tokens.colorNeutralStroke2}`,
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "8px" }}>
-        <span
-          style={{
-            fontSize: `${sizes.caption}px`,
-            fontWeight: 700,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-            color: cardSecondary,
-          }}
-        >
-          {title}
-        </span>
-        {caption !== undefined && (
-          <span style={{ fontSize: `${sizes.caption}px`, fontWeight: 400, color: cardSecondary }}>
-            {caption}
-          </span>
-        )}
-      </div>
-      {children}
-    </section>
-  );
-}
-
 function LevelMixCard({
   levelMix,
   total,
@@ -952,67 +884,6 @@ function OmittedRows({
       {omittedLabel(count, singular)}
     </span>
   ) : null;
-}
-
-/**
- * A disclosure whose open state lives in the caller, so it survives the diagnosis being rebuilt.
- * The body is a bounded, focusable scroll region.
- */
-function Disclosure({
-  label,
-  open,
-  onOpenChange,
-  sizes,
-  stale = false,
-  children,
-}: {
-  label: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  sizes: RailSizes;
-  /** The label's count and the rows are from the previous build. The rows inherit the dimming. */
-  stale?: boolean;
-  children: ReactNode;
-}) {
-  const labelId = useId();
-  return (
-    <details
-      open={open}
-      aria-busy={stale || undefined}
-      style={{
-        opacity: stale ? 0.6 : 1,
-        padding: "8px 12px",
-        borderRadius: "6px",
-        backgroundColor: tokens.colorNeutralBackground1,
-        border: `1px solid ${tokens.colorNeutralStroke2}`,
-      }}
-    >
-      <summary
-        id={labelId}
-        onClick={(event) => {
-          event.preventDefault();
-          onOpenChange(!open);
-        }}
-        style={{ cursor: "pointer", fontSize: `${sizes.small}px`, fontWeight: 600 }}
-      >
-        {label}
-      </summary>
-      <div
-        aria-labelledby={labelId}
-        role="region"
-        tabIndex={0}
-        style={{
-          display: "grid",
-          gap: "8px",
-          marginTop: "8px",
-          maxHeight: "min(420px, 50vh)",
-          overflowY: "auto",
-        }}
-      >
-        {children}
-      </div>
-    </details>
-  );
 }
 
 export const EventDiagnosisPanel = memo(function EventDiagnosisPanel({
