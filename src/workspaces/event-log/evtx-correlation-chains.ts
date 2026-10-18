@@ -188,6 +188,16 @@ export interface CorrelationChainModel {
   ignoredRelationCount: number;
 }
 
+/**
+ * How many chains a session has, for every surface that says "{n} chains" (the Insights card, the
+ * Chains tab, the Correlation view's announcement): the exact, candidate and ambiguous rows. A
+ * coverage blocked row is a coverage state and is counted apart, never as a correlation (#838
+ * ruling 1). Takes the model's own `counts`, so the three surfaces cannot count it differently.
+ */
+export function correlationChainCount(counts: Readonly<Record<CorrelationChainStrength, number>>): number {
+  return counts.exact + counts.candidate + counts.ambiguous;
+}
+
 /** Code-unit order, so a sort does not depend on the locale. The one comparator of the correlation modules. */
 export function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;

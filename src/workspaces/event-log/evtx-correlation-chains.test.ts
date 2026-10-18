@@ -3,6 +3,7 @@ import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import {
   CORRELATION_CHAIN_RENDER_LIMIT,
   buildCorrelationChains,
+  correlationChainCount,
   derivedTitle,
   type CorrelationChain,
   type CorrelationChainInput,
@@ -1726,5 +1727,34 @@ describe("the exported D19 title (#842)", () => {
 
   it("is null when no member has an item", () => {
     expect(derivedTitle(["a", "b"], new Map())).toBeNull();
+  });
+});
+
+describe("the chain count (#841)", () => {
+  it("counts exact, candidate and ambiguous rows, and leaves coverage blocked apart", () => {
+    expect(correlationChainCount({ exact: 3, candidate: 2, ambiguous: 1, coverageBlocked: 5 })).toBe(6);
+  });
+
+  it("is 0 only when no row of the three kinds exists, whatever the blocked count", () => {
+    expect(correlationChainCount({ exact: 0, candidate: 0, ambiguous: 0, coverageBlocked: 4 })).toBe(0);
+  });
+
+  it("reads the model's own counts: a blocked row is a row of the model and not a chain", () => {
+    const items = [
+      eventItem("a", 1000),
+      eventItem("b", 2000),
+      eventItem("c", 3000),
+      eventItem("d", 4000),
+    ];
+    const model = build({
+      items,
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact"),
+        { ...tEdge("e2", "c", "d", "exact"), coverage: { state: "gap", gap: { source: "s", reason: "r" } } },
+      ],
+    });
+    expect(model.totalCount).toBe(2);
+    expect(model.counts.coverageBlocked).toBe(1);
+    expect(correlationChainCount(model.counts)).toBe(1);
   });
 });

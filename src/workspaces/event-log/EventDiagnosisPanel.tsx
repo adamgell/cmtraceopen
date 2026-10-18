@@ -36,6 +36,7 @@ import { LOG_MONOSPACE_FONT_FAMILY, getLogListMetrics } from "../../lib/log-acce
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 import { useRailTextColors } from "./evtx-rail-text";
+import { correlationChainCount } from "./evtx-correlation-chains";
 import { edgeInputNotice } from "./evtx-correlation-copy";
 import { openCorrelationView, openUnplacedList } from "./evtx-correlation-store";
 import { describeUnplaced, unplacedCardLine } from "./evtx-unplaced";
@@ -849,7 +850,7 @@ function CorrelationSummaryCard({ sizes, stale }: { sizes: RailSizes; stale: boo
     return null;
   }
   const rows = counts?.model.counts;
-  const correlations = rows === undefined ? 0 : rows.exact + rows.candidate + rows.ambiguous;
+  const correlations = rows === undefined ? 0 : correlationChainCount(rows);
   const shortfall =
     counts === null
       ? null
