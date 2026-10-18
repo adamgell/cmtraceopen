@@ -1,7 +1,8 @@
 /**
  * The EVT and LOG chip (#843): one component, so one pair of colors, measured in every theme. EVT is
  * the selection triplet's fill and text; LOG is bg3 with fg2 (spec 8.13 names bg4, which fg2 misses
- * 4.5:1 on in solarized-dark, and which is the defect of the older inline chip).
+ * 4.5:1 on in solarized-dark, and which is the defect of the older inline chip). That nothing else
+ * draws a chip is evtx-one-chip.test.ts.
  */
 import { tokens } from "@fluentui/react-components";
 import { act, cleanup, render, screen } from "@testing-library/react";
@@ -35,12 +36,6 @@ const themes = getAllThemes();
 const chipSource = Object.entries(
   import.meta.glob("./EvtxKindChip.tsx", { query: "?raw", import: "default", eager: true }) as Record<string, string>,
 )[0]![1];
-
-/** Every component source of the workspace, to see which of them draws a chip. */
-const componentSources = import.meta.glob("./*.tsx", { query: "?raw", import: "default", eager: true }) as Record<
-  string,
-  string
->;
 
 /** The colors a chip was drawn with, resolved to hex in `themeId`. */
 function drawn(chip: "EVT" | "LOG", themeId: string) {
@@ -132,13 +127,6 @@ describe("EvtxKindChip", () => {
       const body = /interface EvtxKindChipProps \{([^}]*)\}/.exec(chipSource)?.[1] ?? "";
       expect(body.match(/^\s*\w+\??:/gm)?.map((line) => line.trim())).toEqual(["chip:"]);
     });
-  });
-
-  it("is the only component of the workspace that draws a kind chip", () => {
-    const drawing = Object.entries(componentSources)
-      .filter(([path, source]) => !path.endsWith(".test.tsx") && /data-chip=/.test(source))
-      .map(([path]) => path);
-    expect(drawing).toEqual(["./EvtxKindChip.tsx"]);
   });
 
   describe("contrast, in every theme", () => {
