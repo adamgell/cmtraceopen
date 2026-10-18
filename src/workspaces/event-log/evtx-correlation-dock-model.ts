@@ -33,6 +33,7 @@ import {
   compareStrings,
   derivedTitle,
   messageHead,
+  strongestRowOf,
   type CorrelationChain,
 } from "./evtx-correlation-chains";
 import {
@@ -66,6 +67,7 @@ import {
   isUnmatchableEvent,
   itemsByOriginId,
   logOriginNamesRecord,
+  originsNaming,
   resolveOriginRecords,
 } from "./evtx-correlation-origin-index";
 import {
@@ -247,30 +249,6 @@ function isLinking(strength: CorrelationChain["strength"]): boolean {
 }
 
 /**
- * The origin ids of the window's items that name `record`, found with the origin join's own
- * matchers: an event record against an index of that one record, an archive text row (`originKind`
- * "log") with the strict log matcher. Never a rebuilt stable id.
- */
-function originsNaming(record: EvtxRecord, items: readonly TimelineItem[]): Set<string> {
-  const found = new Set<string>();
-  if (record.originKind === "log") {
-    for (const item of items) {
-      if (logOriginNamesRecord(item.origin, record)) found.add(timelineOriginId(item.origin));
-    }
-    return found;
-  }
-  const index = buildEvidenceIndex([record]);
-  for (const item of items) {
-    if (item.origin.kind !== "event") continue;
-    const resolution = resolveOriginRecords(item.origin, index);
-    if (resolution.kind === "matches" && resolution.records.includes(record)) {
-      found.add(timelineOriginId(item.origin));
-    }
-  }
-  return found;
-}
-
-/**
  * Why "Open in Correlation view" has no row to open. What is known of the selected event comes
  * first: it is true whether or not the links are in. Only an identified event waits for them.
  */
@@ -446,11 +424,9 @@ export function buildDockModel(input: DockModelInput): DockModel {
   } = windowRead;
 
   // ---- its rows, from the uncapped index of the SAME session ----
-  const rows =
-    pairedCounts !== null && originId !== null
-      ? (pairedCounts.model.rowsByMember.get(originId) ?? [])
-      : [];
-  const row = rows[0] ?? null;
+  const rowsByMember = pairedCounts === null ? null : pairedCounts.model.rowsByMember;
+  const rows = rowsByMember !== null && originId !== null ? (rowsByMember.get(originId) ?? []) : [];
+  const row = rowsByMember !== null && originId !== null ? strongestRowOf(rowsByMember, originId) : null;
   const rowMembers =
     row === null
       ? []

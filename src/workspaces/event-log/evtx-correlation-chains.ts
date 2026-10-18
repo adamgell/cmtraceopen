@@ -198,6 +198,18 @@ export function correlationChainCount(counts: Readonly<Record<CorrelationChainSt
   return counts.exact + counts.candidate + counts.ambiguous;
 }
 
+/**
+ * The row a member is shown under: the strongest it is in. `rowsByMember` lists a member's rows in
+ * the model's own order, strongest first, and counts every row, so a row the render cap dropped is
+ * found. Null when no row names the member; a row is never made up.
+ */
+export function strongestRowOf(
+  rowsByMember: ReadonlyMap<string, readonly CorrelationChain[]>,
+  memberId: string,
+): CorrelationChain | null {
+  return rowsByMember.get(memberId)?.[0] ?? null;
+}
+
 /** Code-unit order, so a sort does not depend on the locale. The one comparator of the correlation modules. */
 export function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;

@@ -38,6 +38,7 @@ import { bundleOfSource } from "./evtx-collector-bundle";
 import type { CorrelationChain } from "./evtx-correlation-chains";
 import { countScopeReferences, type EvtxRecordScopeCounts } from "./evtx-filter";
 import {
+  buildEvidenceIndex,
   engineRecordIdentity,
   engineTimelineRecordIdentity,
   recordsForOriginIdentity,
@@ -266,6 +267,32 @@ export function soleRecordForOrigin(
   return resolution.kind === "matches" && resolution.records.length === 1
     ? (resolution.records[0] as EvtxRecord)
     : null;
+}
+
+/**
+ * The origin ids, among `items`, that name `record`: the join read in the other direction than the
+ * engine gives it. An event record is tested against an index of that one record with the origin
+ * join's own matchers; an archive text row (`originKind` "log") with the strict log matcher. An id is
+ * never rebuilt from the record. Several ids are several entries that cannot be told apart (an
+ * identical entry read twice), and none is picked among them.
+ */
+export function originsNaming(record: EvtxRecord, items: readonly TimelineItem[]): Set<string> {
+  const found = new Set<string>();
+  if (record.originKind === "log") {
+    for (const item of items) {
+      if (logOriginNamesRecord(item.origin, record)) found.add(timelineOriginId(item.origin));
+    }
+    return found;
+  }
+  const index = buildEvidenceIndex([record]);
+  for (const item of items) {
+    if (item.origin.kind !== "event") continue;
+    const resolution = resolveOriginRecords(item.origin, index);
+    if (resolution.kind === "matches" && resolution.records.includes(record)) {
+      found.add(timelineOriginId(item.origin));
+    }
+  }
+  return found;
 }
 
 export interface ChainScope {

@@ -7,6 +7,7 @@
  * never read it.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import dockModelSource from "./evtx-correlation-dock-model.ts?raw";
 import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
 import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
 import fixtureDocument from "./__fixtures__/correlation-edges.json";
@@ -22,6 +23,7 @@ import {
   linkCountsByRecord,
   linkPartnerCounts,
   originIdentityText,
+  originsNaming,
   recordLinkStatus,
   repeatedItems,
   resolveOriginRecords,
@@ -1865,5 +1867,79 @@ describe("repeatedItems: the entries an origin's first entry leaves out", () => 
       expect(byId.get(timelineOriginId(item.origin))).not.toBe(item);
     }
     expect(repeats.map((item) => item.timestampMs)).toEqual([25, 35, 40]);
+  });
+});
+
+describe("originsNaming: the origins of a list of entries that name one record (#841)", () => {
+  const FILE = "C:\\Logs\\AppEnforce.log";
+  const idOf = (origin: TimelineOrigin) => timelineOriginId(origin);
+
+  function logRecord(line: number): EvtxRecord {
+    return record(line, {
+      originKind: "log",
+      eventId: 0,
+      sourceLabel: FILE,
+      channel: FILE,
+      provider: "CcmExec",
+      computer: "",
+    });
+  }
+  function logOrigin(line: number, overrides: Partial<Extract<TimelineOrigin, { kind: "log" }>> = {}): TimelineOrigin {
+    return {
+      kind: "log",
+      file: FILE,
+      component: "CcmExec",
+      line,
+      source: FILE,
+      machine: null,
+      bundle: null,
+      recordId: line,
+      ...overrides,
+    };
+  }
+
+  it("names an event record by the origin whose fields are the record's own, and no other", () => {
+    const [one, two] = [record(1), record(2)];
+    const items = [itemOf(originOf(one)), itemOf(originOf(two))];
+    expect(originsNaming(one, items)).toEqual(new Set([idOf(originOf(one))]));
+    expect(originsNaming(two, items)).toEqual(new Set([idOf(originOf(two))]));
+    expect(originsNaming(record(3), items)).toEqual(new Set());
+  });
+
+  it("names every origin that names it: identical entries read twice are several, and none is picked", () => {
+    const one = record(1);
+    const items = [
+      itemOf(originOf(one, { stableId: "copy-a" })),
+      itemOf(originOf(one, { stableId: "copy-b" })),
+    ];
+    expect(originsNaming(one, items)).toEqual(new Set(["copy-a", "copy-b"].map((stableId) => idOf(originOf(one, { stableId })))));
+    expect(originsNaming(one, items).size).toBe(2);
+  });
+
+  it("never reads a stable id: an origin with the record's number but another field does not name it", () => {
+    const one = record(1);
+    expect(originsNaming(one, [itemOf(originOf(one, { channel: "Security" }))])).toEqual(new Set());
+    expect(originsNaming(one, [itemOf(originOf(one, { recordId: 2, recordIdText: "2" }))])).toEqual(new Set());
+  });
+
+  it("names an archive text row by the strict log matcher, and an event origin never names it", () => {
+    const row = logRecord(7);
+    const items = [itemOf(logOrigin(7)), itemOf(logOrigin(8)), itemOf(originOf(record(7)))];
+    expect(originsNaming(row, items)).toEqual(new Set([idOf(logOrigin(7))]));
+    expect(originsNaming(row, [itemOf(logOrigin(7, { file: "C:\\Logs\\Other.log" }))])).toEqual(new Set());
+  });
+
+  it("never lets a log origin name an event record", () => {
+    expect(originsNaming(record(7), [itemOf(logOrigin(7))])).toEqual(new Set());
+  });
+
+  it("names nothing from no entries", () => {
+    expect(originsNaming(record(1), [])).toEqual(new Set());
+  });
+
+  it("is the one definition: the dock model imports it and holds no copy", () => {
+    expect(dockModelSource).toMatch(/import \{[^}]*\boriginsNaming\b[^}]*\} from "\.\/evtx-correlation-origin-index"/);
+    expect(dockModelSource).not.toMatch(/function originsNaming\b/);
+    expect(dockModelSource).toMatch(/\bstrongestRowOf\(/);
   });
 });

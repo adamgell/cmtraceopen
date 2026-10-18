@@ -5,6 +5,7 @@ import {
   buildCorrelationChains,
   correlationChainCount,
   derivedTitle,
+  strongestRowOf,
   type CorrelationChain,
   type CorrelationChainInput,
   type CorrelationChainModel,
@@ -1756,5 +1757,42 @@ describe("the chain count (#841)", () => {
     expect(model.totalCount).toBe(2);
     expect(model.counts.coverageBlocked).toBe(1);
     expect(correlationChainCount(model.counts)).toBe(1);
+  });
+});
+
+describe("strongestRowOf, the row a member is shown under (#841)", () => {
+  it("is the strongest row the member is in: the model lists them strongest first", () => {
+    const model = build({
+      timelineEdges: [tEdge("e1", "a", "b", "exact"), ...ambiguousGroup("g", ["a", "x", "y"])],
+    });
+    expect(model.rowsByMember.get("a")?.map((row) => row.strength)).toEqual(["exact", "ambiguous"]);
+    expect(strongestRowOf(model.rowsByMember, "a")?.strength).toBe("exact");
+    expect(strongestRowOf(model.rowsByMember, "a")).toBe(model.rowsByMember.get("a")?.[0]);
+    expect(strongestRowOf(model.rowsByMember, "x")?.strength).toBe("ambiguous");
+  });
+
+  it("is the first row it is given, and does not sort", () => {
+    const model = build({
+      timelineEdges: [tEdge("e1", "a", "b", "exact"), ...ambiguousGroup("g", ["a", "x", "y"])],
+    });
+    const [exact, ambiguous] = model.rowsByMember.get("a")!;
+    expect(strongestRowOf(new Map([["a", [ambiguous!, exact!]]]), "a")).toBe(ambiguous);
+  });
+
+  it("finds a row the 100-row render cap dropped", () => {
+    const model = build({
+      timelineEdges: Array.from({ length: 130 }, (_, i) => tEdge(`e${i}`, `l${i}`, `r${i}`, "exact")),
+    });
+    const shown = new Set(model.chains.flatMap((chain) => [...chain.memberIds, ...chain.unresolvedMemberIds]));
+    const past = Array.from({ length: 130 }, (_, i) => `l${i}`).find((id) => !shown.has(id)) as string;
+    const row = strongestRowOf(model.rowsByMember, past);
+    expect(row).not.toBeNull();
+    expect(model.chains).not.toContain(row);
+  });
+
+  it("is null for an id no row names, and for an empty list, never a made-up row", () => {
+    const model = build({ timelineEdges: [tEdge("e1", "a", "b", "exact")] });
+    expect(strongestRowOf(model.rowsByMember, "zzz")).toBeNull();
+    expect(strongestRowOf(new Map([["a", []]]), "a")).toBeNull();
   });
 });
