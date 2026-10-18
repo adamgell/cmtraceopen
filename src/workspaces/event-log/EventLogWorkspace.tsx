@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   useEffect,
+  useLayoutEffect,
   Suspense,
   type ReactNode,
 } from "react";
@@ -28,7 +29,14 @@ import { EvtxHistogram } from "./EvtxHistogram";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
-import { UNIFIED_TIMELINE_STRIP_HEIGHT_PX } from "./evtx-timeline-strip";
+import {
+  DOCK_MIN_HEIGHT_PX,
+  dockHandleBounds,
+  gridRecordRowPx,
+  tableGridFloorPx,
+  timelineStripHeightPx,
+  viewMinHeightPx,
+} from "./evtx-main-column-layout";
 import { EvtxInsightsRail } from "./EvtxInsightsRail";
 import { EvtxViewBar } from "./EvtxViewBar";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
@@ -115,15 +123,61 @@ function RegionPlaceholder({ title, loading }: { title: string; loading?: boolea
 }
 
 /**
+ * The dock as it is rendered: its own box, and the main column's height, both measured. The chosen
+ * height is only what the dock asks for; the Table's floor can render it smaller, and the resize
+ * handle has to speak for what is there. Null until measured (and where nothing observes layout,
+ * as in jsdom), when the chosen height stands in.
+ */
+function useDockMeasure(
+  slot: HTMLElement | null,
+  main: HTMLElement | null,
+): { renderedHeight: number | null; mainHeight: number | null } {
+  const [measure, setMeasure] = useState<{ renderedHeight: number | null; mainHeight: number | null }>({
+    renderedHeight: null,
+    mainHeight: null,
+  });
+  useLayoutEffect(() => {
+    if (slot === null || main === null) return;
+    const read = () => {
+      const rendered = slot.getBoundingClientRect().height;
+      const mainHeight = main.clientHeight;
+      const next = {
+        renderedHeight: rendered > 0 ? rendered : null,
+        mainHeight: mainHeight > 0 ? mainHeight : null,
+      };
+      setMeasure((previous) =>
+        previous.renderedHeight === next.renderedHeight && previous.mainHeight === next.mainHeight
+          ? previous
+          : next,
+      );
+    };
+    read();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(read);
+    observer.observe(slot);
+    observer.observe(main);
+    return () => observer.disconnect();
+  }, [slot, main]);
+  return measure;
+}
+
+/**
  * The tabpanel the Layout tablist controls. Each view renders inside its own Suspense boundary, so
  * a lazily loaded view shows a fallback here while the tablist and the other regions stay mounted.
+ *
+ * `minHeightPx` is the least height the active view keeps (`viewMinHeightPx`: the Table's strip and
+ * grid floor, the Correlation view's list and detail header, or the generic minimum). The panel is
+ * a flex item of the main column, and a flex item that is only `flex: 1` shrinks to nothing; with
+ * a floor it holds, and the column scrolls instead (evtx-main-column-layout.ts).
  */
 export function EvtxViewHost({
   views,
   activeView,
+  minHeightPx = 0,
 }: {
   views: Record<EvtxViewId, EvtxViewEntry>;
   activeView: EvtxViewId;
+  minHeightPx?: number;
 }) {
   return (
     <div
@@ -132,7 +186,7 @@ export function EvtxViewHost({
       aria-labelledby={evtxViewTabId(activeView)}
       style={{
         flex: 1,
-        minHeight: 0,
+        minHeight: `${minHeightPx}px`,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -395,6 +449,35 @@ export function EventLogWorkspace() {
   // rather than stored.
   const dockMax = maxDockHeightFor(viewportHeight);
   const effectiveDockHeight = Math.min(Math.max(dockHeight, MIN_DOCK_HEIGHT), dockMax);
+  // The floors of the main column (evtx-main-column-layout.ts): the Table grid keeps five rows, the
+  // dock gives way down to its header and one lane, and the column scrolls when they do not fit.
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const gridRowPx = gridRecordRowPx(getLogListMetrics(logListFontSize).rowHeight, columnOrder);
+  const tableGridFloor = tableGridFloorPx(gridRowPx);
+  const dockMin = DOCK_MIN_HEIGHT_PX;
+  const viewMin = viewMinHeightPx({
+    view: activeView,
+    gridRowPx,
+    windowHeight: viewportHeight,
+    logListFontSize,
+  });
+  // The dock's resize handle speaks for the dock as rendered: its measured height, and what the
+  // column leaves it after the active view's floor, never above the store's maximum.
+  const [dockSlot, setDockSlot] = useState<HTMLElement | null>(null);
+  const [mainColumn, setMainColumn] = useState<HTMLElement | null>(null);
+  const dockMeasure = useDockMeasure(dockSlot, mainColumn);
+  const dockHandle = dockHandleBounds({
+    renderedHeight: dockMeasure.renderedHeight ?? effectiveDockHeight,
+    availableHeight: dockMeasure.mainHeight === null ? Number.POSITIVE_INFINITY : dockMeasure.mainHeight - viewMin,
+    storeMax: dockMax,
+  });
+  // A step is taken from the rendered height. At a bound it changes nothing, and the handle's value
+  // already says it is there; the stored height is not rewritten by a step that moves nothing.
+  const resizeDock = (next: number) => {
+    const target = Math.min(dockHandle.max, Math.max(dockHandle.min, Math.round(next)));
+    if (target === Math.round(dockHandle.value)) return;
+    setDockHeight(target, window.innerHeight);
+  };
 
   useEffect(() => {
     const pump = analysisPumpRef.current;
@@ -598,9 +681,7 @@ export function EventLogWorkspace() {
     <>
       <div
         style={{
-          height: `${UNIFIED_TIMELINE_STRIP_HEIGHT_PX}px`,
-          minHeight: "240px",
-          maxHeight: "50vh",
+          height: `${timelineStripHeightPx(viewportHeight)}px`,
           flexShrink: 0,
           overflowY: "auto",
           overflowX: "hidden",
@@ -614,7 +695,7 @@ export function EventLogWorkspace() {
           pending={timelinePending}
         />
       </div>
-      <div style={{ flex: 1, overflow: "hidden" }}>
+      <div style={{ flex: 1, minHeight: `${tableGridFloor}px`, overflow: "hidden" }}>
         <EvtxTimeline nowEpoch={nowEpoch} />
       </div>
     </>
@@ -734,32 +815,45 @@ export function EventLogWorkspace() {
 
             <div
               data-evtx-region="main"
+              ref={setMainColumn}
               style={{
                 flex: 1,
                 minWidth: 0,
                 display: "flex",
                 flexDirection: "column",
-                overflow: "hidden",
+                // Scrolls, not clips: when the Table's floor and the dock's minimum do not fit
+                // together, the column is taller than its box and the operator scrolls to the rest.
+                overflowX: "hidden",
+                overflowY: "auto",
                 backgroundColor: tokens.colorNeutralBackground1,
               }}
             >
-              <EvtxViewHost views={views} activeView={activeView} />
+              <EvtxViewHost
+                views={views}
+                activeView={activeView}
+                minHeightPx={viewMin}
+              />
 
               {/*
                 The dock's slot is always here, hidden when the dock is off, but the dock is mounted
                 only while it is shown: a hidden dock reads nothing (R5) and its chunk loads on first
-                use. Collapsed, the slot is as tall as the dock's header and has no resize handle.
-                The scroll container inside it is a child of this block box, whose height is a number
-                of pixels (or auto), so it cannot be squeezed; the slot itself does not shrink.
+                use. Collapsed, the slot is as tall as the dock's header and has no resize handle and
+                does not shrink. Expanded, the height the user chose is its basis, and it is the one
+                item of the column that gives way: it shrinks down to its header plus one lane once
+                the view has its floor, and the column scrolls past that (evtx-main-column-layout.ts).
+                The scroll container inside it is a child of this box, whose height is a number of
+                pixels (or auto), so it cannot be squeezed to a sliver of its own.
               */}
               <div
                 id={EVTX_DOCK_ID}
                 data-evtx-region="dock"
+                ref={setDockSlot}
                 style={{
                   display: panels.dock ? "block" : "none",
                   position: "relative",
                   height: dockCollapsed ? "auto" : `${effectiveDockHeight}px`,
-                  flexShrink: 0,
+                  flexShrink: dockCollapsed ? 0 : 1,
+                  minHeight: dockCollapsed ? undefined : `${dockMin}px`,
                   boxSizing: "border-box",
                   borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
                   backgroundColor: tokens.colorNeutralBackground2,
@@ -771,11 +865,11 @@ export function EventLogWorkspace() {
                     edge="start"
                     label="Resize correlation dock"
                     controls={EVTX_DOCK_ID}
-                    value={effectiveDockHeight}
-                    min={MIN_DOCK_HEIGHT}
-                    max={dockMax}
+                    value={dockHandle.value}
+                    min={dockHandle.min}
+                    max={dockHandle.max}
                     direction={-1}
-                    onChange={(next) => setDockHeight(next, window.innerHeight)}
+                    onChange={resizeDock}
                   />
                 )}
                 <div data-evtx-dock-scroll="" style={{ height: dockCollapsed ? "auto" : "100%", overflow: "auto" }}>

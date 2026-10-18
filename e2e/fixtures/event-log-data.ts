@@ -52,6 +52,7 @@ import type {
 import type {
   EventLogAnalysisSessionStatus,
   EventLogAnalysisTimelinePage,
+  EventLogAnalysisTimelineWindow,
 } from "../../src/lib/commands";
 
 const COMPUTER = "CONTOSO-PC01";
@@ -86,6 +87,9 @@ export const ENGINE_CHUNK_RECORD_LIMIT = 1_000;
 export const ENGINE_PAGE_SIZE = 1_000;
 /** Fixed placeholder so a regeneration only changes the JSON when the engine's answer changes. */
 export const ENGINE_SESSION_ID = "00000000-0000-4000-8000-000000000828";
+
+/** Rows asked for per window call: CORRELATION_WINDOW_LIMIT in evtx-correlation-window.ts. */
+export const ENGINE_WINDOW_LIMIT = 1_000;
 
 const DM_PROVIDER = "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider";
 
@@ -435,6 +439,7 @@ export function engineInput(parseResult: EvtxParseResult) {
     chunkRecordLimit: ENGINE_CHUNK_RECORD_LIMIT,
     pageSize: ENGINE_PAGE_SIZE,
     sessionId: ENGINE_SESSION_ID,
+    timelineWindows: timelineWindowRequests(parseResult),
   };
 }
 
@@ -467,7 +472,94 @@ export interface EngineReplies {
   append: EventLogAnalysisSessionStatus[];
   finalize: EventLogAnalysisSessionStatus;
   timelinePages: { offset: number; limit: number; page: EventLogAnalysisTimelinePage }[];
+  /** One entry per window of `engineInput().timelineWindows`, in that order, as the engine answered. */
+  timelineWindows: {
+    name: string;
+    centerMs: number;
+    halfWidthMs: number;
+    startMs: number;
+    endMs: number;
+    limit: number;
+    window: EventLogAnalysisTimelineWindow;
+  }[];
   diagnosis: DiagnosisSummary;
+}
+
+/**
+ * A record the specs select, named by what identifies it in this dataset: the channel it is in, its
+ * event ID and its event record ID (unique in the dataset). Its `timestampEpoch` is read from the
+ * dataset, never written down, so a change to the dataset moves the windows with it.
+ */
+interface FixtureRecordRef {
+  channel: ChannelKey;
+  eventId: number;
+  eventRecordId: number;
+}
+
+/**
+ * The windows the specs ask the engine for, and nothing else: the screenshot spec's
+ * `evtx_query_analysis_timeline_window` override matches a request EXACTLY against these, so a
+ * spec that asks for another center or another width trips the replay guard instead of being
+ * answered with something that was never captured.
+ *
+ * - `dock`: the correlation dock's default width (+/-75 s, `DEFAULT_DOCK_WINDOW_MS`) around the
+ *   record the "Correlation dock" capture selects: the "Auto MDM Enroll: Failed" (76) of the
+ *   dataset's first Exact pair, whose 72 comes 6 s before it.
+ * - `selectedContext`: +/-300 s (the Details context list, #843) around the record the "selected
+ *   record" capture selects: the DeviceManagement 404 at record 89131. Nothing asks for it yet;
+ *   it is captured here so the Details context's capture needs no second Rust change.
+ */
+const TIMELINE_WINDOW_REQUESTS: readonly {
+  name: string;
+  record: FixtureRecordRef;
+  halfWidthMs: number;
+}[] = [
+  { name: "dock", record: { channel: "dm", eventId: 76, eventRecordId: 91915 }, halfWidthMs: 75_000 },
+  {
+    name: "selectedContext",
+    record: { channel: "dm", eventId: 404, eventRecordId: 89131 },
+    halfWidthMs: 300_000,
+  },
+];
+
+/**
+ * The dataset record a named window is centered on, so a spec selects the very record the engine
+ * was asked about. Throws when the dataset no longer holds it.
+ */
+export function timelineWindowRecord(parseResult: EvtxParseResult, windowName: string): EvtxRecord {
+  const request = TIMELINE_WINDOW_REQUESTS.find((candidate) => candidate.name === windowName);
+  if (request === undefined) {
+    throw new Error(`[event-logs fixture] there is no window named "${windowName}"`);
+  }
+  const { record } = request;
+  const found = parseResult.records.find(
+    (candidate) =>
+      candidate.channel === CHANNELS[record.channel].name &&
+      candidate.eventId === record.eventId &&
+      candidate.eventRecordId === record.eventRecordId,
+  );
+  if (found === undefined) {
+    throw new Error(
+      `[event-logs fixture] window "${windowName}": no ${CHANNELS[record.channel].name} event ` +
+        `${record.eventId} with record ID ${record.eventRecordId} in the dataset`,
+    );
+  }
+  return found;
+}
+
+/** The window requests with their centers and bounds filled in from the dataset's own records. */
+export function timelineWindowRequests(parseResult: EvtxParseResult) {
+  return TIMELINE_WINDOW_REQUESTS.map(({ name, halfWidthMs }) => {
+    const centerMs = timelineWindowRecord(parseResult, name).timestampEpoch;
+    return {
+      name,
+      centerMs,
+      halfWidthMs,
+      startMs: centerMs - halfWidthMs,
+      endMs: centerMs + halfWidthMs,
+      limit: ENGINE_WINDOW_LIMIT,
+    };
+  });
 }
 
 /** The exact engine input, committed so `cargo test` can replay it (see the capture script). */

@@ -13,6 +13,7 @@
  */
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { DOCK_MIN_HEIGHT_PX } from "./evtx-main-column-layout";
 
 export const EVTX_VIEW_IDS = [
   "table",
@@ -60,7 +61,12 @@ export const DEFAULT_RAIL_WIDTH = 340;
 export const MIN_RAIL_WIDTH = 280;
 export const MAX_RAIL_WIDTH = 480;
 export const DEFAULT_DOCK_HEIGHT = 210;
-export const MIN_DOCK_HEIGHT = 160;
+/**
+ * The least the dock is stored or drawn at: its header plus one lane (evtx-main-column-layout.ts).
+ * The same number bounds the resize handle, so a window too short for the chosen height can render
+ * the dock at it and the handle can still move it.
+ */
+export const MIN_DOCK_HEIGHT = DOCK_MIN_HEIGHT_PX;
 /** The dock may take at most half the viewport height; applied in pixels at use time. */
 export const MAX_DOCK_HEIGHT_RATIO = 0.5;
 
@@ -73,9 +79,10 @@ export const MAX_DOCK_HEIGHT_RATIO = 0.5;
  * deliberately no `migrate`: no released build wrote the older versions. Phase 4 did this for
  * Insights (version 2).
  *
- * The correlation dock (Phase 11) is available but defaults OFF (R4: it would leave the Table grid
- * about 120 px under the 320 px timeline strip), so its default is the `false` every stored layout
- * already holds, and shipping it needed no version bump.
+ * The correlation dock (Phase 11) is available but defaults OFF (R4: it takes 210 px of the main
+ * column, and the Table grid keeps its floor of five rows whether it is open or not, so the dock
+ * is the panel that gives way; see evtx-main-column-layout.ts), so its default is the `false`
+ * every stored layout already holds, and shipping it needed no version bump.
  */
 export const EVTX_PANELS_AVAILABLE: EvtxPanels = {
   channels: true,
