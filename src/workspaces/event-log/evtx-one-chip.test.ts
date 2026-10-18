@@ -12,15 +12,13 @@
  * value, `chip={row.chip}` or `chip={chipForOriginKind(...)}`, and never writes the words itself, so
  * a second rule for the kind cannot be written inside a `chip=` attribute either.
  */
-import type { ComponentProps } from "react";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import type { EvtxKindChip } from "./EvtxKindChip";
-import { chipForOriginKind, type KindChip } from "./evtx-kind-chip-value";
+import { chipForOriginKind } from "./evtx-kind-chip-value";
 
 /** The files that may write EVT or LOG, and why. Keep it small: a new entry is a decision. */
 const ALLOWED_TO_WRITE_THE_KIND: Record<string, string> = {
-  "EvtxKindChip.tsx": "draws the chip and types its prop",
+  "EvtxKindChip.tsx": "draws the chip: picks its colors and names it by the kind",
   "evtx-kind-chip-value.ts": "the one rule that says which entry gets which",
 };
 
@@ -197,8 +195,13 @@ describe("the one rule for the chip's value", () => {
     expect(chipForOriginKind("log")).toBe("LOG");
   });
 
-  it("gives the chip component the same type the rule returns", () => {
-    expectTypeOf<ComponentProps<typeof EvtxKindChip>["chip"]>().toEqualTypeOf<KindChip>();
-    expectTypeOf(chipForOriginKind).returns.toEqualTypeOf<KindChip>();
+  it("declares the chip's type once, in the rule's module, and the chip takes it from there", () => {
+    // A union of the two words anywhere else is a second definition of the type.
+    const declaring = Object.keys(sources)
+      .filter((file) => /"EVT"\s*\|\s*"LOG"|"LOG"\s*\|\s*"EVT"/.test(withoutComments(sources[file]!)))
+      .sort();
+    expect(declaring).toEqual(["evtx-kind-chip-value.ts"]);
+    expect(sources[CHIP_FILE]).toMatch(/import type \{ KindChip \} from "\.\/evtx-kind-chip-value";/);
+    expect(sources[CHIP_FILE]).toMatch(/\bchip: KindChip;/);
   });
 });

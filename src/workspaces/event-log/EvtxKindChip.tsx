@@ -13,13 +13,14 @@ import { tokens } from "@fluentui/react-components";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { correlationSizes } from "./evtx-correlation-sizes";
+import type { KindChip } from "./evtx-kind-chip-value";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 
 interface EvtxKindChipProps {
-  chip: "EVT" | "LOG";
+  chip: KindChip;
 }
 
-const NAMES = { EVT: "Windows event", LOG: "Text log line" } as const;
+const NAMES = { EVT: "Windows event", LOG: "Text log line" } as const satisfies Record<KindChip, string>;
 
 /**
  * The chip owns its size: the spec's mono f - 4, with the 10 px floor it puts on text. A caller
