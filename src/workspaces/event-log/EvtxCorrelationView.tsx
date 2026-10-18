@@ -42,7 +42,7 @@ import {
   whyHeading,
   whyStatement,
 } from "./evtx-correlation-copy";
-import type { CorrelationChain, CorrelationChainStrength } from "./evtx-correlation-chains";
+import type { CorrelationChain } from "./evtx-correlation-chains";
 import {
   resolveOriginRecords,
   scopeForChain,
@@ -95,6 +95,7 @@ import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
 import { formatEventTime, timeZoneLabel } from "./evtx-time";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
+import { EvtxStrengthBadge } from "./EvtxStrengthBadge";
 import { useThrottledValue } from "./evtx-throttle";
 import type { TimelineItem } from "./unified-timeline";
 
@@ -173,44 +174,6 @@ interface Palette {
   caption: string;
 }
 
-function StrengthBadge({
-  strength,
-  selected,
-  palette,
-}: {
-  strength: CorrelationChainStrength;
-  selected: boolean;
-  palette: Palette;
-}) {
-  const badge = palette.visuals.strengths[strength];
-  // On a selected row the Exact badge's own fill IS the selection fill (1.00:1), so it is drawn on
-  // the surface color with its border and its text; the other badges already differ from it.
-  const background = selected && strength === "exact" ? tokens.colorNeutralBackground1 : badge.background;
-  const Icon = badge.Icon;
-  return (
-    <span
-      data-strength-badge={strength}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "3px",
-        padding: "1px 6px",
-        borderRadius: "8px",
-        fontSize: `${palette.sizes.label}px`,
-        fontWeight: 700,
-        lineHeight: 1.3,
-        backgroundColor: background,
-        color: badge.foreground,
-        border: `1px ${badge.borderStyle} ${badge.border}`,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {Icon !== undefined && <Icon aria-hidden="true" style={{ width: "12px", height: "12px" }} />}
-      {STRENGTH_LABELS[strength]}
-    </span>
-  );
-}
-
 function ChainRow({
   chain,
   id,
@@ -255,7 +218,7 @@ function ChainRow({
       }}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
-        <StrengthBadge strength={chain.strength} selected={selected} palette={palette} />
+        <EvtxStrengthBadge strength={chain.strength} selected={selected} visuals={palette.visuals} textSize={palette.sizes.label} />
         <span
           style={{
             fontSize: `${sizes.label}px`,
@@ -942,7 +905,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
                 >
                   {chainTitle(chain)}
                 </h2>
-                <StrengthBadge strength={chain.strength} selected={false} palette={palette} />
+                <EvtxStrengthBadge strength={chain.strength} visuals={palette.visuals} textSize={palette.sizes.label} />
               </div>
               <div style={{ fontSize: `${sizes.lane}px`, color: palette.caption, display: "flex", gap: "6px", flexWrap: "wrap" }}>
                 {header !== null && (
