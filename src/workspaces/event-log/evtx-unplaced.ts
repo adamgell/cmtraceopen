@@ -223,31 +223,51 @@ export function unplacedCardLine(list: UnplacedListInput | null): string | null 
 }
 
 /**
- * What the Log Viewer holds: the log store's own mode, the file it has open and which lines of that
- * file are loaded.
+ * What the Log Viewer holds: the log store's own mode, the file it has open, which lines of that
+ * file are loaded, and whether the entries are in line order.
  */
 export interface LogViewerLines {
   openFilePath: string | null;
   /**
-   * The log store's `sourceOpenMode`. Only "single-file" means the entries are one file, in that
-   * file's order, shown by the list that consumes a scroll target. The other modes keep
-   * `openFilePath` and the entries in states that look like it and are not (see
-   * `openAtLineAvailability`), so the file and the lines alone cannot tell them apart.
+   * The log store's `sourceOpenMode`. The modes other than "single-file" keep `openFilePath` and the
+   * entries in states that look like a file and are not (see `openAtLineAvailability`), and diff
+   * mounts a different view altogether. But "single-file" alone does not guarantee that the entries
+   * are in the file's order either: the aggregate firewall tail (`applyFirewallTail`, log-store.ts)
+   * writes a file's rows into its "single-file" snapshot in the aggregate's timestamp order, untimed
+   * rows last, and the file sidebar restores that snapshot as the open file (#967). So the mode is
+   * necessary and the order is checked as well (`inLineOrder`).
    */
   sourceOpenMode: SourceOpenMode;
   /** The line numbers loaded for `openFilePath`. */
   lines: ReadonlySet<number>;
+  /**
+   * The entries' line numbers never decrease, in the order the Log Viewer holds them. This is the
+   * order the consumer of a scroll target needs: it selects the first shown entry whose line is at
+   * or after the target, which is the target's own line only when no earlier entry has a larger
+   * number. It is "never decreases", not "strictly increases": a parser may emit several entries for
+   * one line, and equal numbers in a row do not move the find.
+   */
+  inLineOrder: boolean;
 }
 
-/** The Log Viewer's mode, open file and that file's loaded lines, in one pass over the entries. */
+/**
+ * The Log Viewer's mode, open file, that file's loaded lines and whether the entries are in line
+ * order, in one pass over the entries.
+ */
 export function logViewerLines(
   openFilePath: string | null,
   sourceOpenMode: SourceOpenMode,
   entries: readonly { filePath: string; lineNumber: number }[],
 ): LogViewerLines {
   const lines = new Set<number>();
-  for (const entry of entries) if (entry.filePath === openFilePath) lines.add(entry.lineNumber);
-  return { openFilePath, sourceOpenMode, lines };
+  let inLineOrder = true;
+  let previous = Number.NEGATIVE_INFINITY;
+  for (const entry of entries) {
+    if (entry.filePath === openFilePath) lines.add(entry.lineNumber);
+    if (entry.lineNumber < previous) inLineOrder = false;
+    previous = entry.lineNumber;
+  }
+  return { openFilePath, sourceOpenMode, lines, inLineOrder };
 }
 
 export interface OpenAtLine {
@@ -275,13 +295,18 @@ const MODE_REASONS: Record<Exclude<SourceOpenMode, "single-file" | null>, string
  * SHOWS whose number is at or after the target, without looking at the file. That is the right line
  * only when the entries are the one file in file order and that list is the one mounted. So it is
  * enabled only when the log store is in "single-file" mode, its open file is exactly the line's
- * file, and it holds exactly that line. Every other state is disabled with its reason:
+ * file, the entries' line numbers never decrease, and it holds exactly that line. Every other state
+ * is disabled with its reason:
  * - merged: the entries are in timestamp order, untimed lines last, so with the other files hidden
  *   the open file's line 7 is loaded and a click selects some other line; with them shown it can
  *   select another file's line;
  * - diff: the diff view is mounted instead of the list, so the target would never be consumed and
  *   would fire when the diff closes;
- * - aggregate-folder, and no mode (after the diff closes): there is no single file open.
+ * - aggregate-folder, and no mode (after the diff closes): there is no single file open;
+ * - single-file with the entries out of line order (#967): the aggregate firewall tail leaves a
+ *   file's rows in timestamp order with the untimed ones last, so line 7 is loaded, at the end,
+ *   and the first shown line at or after 7 is some other row. The order check also refuses the
+ *   hidden-merged state on its own, whatever the mode.
  * The button is "near line n" because a filter in the Log Viewer can hide the line itself.
  */
 export function openAtLineAvailability(
@@ -301,6 +326,11 @@ export function openAtLineAvailability(
   if (viewer.openFilePath === null) return no(NO_SINGLE_FILE);
   if (viewer.openFilePath !== file) {
     return no(`The Log Viewer has a different file open. Open ${getBaseName(file)} there first.`);
+  }
+  if (!viewer.inLineOrder) {
+    return no(
+      "The Log Viewer is not showing this file in its own line order, so it cannot open this line at its place.",
+    );
   }
   if (!viewer.lines.has(line)) {
     return no(`Line ${count(line)} is not among the lines the Log Viewer has loaded.`);

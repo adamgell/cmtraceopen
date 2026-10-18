@@ -361,6 +361,53 @@ describe("Open in Log Viewer (R4)", () => {
     expect(result.reason).toBe("The Log Viewer has no single file open, so this line cannot be opened there.");
   });
 
+  // The aggregate firewall tail (#967) writes a file's rows into its "single-file" snapshot in the
+  // aggregate's timestamp order, untimed rows last, and the sidebar restores it as the open file.
+  const firewallOrder = [
+    { filePath: file, lineNumber: 1 },
+    { filePath: file, lineNumber: 2 },
+    { filePath: file, lineNumber: 4 },
+    { filePath: file, lineNumber: 5 },
+    { filePath: file, lineNumber: 3 },
+  ];
+
+  it("is disabled in single-file mode when the entries are out of line order, the untimed row last, though the line is loaded", () => {
+    const restored = viewer(file, "single-file", firewallOrder);
+    expect(restored.lines.has(3)).toBe(true);
+    expect(restored.inLineOrder).toBe(false);
+    const result = openAtLineAvailability(restored, file, 3);
+    expect(result.enabled).toBe(false);
+    expect(result.reason).toBe(
+      "The Log Viewer is not showing this file in its own line order, so it cannot open this line at its place.",
+    );
+  });
+
+  it("is enabled in single-file mode when several entries share a line number, as a parser may emit", () => {
+    // "Never decreases", not "strictly increases": equal numbers in a row do not move the find.
+    const repeated = [
+      { filePath: file, lineNumber: 1 },
+      { filePath: file, lineNumber: 2 },
+      { filePath: file, lineNumber: 2 },
+      { filePath: file, lineNumber: 3 },
+      { filePath: file, lineNumber: 7 },
+      { filePath: file, lineNumber: 7 },
+    ];
+    const result = openAtLineAvailability(viewer(file, "single-file", repeated), file, 7);
+    expect(viewer(file, "single-file", repeated).inLineOrder).toBe(true);
+    expect(result.enabled).toBe(true);
+  });
+
+  it("refuses the hidden-merged state on the order alone, whatever the mode says", () => {
+    // Mode lied about as single-file: the entries are the open file's lines in timestamp order.
+    const result = openAtLineAvailability(viewer(file, "single-file", firewallOrder), file, 5);
+    expect(result.enabled).toBe(false);
+  });
+
+  it("counts an empty list and one entry as in order", () => {
+    expect(viewer(file, "single-file", []).inLineOrder).toBe(true);
+    expect(viewer(file, "single-file", [{ filePath: file, lineNumber: 9 }]).inLineOrder).toBe(true);
+  });
+
   it("is disabled, with its reason, when a single file is meant but none is open", () => {
     const result = openAtLineAvailability(viewer(null), file, 7);
     expect(result.enabled).toBe(false);
