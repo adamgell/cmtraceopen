@@ -32,7 +32,7 @@ vi.mock("./evtx-correlation-view-model", async (importOriginal) => {
   return {
     ...actual,
     buildChainPlot: (...args: Parameters<typeof actual.buildChainPlot>) => {
-      plotBuilds();
+      plotBuilds(...args);
       return actual.buildChainPlot(...args);
     },
   };
@@ -67,6 +67,7 @@ import {
   synthetic,
   type DataOptions,
 } from "./evtx-correlation-test-fixtures";
+import type { TimeWindow } from "./evtx-correlation-view-model";
 import type { EvtxRecord } from "./types";
 import type { TimelineCorrelationEdge, TimelineItem, UnplacedItem } from "./unified-timeline";
 
@@ -1128,6 +1129,82 @@ describe("the overview strip in the view (spec 8.11)", () => {
     fireEvent.keyDown(slider(), { key: "Home" });
     expect(screen.getByTestId("lane-plot")).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/nothing to plot/);
+  });
+
+  describe("a window equal to the default is the default, so the plot goes on following it", () => {
+    const lastBuiltWindow = () => {
+      const calls = plotBuilds.mock.calls;
+      return (calls[calls.length - 1]![0] as { window?: TimeWindow | null }).window;
+    };
+    const LEFT = 100;
+    const WIDTH = 720;
+    /** The band's own press target, with the strip's geometry stubbed (jsdom has no layout). */
+    const bandAndBox = () => {
+      screen.getByTestId("overview-box").getBoundingClientRect = () =>
+        ({ left: LEFT, top: 0, right: LEFT + WIDTH, bottom: 48, width: WIDTH, height: 48, x: LEFT, y: 0, toJSON: () => ({}) }) as DOMRect;
+      const wash = document.querySelector<HTMLElement>('[data-evtx-layer="wash"]')!;
+      return { box: slider(), wash, startX: LEFT + (parseFloat(wash.style.left) / 100) * WIDTH + 2 };
+    };
+
+    it("hands the plot undefined before anything is done, and after a drag cancelled with Escape", () => {
+      show(mixedData());
+      expect(lastBuiltWindow()).toBeUndefined();
+      const { box, wash, startX } = bandAndBox();
+      fireEvent.pointerDown(wash, { clientX: startX, button: 0, buttons: 1, isPrimary: true, pointerId: 1 });
+      fireEvent.pointerMove(box, { clientX: startX + 60, buttons: 1, pointerId: 1 });
+      // Mid-drag the band is somewhere else, so the plot has a concrete window.
+      expect(lastBuiltWindow()).toBeDefined();
+      expect(fireEvent.keyDown(box, { key: "Escape" })).toBe(false);
+      // Back where it was pressed, which is the default: no override is kept.
+      expect(lastBuiltWindow()).toBeUndefined();
+    });
+
+    // Only a window equal at BOTH ends is the default. The first chain's default starts at the strip's
+    // start, so its end handle is the one that can move on its own; the second chain sits in the middle
+    // of the strip, so there the start handle can.
+    it.each([
+      { chainRow: 0, side: "end", dx: 40 },
+      { chainRow: 1, side: "start", dx: -40 },
+    ] as const)("hands the plot a concrete window when only the $side edge of chain $chainRow's default moves", ({ chainRow, side, dx }) => {
+      show(mixedData());
+      if (chainRow !== 0) fireEvent.click(rows()[chainRow]!);
+      const { box } = bandAndBox();
+      const wash = document.querySelector<HTMLElement>('[data-evtx-layer="wash"]')!;
+      const left = parseFloat(wash.style.left) / 100;
+      const right = left + parseFloat(wash.style.width) / 100;
+      const edgeX = LEFT + (side === "start" ? left : right) * WIDTH;
+      const handle = document.querySelector<HTMLElement>(`[data-part="${side}"]`)!;
+      fireEvent.pointerDown(handle, { clientX: edgeX, button: 0, buttons: 1, isPrimary: true, pointerId: 1 });
+      fireEvent.pointerMove(box, { clientX: edgeX + dx, buttons: 1, pointerId: 1 });
+      expect(lastBuiltWindow()).toBeDefined();
+    });
+
+    it("hands the plot undefined when a key move lands exactly back on the default", () => {
+      show(mixedData());
+      fireEvent.keyDown(slider(), { key: "ArrowRight" });
+      expect(lastBuiltWindow()).toBeDefined();
+      fireEvent.keyDown(slider(), { key: "ArrowLeft" });
+      expect(lastBuiltWindow()).toBeUndefined();
+    });
+
+    it("follows the new default when a live rebuild changes it after a cancelled drag", () => {
+      const view = show(mixedData());
+      const { box, wash, startX } = bandAndBox();
+      fireEvent.pointerDown(wash, { clientX: startX, button: 0, buttons: 1, isPrimary: true, pointerId: 1 });
+      fireEvent.pointerMove(box, { clientX: startX + 60, buttons: 1, pointerId: 1 });
+      fireEvent.keyDown(box, { key: "Escape" });
+      const before = axisLabels();
+      // A live rebuild in which the selected chain's first entry is 1 s earlier: its default moves, and
+      // the strip only grows, so the old window is still legal there and nothing clamps it.
+      const edges = [
+        ...fixtureEdges("pairAndGroupDisjoint"),
+        ...fixtureEdges("secondaryPair", 10),
+        ...fixtureEdges("gappedPair", 20),
+      ];
+      const earlier = idsOf(edges).map((id) => eventItem(numberOf(id), T0 + numberOf(id) * 1_000 - (numberOf(id) === 1 ? 1_000 : 0)));
+      view.update(makeData({ items: earlier, edges, builtFor: "session:2" }));
+      expect(axisLabels()).not.toEqual(before);
+    });
   });
 
   it("starts the next chain from its own default, and so does coming back", () => {

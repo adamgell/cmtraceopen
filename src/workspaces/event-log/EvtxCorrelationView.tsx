@@ -440,15 +440,21 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
   // and is never the time-range criterion.
   const [zoom, setZoom] = useState<ZoomState | null>(null);
   const zoomWindow = zoomWindowFor(zoom, chain?.id ?? null);
-  const bandWindow: TimeWindow | null =
-    zoomWindow ?? (chain === null ? null : defaultLaneWindow(chain.startMs, chain.endMs));
+  const defaultWindow = chain === null ? null : defaultLaneWindow(chain.startMs, chain.endMs);
+  const defaultStartMs = defaultWindow?.startMs;
+  const defaultEndMs = defaultWindow?.endMs;
+  const bandWindow: TimeWindow | null = zoomWindow ?? defaultWindow;
   const zoomChainId = chain?.id ?? null;
   const onBandChange = useCallback(
     (next: TimeWindow | null) => {
       if (zoomChainId === null) return;
-      setZoom(next === null ? null : { chainId: zoomChainId, window: next });
+      // A window equal to the chain's default IS the default, so it is stored as no override: a drag
+      // cancelled with Escape, or a move that lands exactly on it, must not freeze the plot at a
+      // concrete window and stop it following the default when a live rebuild changes it.
+      const isDefault = next !== null && next.startMs === defaultStartMs && next.endMs === defaultEndMs;
+      setZoom(next === null || isDefault ? null : { chainId: zoomChainId, window: next });
     },
-    [zoomChainId],
+    [zoomChainId, defaultStartMs, defaultEndMs],
   );
   const plot = useMemo(
     () =>
