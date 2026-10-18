@@ -76,21 +76,21 @@ import { timelineOriginId, type TimelineItem } from "./unified-timeline";
 /** Spec 8.13 item 7: ±5 min around the selected record. */
 export const DETAIL_CONTEXT_HALF_WIDTH_MS = 300_000;
 /** Spec 8.13 item 7: the 12 nearest items. */
-export const DETAIL_CONTEXT_ROW_CAP = 12;
+const DETAIL_CONTEXT_ROW_CAP = 12;
 /** The eyebrow: "Context ±5 min". */
 export const DETAIL_CONTEXT_TITLE = `Context ${windowWidthLabel(DETAIL_CONTEXT_HALF_WIDTH_MS)}`;
 /** The eyebrow's right side. */
 export const DETAIL_CONTEXT_KINDS_LABEL = "events + text logs";
 
 /** Said when at least one row carries the link icon. */
-export const LINK_LEGEND_TEXT = "Link icon: Exact or Candidate link to this event.";
+const LINK_LEGEND_TEXT = "Link icon: Exact or Candidate link to this event.";
 
 /**
  * Said when the absence of a link icon could be misread as an absence of a link: the session could
  * not speak for it (an edge, an event or an origin may be missing). The specific reasons are the
  * notes beside it.
  */
-export const LINKS_MAY_BE_MISSING_TEXT =
+const LINKS_MAY_BE_MISSING_TEXT =
   "Links may be missing, so an entry without a link icon may still be linked to this event.";
 
 export interface DetailContextInput extends DockModelInput {
@@ -103,7 +103,7 @@ export interface DetailContextInput extends DockModelInput {
 }
 
 /** A direct Exact or Candidate edge between an entry and the selected event. */
-export interface DirectLink {
+interface DirectLink {
   strength: "exact" | "candidate";
   /** The one key kind the edge carries, as the views word it, or null when it carries none or several. */
   keyLabel: string | null;
@@ -127,7 +127,7 @@ export interface DetailContextRow {
   link: { strength: "exact" | "candidate"; name: string } | null;
 }
 
-export interface DetailContextReady {
+interface DetailContextReady {
   kind: "ready";
   eventId: number;
   centerMs: number;
@@ -154,7 +154,7 @@ export interface DetailContextReady {
   empty: { text: string; absolute: boolean } | null;
 }
 
-export type DetailContextModel =
+type DetailContextModel =
   | { kind: "none" }
   | { kind: "untimed"; text: string }
   | { kind: "noSession"; text: string }

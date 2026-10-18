@@ -40,15 +40,10 @@ import {
 import {
   DETAIL_CONTEXT_HALF_WIDTH_MS,
   DETAIL_CONTEXT_KINDS_LABEL,
-  DETAIL_CONTEXT_ROW_CAP,
   DETAIL_CONTEXT_TITLE,
-  LINKS_MAY_BE_MISSING_TEXT,
-  LINK_LEGEND_TEXT,
   buildDetailContext,
   directLinks,
   type DetailContextInput,
-  type DetailContextModel,
-  type DetailContextReady,
 } from "./evtx-detail-context-model";
 import {
   FIVE_MIN,
@@ -78,6 +73,13 @@ function input(extra: Partial<DetailContextInput> = {}): DetailContextInput {
     ...extra,
   };
 }
+
+/** The words this list adds (the model keeps them private): the tests pin them as written. */
+const LINK_LEGEND_TEXT = "Link icon: Exact or Candidate link to this event.";
+const LINKS_MAY_BE_MISSING_TEXT =
+  "Links may be missing, so an entry without a link icon may still be linked to this event.";
+type DetailContextModel = ReturnType<typeof buildDetailContext>;
+type DetailContextReady = Extract<DetailContextModel, { kind: "ready" }>;
 
 function ready(extra: Partial<DetailContextInput> = {}): DetailContextReady {
   const model = buildDetailContext(input(extra));
@@ -161,7 +163,7 @@ describe("which state the list is in", () => {
 describe("the 12 nearest entries", () => {
   it("lists the selected event and its 11 nearest neighbours, in time order, not the first 12 by time", () => {
     const model = ready();
-    expect(DETAIL_CONTEXT_ROW_CAP).toBe(12);
+    expect(model.rows).toHaveLength(12);
     expect(numbers(model)).toEqual([14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
     expect(DETAIL_CONTEXT_TITLE).toBe("Context ±5 min");
   });
