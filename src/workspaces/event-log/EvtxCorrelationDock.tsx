@@ -29,7 +29,6 @@
 import { useCallback, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button, Dropdown, Option, tokens } from "@fluentui/react-components";
 import { ChevronDown12Regular, ChevronUp12Regular, Dismiss12Regular } from "@fluentui/react-icons";
-import type { EventLogAnalysisSessionStatus } from "../../lib/commands";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { CorrelationLegend, EvtxCorrelationLanes, correlationSizes } from "./EvtxCorrelationLanes";
@@ -56,6 +55,7 @@ import {
   type DockReady,
   type MarkerSelectability,
 } from "./evtx-correlation-dock-model";
+import { useEvtxAnalysisSession, type EvtxAnalysisSession } from "./evtx-analysis-session";
 import { itemsByOriginId } from "./evtx-correlation-origin-index";
 import { openCorrelationView } from "./evtx-correlation-store";
 import type { CorrelationWindowDeps, LoadedCorrelationWindow } from "./evtx-correlation-window";
@@ -74,12 +74,9 @@ import type { PlotMarker } from "./evtx-correlation-view-model";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 import { useEvtxCorrelationData } from "./useEvtxCorrelation";
 import { useEvtxCorrelationWindow } from "./useEvtxCorrelationWindow";
+import { useUnreadSources } from "./useUnreadSources";
 
 export interface EvtxCorrelationDockProps {
-  /** The published analysis session, or null while there is none. */
-  status: Pick<EventLogAnalysisSessionStatus, "sessionId" | "revision"> | null;
-  /** A source was not fully read (a channel needs elevation, a file failed): entries may be missing. */
-  unreadSources: boolean;
   /** Test seams: the window reader's IO and its two settle times. */
   windowDeps?: Partial<CorrelationWindowDeps>;
   selectionSettleMs?: number;
@@ -94,12 +91,10 @@ interface ClickResults {
 const NO_CLICKS: ReadonlyMap<string, MarkerSelectability> = new Map();
 
 export default function EvtxCorrelationDock({
-  status,
-  unreadSources,
   windowDeps,
   selectionSettleMs,
   sessionSettleMs,
-}: EvtxCorrelationDockProps) {
+}: EvtxCorrelationDockProps = {}) {
   const uid = useId();
   const bodyId = `${uid}-body`;
   const reasonId = `${uid}-open-reason`;
@@ -115,6 +110,10 @@ export default function EvtxCorrelationDock({
   const setDockWindowMs = useEvtxLayoutStore((s) => s.setDockWindowMs);
   const setDockCollapsed = useEvtxLayoutStore((s) => s.setDockCollapsed);
   const counts = useEvtxCorrelationData().counts;
+  // The session comes from the workspace's provider, the unread sources from the store's coverage:
+  // the same two readings the Details context list takes, so there is one of each.
+  const status = useEvtxAnalysisSession();
+  const unreadSources = useUnreadSources();
 
   const centerMs = dockCenterMs(record);
   const { window, reading, retry } = useEvtxCorrelationWindow({
@@ -367,7 +366,7 @@ export default function EvtxCorrelationDock({
 }
 
 /** The sentence for a dock with nothing to draw yet, or null when the failure's alert says it. */
-function messageFor(model: DockModel | null, status: EvtxCorrelationDockProps["status"]): string | null {
+function messageFor(model: DockModel | null, status: EvtxAnalysisSession | null): string | null {
   if (model === null) return "";
   switch (model.kind) {
     case "noSelection":

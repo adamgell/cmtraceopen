@@ -27,6 +27,7 @@ vi.mock("./evtx-correlation-dock-model", async (importOriginal) => {
 
 import { useUiStore } from "../../stores/ui-store";
 import EvtxCorrelationDock from "./EvtxCorrelationDock";
+import { EvtxAnalysisSessionProvider } from "./evtx-analysis-session";
 import dockSource from "./EvtxCorrelationDock.tsx?raw";
 import dockWindowSource from "./useEvtxCorrelationWindow.ts?raw";
 import {
@@ -62,6 +63,11 @@ import type { EvtxRecord } from "./types";
 import type { TimelineItem } from "./unified-timeline";
 
 type QueryWindow = CorrelationWindowDeps["queryWindow"];
+
+/** A coverage gap that loses records: a channel that needs elevation. */
+const UNREAD_GAP = { source: "Security", kind: "accessDenied", reason: "needs elevation" } as const;
+const setUnreadSources = (unread: boolean) =>
+  useEvtxStore.setState({ coverageDetails: unread ? [UNREAD_GAP] : [] });
 
 const STATUS = { sessionId: "session", revision: 1 };
 const RECORD = recordFor(1);
@@ -109,6 +115,7 @@ function renderDock(
     status?: typeof STATUS | null;
     unreadSources?: boolean;
     settle?: number;
+    sessionSettle?: number;
     queryWindow?: Mock<QueryWindow>;
   } = {},
 ): Harness {
@@ -120,16 +127,17 @@ function renderDock(
   let status = options.status === undefined ? STATUS : options.status;
   let unreadSources = options.unreadSources ?? false;
   const tree = () => (
-    <EvtxCorrelationProvider value={data}>
-      <EvtxCorrelationDock
-        status={status}
-        unreadSources={unreadSources}
-        windowDeps={{ queryWindow, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }}
-        selectionSettleMs={options.settle ?? 0}
-        sessionSettleMs={options.settle ?? 0}
-      />
-    </EvtxCorrelationProvider>
+    <EvtxAnalysisSessionProvider value={status}>
+      <EvtxCorrelationProvider value={data}>
+        <EvtxCorrelationDock
+          windowDeps={{ queryWindow, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }}
+          selectionSettleMs={options.settle ?? 0}
+          sessionSettleMs={options.sessionSettle ?? options.settle ?? 0}
+        />
+      </EvtxCorrelationProvider>
+    </EvtxAnalysisSessionProvider>
   );
+  setUnreadSources(unreadSources);
   const view = render(tree());
   return {
     get data() {
@@ -139,7 +147,10 @@ function renderDock(
     rerender: (next = {}) => {
       if (next.data !== undefined) data = next.data;
       if (next.status !== undefined) status = next.status;
-      if (next.unreadSources !== undefined) unreadSources = next.unreadSources;
+      if (next.unreadSources !== undefined) {
+        unreadSources = next.unreadSources;
+        act(() => setUnreadSources(unreadSources));
+      }
       view.rerender(tree());
     },
   };
@@ -275,6 +286,60 @@ describe("what it says before there is a window to draw", () => {
   }, 10_000);
 });
 
+describe("where it gets the session and the unread sources", () => {
+  it("reads the session from the workspace's provider: a new revision is a new read, after the settle", async () => {
+    vi.useFakeTimers();
+    const { queryWindow, rerender } = renderDock({ settle: 150, sessionSettle: 500 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    expect(queryWindow).toHaveBeenCalledTimes(1);
+    expect(queryWindow.mock.calls[0]![0]).toBe(STATUS.sessionId);
+    rerender({ status: { sessionId: "session", revision: 2 } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    expect(queryWindow).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+    expect(queryWindow).toHaveBeenCalledTimes(2);
+  });
+
+  it("says there is no analysis when the provider holds none, and reads again when one is published", async () => {
+    const { queryWindow, rerender } = renderDock({ status: null });
+    expect(screen.getByTestId("correlation-dock-message")).toHaveTextContent(NO_SESSION_TEXT);
+    rerender({ status: STATUS });
+    await ready();
+    expect(queryWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the unread sources from the store's coverage, and follows it", async () => {
+    const { rerender } = renderDock();
+    await ready();
+    const notices = () => screen.queryByTestId("correlation-dock-notices")?.textContent ?? "";
+    expect(notices()).not.toMatch(/not fully read/);
+    rerender({ unreadSources: true });
+    expect(notices()).toContain("Some sources were not fully read");
+    rerender({ unreadSources: false });
+    expect(notices()).not.toMatch(/not fully read/);
+  });
+
+  it("does not call a source with no events, or an unresolved provider message, unread", async () => {
+    renderDock();
+    await ready();
+    act(() =>
+      useEvtxStore.setState({
+        coverageDetails: [
+          { source: "Setup", kind: "empty", reason: "no events" },
+          { source: "System", kind: "provider", reason: "message text unavailable" },
+        ],
+      }),
+    );
+    expect(screen.queryByTestId("correlation-dock-notices")?.textContent ?? "").not.toMatch(/not fully read/);
+  });
+});
+
 describe("when it reads (R5)", () => {
   it("reads nothing while collapsed, shows only its header, and reads when it is expanded", async () => {
     useEvtxLayoutStore.setState({ dockCollapsed: true });
@@ -398,15 +463,15 @@ describe("the lanes and the summary", () => {
       throw new Error("page failed");
     });
     render(
-      <EvtxCorrelationProvider value={makeData({ items, edges: sceneEdges() })}>
-        <EvtxCorrelationDock
-          status={STATUS}
-          unreadSources={false}
-          windowDeps={{ queryWindow, queryTimelinePage: pageFails, sleep: async () => undefined }}
-          selectionSettleMs={0}
-          sessionSettleMs={0}
-        />
-      </EvtxCorrelationProvider>,
+      <EvtxAnalysisSessionProvider value={STATUS}>
+        <EvtxCorrelationProvider value={makeData({ items, edges: sceneEdges() })}>
+          <EvtxCorrelationDock
+            windowDeps={{ queryWindow, queryTimelinePage: pageFails, sleep: async () => undefined }}
+            selectionSettleMs={0}
+            sessionSettleMs={0}
+          />
+        </EvtxCorrelationProvider>
+      </EvtxAnalysisSessionProvider>,
     );
     await ready();
     expect(screen.getByTestId("correlation-dock-notices")).toHaveTextContent(

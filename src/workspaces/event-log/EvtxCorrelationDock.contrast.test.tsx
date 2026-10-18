@@ -18,6 +18,7 @@ import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import EvtxCorrelationDock from "./EvtxCorrelationDock";
+import { EvtxAnalysisSessionProvider } from "./evtx-analysis-session";
 import { CONNECTOR_STYLES } from "./EvtxCorrelationLanes";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
@@ -65,18 +66,17 @@ function reply(items: TimelineItem[], startMs: number, endMs: number): EventLogA
 
 async function draw(items: TimelineItem[], options: { unreadSources?: boolean; status?: typeof STATUS | null } = {}) {
   const queryWindow = vi.fn<QueryWindow>(async (_s, startMs, endMs) => reply(items, startMs, endMs));
+  useEvtxStore.setState({
+    coverageDetails: options.unreadSources === true ? [{ source: "Security", kind: "accessDenied", reason: "needs elevation" }] : [],
+  });
   render(
-    <EvtxCorrelationProvider
-      value={makeData({ items, edges: [...fixtureEdges("exactPair"), synthetic("o", rid(10), rid(11))] })}
-    >
-      <EvtxCorrelationDock
-        status={options.status === undefined ? STATUS : options.status}
-        unreadSources={options.unreadSources ?? false}
-        windowDeps={{ queryWindow }}
-        selectionSettleMs={0}
-        sessionSettleMs={0}
-      />
-    </EvtxCorrelationProvider>,
+    <EvtxAnalysisSessionProvider value={options.status === undefined ? STATUS : options.status}>
+      <EvtxCorrelationProvider
+        value={makeData({ items, edges: [...fixtureEdges("exactPair"), synthetic("o", rid(10), rid(11))] })}
+      >
+        <EvtxCorrelationDock windowDeps={{ queryWindow }} selectionSettleMs={0} sessionSettleMs={0} />
+      </EvtxCorrelationProvider>
+    </EvtxAnalysisSessionProvider>,
   );
   if (options.status !== null) await screen.findByRole("figure");
 }
