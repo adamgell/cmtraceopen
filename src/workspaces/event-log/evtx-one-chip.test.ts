@@ -7,16 +7,21 @@
  * that attribute alone would never have seen it. This guard looks for what such a chip must contain
  * instead: the kind written as text or compared against, the chip's two names, and the attribute.
  *
- * The allow-list is the files that may hold the literal, and each says why. Passing the kind to the
- * chip (`chip={...}`) is not drawing it, so that attribute's value is set aside before the scan.
+ * The allow-list is the files that may write the two words: the chip, which draws them, and the one
+ * module that says which entry gets which (evtx-kind-chip-value.ts). A surface hands the chip a
+ * value, `chip={row.chip}` or `chip={chipForOriginKind(...)}`, and never writes the words itself, so
+ * a second rule for the kind cannot be written inside a `chip=` attribute either.
  */
-import { describe, expect, it } from "vitest";
+import type { ComponentProps } from "react";
+import { describe, expect, expectTypeOf, it } from "vitest";
+
+import type { EvtxKindChip } from "./EvtxKindChip";
+import { chipForOriginKind, type KindChip } from "./evtx-kind-chip-value";
 
 /** The files that may write EVT or LOG, and why. Keep it small: a new entry is a decision. */
 const ALLOWED_TO_WRITE_THE_KIND: Record<string, string> = {
   "EvtxKindChip.tsx": "draws the chip and types its prop",
-  "evtx-unplaced.ts": "produces the kind of an unplaced row",
-  "evtx-detail-context-model.ts": "produces the kind of a Details context row",
+  "evtx-kind-chip-value.ts": "the one rule that says which entry gets which",
 };
 
 /** The only file that may name the chip or give it a `data-chip` attribute. */
@@ -54,10 +59,7 @@ function withoutComments(source: string): string {
 
 /** The kinds of drawing a source may hold, as short descriptions; empty for a clean source. */
 export function chipDrawingIn(source: string): string[] {
-  const code = withoutComments(source)
-    // Handing the kind to the chip is the one allowed use of the literal outside the files above.
-    .replace(/\bchip=\{[^{}]*\}/g, "chip={}")
-    .replace(/\bchip=(["'])(?:EVT|LOG)\1/g, "chip={}");
+  const code = withoutComments(source);
   const found: string[] = [];
   if (/>\s*(?:EVT|LOG)\s*</.test(code)) found.push("EVT or LOG as the text of a JSX node");
   if (/(?:\?|:|===?|!==?|\bcase)\s*(["'`])(?:EVT|LOG)\1/.test(code)) found.push("a condition on EVT or LOG");
@@ -114,23 +116,24 @@ describe("the scan sees what it must", () => {
     ["a literal after a // inside a string", 'const url = "http://x"; const KIND = "EVT";', ["an EVT or LOG literal"]],
     ["a literal after a comment on the line before", '// a note\nconst KIND = "LOG";', ["an EVT or LOG literal"]],
     [
-      "a literal drawn after a chip attribute, on the same line",
-      '<EvtxKindChip chip={kind} /><b>EVT</b>',
-      ["EVT or LOG as the text of a JSX node"],
-    ],
-    [
-      "a literal drawn after a chip attribute, further down",
-      '<EvtxKindChip chip={kind} />\n<p>{ok ? "LOG" : null}</p>',
+      "a second rule for the kind inside the chip attribute",
+      '<EvtxKindChip chip={fromEvent ? "EVT" : "LOG"} />',
       ["a condition on EVT or LOG", "an EVT or LOG literal"],
     ],
+    ["a literal kind in the chip attribute", '<EvtxKindChip chip="EVT" />', ["an EVT or LOG literal"]],
+    [
+      "a kind rule on two lines inside the chip attribute",
+      '<EvtxKindChip\n  chip={isEvent(o)\n    ? "EVT" : "LOG"}\n/>',
+      ["a condition on EVT or LOG", "an EVT or LOG literal"],
+    ],
+    ["a chip value written in a table", 'const CHIPS = { event: "EVT", log: "LOG" };', ["a condition on EVT or LOG", "an EVT or LOG literal"]],
   ])("flags %s", (_name, source, expected) => {
     expect(chipDrawingIn(source)).toEqual(expected);
   });
 
   it.each([
-    ["the kind handed to the chip", '<EvtxKindChip chip={fromEvent ? "EVT" : "LOG"} />'],
-    ["a literal kind handed to the chip", '<EvtxKindChip chip="EVT" />'],
-    ["the kind handed on two lines", '<EvtxKindChip\n  chip={isEvent(o)\n    ? "EVT" : "LOG"}\n/>'],
+    ["the kind handed to the chip from a row", "<EvtxKindChip chip={row.chip} />"],
+    ["the kind handed to the chip from the one rule", "<EvtxKindChip chip={chipForOriginKind(item.origin.kind)} />"],
     ["a line comment", "// the EVT chip\nconst a = 1;"],
     ["a doc comment", '/**\n * EVT / LOG: "EVT" is a Windows event.\n */\nconst a = 1;'],
     ["a longer string that has the word in it", 'const label = isEvt ? "UNPLACED EVT" : "UNPLACED LOG";'],
@@ -170,12 +173,32 @@ describe("EVT and LOG chips are drawn by one component", () => {
       expect(chipDrawingIn(sources[file]!).length, `${file} no longer writes EVT or LOG: drop it from the list`).toBeGreaterThan(0);
     }
     expect(chipDrawingIn(sources[CHIP_FILE]!).length).toBeGreaterThan(0);
-    expect(Object.keys(ALLOWED_TO_WRITE_THE_KIND).length).toBeLessThanOrEqual(3);
+    expect(Object.keys(ALLOWED_TO_WRITE_THE_KIND).length).toBeLessThanOrEqual(2);
   });
 
-  it("has the timeline, the Details context and the unplaced list hand their kind to the chip", () => {
+  it("has every surface hand the chip a value, and the models and the timeline take it from the one rule", () => {
     for (const file of ["UnifiedTimelineView.tsx", "EvtxDetailContext.tsx", "EvtxUnplacedList.tsx"]) {
       expect(sources[file], file).toMatch(/<EvtxKindChip\b[^>]*\bchip=\{/);
     }
+    for (const file of ["UnifiedTimelineView.tsx", "evtx-unplaced.ts", "evtx-detail-context-model.ts"]) {
+      expect(sources[file], file).toMatch(/\bchipForOriginKind\(/);
+    }
+  });
+
+  it("is called by nothing but those three, so there is one producer and three callers", () => {
+    const callers = files.filter((file) => file !== "evtx-kind-chip-value.ts" && /\bchipForOriginKind\b/.test(sources[file]!));
+    expect(callers.sort()).toEqual(["UnifiedTimelineView.tsx", "evtx-detail-context-model.ts", "evtx-unplaced.ts"]);
+  });
+});
+
+describe("the one rule for the chip's value", () => {
+  it("makes a Windows event EVT and a text-log line LOG", () => {
+    expect(chipForOriginKind("event")).toBe("EVT");
+    expect(chipForOriginKind("log")).toBe("LOG");
+  });
+
+  it("gives the chip component the same type the rule returns", () => {
+    expectTypeOf<ComponentProps<typeof EvtxKindChip>["chip"]>().toEqualTypeOf<KindChip>();
+    expectTypeOf(chipForOriginKind).returns.toEqualTypeOf<KindChip>();
   });
 });

@@ -9,6 +9,7 @@ import type {
 import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { EvtxKindChip } from "./EvtxKindChip";
+import { chipForOriginKind } from "./evtx-kind-chip-value";
 import { formatEventTime } from "./evtx-time";
 import { knownTotal } from "./evtx-correlation-load";
 import { useEvtxStore } from "./evtx-store";
@@ -924,7 +925,6 @@ export function UnifiedTimelineView({
                 );
               }
               const color = SEVERITY_COLORS[item.severity];
-              const fromEvent = isEventOrigin(item.origin);
 
               return (
                 <div
@@ -953,7 +953,7 @@ export function UnifiedTimelineView({
                   }}
                 >
                   <span style={{ width: "40px", flexShrink: 0, display: "flex", justifyContent: "center" }}>
-                    <EvtxKindChip chip={fromEvent ? "EVT" : "LOG"} />
+                    <EvtxKindChip chip={chipForOriginKind(item.origin.kind)} />
                   </span>
 
                   <span

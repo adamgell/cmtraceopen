@@ -64,6 +64,7 @@ import {
 } from "./evtx-correlation-dock-model";
 import type { EvtxAnalysisSessionState } from "./evtx-analysis-session";
 import { repeatedItems } from "./evtx-correlation-origin-index";
+import { chipForOriginKind, type KindChip } from "./evtx-kind-chip-value";
 import {
   describeLanes,
   entryLabel,
@@ -113,7 +114,7 @@ export interface DetailContextRow {
   /** The entry's origin id. */
   id: string;
   kind: "event" | "log";
-  chip: "EVT" | "LOG";
+  chip: KindChip;
   timestampMs: number;
   /** Milliseconds from the selected event, negative before it. */
   offsetMs: number;
@@ -305,7 +306,7 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
       return {
         id,
         kind: item.origin.kind,
-        chip: item.origin.kind === "event" ? "EVT" : "LOG",
+        chip: chipForOriginKind(item.origin.kind),
         timestampMs: item.timestampMs,
         offsetMs,
         offsetText: offsetText(offsetMs, isSelected),
