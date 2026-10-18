@@ -8,6 +8,7 @@ import {
   computePriorWindow,
   countCurrentPeriod,
   createAggregator,
+  currentPeriodOf,
   eventIdentityKey,
   filesWindowAnchor,
   getComparisonState,
@@ -2548,6 +2549,29 @@ describe("resolveFilesPrior", () => {
     } else {
       expect(resolved.status).toBe("available");
     }
+  });
+});
+
+describe("currentPeriodOf", () => {
+  it.each(["1h", "24h", "7d", "30d"] as const)(
+    "is the %s ending at the anchor, meeting the previous period without overlap or gap",
+    (window) => {
+      const p = priorFor(window);
+      const current = currentPeriodOf(p);
+      expect(current).toEqual({ fromMs: ANCHOR - EVTX_TIME_WINDOW_MS[window], toMs: ANCHOR });
+      expect(current.toMs - current.fromMs).toBe(p.lengthMs);
+      // The previous period ends one millisecond before this one starts, so an instant is in one.
+      expect(p.toMs + 1).toBe(current.fromMs);
+    },
+  );
+
+  it("is what the current side is counted over", () => {
+    const p = priorFor("24h");
+    const { fromMs, toMs } = currentPeriodOf(p);
+    const records = [fromMs - 1, fromMs, toMs, toMs + 1].map((timestampEpoch) =>
+      record({ timestampEpoch }),
+    );
+    expect(countCurrentPeriod(records, basisOf(p), visibility()).counts.total).toBe(2);
   });
 });
 

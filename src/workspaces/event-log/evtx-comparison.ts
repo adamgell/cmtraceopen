@@ -37,7 +37,8 @@ export interface PriorWindow {
   lengthMs: number;
   /**
    * The instant the current window was measured from, and where the current period ends. The
-   * current period is `[anchorEpoch - lengthMs, anchorEpoch]`. For a live source it is the earliest
+   * current period is `currentPeriodOf(prior)`, `[anchorEpoch - lengthMs, anchorEpoch]`. For a live
+   * source it is the earliest
    * instant a compared channel's current read was issued, not the workspace clock, so it does not
    * equal `nowEpoch`; a consumer must count its current side over this period
    * (`countCurrentPeriod`) and not over a window measured from `nowEpoch`, or the two sides stop
@@ -143,6 +144,19 @@ export function computePriorWindow(window: EvtxTimeWindow, anchorEpoch: number):
  */
 function hasUsableTimestamp(epoch: number): boolean {
   return Number.isFinite(epoch) && epoch > 0;
+}
+
+/**
+ * The current period a comparison measured: the window ending at its anchor, `[anchorEpoch -
+ * lengthMs, anchorEpoch]`, inclusive. The one definition of it, so the current side is counted
+ * over it (`countCurrentPeriod`) and anything that says which period was compared reads the same
+ * bounds. The previous period ends one millisecond before it starts.
+ */
+export function currentPeriodOf(prior: Pick<PriorWindow, "anchorEpoch" | "lengthMs">): {
+  fromMs: number;
+  toMs: number;
+} {
+  return { fromMs: prior.anchorEpoch - prior.lengthMs, toMs: prior.anchorEpoch };
 }
 
 /** The key under which a (provider, event id) pair is stored in `ComparisonCounts.distinctEvents`. */
@@ -311,10 +325,7 @@ export function countCurrentPeriod(
   visibility: ComparisonVisibility
 ): CurrentPeriodTally {
   const { prior } = basis;
-  const aggregator = createAggregator(
-    { fromMs: prior.anchorEpoch - prior.lengthMs, toMs: prior.anchorEpoch },
-    visibility
-  );
+  const aggregator = createAggregator(currentPeriodOf(prior), visibility);
   const tailRows = records.filter((candidate) => isTailAppended(candidate));
   aggregator.add(records.filter((candidate) => !isTailAppended(candidate)));
   const tally = aggregator.finish();
