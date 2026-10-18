@@ -862,6 +862,71 @@ test.describe("event-logs screenshots", () => {
     await page.setViewportSize(tallWindow as { width: number; height: number });
     await expect(grid).toBeVisible();
 
+    // The resize handle speaks for the dock as rendered (fix round 2, H1). At 900 px the Table's
+    // floor leaves the dock less than the 210 px chosen, so the handle must say what is there, step
+    // from it, and move the dock: it reported the chosen height and moved nothing before. Its
+    // range is the dock's minimum up to what the column leaves it, and at a bound a step does
+    // nothing and stores nothing.
+    const separator = page.getByRole("separator", { name: "Resize correlation dock" });
+    const measuredSlot = async () => Math.round((await slot.boundingBox())?.height ?? 0);
+    const handleRange = async () => ({
+      now: Number(await separator.getAttribute("aria-valuenow")),
+      min: Number(await separator.getAttribute("aria-valuemin")),
+      max: Number(await separator.getAttribute("aria-valuemax")),
+    });
+    const chosenHeight = () =>
+      page.evaluate(async () => {
+        const { useEvtxLayoutStore } = await import("/src/workspaces/event-log/evtx-layout-store.ts");
+        return useEvtxLayoutStore.getState().dockHeight;
+      });
+    // The value is the measured box, whatever the window did a moment ago.
+    await expect(async () => {
+      const range = await handleRange();
+      expect(range.now).toBe(await measuredSlot());
+    }).toPass({ timeout: 5_000 });
+    const atStart = await handleRange();
+    expect(atStart.now).toBeLessThan(210);
+    expect(atStart.now).toBeGreaterThanOrEqual(atStart.min);
+    // The floor binds here, so the dock is as tall as the column lets it be.
+    expect(atStart.max).toBe(atStart.now);
+    expect(await chosenHeight()).toBe(210);
+    test.info().annotations.push({
+      type: "dock handle at 900px",
+      description: `value ${atStart.now} of ${atStart.min} to ${atStart.max}, measured ${await measuredSlot()}, chosen ${await chosenHeight()}`,
+    });
+    await separator.focus();
+    // At the maximum a step does nothing, and the 210 px chosen is not rewritten by it.
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("End");
+    await quiet();
+    expect(await measuredSlot()).toBe(atStart.max);
+    expect(await chosenHeight()).toBe(210);
+    // Shrink: the dock moves, to the minimum when a step would pass it, and the value follows.
+    await page.keyboard.press("ArrowDown");
+    await expect(async () => {
+      expect(await measuredSlot()).toBe(atStart.min);
+      expect((await handleRange()).now).toBe(atStart.min);
+    }).toPass({ timeout: 5_000 });
+    expect(await chosenHeight()).toBe(atStart.min);
+    // Enlarge: back up to the most the column leaves it.
+    await page.keyboard.press("ArrowUp");
+    await expect(async () => {
+      expect(await measuredSlot()).toBe(atStart.max);
+      expect((await handleRange()).now).toBe(atStart.max);
+    }).toPass({ timeout: 5_000 });
+    await page.keyboard.press("Home");
+    await expect(async () => {
+      expect(await measuredSlot()).toBe(atStart.min);
+    }).toPass({ timeout: 5_000 });
+    // Back to the height the layout checks below and above were made at.
+    await page.evaluate(async () => {
+      const { useEvtxLayoutStore } = await import("/src/workspaces/event-log/evtx-layout-store.ts");
+      useEvtxLayoutStore.getState().setDockHeight(210, window.innerHeight);
+    });
+    await expect(async () => {
+      expect(await measuredSlot()).toBe(atStart.max);
+    }).toPass({ timeout: 5_000 });
+
     // Collapsed, the dock reads nothing (R5): another selection while it is collapsed asks for
     // nothing, and expanding on the record it last read asks for nothing either.
     await dock.getByRole("button", { name: "Collapse correlation" }).click();
@@ -907,5 +972,110 @@ test.describe("event-logs screenshots", () => {
     await expect(subtitle).toHaveText(sourcesAt(contextCapture));
     await expect(plot.locator("button[data-marker]")).toHaveCount(contextCapture.window.items.length);
     expect(await queries()).toEqual([requestOf(dockCapture), requestOf(contextCapture)]);
+  });
+
+  test("event-logs correlation view keeps its floor beside the dock", async ({ page }) => {
+    // The floor is every view's, not only the Table's (fix round 2, H2): with the Correlation view
+    // active, an open dock gives way to the view's minimum usable height (its chain list header and
+    // three chain rows), and the column scrolls when they do not fit. Nothing asks for a window, so
+    // the dock reads nothing here; only its box is under test.
+    const list = page.getByRole("listbox", { name: "Correlation chains, strongest first" });
+    await page.getByRole("tab", { name: "Correlation", exact: true }).click();
+    await expect(list.getByRole("option")).toHaveCount(5);
+    await page.getByRole("button", { name: "Correlation dock", exact: true }).click();
+    const dock = page.getByTestId("correlation-dock");
+    await expect(dock).toBeVisible({ timeout: 15_000 });
+    const setDockHeight = (height: number) =>
+      page.evaluate(async (chosen) => {
+        const { useEvtxLayoutStore } = await import("/src/workspaces/event-log/evtx-layout-store.ts");
+        useEvtxLayoutStore.getState().setDockHeight(chosen, window.innerHeight);
+        return useEvtxLayoutStore.getState().dockHeight;
+      }, height);
+    const measure = () =>
+      page.evaluate(() => {
+        const need = (selector: string) => {
+          const element = document.querySelector<HTMLElement>(selector);
+          if (!element) throw new Error(`${selector} is missing`);
+          return element;
+        };
+        const main = need('[data-evtx-region="main"]');
+        const view = need('[data-testid="correlation-view"]');
+        const listbox = need('[role="listbox"]');
+        const header = listbox.parentElement?.children[0] as HTMLElement;
+        const options = [...listbox.querySelectorAll<HTMLElement>('[role="option"]')];
+        const heightOf = (element: Element) => element.getBoundingClientRect().height;
+        return {
+          viewHeight: heightOf(view),
+          headerHeight: heightOf(header),
+          threeRows: options.slice(0, 3).reduce((total, option) => total + heightOf(option), 0),
+          thirdRowBottom: options[2].getBoundingClientRect().bottom,
+          listBottom: listbox.getBoundingClientRect().bottom,
+          mainOverflowY: getComputedStyle(main).overflowY,
+          mainOverflowPx: main.scrollHeight - main.clientHeight,
+          dockHeight: heightOf(need('[data-evtx-region="dock"]')),
+        };
+      });
+    type Measured = Awaited<ReturnType<typeof measure>>;
+    // `scrolls`: the view's floor and the dock's minimum do not fit in the column at this height.
+    const check = async (height: number, chosen: number, scrolls: boolean): Promise<Measured> => {
+      await page.setViewportSize({ width: 1440, height });
+      // The store holds the height chosen up to half the window, the dock's maximum.
+      expect(await setDockHeight(chosen)).toBe(Math.min(chosen, Math.floor(height / 2)));
+      let measured: Measured | null = null;
+      await expect(async () => {
+        measured = await measure();
+        // The view keeps the height its chain list header and three rows need, and shows the rows.
+        expect(measured.viewHeight).toBeGreaterThanOrEqual(measured.headerHeight + measured.threeRows - 0.5);
+        expect(measured.thirdRowBottom).toBeLessThanOrEqual(measured.listBottom + 0.5);
+        // The column scrolls when the floors do not fit, and does not when they do.
+        expect(measured.mainOverflowY).toBe("auto");
+        if (scrolls) expect(measured.mainOverflowPx).toBeGreaterThan(1);
+        else expect(measured.mainOverflowPx).toBeLessThanOrEqual(1);
+      }).toPass({ timeout: 5_000 });
+      const result = measured as Measured | null;
+      if (result === null) throw new Error("the layout was never measured");
+      test.info().annotations.push({
+        type: `correlation view at ${height}px, dock chosen ${chosen}`,
+        description:
+          `view ${result.viewHeight} (header ${result.headerHeight} + three rows ${result.threeRows}), ` +
+          `column overflow ${result.mainOverflowPx}, dock ${result.dockHeight}`,
+      });
+      return result;
+    };
+    const defaultDock = 210;
+    const maximumDock = 5000;
+    // At 900 px both fit by the dock giving way: the 210 px chosen is drawn whole, the maximum (half
+    // the window, 450 px) is cut down to what the column leaves after the view's floor.
+    const at900Default = await check(900, defaultDock, false);
+    expect(Math.round(at900Default.dockHeight)).toBe(defaultDock);
+    const at900Maximum = await check(900, maximumDock, false);
+    expect(at900Maximum.dockHeight).toBeLessThan(450);
+    expect(at900Maximum.viewHeight).toBeCloseTo(at900Maximum.headerHeight + at900Maximum.threeRows, 0);
+    // At 700 and 600 px they do not fit: the dock is at its minimum whichever height was chosen,
+    // the view keeps its floor, and the column scrolls.
+    const at700Default = await check(700, defaultDock, true);
+    const at700Maximum = await check(700, maximumDock, true);
+    const at600Default = await check(600, defaultDock, true);
+    const at600Maximum = await check(600, maximumDock, true);
+    expect(new Set([at700Default, at700Maximum, at600Default, at600Maximum].map((m) => m.dockHeight)).size).toBe(1);
+
+    // The placeholder views share one generic minimum, a header and three list rows (111 px at the
+    // default font), so the dock at its maximum cannot squeeze them to nothing either: at 600 px it
+    // gives up the rest of its height, down to what the column leaves after that minimum.
+    for (const name of ["Grouped", "Timeline", "Charts"]) {
+      await page.getByRole("tab", { name, exact: true }).click();
+      await expect(async () => {
+        const panel = await page.locator('[data-evtx-region="main"] [role="tabpanel"]').boundingBox();
+        expect(panel?.height ?? 0).toBeGreaterThanOrEqual(111);
+        const column = await page.evaluate(() => {
+          const main = document.querySelector<HTMLElement>('[data-evtx-region="main"]')!;
+          const dockBox = document.querySelector<HTMLElement>('[data-evtx-region="dock"]')!;
+          return { overflow: main.scrollHeight - main.clientHeight, dock: dockBox.getBoundingClientRect().height };
+        });
+        // Both fit by the dock giving way, so the column does not scroll.
+        expect(column.overflow).toBeLessThanOrEqual(1);
+        expect(column.dock).toBeLessThan(Math.floor(600 / 2));
+      }).toPass({ timeout: 5_000 });
+    }
   });
 });
