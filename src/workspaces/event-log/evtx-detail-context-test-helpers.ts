@@ -6,7 +6,7 @@
  *
  * Test code only: nothing outside a test file imports it.
  */
-import { makeCounts, recordFor, type DataOptions } from "./evtx-correlation-test-fixtures";
+import { eventItem, makeCounts, recordFor, type DataOptions } from "./evtx-correlation-test-fixtures";
 import type { LoadedCorrelationWindow } from "./evtx-correlation-window";
 import type { TimelineCorrelationEdge, TimelineItem } from "./unified-timeline";
 import type { EvtxRecord } from "./types";
@@ -74,4 +74,37 @@ export function twinOf(item: TimelineItem, stableId: string): TimelineItem {
 /** A record the join can never name: an event the provider never numbered. */
 export function unnumbered(epoch: number): EvtxRecord {
   return { ...recordFor(1), eventRecordId: 0, eventRecordIdText: null, timestampEpoch: epoch };
+}
+
+/** An event on `channel` at `timestampMs`, named by record `n`. */
+export function onChannel(n: number, timestampMs: number, channel: string, message?: string): TimelineItem {
+  const item = eventItem(n, timestampMs, "info", message);
+  return item.origin.kind === "event" ? { ...item, origin: { ...item.origin, channel } } : item;
+}
+
+/**
+ * Text-log lines are transformed from a corpus exemplar, never invented: the message and the
+ * component come from the parser crate's
+ * `tests/fixtures/intune/windows/remediations/execution-completes-report-fails/AgentExecutor.log`
+ * ("Starting Powershell Execution", component "AgentExecutor"). The folder is made up.
+ */
+export const LOG_FILE = "C:\\Logs\\AgentExecutor.log";
+
+/** A text-log line of `LOG_FILE`, in the shape the engine gives a log origin. */
+export function logItem(line: number, timestampMs: number, file = LOG_FILE): TimelineItem {
+  return {
+    timestampMs,
+    severity: "info",
+    message: "Starting Powershell Execution",
+    origin: {
+      kind: "log",
+      file,
+      component: "AgentExecutor",
+      line,
+      source: file,
+      machine: null,
+      bundle: null,
+      recordId: line,
+    },
+  };
 }
