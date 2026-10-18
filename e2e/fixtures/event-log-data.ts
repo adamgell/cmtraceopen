@@ -522,22 +522,35 @@ const TIMELINE_WINDOW_REQUESTS: readonly {
   },
 ];
 
+/**
+ * The dataset record a named window is centered on, so a spec selects the very record the engine
+ * was asked about. Throws when the dataset no longer holds it.
+ */
+export function timelineWindowRecord(parseResult: EvtxParseResult, windowName: string): EvtxRecord {
+  const request = TIMELINE_WINDOW_REQUESTS.find((candidate) => candidate.name === windowName);
+  if (request === undefined) {
+    throw new Error(`[event-logs fixture] there is no window named "${windowName}"`);
+  }
+  const { record } = request;
+  const found = parseResult.records.find(
+    (candidate) =>
+      candidate.channel === CHANNELS[record.channel].name &&
+      candidate.eventId === record.eventId &&
+      candidate.eventRecordId === record.eventRecordId,
+  );
+  if (found === undefined) {
+    throw new Error(
+      `[event-logs fixture] window "${windowName}": no ${CHANNELS[record.channel].name} event ` +
+        `${record.eventId} with record ID ${record.eventRecordId} in the dataset`,
+    );
+  }
+  return found;
+}
+
 /** The window requests with their centers and bounds filled in from the dataset's own records. */
 export function timelineWindowRequests(parseResult: EvtxParseResult) {
-  return TIMELINE_WINDOW_REQUESTS.map(({ name, record, halfWidthMs }) => {
-    const found = parseResult.records.find(
-      (candidate) =>
-        candidate.channel === CHANNELS[record.channel].name &&
-        candidate.eventId === record.eventId &&
-        candidate.eventRecordId === record.eventRecordId,
-    );
-    if (found === undefined) {
-      throw new Error(
-        `[event-logs fixture] window "${name}": no ${CHANNELS[record.channel].name} event ` +
-          `${record.eventId} with record ID ${record.eventRecordId} in the dataset`,
-      );
-    }
-    const centerMs = found.timestampEpoch;
+  return TIMELINE_WINDOW_REQUESTS.map(({ name, halfWidthMs }) => {
+    const centerMs = timelineWindowRecord(parseResult, name).timestampEpoch;
     return {
       name,
       centerMs,
