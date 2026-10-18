@@ -47,6 +47,7 @@ import {
   emptyWindowText,
   keyKindLabel,
   scopeDisclosure,
+  sharedOriginNote,
   unmatchableNote,
   windowFailureText,
   windowNotice,
@@ -133,9 +134,6 @@ export interface DetailContextRow {
 
 export interface DetailContextReady {
   kind: "ready";
-  /** "Context ±5 min". */
-  title: string;
-  kindsLabel: string;
   eventId: number;
   centerMs: number;
   /** The session and revision the window was read from. */
@@ -236,24 +234,31 @@ function entriesText(value: number): string {
  * How the rows were chosen. Words "nearest" only for rows that are: of a window read whole (every
  * entry was a candidate), or of a read that stopped but is proven. Otherwise the rows are the
  * nearest of the entries READ, and the caption says so.
+ *
+ * The counts are the ones the card above it and the engine give: `windowItems`, the entries of the
+ * window, and `read`, the entries read (`window.items.length`, which `windowNotice` names too). They
+ * are never the count of the list left after entries were set aside, so a reader can put the two
+ * lines side by side; the entries the list leaves out are explained by the notes of their own (the
+ * ambiguous event's, and `sharedOriginNote`).
  */
 function captionFor(input: {
   shown: number;
-  usable: number;
+  windowItems: number;
+  read: number;
   complete: boolean;
   proven: boolean;
   halfWidthMs: number;
 }): string {
   const width = windowWidthLabel(input.halfWidthMs);
   if (input.complete) {
-    return input.usable > input.shown
-      ? `${count(input.shown)} nearest of ${entriesText(input.usable)} within ${width}`
-      : `${entriesText(input.usable)} within ${width}`;
+    return input.windowItems > input.shown
+      ? `${count(input.shown)} nearest of ${entriesText(input.windowItems)} within ${width}`
+      : `${entriesText(input.windowItems)} within ${width}`;
   }
   if (input.proven) return `${count(input.shown)} nearest entries within ${width}`;
-  return input.usable > input.shown
-    ? `${count(input.shown)} nearest of the ${entriesText(input.usable)} read`
-    : `${entriesText(input.usable)} read`;
+  return input.read > input.shown
+    ? `${count(input.shown)} nearest of the ${entriesText(input.read)} read`
+    : `${entriesText(input.read)} read`;
 }
 
 function unreadState(session: DetailSessionState): DetailContextModel {
@@ -320,6 +325,7 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
     if (text !== null) notices.push(text);
   };
   push(windowNotice(window));
+  push(sharedOriginNote(window.items.length - read.items.length));
   if (pairedCounts === null) {
     push(LINKS_LOADING_TEXT);
   } else {
@@ -376,8 +382,6 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
 
   return {
     kind: "ready",
-    title: DETAIL_CONTEXT_TITLE,
-    kindsLabel: DETAIL_CONTEXT_KINDS_LABEL,
     eventId: read.record.eventId,
     centerMs: center,
     sessionKey: window.sessionKey,
@@ -392,7 +396,8 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
         ? null
         : captionFor({
             shown: rows.length,
-            usable: usable.length,
+            windowItems: read.windowItems,
+            read: window.items.length,
             complete: window.complete,
             proven: nearestProven,
             halfWidthMs: window.halfWidthMs,

@@ -466,11 +466,12 @@ export interface EmptyWindowInput {
 
 /**
  * The dock's "no other sources" sentence, or the Details list's "no other entries". The spec's own
- * words are an absence claim, so they are said only when all of these hold: the window was read whole (the caller asks only then), nothing
- * is narrowed, no source went unread, the pair is not an earlier session's, and the session's count
- * of entries it could not place in time is a known zero. Otherwise the sentence says what it was
- * looked for IN, and what was not looked at. (A correlation coverage gap does not bear on it: no
- * gap removes an entry from the window; gaps withdraw "not linked", and the dock does that.)
+ * words are an absence claim, so they are said only when all of these hold: the window was read
+ * whole (the caller asks only then), nothing is narrowed, no source went unread, the pair is not an
+ * earlier session's, and the session's count of entries it could not place in time is a known zero.
+ * Otherwise the sentence says what it was looked for IN, and what was not looked at. (A correlation
+ * coverage gap does not bear on it: no gap removes an entry from the window; gaps withdraw "not
+ * linked", and the dock does that.)
  */
 export function emptyWindowText(input: EmptyWindowInput): { text: string; absolute: boolean } {
   const width = windowWidthLabel(input.halfWidthMs);
@@ -520,6 +521,15 @@ export const NOT_IN_TIMELINE_NOTE =
  */
 export const NOT_READ_NOTE =
   "The read of this window stopped before this event was found, so whether it is among the entries, and what it is linked to, are not known.";
+
+/**
+ * Entries of a window that share one origin are one entry to the join, so a surface that shows each
+ * origin once shows fewer entries than the window holds. This says by how many. Null when none does.
+ */
+export function sharedOriginNote(duplicates: number): string | null {
+  if (duplicates <= 0) return null;
+  return `${count(duplicates)} ${duplicates === 1 ? "entry shares" : "entries share"} an origin with another entry of this window, so ${duplicates === 1 ? "it is" : "they are"} listed once.`;
+}
 
 /** Where the entries of a window are shown: the dock draws them, the Details list lists them. */
 export type NoteSurface = "dock" | "list";

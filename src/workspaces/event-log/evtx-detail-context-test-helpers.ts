@@ -77,8 +77,8 @@ export function unnumbered(epoch: number): EvtxRecord {
 }
 
 /** An event on `channel` at `timestampMs`, named by record `n`. */
-export function onChannel(n: number, timestampMs: number, channel: string, message?: string): TimelineItem {
-  const item = eventItem(n, timestampMs, "info", message);
+export function onChannel(n: number, timestampMs: number, channel: string): TimelineItem {
+  const item = eventItem(n, timestampMs);
   return item.origin.kind === "event" ? { ...item, origin: { ...item.origin, channel } } : item;
 }
 
@@ -91,17 +91,17 @@ export function onChannel(n: number, timestampMs: number, channel: string, messa
 export const LOG_FILE = "C:\\Logs\\AgentExecutor.log";
 
 /** A text-log line of `LOG_FILE`, in the shape the engine gives a log origin. */
-export function logItem(line: number, timestampMs: number, file = LOG_FILE): TimelineItem {
+export function logItem(line: number, timestampMs: number): TimelineItem {
   return {
     timestampMs,
     severity: "info",
     message: "Starting Powershell Execution",
     origin: {
       kind: "log",
-      file,
+      file: LOG_FILE,
       component: "AgentExecutor",
       line,
-      source: file,
+      source: LOG_FILE,
       machine: null,
       bundle: null,
       recordId: line,

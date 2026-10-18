@@ -20,6 +20,7 @@ import {
   UNTIMED_TEXT,
   ambiguousEventNote,
   emptyWindowText,
+  sharedOriginNote,
   unmatchableNote,
   windowFailureText,
   windowNotice,
@@ -36,7 +37,9 @@ import {
 import {
   BUILDING_TIMELINE_TEXT,
   DETAIL_CONTEXT_HALF_WIDTH_MS,
+  DETAIL_CONTEXT_KINDS_LABEL,
   DETAIL_CONTEXT_ROW_CAP,
+  DETAIL_CONTEXT_TITLE,
   LINKS_MAY_BE_MISSING_TEXT,
   LINK_LEGEND_TEXT,
   TIMELINE_UPDATING_NOTE,
@@ -139,7 +142,7 @@ describe("the 12 nearest entries", () => {
     const model = ready();
     expect(DETAIL_CONTEXT_ROW_CAP).toBe(12);
     expect(numbers(model)).toEqual([14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
-    expect(model.title).toBe("Context ±5 min");
+    expect(DETAIL_CONTEXT_TITLE).toBe("Context ±5 min");
   });
 
   it("lists every entry when there are not more than 12", () => {
@@ -502,12 +505,94 @@ describe("the caption: nearest is said only when it is proven", () => {
     expect(model.selected).toEqual({ status: "ambiguous", candidates: 2 });
     expect(model.rows).toHaveLength(1);
     expect(model.nearestProven).toBe(false);
-    expect(model.caption).toBe("1 entry read");
+    // The three entries READ, as the card above says; the two that name the event are explained by
+    // the ambiguous note.
+    expect(model.caption).toBe("1 nearest of the 3 entries read");
   });
 
   it("never says 'of' the window's count when the rows are not proven nearest", () => {
     for (const last of [15, 20, 25, 26]) {
       expect(stoppedAt(last).caption).not.toContain("of 500");
+    }
+  });
+});
+
+describe("the caption counts what the card counts, never the list that left entries out", () => {
+  /** The number the card's "Showing {k} of {n} entries" line names, or null when it says nothing. */
+  const cardRead = (model: DetailContextReady) => {
+    const match = /^Showing ([\d,]+) of ([\d,]+) entries/.exec(model.notices[0] ?? "");
+    return match === null ? null : { read: Number(match[1]?.replace(/,/g, "")), of: Number(match[2]?.replace(/,/g, "")) };
+  };
+  const captionRead = (model: DetailContextReady) => {
+    const match = /of the ([\d,]+) entries read$/.exec(model.caption ?? "");
+    return match === null ? null : Number(match[1]?.replace(/,/g, ""));
+  };
+  const later = { ...twinOf(eventItem(20, t), rid(88)), timestampMs: t + 9_000 };
+  /** The loader hands the entries over in time order; a stable sort keeps a scene honest about it. */
+  const byTime = (list: TimelineItem[]) => [...list].sort((a, b) => a.timestampMs - b.timestampMs);
+
+  it("counts the entries read, not the entries left after the ones that name an ambiguous event", () => {
+    const window = stoppedWindow(record, [eventItem(19, t - 1_000), eventItem(20, t), later], 500);
+    const model = ready({ window });
+    expect(model.selected).toEqual({ status: "ambiguous", candidates: 2 });
+    expect(model.notices[0]).toBe("Showing 3 of 500 entries within \u00b15 min; reading stopped at its call limit, so entries and sources may be missing.");
+    expect(model.caption).toBe("1 nearest of the 3 entries read");
+    expect(model.notices).toContain(ambiguousEventNote(2, "list"));
+  });
+
+  it("counts the entries of the window the engine counted, for a window read whole", () => {
+    const window = windowAround(record, [...entries(), twinOf(eventItem(20, t), rid(88))]);
+    expect(window.windowItems).toBe(42);
+    const model = ready({ window });
+    expect(model.selected).toEqual({ status: "ambiguous", candidates: 2 });
+    expect(model.caption).toBe("12 nearest of 42 entries within \u00b15 min");
+    expect(model.notices).toContain(ambiguousEventNote(2, "list"));
+  });
+
+  it("counts a duplicate as read, and says that an entry sharing an origin is listed once", () => {
+    const read = entries().slice(0, 25);
+    const window = stoppedWindow(record, [...read, read[24] as TimelineItem], 500);
+    const model = ready({ window });
+    expect(model.selected.status).toBe("found");
+    expect(model.notices[0]).toMatch(/^Showing 26 of 500 entries/);
+    expect(model.caption).toBe("12 nearest of the 26 entries read");
+    expect(model.notices).toContain(sharedOriginNote(1));
+    expect(sharedOriginNote(1)).toBe("1 entry shares an origin with another entry of this window, so it is listed once.");
+  });
+
+  it("says nothing about shared origins when no entry shares one", () => {
+    expect(ready().notices).toEqual([]);
+    expect(ready({ window: stoppedWindow(record, entries().slice(0, 25), 500) }).notices.join(" ")).not.toContain("shares an origin");
+  });
+
+  it("agrees with the card on how many entries were read, in every scene where the read stopped", () => {
+    const dup = entries().slice(0, 25);
+    const scenes: [string, ReturnType<typeof stoppedWindow>][] = [
+      ["an ambiguous event", stoppedWindow(record, [eventItem(19, t - 1_000), eventItem(20, t), later], 500)],
+      ["an event the read did not reach", stoppedWindow(record, entries().slice(0, 15), 500)],
+      ["a read that ends just after the event", stoppedWindow(record, entries().slice(0, 25), 500)],
+      ["a duplicate", stoppedWindow(record, [...dup, dup[24] as TimelineItem], 500)],
+      ["two duplicates and an ambiguous event", stoppedWindow(record, byTime([...dup, dup[24] as TimelineItem, dup[23] as TimelineItem, twinOf(eventItem(20, t), rid(88))]), 800)],
+    ];
+    for (const [why, window] of scenes) {
+      const model = ready({ window });
+      const card = cardRead(model);
+      expect(card, why).not.toBeNull();
+      expect(card?.read, why).toBe(window.items.length);
+      expect(card?.of, why).toBe(window.windowItems);
+      if (captionRead(model) !== null) expect(captionRead(model), why).toBe(card?.read);
+    }
+  });
+
+  it("agrees with the engine on the window's count, in every scene where the read was whole", () => {
+    const scenes: [string, ReturnType<typeof windowAround>][] = [
+      ["a clear window", windowAround(record, entries())],
+      ["two entries naming the event", windowAround(record, [...entries(), twinOf(eventItem(20, t), rid(88))])],
+      ["a shared origin", windowAround(record, byTime([...entries(), eventItem(30, T0 + 30_000)]))],
+    ];
+    for (const [why, window] of scenes) {
+      const model = ready({ window });
+      expect(model.caption, why).toBe(`12 nearest of ${(window.windowItems as number).toLocaleString()} entries within \u00b15 min`);
     }
   });
 });
@@ -603,7 +688,7 @@ describe("no row, caption or note claims a relationship the evidence does not gi
     if (model.kind !== "ready") return { rows: [], section: [("text" in model ? model.text : "")] };
     return {
       rows: model.rows.flatMap((row) => [row.offsetText, row.entry, row.message]),
-      section: [model.title, model.kindsLabel, model.caption ?? "", model.legend ?? "", ...model.notices, model.empty?.text ?? ""],
+      section: [DETAIL_CONTEXT_TITLE, DETAIL_CONTEXT_KINDS_LABEL, model.caption ?? "", model.legend ?? "", ...model.notices, model.empty?.text ?? ""],
     };
   }
 

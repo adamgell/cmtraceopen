@@ -40,6 +40,7 @@ import {
   plotOmissionNotice,
   renderCapNotice,
   scanNotice,
+  sharedOriginNote,
   scopeDisclosure,
   sourcesText,
   unmatchableNote,
@@ -572,6 +573,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "renderCapNotice",
     "scanNotice",
     "scopeDisclosure",
+    "sharedOriginNote",
     "sourcesText",
     "unmatchableNote",
     "unresolvedNotice",
@@ -687,6 +689,8 @@ describe("no string claims an entry is unplaced without proof", () => {
       emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
       outsideWindowNote(1, 3) ?? "",
       outsideWindowNote(3, 5) ?? "",
+      sharedOriginNote(1) ?? "",
+      sharedOriginNote(4) ?? "",
       notReadNote(1, 3) ?? "",
       notReadNote(3, 5) ?? "",
       partialChainTitle(5, 2, true),
@@ -1260,5 +1264,24 @@ describe("the notes shared by the dock and the Details context list", () => {
       expect(ambiguousEventNote(7, "list")).toContain("7 entries");
       expect(unmatchableNote(1, WIDTH, "list")).toContain("which of the 1 entry within");
     });
+  });
+});
+
+describe("the note about entries that share an origin (#843)", () => {
+  it("is said for one entry and for several, in the dock's plain words", () => {
+    expect(sharedOriginNote(1)).toBe("1 entry shares an origin with another entry of this window, so it is listed once.");
+    expect(sharedOriginNote(3)).toBe("3 entries share an origin with another entry of this window, so they are listed once.");
+    expect(sharedOriginNote(1500)).toBe("1,500 entries share an origin with another entry of this window, so they are listed once.");
+  });
+
+  it("is not said when there is nothing to say, and never for a negative count", () => {
+    expect(sharedOriginNote(0)).toBeNull();
+    expect(sharedOriginNote(-2)).toBeNull();
+  });
+
+  it("claims nothing about the entries' time or place", () => {
+    for (const text of [sharedOriginNote(1), sharedOriginNote(5)]) {
+      expect(text).not.toMatch(NO_UNPROVEN_CLAIM);
+    }
   });
 });
