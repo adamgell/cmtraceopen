@@ -175,7 +175,12 @@ describe("EVT and LOG chips are drawn by one component", () => {
   });
 
   it("has every surface hand the chip a value, and the models and the timeline take it from the one rule", () => {
-    for (const file of ["UnifiedTimelineView.tsx", "EvtxDetailContext.tsx", "EvtxUnplacedList.tsx"]) {
+    for (const file of [
+      "UnifiedTimelineView.tsx",
+      "EvtxDetailContext.tsx",
+      "EvtxUnplacedList.tsx",
+      "EvtxRailChainCard.tsx",
+    ]) {
       expect(sources[file], file).toMatch(/<EvtxKindChip\b[^>]*\bchip=\{/);
     }
     for (const file of [
