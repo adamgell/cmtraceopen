@@ -2,7 +2,7 @@
  * The correlation dock (spec 8.12, #842) as an operator meets it: its header, what it says in each
  * state, when it reads, what its controls do, and what a click on a marker does. What it may CLAIM
  * is evtx-correlation-dock-model.test.ts's; the colors are EvtxCorrelationDock.contrast.test.tsx's.
- * The window reader's timing is useEvtxCorrelationDockWindow.test.tsx's; here the dock is shown to
+ * The window reader's timing is useEvtxCorrelationWindow.test.tsx's; here the dock is shown to
  * use it (no read while collapsed, one read for a burst of selections).
  */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -28,7 +28,7 @@ vi.mock("./evtx-correlation-dock-model", async (importOriginal) => {
 import { useUiStore } from "../../stores/ui-store";
 import EvtxCorrelationDock from "./EvtxCorrelationDock";
 import dockSource from "./EvtxCorrelationDock.tsx?raw";
-import dockWindowSource from "./useEvtxCorrelationDockWindow.ts?raw";
+import dockWindowSource from "./useEvtxCorrelationWindow.ts?raw";
 import {
   NO_SELECTION_TEXT,
   NO_SESSION_TEXT,

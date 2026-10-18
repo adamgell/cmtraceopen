@@ -5,7 +5,7 @@
  * summary, and what is nearby by time alone.
  *
  * Thin on purpose. Every decision about what the dock may claim is `buildDockModel`'s: this draws it.
- * The words are the copy module's. The window is read by `useCorrelationDockWindow`, only while the
+ * The words are the copy module's. The window is read by `useEvtxCorrelationWindow`, only while the
  * dock is expanded, behind a debounce.
  *
  * Rules the component itself keeps:
@@ -73,7 +73,7 @@ import { formatClock } from "./evtx-time";
 import type { PlotMarker } from "./evtx-correlation-view-model";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 import { useEvtxCorrelationData } from "./useEvtxCorrelation";
-import { useCorrelationDockWindow } from "./useEvtxCorrelationDockWindow";
+import { useEvtxCorrelationWindow } from "./useEvtxCorrelationWindow";
 
 export interface EvtxCorrelationDockProps {
   /** The published analysis session, or null while there is none. */
@@ -117,7 +117,7 @@ export default function EvtxCorrelationDock({
   const counts = useEvtxCorrelationData().counts;
 
   const centerMs = dockCenterMs(record);
-  const { window, reading, retry } = useCorrelationDockWindow({
+  const { window, reading, retry } = useEvtxCorrelationWindow({
     status,
     centerMs,
     halfWidthMs,
