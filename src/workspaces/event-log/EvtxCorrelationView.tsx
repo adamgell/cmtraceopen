@@ -37,6 +37,7 @@ import {
   unresolvedNotice,
   whyHeading,
   whyStatement,
+  UPDATING_CORRELATION_TEXT,
 } from "./evtx-correlation-copy";
 import type { CorrelationChain } from "./evtx-correlation-chains";
 import {
@@ -886,7 +887,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
           // Not a live region: the scan reports a page at a time, which would queue an announcement
           // per page. The announcer says "Updating" once, throttled.
           <div data-testid="correlation-updating" style={{ fontSize: `${sizes.lane}px`, color: palette.caption }}>
-            {data.updating ? "Updating correlation... " : ""}
+            {data.updating ? `${UPDATING_CORRELATION_TEXT} ` : ""}
             {reading
               ? progress === null
                 ? "Reading the timeline..."

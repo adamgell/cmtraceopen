@@ -415,6 +415,13 @@ export const NO_SESSION_TEXT = "No event analysis is available. Load events to s
 export const ANALYSIS_BUILDING_TEXT =
   "The event analysis is being built, so the entries around this event are not available yet.";
 
+/**
+ * What a surface that shows the correlation says while the correlation it shows belongs to an
+ * earlier session and a newer one is being built. One constant for the Correlation view, the dock and
+ * the Details context list, so the three say it alike.
+ */
+export const UPDATING_CORRELATION_TEXT = "Updating correlation...";
+
 /** The dock body while the first read of a window is under way. */
 export const READING_WINDOW_TEXT = "Reading the entries around this event...";
 

@@ -3,6 +3,8 @@
  * are that a narrowed or partial view says so, and that nothing here reads as cause.
  */
 import { describe, expect, it } from "vitest";
+import dockSource from "./EvtxCorrelationDock.tsx?raw";
+import viewSource from "./EvtxCorrelationView.tsx?raw";
 import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import {
   buildCorrelationChains,
@@ -22,6 +24,7 @@ import {
   STRENGTH_LABELS,
   UNREAD_SOURCES_NOTE,
   UNTIMED_TEXT,
+  UPDATING_CORRELATION_TEXT,
   ambiguousEventNote,
   chainCopyText,
   coverageGapNotice,
@@ -555,6 +558,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "SCOPE_NOT_KNOWN_NOTICE",
     "STRENGTH_LABELS",
     "UNREAD_SOURCES_NOTE",
+    "UPDATING_CORRELATION_TEXT",
     "ambiguousEventNote",
     "chainCopyText",
     "coverageGapNotice",
@@ -661,6 +665,7 @@ describe("no string claims an entry is unplaced without proof", () => {
   function dockStrings(): string[] {
     const partial = { complete: false, windowItems: 40, omittedItems: 15, items: new Array(25), halfWidthMs: 75_000, error: null };
     return [
+      UPDATING_CORRELATION_TEXT,
       DOCK_SCOPE_NOTE,
       LINKS_LOADING_TEXT,
       NOT_IN_TIMELINE_NOTE,
@@ -1304,5 +1309,18 @@ describe("the two session states a surface that reads the analysis session can b
     expect(NO_SESSION_TEXT).toBe("No event analysis is available. Load events to see what is around an event.");
     expect(NO_SESSION_TEXT).not.toBe(ANALYSIS_BUILDING_TEXT);
     expect(NO_SESSION_TEXT).not.toMatch(/being built|yet\b/);
+  });
+});
+
+describe("the words for a correlation that is being rebuilt (#843)", () => {
+  it("are one constant", () => {
+    expect(UPDATING_CORRELATION_TEXT).toBe("Updating correlation...");
+  });
+
+  it("are not spelled out again by the dock or the Correlation view, which say them from the constant", () => {
+    for (const source of [dockSource, viewSource]) {
+      expect(source).toContain("UPDATING_CORRELATION_TEXT");
+      expect(source).not.toMatch(/Updating correlation/);
+    }
   });
 });

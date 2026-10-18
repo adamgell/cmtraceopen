@@ -40,6 +40,7 @@ import {
   NO_SESSION_TEXT,
   READING_WINDOW_TEXT,
   UNTIMED_TEXT,
+  UPDATING_CORRELATION_TEXT,
   dockSubtitle,
   keyKindLabel,
   nearbyReason,
@@ -464,7 +465,7 @@ function ReadyBody({
     <>
       {ready.updating && (
         <div data-testid="correlation-dock-updating" style={{ fontSize: `${sizes.lane}px`, color: secondary }}>
-          Updating correlation...
+          {UPDATING_CORRELATION_TEXT}
         </div>
       )}
       <EvtxCorrelationLanes
