@@ -6,6 +6,7 @@
  * that everything drawn reaches its contrast floor in every theme.
  */
 import { tokens } from "@fluentui/react-components";
+import type { ComponentProps } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -40,8 +41,6 @@ import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { eventItem, recordFor, rid, synthetic, T0 } from "./evtx-correlation-test-fixtures";
 import {
   DETAIL_CONTEXT_TITLE,
-  LINKS_MAY_BE_MISSING_TEXT,
-  LINK_LEGEND_TEXT,
   buildDetailContext,
 } from "./evtx-detail-context-model";
 import {
@@ -55,11 +54,18 @@ import {
 import { correlationSizes } from "./evtx-correlation-sizes";
 import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
 import { resolveToken } from "./evtx-visual-tokens";
-import { EvtxDetailContext, type EvtxDetailContextProps } from "./EvtxDetailContext";
+import { EvtxDetailContext } from "./EvtxDetailContext";
 import chipSource from "./EvtxKindChip.tsx?raw";
 import componentSource from "./EvtxDetailContext.tsx?raw";
 import modelSource from "./evtx-detail-context-model.ts?raw";
 import type { TimelineItem } from "./unified-timeline";
+
+type EvtxDetailContextProps = ComponentProps<typeof EvtxDetailContext>;
+
+/** The words the section adds on top of the model's (which keeps them private): pinned as written. */
+const LINK_LEGEND_TEXT = "Link icon: Exact or Candidate link to this event.";
+const LINKS_MAY_BE_MISSING_TEXT =
+  "Links may be missing, so an entry without a link icon may still be linked to this event.";
 
 const record = recordFor(20);
 const t = record.timestampEpoch;

@@ -40,7 +40,7 @@ import { useRailTextColors } from "./evtx-rail-text";
 import { formatClock, type EvtxTimeZoneMode } from "./evtx-time";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 
-export interface EvtxDetailContextProps extends DetailContextInput {
+interface EvtxDetailContextProps extends DetailContextInput {
   /** The record the Details tab shows; the section is about this event. */
   record: NonNullable<DetailContextInput["record"]>;
   timeZoneMode: EvtxTimeZoneMode;

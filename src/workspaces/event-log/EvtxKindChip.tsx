@@ -13,7 +13,7 @@ import { tokens } from "@fluentui/react-components";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 
-export interface EvtxKindChipProps {
+interface EvtxKindChipProps {
   chip: "EVT" | "LOG";
   /** Pixels; the caller derives it from the log list font size (spec: mono f - 4). */
   fontSize: number;

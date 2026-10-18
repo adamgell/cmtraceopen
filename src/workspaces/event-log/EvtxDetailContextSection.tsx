@@ -27,7 +27,7 @@ import type { EvtxRecord } from "./types";
 import { useEvtxCorrelationWindow } from "./useEvtxCorrelationWindow";
 import { useUnreadSources } from "./useUnreadSources";
 
-export interface EvtxDetailContextSectionProps {
+interface EvtxDetailContextSectionProps {
   /** The record the Details tab shows. */
   record: EvtxRecord;
   timeZoneMode: EvtxTimeZoneMode;
