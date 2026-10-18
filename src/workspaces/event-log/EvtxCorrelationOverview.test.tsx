@@ -3,13 +3,14 @@
  * keyboard. The geometry is stubbed (jsdom has no layout): the box is 720 px wide at x = 100.
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
 }));
 
 import { useUiStore } from "../../stores/ui-store";
-import { EvtxCorrelationOverview, type EvtxCorrelationOverviewProps } from "./EvtxCorrelationOverview";
+import { EvtxCorrelationOverview } from "./EvtxCorrelationOverview";
 import { correlationSizes } from "./EvtxCorrelationLanes";
 import type { CorrelationChain, CorrelationChainStrength } from "./evtx-correlation-chains";
 import {
@@ -61,6 +62,8 @@ const win = (startS: number, endS: number): TimeWindow => ({ startMs: T0 + start
 /** Pixels across the stubbed box for a time. */
 const xOf = (ms: number) => LEFT + ((ms - domain.startMs) / (domain.endMs - domain.startMs)) * WIDTH;
 const msOf = (x: number) => domain.startMs + ((x - LEFT) / WIDTH) * (domain.endMs - domain.startMs);
+
+type EvtxCorrelationOverviewProps = ComponentProps<typeof EvtxCorrelationOverview>;
 
 let onWindowChange: ReturnType<typeof vi.fn>;
 

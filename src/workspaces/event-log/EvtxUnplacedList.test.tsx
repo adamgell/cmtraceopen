@@ -4,12 +4,13 @@
  * judged from the log store at render AND at click time.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import type { LogEntry } from "../../types/log";
-import { EvtxUnplacedList, type EvtxUnplacedListProps } from "./EvtxUnplacedList";
+import { EvtxUnplacedList } from "./EvtxUnplacedList";
 import { correlationSizes } from "./EvtxCorrelationLanes";
 import { EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT } from "./evtx-timeline-paging";
 import { unplacedCopyText, describeUnplaced } from "./evtx-unplaced";
@@ -55,6 +56,8 @@ function eventItem(n: number): UnplacedItem {
 
 const entry = (filePath: string, lineNumber: number, timestamp: number | null = null) =>
   ({ filePath, lineNumber, timestamp, message: `line ${lineNumber}` }) as unknown as LogEntry;
+
+type EvtxUnplacedListProps = ComponentProps<typeof EvtxUnplacedList>;
 
 let onReply: ReturnType<typeof vi.fn>;
 let onFail: ReturnType<typeof vi.fn>;

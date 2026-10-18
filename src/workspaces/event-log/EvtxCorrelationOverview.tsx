@@ -120,7 +120,7 @@ const useStyles = makeStyles({
   },
 });
 
-export interface EvtxCorrelationOverviewProps {
+interface EvtxCorrelationOverviewProps {
   /** The chains the view lists (at most the 100-row cap), in the model's order. */
   chains: readonly CorrelationChain[];
   selectedId: string | null;

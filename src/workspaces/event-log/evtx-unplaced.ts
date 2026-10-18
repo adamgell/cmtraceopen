@@ -226,7 +226,7 @@ export function unplacedCardLine(list: UnplacedListInput | null): string | null 
  * What the Log Viewer holds: the log store's own mode, the file it has open, which lines of that
  * file are loaded, and whether the entries are in line order.
  */
-export interface LogViewerLines {
+interface LogViewerLines {
   openFilePath: string | null;
   /**
    * The log store's `sourceOpenMode`. The modes other than "single-file" keep `openFilePath` and the
@@ -291,7 +291,7 @@ export function logViewerLines(
   return { openFilePath, sourceOpenMode, lines, untimed, timed, inLineOrder };
 }
 
-export interface OpenAtLine {
+interface OpenAtLine {
   enabled: boolean;
   /** Why it is disabled; null when enabled. */
   reason: string | null;

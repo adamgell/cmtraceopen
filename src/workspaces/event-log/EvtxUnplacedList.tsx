@@ -38,7 +38,7 @@ import {
 import { useRailTextColors } from "./evtx-rail-text";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 
-export interface EvtxUnplacedListProps {
+interface EvtxUnplacedListProps {
   /** The engine's unplaced list and its count, from the model on show. Null is no run: nothing to show. */
   list: UnplacedListInput | null;
   /** The correlation data is being rebuilt, so this list belongs to an earlier session. */
