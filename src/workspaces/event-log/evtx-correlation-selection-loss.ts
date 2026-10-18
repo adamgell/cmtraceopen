@@ -9,7 +9,10 @@
  *   unplaced items that are listed again make the sentence false, so it is no longer said;
  * - it names a chain only when a chain is shown ("showing another" with zero chains is a false claim);
  * - the polite region says it until it has published it once (`announced`), and not again after a later
- *   model or "updating" change re-composes the announcement.
+ *   model or "updating" change re-composes the announcement. A publication counts only if it was made
+ *   AFTER the record was created (the record captures the publication count), because the region can
+ *   still hold an earlier loss's sentence, and one kind's zero-chain wording is a prefix of its
+ *   chain-shown wording.
  *
  * Pure: it reads no store and draws nothing.
  */
@@ -21,6 +24,14 @@ export interface SelectionLoss {
   lostId: string | null;
   /** True once the polite region has published the sentence, which it is then not given again. */
   announced: boolean;
+  /** How many publications the polite region had made when the record was created. */
+  since: number;
+}
+
+/** What the polite region holds: the text it last published, and how many publications it has made. */
+export interface Region {
+  text: string;
+  publications: number;
 }
 
 /** What exists now. */
@@ -35,9 +46,32 @@ export interface LossFacts {
   chainShown: boolean;
 }
 
-/** A new, unspoken loss. */
-export function newSelectionLoss(kind: SelectionLoss["kind"], lostId: string | null): SelectionLoss {
-  return { kind, lostId, announced: false };
+/** A new, unspoken loss, made when the region had made `publications` publications. */
+export function newSelectionLoss(
+  kind: SelectionLoss["kind"],
+  lostId: string | null,
+  publications: number,
+): SelectionLoss {
+  return { kind, lostId, announced: false, since: publications };
+}
+
+/**
+ * Whether the region has now said the sentence of this loss. Not by looking for the text in whatever
+ * the region holds: that can be a publication made before the record existed, and a prefix of
+ * another sentence. It has been said when
+ * - the announcement composed with it is identical to what the region already holds (the region
+ *   would not publish it again, so it would otherwise sit in every later announcement); or
+ * - a publication made AFTER the record was created carries the sentence.
+ */
+export function lossWasSaid(
+  loss: SelectionLoss,
+  sentence: string | null,
+  region: Region,
+  composed: string,
+): boolean {
+  if (loss.announced || sentence === null) return false;
+  if (composed === region.text) return true;
+  return region.publications > loss.since && region.text.includes(sentence);
 }
 
 /** Whether what the record says is still the case. A pane that is shown is not "left". */

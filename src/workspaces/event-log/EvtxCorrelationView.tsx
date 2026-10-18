@@ -49,10 +49,12 @@ import {
 import { zoomWindowFor, type ZoomState } from "./evtx-correlation-overview";
 import {
   lossStillTrue,
+  lossWasSaid,
   newSelectionLoss,
   spokenLoss,
   visibleLoss,
   type LossFacts,
+  type Region,
   type SelectionLoss,
 } from "./evtx-correlation-selection-loss";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
@@ -435,15 +437,17 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
   // What is lost is an EVENT, recorded here once (`loss`), not a flag the renders go on reading: what
   // is said about it is derived from the record and from what exists now (evtx-correlation-selection-loss).
   const [loss, setLoss] = useState<SelectionLoss | null>(null);
+  // How many publications the polite region has made, read when a loss is recorded (below).
+  const publicationsRef = useRef(0);
   useEffect(() => {
     if (model === null || data.updating || showPane) return;
     if (unplacedOpen) {
-      setLoss(newSelectionLoss("unplaced", null));
+      setLoss(newSelectionLoss("unplaced", null, publicationsRef.current));
       selectChain(reconciled.selectedId);
       return;
     }
     if (reconciled.selectedId !== selectedChainId) {
-      if (reconciled.lost) setLoss(newSelectionLoss("chain", selectedChainId));
+      if (reconciled.lost) setLoss(newSelectionLoss("chain", selectedChainId, publicationsRef.current));
       selectChain(reconciled.selectedId);
     }
   }, [model, data.updating, showPane, unplacedOpen, reconciled.selectedId, reconciled.lost, selectedChainId, selectChain]);
@@ -561,12 +565,17 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
       .join(". ");
   }, [model, lossSentence, data.updating, data.error, data.stage]);
   const spoken = useThrottledValue(announcement, CORRELATION_ANNOUNCE_MS);
-  // The loss is given to the polite region until the region has published it once; after that a later
-  // model or "updating" change composes an announcement without it.
+  // The publications of the throttle, counted here because the throttle does not report them (it is
+  // shared and stays as it is): the region's text changes exactly when it publishes.
+  const [region, setRegion] = useState<Region>({ text: spoken, publications: 0 });
+  if (region.text !== spoken) setRegion({ text: spoken, publications: region.publications + 1 });
+  publicationsRef.current = region.publications;
+  // The loss is given to the polite region until the region has said it once; after that a later model
+  // or "updating" change composes an announcement without it.
   useEffect(() => {
-    if (lossSentence === null || !spoken.includes(lossSentence)) return;
-    setLoss((current) => (current !== null && !current.announced ? { ...current, announced: true } : current));
-  }, [spoken, lossSentence]);
+    if (loss === null || !lossWasSaid(loss, lossSentence, region, announcement)) return;
+    setLoss((current) => (current === loss ? { ...current, announced: true } : current));
+  }, [loss, lossSentence, region, announcement]);
 
   const optionId = (index: number) => `${uid}-chain-${index}`;
   // The options of the listbox: the chains, then "Not placed" last when the session has unplaced items.

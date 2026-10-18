@@ -1532,6 +1532,150 @@ describe("a lost selection is an event, said once and by what exists (the sticky
     });
   });
 
+  describe("the receipt: said by a publication made after the record, never by an earlier one", () => {
+    const ZERO = "The selected chain is no longer present";
+    const SHOWN = `${ZERO}, showing another`;
+    /** Time passes in quarter seconds; every distinct text the region holds is kept, in order. */
+    const heard: string[] = [];
+    const hear = () => {
+      const text = announcer().textContent ?? "";
+      if (heard[heard.length - 1] !== text) heard.push(text);
+    };
+    const advance = (ms: number) => {
+      for (let elapsed = 0; elapsed < ms; elapsed += 250) {
+        act(() => {
+          vi.advanceTimersByTime(250);
+        });
+        hear();
+      }
+    };
+    const saidCount = (sentence: string) => heard.filter((text) => text.includes(sentence)).length;
+    /** One secondary pair only: a model that does not hold the mixed model's first chain. */
+    const secondaryOnly = (extra: Partial<DataOptions> = {}) => {
+      const edges = fixtureEdges("secondaryPair", 10);
+      return makeData({
+        items: idsOf(edges).map((id) => eventItem(numberOf(id), T0 + numberOf(id) * 1_000)),
+        edges,
+        ...extra,
+      });
+    };
+    beforeEach(() => {
+      heard.length = 0;
+    });
+
+    it("speaks a second loss of the same kind recorded inside the window after the first was published", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone-1" });
+      const view = show(mixedData());
+      hear();
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard[heard.length - 1]).toBe(`4 chains. ${SHOWN}`);
+      // The next tail rebuild drops the chain the operator was moved to, before the first publication is replaced.
+      view.update(secondaryOnly({ builtFor: "session:2" }));
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard).toContain(`1 chain. ${SHOWN}`);
+      expect(saidCount(SHOWN)).toBe(2);
+      // Each is said once: a later model and an update do not say either again.
+      view.update(secondaryOnly({ builtFor: "session:3", updating: true }));
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      view.update(secondaryOnly({ builtFor: "session:4" }));
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(saidCount(SHOWN)).toBe(2);
+      expect(announcer().textContent).not.toContain(ZERO);
+    });
+
+    it("speaks a zero-chain loss after a chain-shown one of the same kind, whose sentence contains it", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone-1" });
+      const view = show(mixedData());
+      hear();
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard[heard.length - 1]).toBe(`4 chains. ${SHOWN}`);
+      // The operator's selection goes again, and now there is no chain at all.
+      act(() => {
+        useEvtxCorrelationStore.setState({ selectedChainId: "gone-2" });
+        view.update(makeData({ items: [], edges: [], totalEdges: 0, builtFor: "session:2" }));
+      });
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard).toContain(`0 chains. ${ZERO}`);
+      expect(saidCount(SHOWN)).toBe(1);
+      expect(saidCount(ZERO)).toBe(2);
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(announcer().textContent).not.toContain(ZERO);
+    });
+
+    it("speaks a chain-shown loss after a zero-chain one of the same kind", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone-1" });
+      const view = show(makeData({ items: [], edges: [], totalEdges: 0 }));
+      hear();
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard[heard.length - 1]).toBe(`0 chains. ${ZERO}`);
+      act(() => {
+        useEvtxCorrelationStore.setState({ selectedChainId: "gone-2" });
+        view.update(mixedData({ builtFor: "session:2" }));
+      });
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard).toContain(`4 chains. ${SHOWN}`);
+      expect(saidCount(SHOWN)).toBe(1);
+    });
+
+    it("speaks a second Not placed loss recorded inside the window after the first was published", () => {
+      vi.useFakeTimers();
+      const NOTHING = "Nothing is listed under Not placed any more, showing a chain";
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+      view.update(mixedData({ unplacedList: { items: [], total: 0 }, builtFor: "session:2" }));
+      hear();
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard[heard.length - 1]).toBe(`4 chains. ${NOTHING}`);
+      // Items are listed again and the operator opens the pane from the rail; then they go again.
+      view.update(mixedData({ unplacedList: { items: unplacedItems(2), total: 2 }, builtFor: "session:3" }));
+      act(() => openUnplacedList());
+      expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+      view.update(secondaryOnly({ unplacedList: { items: [], total: 0 }, builtFor: "session:4" }));
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard).toContain(`1 chain. ${NOTHING}`);
+      expect(heard.filter((text) => text.includes(NOTHING))).toHaveLength(2);
+    });
+
+    it("says it once when the announcement changes in the same step as the publication that carries it", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone-1" });
+      const view = show(mixedData());
+      hear();
+      advance(CORRELATION_ANNOUNCE_MS - 250);
+      expect(announcer().textContent).toBe("4 chains");
+      // The timer fires and the data starts updating in one step, so the announcement composed with the
+      // sentence is no longer the text that was published. The publication still said it.
+      act(() => {
+        vi.advanceTimersByTime(300);
+        view.update(mixedData({ builtFor: "session:2", updating: true }));
+      });
+      hear();
+      expect(heard).toContain(`4 chains. ${SHOWN}`);
+      advance(3 * (CORRELATION_ANNOUNCE_MS + 100));
+      expect(saidCount(SHOWN)).toBe(1);
+    });
+
+    it("counts an announcement identical to what the region holds as said, and does not publish it again", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone-1" });
+      show(mixedData());
+      hear();
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard[heard.length - 1]).toBe(`4 chains. ${SHOWN}`);
+      // A second loss of the same kind in the same model composes exactly the text the region holds.
+      act(() => useEvtxCorrelationStore.setState({ selectedChainId: "gone-2" }));
+      hear();
+      expect(announcer().textContent).toBe(`4 chains. ${SHOWN}`);
+      advance(2 * (CORRELATION_ANNOUNCE_MS + 100));
+      // The region held the sentence once, then dropped it. It did not stay in every later announcement,
+      // and it was not published a second time.
+      expect(heard).toEqual(["4 chains", `4 chains. ${SHOWN}`, "4 chains"]);
+    });
+  });
+
   describe("the chain that was selected", () => {
     const notice = () => screen.queryByTestId("correlation-notices")?.textContent ?? "";
     const GONE_VISIBLE = "The chain that was selected is no longer present.";

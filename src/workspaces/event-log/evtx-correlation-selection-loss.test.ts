@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   lossStillTrue,
+  lossWasSaid,
   newSelectionLoss,
   spokenLoss,
   visibleLoss,
@@ -19,8 +20,8 @@ const facts = (extra: Partial<LossFacts> = {}): LossFacts => ({
   chainShown: true,
   ...extra,
 });
-const chainLoss = (): SelectionLoss => newSelectionLoss("chain", "gone");
-const paneLoss = (): SelectionLoss => newSelectionLoss("unplaced", null);
+const chainLoss = (): SelectionLoss => newSelectionLoss("chain", "gone", 0);
+const paneLoss = (): SelectionLoss => newSelectionLoss("unplaced", null, 0);
 
 describe("a lost chain", () => {
   it("says another chain is shown only when a chain is shown", () => {
@@ -86,7 +87,45 @@ describe("no loss", () => {
     expect(visibleLoss(null, facts())).toBeNull();
   });
 
-  it("starts unspoken", () => {
-    expect(newSelectionLoss("chain", "x")).toEqual({ kind: "chain", lostId: "x", announced: false });
+  it("starts unspoken, remembering how many publications the region had made", () => {
+    expect(newSelectionLoss("chain", "x", 3)).toEqual({ kind: "chain", lostId: "x", announced: false, since: 3 });
+  });
+});
+
+describe("when the region has said a loss", () => {
+  const ZERO = "The selected chain is no longer present";
+  const SHOWN = `${ZERO}, showing another`;
+  const region = (text: string, publications: number) => ({ text, publications });
+  /** A loss recorded when the region had made `since` publications. */
+  const recorded = (since: number) => newSelectionLoss("chain", "gone", since);
+
+  it("has not, until a publication made after the record carries its sentence", () => {
+    const loss = recorded(2);
+    expect(lossWasSaid(loss, SHOWN, region("7 chains", 3), "7 chains. " + SHOWN)).toBe(false);
+    expect(lossWasSaid(loss, SHOWN, region("7 chains. " + SHOWN, 3), "7 chains. " + SHOWN)).toBe(true);
+  });
+
+  it("is not said by a publication made before the record, even one that holds the sentence", () => {
+    // The region published this very sentence for an earlier loss (publication 2); a second loss is
+    // recorded after it, and the new announcement differs (the count), so it still has to be published.
+    const loss = recorded(2);
+    expect(lossWasSaid(loss, SHOWN, region("7 chains. " + SHOWN, 2), "6 chains. " + SHOWN)).toBe(false);
+    expect(lossWasSaid(loss, SHOWN, region("7 chains. " + SHOWN, 3), "6 chains. " + SHOWN)).toBe(true);
+  });
+
+  it("is not said by an earlier sentence that contains this one (the zero-chain wording is a prefix)", () => {
+    const loss = recorded(2);
+    expect(lossWasSaid(loss, ZERO, region("7 chains. " + SHOWN, 2), "0 chains. " + ZERO)).toBe(false);
+    expect(lossWasSaid(loss, ZERO, region("0 chains. " + ZERO, 3), "0 chains. " + ZERO)).toBe(true);
+  });
+
+  it("has, with no publication, when the announcement is identical to what the region already holds", () => {
+    const same = "7 chains. " + SHOWN;
+    expect(lossWasSaid(recorded(5), SHOWN, region(same, 5), same)).toBe(true);
+  });
+
+  it("is never said twice, and has nothing to say with no sentence", () => {
+    expect(lossWasSaid({ ...recorded(0), announced: true }, SHOWN, region(SHOWN, 9), SHOWN)).toBe(false);
+    expect(lossWasSaid(recorded(0), null, region("7 chains", 9), "7 chains")).toBe(false);
   });
 });
