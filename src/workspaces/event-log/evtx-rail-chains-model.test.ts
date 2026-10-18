@@ -564,4 +564,3 @@ describe("pure", () => {
     expect(modelSource).not.toMatch(/["'`]#[0-9a-fA-F]{3,8}["'`]|\brgba?\(|\d\s*px\b/);
   });
 });
-

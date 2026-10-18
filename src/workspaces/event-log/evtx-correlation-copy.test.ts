@@ -1761,4 +1761,3 @@ describe("chainActionAvailability, whether an action on the model on show may ac
     });
   });
 });
-

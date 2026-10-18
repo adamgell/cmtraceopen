@@ -365,4 +365,3 @@ export function buildRailChains(input: RailChainsInput): RailChainsModel {
     actions: chainActionAvailability({ hasItems: data.hasItems, updating: data.updating, hasChain: true }),
   };
 }
-
