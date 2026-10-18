@@ -46,7 +46,7 @@ import {
   sanitizeLayout,
   useEvtxLayoutStore,
 } from "./evtx-layout-store";
-import { dockMinHeightPx, gridRecordRowPx } from "./evtx-main-column-layout";
+import { DOCK_MIN_HEIGHT_PX, gridRecordRowPx } from "./evtx-main-column-layout";
 import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
 import type { EvtxRecord } from "./types";
@@ -226,14 +226,87 @@ describe("EventLogWorkspace three-column shell", () => {
       Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
       render(<EventLogWorkspace />);
       const dock = region("dock")!;
-      const minimum = dockMinHeightPx(useUiStore.getState().logListFontSize);
-      expect(dock).toHaveStyle({ height: "210px", flexShrink: "1", minHeight: `${minimum}px` });
-      // The minimum is under the least the user can drag it to, so the dock has room to give.
-      expect(minimum).toBeLessThan(useEvtxLayoutStore.getState().dockHeight);
+      expect(dock).toHaveStyle({ height: "210px", flexShrink: "1", minHeight: `${DOCK_MIN_HEIGHT_PX}px` });
+      // The minimum is under the height the dock opens at, so the dock has room to give.
+      expect(DOCK_MIN_HEIGHT_PX).toBeLessThan(useEvtxLayoutStore.getState().dockHeight);
       act(() => useEvtxLayoutStore.getState().setPanel("dock", true));
       fireEvent.click(await screen.findByRole("button", { name: "Collapse correlation" }));
       expect(dock).toHaveStyle({ flexShrink: "0" });
       expect(dock.style.minHeight).toBe("");
+    });
+  });
+
+  // The dock's own box and the column's height are measured. jsdom does no layout, so they are
+  // supplied here: the dock renders at `slot`, in a column of `main`, under the Table's floor.
+  describe("the dock's resize handle", () => {
+    let restore: (() => void) | null = null;
+    const stubLayout = (slot: number, main: number) => {
+      const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+        this: HTMLElement,
+      ) {
+        const height = this.dataset.evtxRegion === "dock" ? slot : 0;
+        return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: height, width: 0, height, toJSON: () => ({}) };
+      });
+      Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.dataset.evtxRegion === "main" ? main : 0;
+        },
+      });
+      restore = () => {
+        rect.mockRestore();
+        delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+      };
+    };
+    afterEach(() => restore?.());
+    const open = () => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      render(<EventLogWorkspace />);
+      act(() => useEvtxLayoutStore.getState().setPanel("dock", true));
+      return screen.getByRole("separator", { name: "Resize correlation dock" });
+    };
+    const chosen = () => useEvtxLayoutStore.getState().dockHeight;
+
+    it("reports the rendered height and the range the column leaves, not the chosen height", () => {
+      // The Table's floor at 900 px is 320 + 145 = 465, so a 600 px column leaves the dock 135.
+      stubLayout(117, 600);
+      const handle = open();
+      expect(chosen()).toBe(210);
+      expect(handle).toHaveAttribute("aria-valuenow", "117");
+      expect(handle).toHaveAttribute("aria-valuemin", String(DOCK_MIN_HEIGHT_PX));
+      expect(handle).toHaveAttribute("aria-valuemax", "135");
+    });
+
+    it("steps from the rendered height, so a key press moves the dock, and a bound moves nothing", () => {
+      stubLayout(117, 600);
+      const handle = open();
+      fireEvent.keyDown(handle, { key: "ArrowUp" });
+      expect(chosen()).toBe(133);
+      fireEvent.keyDown(handle, { key: "ArrowDown" });
+      expect(chosen()).toBe(DOCK_MIN_HEIGHT_PX);
+    });
+
+    it("takes no step past a bound, and says it is at the bound by its value", () => {
+      // The dock is as tall as the column lets it be: 135 of 135.
+      stubLayout(135, 600);
+      const handle = open();
+      expect(handle).toHaveAttribute("aria-valuenow", "135");
+      expect(handle).toHaveAttribute("aria-valuemax", "135");
+      fireEvent.keyDown(handle, { key: "ArrowUp" });
+      fireEvent.keyDown(handle, { key: "End" });
+      expect(chosen()).toBe(210);
+      fireEvent.keyDown(handle, { key: "Home" });
+      expect(chosen()).toBe(DOCK_MIN_HEIGHT_PX);
+    });
+
+    it("drags from the rendered height", () => {
+      stubLayout(117, 600);
+      const handle = open();
+      fireEvent.pointerDown(handle, { clientY: 500, button: 0, isPrimary: true, pointerId: 1 });
+      // Eight px up grows the dock by eight from the 117 px that is there, not from the 210 chosen.
+      fireEvent.pointerMove(handle, { clientY: 492, buttons: 1, pointerId: 1 });
+      expect(chosen()).toBe(125);
+      fireEvent.pointerUp(handle, { pointerId: 1 });
     });
   });
 

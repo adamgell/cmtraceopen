@@ -13,6 +13,7 @@
  */
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { DOCK_MIN_HEIGHT_PX } from "./evtx-main-column-layout";
 
 export const EVTX_VIEW_IDS = [
   "table",
@@ -60,7 +61,12 @@ export const DEFAULT_RAIL_WIDTH = 340;
 export const MIN_RAIL_WIDTH = 280;
 export const MAX_RAIL_WIDTH = 480;
 export const DEFAULT_DOCK_HEIGHT = 210;
-export const MIN_DOCK_HEIGHT = 160;
+/**
+ * The least the dock is stored or drawn at: its header plus one lane (evtx-main-column-layout.ts).
+ * The same number bounds the resize handle, so a window too short for the chosen height can render
+ * the dock at it and the handle can still move it.
+ */
+export const MIN_DOCK_HEIGHT = DOCK_MIN_HEIGHT_PX;
 /** The dock may take at most half the viewport height; applied in pixels at use time. */
 export const MAX_DOCK_HEIGHT_RATIO = 0.5;
 

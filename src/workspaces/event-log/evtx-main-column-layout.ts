@@ -10,14 +10,17 @@
  *
  * - The Table view keeps `TABLE_GRID_FLOOR_ROWS` grid rows, in every layout.
  * - Secondary panels give way first. The dock is a shrinkable flex item whose floor is its header
- *   plus one lane (`dockMinHeightPx`), so its rendered height is the height the user chose,
- *   clamped to what is left once the view has its floor. The chosen height is never rewritten: the
- *   store keeps it, and a taller window shows it again.
+ *   plus one lane (`DOCK_MIN_HEIGHT_PX`), so its rendered height is the height the user chose,
+ *   clamped to what is left once the view has its floor. The chosen height is never rewritten by
+ *   the layout: the store keeps it, and a taller window shows it again.
  * - When the floors together do not fit, the main column scrolls. Nothing collapses to 0.
+ * - The dock's resize handle speaks for the RENDERED height (`dockHandleBounds`): it reports it,
+ *   drags and steps from it, and its range is what the dock can actually be.
  *
  * Kept apart from the workspace so the numbers are tested without a layout engine, and so the
  * workspace, which is over 300 lines, only reads them.
  */
+import { MAX_LOG_LIST_FONT_SIZE } from "../../lib/log-accessibility";
 import { correlationSizes } from "./evtx-correlation-sizes";
 import type { EvtxColumnId } from "./evtx-columns";
 import { UNIFIED_TIMELINE_STRIP_HEIGHT_PX } from "./evtx-timeline-strip";
@@ -83,17 +86,39 @@ const DOCK_LANE_PX = 24;
 const DOCK_AXIS_CHROME_PX = 2 + 6;
 
 /**
- * The dock's rendered minimum: its header plus one lane of the plot, with the plot's frame and
- * axis. It is the least the dock is drawn at when the window is too short for its chosen height;
- * below it the dock would clip the one lane it exists to show. The tick text follows the user's
- * log list font size.
+ * The dock's minimum, the one number for what it is drawn at and what it can be set to: its header
+ * plus one lane of the plot, with the plot's frame and axis. Below it the dock would clip the one
+ * lane it exists to show. The axis text follows the log list font size, and the minimum is taken at
+ * the largest, so it does not move with the font and the stored height and the handle share it
+ * (`MIN_DOCK_HEIGHT` is this).
  */
-export function dockMinHeightPx(logListFontSize: number): number {
-  return (
-    DOCK_HEADER_PX +
-    DOCK_CHROME_PX +
-    DOCK_LANE_PX +
-    DOCK_AXIS_CHROME_PX +
-    correlationSizes(logListFontSize).tick
-  );
+export const DOCK_MIN_HEIGHT_PX =
+  DOCK_HEADER_PX +
+  DOCK_CHROME_PX +
+  DOCK_LANE_PX +
+  DOCK_AXIS_CHROME_PX +
+  correlationSizes(MAX_LOG_LIST_FONT_SIZE).tick;
+
+export interface DockHandleBounds {
+  /** The rendered height, kept inside the range. */
+  value: number;
+  min: number;
+  max: number;
+}
+
+/**
+ * What the dock's resize handle reports, from the dock as it is rendered. `renderedHeight` is the
+ * dock's own box (measured), `availableHeight` what the main column leaves it once the active view
+ * has its floor, and `storeMax` the most the store lets it be (half the window). The range is the
+ * dock's minimum up to the least of those, so a handle that is at a bound says so by its value and
+ * a step toward it changes nothing.
+ */
+export function dockHandleBounds(input: {
+  renderedHeight: number;
+  availableHeight: number;
+  storeMax: number;
+}): DockHandleBounds {
+  const min = DOCK_MIN_HEIGHT_PX;
+  const max = Math.max(min, Math.min(input.storeMax, input.availableHeight));
+  return { value: Math.min(max, Math.max(min, input.renderedHeight)), min, max };
 }

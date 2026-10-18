@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_LOG_LIST_FONT_SIZE, MAX_LOG_LIST_FONT_SIZE } from "../../lib/log-accessibility";
 import { MIN_DOCK_HEIGHT } from "./evtx-layout-store";
 import {
+  DOCK_MIN_HEIGHT_PX,
   TABLE_GRID_FLOOR_ROWS,
-  dockMinHeightPx,
+  dockHandleBounds,
   listRowPx,
   tableGridFloorPx,
   tableViewMinHeightPx,
@@ -39,12 +39,35 @@ describe("the floors of the main column", () => {
     expect(tableViewMinHeightPx(35, 900)).toBe(320 + 175);
   });
 
-  it("gives the dock a minimum of its header and one lane, under the least a user can drag it to", () => {
-    const atDefault = dockMinHeightPx(DEFAULT_LOG_LIST_FONT_SIZE);
-    expect(atDefault).toBe(100);
-    expect(atDefault).toBeLessThan(MIN_DOCK_HEIGHT);
-    // The axis text grows with the font, so the minimum does too, and stays under that floor.
-    expect(dockMinHeightPx(MAX_LOG_LIST_FONT_SIZE)).toBeGreaterThan(atDefault);
-    expect(dockMinHeightPx(MAX_LOG_LIST_FONT_SIZE)).toBeLessThan(MIN_DOCK_HEIGHT);
+  it("gives the dock one minimum, its header and one lane at the largest font, that the store shares", () => {
+    expect(DOCK_MIN_HEIGHT_PX).toBe(107);
+    // The stored height, the rendered minimum and the handle's range start at the same number, so a
+    // handle at its minimum is at the least the dock can be set to.
+    expect(MIN_DOCK_HEIGHT).toBe(DOCK_MIN_HEIGHT_PX);
+  });
+});
+
+describe("the dock's resize handle range", () => {
+  it("reports the rendered height, within the dock minimum and what the column leaves it", () => {
+    // 117 rendered of a chosen 210: the handle says 117, and 135 is all the column can give.
+    expect(dockHandleBounds({ renderedHeight: 117, availableHeight: 135, storeMax: 450 })).toEqual({
+      value: 117,
+      min: 107,
+      max: 135,
+    });
+  });
+
+  it("never offers more than the store's maximum, and a column with room gives that", () => {
+    expect(dockHandleBounds({ renderedHeight: 210, availableHeight: 5000, storeMax: 450 }).max).toBe(450);
+  });
+
+  it("ends at the minimum when the column has less than that, and the value says so", () => {
+    const bounds = dockHandleBounds({ renderedHeight: 107, availableHeight: 60, storeMax: 450 });
+    expect(bounds).toEqual({ value: 107, min: 107, max: 107 });
+  });
+
+  it("keeps the value inside the range whatever was measured", () => {
+    expect(dockHandleBounds({ renderedHeight: 40, availableHeight: 300, storeMax: 450 }).value).toBe(107);
+    expect(dockHandleBounds({ renderedHeight: 900, availableHeight: 300, storeMax: 450 }).value).toBe(300);
   });
 });
