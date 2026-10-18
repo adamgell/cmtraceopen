@@ -24,22 +24,7 @@
 import { describe, expect, it } from "vitest";
 import parserTimelineSource from "../../../crates/cmtraceopen-parser/src/unified_timeline/mod.rs?raw";
 import timelineSource from "../../../src-tauri/src/event_log/timeline.rs?raw";
-
-const withoutComments = (text: string) => text.replace(/\/\/[^\n]*/g, "");
-const squash = (text: string) => withoutComments(text).replace(/\s+/g, "");
-
-/**
- * The text of the top-level item that starts with `signature`, through the closing brace at column
- * 0 that rustfmt gives it (the repository's CI enforces rustfmt, so a top-level item always ends so).
- */
-function topLevelItem(source: string, signature: string): string {
-  const at = source.indexOf(signature);
-  if (at < 0) throw new Error(`the Rust source no longer has \`${signature}\``);
-  if (source.indexOf(signature, at + 1) >= 0) throw new Error(`\`${signature}\` is no longer unique`);
-  const end = source.indexOf("\n}\n", at);
-  if (end < 0) throw new Error(`\`${signature}\` has no closing brace at column 0`);
-  return source.slice(at, end + 3);
-}
+import { itemText, squashCode } from "./rust-source-test-helpers";
 
 const IS_COLLECTOR_BUNDLE_ID = `
 fn is_collector_bundle_id(segment: &str) -> bool {
@@ -111,16 +96,16 @@ const LOG_ARM = `
 `;
 
 describe("the bundle id rule the log matcher mirrors", () => {
-  const collectorId = topLevelItem(parserTimelineSource, "fn is_collector_bundle_id(");
-  const bundleFromSource = topLevelItem(parserTimelineSource, "pub fn bundle_from_source(");
+  const collectorId = itemText(parserTimelineSource, "fn is_collector_bundle_id(");
+  const bundleFromSource = itemText(parserTimelineSource, "pub fn bundle_from_source(");
 
   it("is the same function as the one this repository's mirror was written from", () => {
-    expect(squash(collectorId)).toBe(squash(IS_COLLECTOR_BUNDLE_ID));
-    expect(squash(bundleFromSource)).toBe(squash(BUNDLE_FROM_SOURCE));
+    expect(squashCode(collectorId)).toBe(squashCode(IS_COLLECTOR_BUNDLE_ID));
+    expect(squashCode(bundleFromSource)).toBe(squashCode(BUNDLE_FROM_SOURCE));
   });
 
   describe("and, so that a failure names the rule that changed, each rule on its own", () => {
-    const id = squash(collectorId);
+    const id = squashCode(collectorId);
 
     it("the prefix word, matched without regard to ASCII case", () => {
       expect(id).toContain('constPREFIX:&str="CMTRACE-";');
@@ -151,7 +136,7 @@ describe("the bundle id rule the log matcher mirrors", () => {
     });
 
     it("bundle_from_source: either separator, empty segments dropped, the first pair whose second is 'evidence'", () => {
-      const source = squash(bundleFromSource);
+      const source = squashCode(bundleFromSource);
       expect(source).toContain(".split(['/','\\\\'])");
       expect(source).toContain(".filter(|segment|!segment.is_empty())");
       expect(source).toContain("segments.windows(2).find_map(|pair|");
@@ -161,9 +146,9 @@ describe("the bundle id rule the log matcher mirrors", () => {
 });
 
 describe("what the engine puts on a log origin", () => {
-  const originOf = topLevelItem(timelineSource, "fn origin_of(");
+  const originOf = itemText(timelineSource, "fn origin_of(");
 
   it("builds it from an archive text row's own fields, as logOriginNamesRecord compares them", () => {
-    expect(squash(originOf)).toContain(squash(LOG_ARM));
+    expect(squashCode(originOf)).toContain(squashCode(LOG_ARM));
   });
 });

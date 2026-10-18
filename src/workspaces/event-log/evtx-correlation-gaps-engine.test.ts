@@ -34,14 +34,20 @@
  *   iterator chain built from `into_iter()` into a new set.
  */
 import { describe, expect, it } from "vitest";
-import analysisSessionSource from "../../../src-tauri/src/event_log/analysis_session.rs?raw";
-import timelineSource from "../../../src-tauri/src/event_log/timeline.rs?raw";
-import reducerSource from "../../../crates/cmtraceopen-parser/src/unified_timeline/mod.rs?raw";
+import analysisSessionRaw from "../../../src-tauri/src/event_log/analysis_session.rs?raw";
+import timelineRaw from "../../../src-tauri/src/event_log/timeline.rs?raw";
+import reducerRaw from "../../../crates/cmtraceopen-parser/src/unified_timeline/mod.rs?raw";
 import {
   DISPLAY_GAP_SOURCES,
   GLOBAL_CORRELATION_GAP_SOURCES,
   classifyCoverageGaps,
 } from "./evtx-correlation-gaps";
+import { normalizeLineEndings } from "./rust-source-test-helpers";
+
+// A checkout with CRLF line endings reads the same as one with LF: the scans below search for "\n".
+const analysisSessionSource = normalizeLineEndings(analysisSessionRaw);
+const timelineSource = normalizeLineEndings(timelineRaw);
+const reducerSource = normalizeLineEndings(reducerRaw);
 
 const ENGINE_FILES = {
   "src-tauri/src/event_log/analysis_session.rs": analysisSessionSource,
