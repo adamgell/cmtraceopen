@@ -65,7 +65,7 @@ export function overviewDomain(chains: readonly Span[]): TimeWindow | null {
   return start === Number.POSITIVE_INFINITY ? null : { startMs: start, endMs: end };
 }
 
-export interface OverviewBar {
+interface OverviewBar {
   chainId: string;
   strength: CorrelationChainStrength;
   /** Bars sit in one row per strength, strongest first (`STRENGTH_ORDER`): the row says which, so colour does not have to. */
@@ -77,7 +77,7 @@ export interface OverviewBar {
   selected: boolean;
 }
 
-export interface OverviewBars {
+interface OverviewBars {
   /** In draw order: the selected chain last, so it is on top where bars overlap. */
   bars: OverviewBar[];
   /** Chains with no resolved member: they have no span and no bar. */
@@ -145,7 +145,7 @@ export function clampWindow(window: TimeWindow, domain: TimeWindow): TimeWindow 
 }
 
 /** The band moved by `deltaMs`, its width kept, inside the domain. */
-export function panWindow(window: TimeWindow, domain: TimeWindow, deltaMs: number): TimeWindow {
+function panWindow(window: TimeWindow, domain: TimeWindow, deltaMs: number): TimeWindow {
   return clampWindow(
     { startMs: window.startMs + deltaMs, endMs: window.endMs + deltaMs },
     domain,
@@ -158,7 +158,7 @@ export function panWindow(window: TimeWindow, domain: TimeWindow, deltaMs: numbe
  * edge belongs to a window that was legal when the gesture began, and a live rebuild can have
  * changed the domain since, so it is moved in with the width kept (`clampWindow`).
  */
-export function resizeEdge(
+function resizeEdge(
   window: TimeWindow,
   domain: TimeWindow,
   edge: "start" | "end",
@@ -199,11 +199,11 @@ export function dragBand(drag: BandDrag, pointerMs: number, domain: TimeWindow):
 }
 
 /** A step is a tenth of the band's width, and at least a second (R7). */
-export function bandStepMs(window: TimeWindow): number {
+function bandStepMs(window: TimeWindow): number {
   return Math.max(1_000, Math.round((window.endMs - window.startMs) / 10));
 }
 
-export type BandKeyResult =
+type BandKeyResult =
   | { kind: "ignore" }
   /** Home: the band goes back to the chain's default window. */
   | { kind: "reset" }
@@ -282,7 +282,7 @@ export function bandValueText(window: TimeWindow, mode: EvtxTimeZoneMode, nowMs?
  * 2.34:1 on the dracula wash) and the focus ring. The band has no keyboard cursor, so the slot 6b
  * keeps for one is the focus ring again.
  */
-export function overviewPaletteFor(theme: CMTraceTheme): BrushPalette {
+function overviewPaletteFor(theme: CMTraceTheme): BrushPalette {
   const visual = buildEvtxVisualTokens(theme);
   const resolve = (value: string) => resolveToken(value, theme);
   const focus = resolve(tokens.colorStrokeFocus2);

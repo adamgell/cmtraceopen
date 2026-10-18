@@ -6,8 +6,11 @@
  *
  * Test code only: nothing outside a test file imports it.
  */
+import { tokens } from "@fluentui/react-components";
+import type { CMTraceTheme } from "../../lib/themes/types";
 import fixtureDocument from "./__fixtures__/correlation-edges.json";
-import { buildCorrelationChains } from "./evtx-correlation-chains";
+import { STRENGTH_ORDER, buildCorrelationChains } from "./evtx-correlation-chains";
+import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import { classifyCoverageGaps, type CorrelationGaps } from "./evtx-correlation-gaps";
 import { itemsByOriginId, linkPartnerCounts, originLookup } from "./evtx-correlation-origin-index";
 import { UNAVAILABLE_CORRELATION, type EvtxCorrelationData } from "./useEvtxCorrelation";
@@ -152,6 +155,22 @@ export interface DataOptions {
 
 /** Nine events loaded and nine visible, no text logs: nothing narrowed. */
 export const UNNARROWED_SCOPE = { visibleCount: 9, loadedCount: 9, textLogCount: 0 } as const;
+
+/**
+ * The colors the overview strip's wash must keep 3:1 against, read straight from the token map, for
+ * a test to measure what the code under test decided. It is deliberately not the code's own palette.
+ */
+export function tokenPalette(theme: CMTraceTheme) {
+  const visual = buildEvtxVisualTokens(theme);
+  const resolve = (value: string) => resolveToken(value, theme);
+  return {
+    surface: resolve(tokens.colorNeutralBackground1),
+    fill: resolve(tokens.colorNeutralBackground1Selected),
+    bars: STRENGTH_ORDER.map((strength) => resolve(visual.strengthBars[strength])),
+    border: resolve(tokens.colorNeutralStrokeAccessible),
+    focus: resolve(tokens.colorStrokeFocus2),
+  };
+}
 
 /** An unplaced list the session counts as empty: no item, and a trusted count of 0. */
 export const EMPTY_UNPLACED_LIST: NonNullable<EvtxCorrelationData["unplacedList"]> = { items: [], total: 0 };

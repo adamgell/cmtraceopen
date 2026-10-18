@@ -7,8 +7,9 @@ import { describe, expect, it } from "vitest";
 import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
 import { STRENGTH_ORDER, type CorrelationChainStrength } from "./evtx-correlation-chains";
-import { CORRELATION_MIN_WINDOW_MS, defaultLaneWindow } from "./evtx-correlation-view-model";
+import { CORRELATION_MIN_WINDOW_MS, defaultLaneWindow, type TimeWindow } from "./evtx-correlation-view-model";
 import { BRUSH_FILL_OPACITIES, BRUSH_MIN_CONTRAST, compositeOver } from "./evtx-histogram-brush";
+import { tokenPalette } from "./evtx-correlation-test-fixtures";
 import {
   OVERVIEW_BAR_HEIGHT_PX,
   OVERVIEW_BOX_HEIGHT_PX,
@@ -17,7 +18,6 @@ import {
   OVERVIEW_HINT,
   OVERVIEW_UNSELECTED_FILL_OPACITY,
   bandFractions,
-  bandStepMs,
   bandValueText,
   clampWindow,
   dragBand,
@@ -25,10 +25,7 @@ import {
   overviewBandOpacity,
   overviewBars,
   overviewDomain,
-  overviewPaletteFor,
-  panWindow,
   reduceBandKey,
-  resizeEdge,
   undrawnNote,
   zoomWindowFor,
 } from "./evtx-correlation-overview";
@@ -49,6 +46,20 @@ const chain = (
   endMs: endS === null ? null : T0 + endS * S,
 });
 const win = (startS: number, endS: number) => ({ startMs: T0 + startS * S, endMs: T0 + endS * S });
+
+/** Panning, resizing and the key step are private to the module: they are tested through the gesture and the key. */
+const panWindow = (window: TimeWindow, domain: TimeWindow, deltaMs: number) =>
+  dragBand({ part: "body", origin: window, grabMs: 0 }, deltaMs, domain);
+const resizeEdge = (window: TimeWindow, domain: TimeWindow, edge: "start" | "end", toMs: number) =>
+  dragBand(
+    { part: edge, origin: window, grabMs: 0 },
+    toMs - (edge === "start" ? window.startMs : window.endMs),
+    domain,
+  );
+const WIDE = { startMs: T0 - 10_000 * S, endMs: T0 + 10_000 * S };
+const bandStepMs = (window: TimeWindow) =>
+  (reduceBandKey(window, WIDE, "ArrowRight", false) as { kind: "set"; window: TimeWindow }).window.startMs -
+  window.startMs;
 
 describe("the scale (R5)", () => {
   it("is the union of every chain's default lane window, not of the spans", () => {
@@ -309,7 +320,7 @@ describe("the wash behind the bars (Adam's criterion on #840)", () => {
   const themes = getAllThemes();
   const resolved = (id: string) => {
     const theme = themes.find((candidate) => candidate.id === id)!;
-    const palette = overviewPaletteFor(theme);
+    const palette = tokenPalette(theme);
     return { theme, palette, opacity: overviewBandOpacity(theme) };
   };
 

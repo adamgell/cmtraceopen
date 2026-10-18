@@ -18,7 +18,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { EvtxCorrelationOverview } from "./EvtxCorrelationOverview";
 import { correlationSizes } from "./EvtxCorrelationLanes";
 import type { CorrelationChain, CorrelationChainStrength } from "./evtx-correlation-chains";
-import { overviewPaletteFor } from "./evtx-correlation-overview";
+import { tokenPalette } from "./evtx-correlation-test-fixtures";
 import { defaultLaneWindow } from "./evtx-correlation-view-model";
 import { BRUSH_MIN_CONTRAST, compositeOver } from "./evtx-histogram-brush";
 import { resolveToken } from "./evtx-visual-tokens";
@@ -165,7 +165,7 @@ describe("the strength bars under the zoom band keep 3:1 (issue #840, Adam's cri
     "draws the wash at the opacity solved from the token map in %s",
     (themeId) => {
       const { container } = renderIn(themeId);
-      const palette = overviewPaletteFor(themeOf(themeId));
+      const palette = tokenPalette(themeOf(themeId));
       const model = paintModel(container, themeId);
       expect(model.surface.toLowerCase()).toBe(palette.surface.toLowerCase());
       expect(model.opacity).toBe(themeId === "high-contrast" ? 0.5 : 0.6);
@@ -189,7 +189,7 @@ describe("the strength bars under the zoom band keep 3:1 (issue #840, Adam's cri
       nord: 0.6,
       dracula: 0.6,
     });
-    const palette = overviewPaletteFor(themeOf("high-contrast"));
+    const palette = tokenPalette(themeOf("high-contrast"));
     expect(contrastRatio(palette.bars[0]!, compositeOver(palette.surface, palette.fill, 0.6))).toBeCloseTo(2.72, 2);
   });
 
@@ -229,7 +229,7 @@ describe("the strength bars under the zoom band keep 3:1 (issue #840, Adam's cri
   it("is why the unselected bars are faded in their fill only: faded as a whole they miss 3:1 in light", () => {
     cleanup();
     const { container } = renderIn("light");
-    const palette = overviewPaletteFor(themeOf("light"));
+    const palette = tokenPalette(themeOf("light"));
     const wash = paintModel(container, "light").wash;
     const exactFaded = compositeOver(wash, palette.bars[0]!, 0.4);
     expect(contrastRatio(exactFaded, wash)).toBeLessThan(BRUSH_MIN_CONTRAST);
