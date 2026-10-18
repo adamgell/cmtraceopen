@@ -44,7 +44,7 @@ import { useUiStore } from "../../stores/ui-store";
 import EvtxCorrelationView, { CORRELATION_ANNOUNCE_MS, scopeFailureText } from "./EvtxCorrelationView";
 import viewSource from "./EvtxCorrelationView.tsx?raw";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
-import { openUnplacedList, useEvtxCorrelationStore } from "./evtx-correlation-store";
+import { openCorrelationView, openUnplacedList, useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
 import { pickRailTextColors } from "./evtx-rail-text";
 import { useEvtxStore } from "./evtx-store";
@@ -1924,6 +1924,94 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       settle();
       expect(announcer().textContent).not.toContain(CHAIN_GONE);
       expect(document.body.textContent).not.toContain(GONE_VISIBLE);
+    });
+
+    describe("and a chain opened from outside, the dock's Open (#842)", () => {
+      it("drops the loss before it was spoken: the notice is gone and the sentence is never said", () => {
+        vi.useFakeTimers();
+        useEvtxCorrelationStore.setState({ selectedChainId: "gone" });
+        const data = mixedData();
+        show(data);
+        expect(notice()).toContain(GONE_VISIBLE);
+        const opened = data.model!.chains[1]!.id;
+        act(() => openCorrelationView(opened));
+        settle();
+        expect(useEvtxCorrelationStore.getState().selectedChainId).toBe(opened);
+        expect(notice()).not.toContain(GONE_VISIBLE);
+        expect(announcer().textContent).not.toContain(CHAIN_GONE);
+        expect(document.body.textContent).not.toContain("no longer present");
+        // Nor on any later publication.
+        act(() => {
+          vi.advanceTimersByTime(CORRELATION_ANNOUNCE_MS * 4);
+        });
+        expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      });
+
+      it("drops the notice of a loss that was already spoken, which stays until a pick", () => {
+        vi.useFakeTimers();
+        useEvtxCorrelationStore.setState({ selectedChainId: "gone" });
+        const data = mixedData();
+        show(data);
+        settle();
+        expect(announcer().textContent).toContain(CHAIN_GONE);
+        expect(notice()).toContain(GONE_VISIBLE);
+        act(() => openCorrelationView(data.model!.chains[1]!.id));
+        settle();
+        expect(notice()).not.toContain(GONE_VISIBLE);
+        expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      });
+
+      it("does not make a loss of a row the model on show does not have yet (an older model, updating)", () => {
+        vi.useFakeTimers();
+        const newer = mixedData({ builtFor: "session:2" });
+        const arriving = newer.model!.chains[2]!.id;
+        const older = pairData({ builtFor: "session:1", updating: true });
+        expect(older.model!.chains.some((row) => row.id === arriving)).toBe(false);
+        const view = show(older);
+        settle();
+        act(() => openCorrelationView(arriving));
+        settle();
+        // The view shows its older model's first chain meanwhile, and says nothing was lost.
+        expect(useEvtxCorrelationStore.getState().selectedChainId).toBe(arriving);
+        expect(announcer().textContent).not.toContain(CHAIN_GONE);
+        expect(document.body.textContent).not.toContain("no longer present");
+        view.update(newer);
+        settle();
+        expect(useEvtxCorrelationStore.getState().selectedChainId).toBe(arriving);
+        expect(rows().find((row) => row.getAttribute("aria-selected") === "true")).toHaveAttribute(
+          "data-chain-id",
+          arriving,
+        );
+        expect(announcer().textContent).not.toContain(CHAIN_GONE);
+        expect(document.body.textContent).not.toContain("no longer present");
+      });
+
+      it("makes no loss of an opened id the current model lacks either: nothing was lost, so nothing is said", () => {
+        vi.useFakeTimers();
+        show(mixedData());
+        act(() => openCorrelationView("a-row-no-model-has"));
+        settle();
+        expect(announcer().textContent).not.toContain(CHAIN_GONE);
+        expect(document.body.textContent).not.toContain("no longer present");
+        // The view falls back to its first chain, as it does for any selection it cannot show.
+        expect(rows()[0]).toHaveAttribute("aria-selected", "true");
+      });
+
+      it("still says a loss that happens after the open", () => {
+        vi.useFakeTimers();
+        const data = mixedData();
+        const opened = data.model!.chains[1]!.id;
+        expect(pairData().model!.chains.some((row) => row.id === opened)).toBe(false);
+        const view = show(data);
+        act(() => openCorrelationView(opened));
+        settle();
+        expect(notice()).not.toContain(GONE_VISIBLE);
+        // A later session no longer has the chain the operator opened.
+        view.update(pairData({ builtFor: "session:2" }));
+        settle();
+        expect(notice()).toContain(GONE_VISIBLE);
+        expect(announcer().textContent).toContain(CHAIN_GONE);
+      });
     });
 
     it("is gone when a later session has the chain again", () => {

@@ -406,6 +406,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
   const selectChain = useEvtxCorrelationStore((s) => s.selectChain);
   const unplacedOpen = useEvtxCorrelationStore((s) => s.unplacedOpen);
   const showUnplaced = useEvtxCorrelationStore((s) => s.showUnplaced);
+  const openedCount = useEvtxCorrelationStore((s) => s.openedCount);
   const listRef = useRef<HTMLDivElement>(null);
   const palette = useMemo<Palette>(
     () => ({
@@ -471,6 +472,15 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
     }),
     [listed, showPane, unplacedPresent, chain],
   );
+  // A chain opened from outside (the dock's Open) replaces the selection a loss was about, so the loss
+  // is dropped with it. This runs after the reconcile above in the commit that applies the open: an
+  // opened id this model does not have is not a chain that was lost, and records no loss.
+  const seenOpened = useRef(openedCount);
+  useEffect(() => {
+    if (seenOpened.current === openedCount) return;
+    seenOpened.current = openedCount;
+    setLoss(null);
+  }, [openedCount]);
   // A record that stops being true (the pane is shown, the items are listed again, the chain is back)
   // is dropped, so it cannot come true again later and be said about something that did not happen.
   // A pick of a chain drops it in `pickChain`; a pick of Not placed shows the pane, which drops it here.

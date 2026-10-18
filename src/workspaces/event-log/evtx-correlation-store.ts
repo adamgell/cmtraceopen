@@ -23,8 +23,20 @@ interface EvtxCorrelationSelectionState {
   selectedChainId: string | null;
   /** The "Not placed" pane is the one shown, in place of a chain's detail. */
   unplacedOpen: boolean;
+  /**
+   * How many chains have been opened from outside the view (`openChain`). The view drops the loss
+   * it holds when this changes: a chain the operator has just asked for replaces the selection the
+   * loss was about, and the loss must not be said, or shown, about a selection that is gone.
+   */
+  openedCount: number;
   /** Selects a chain (or none) and leaves the "Not placed" pane. */
   selectChain: (chainId: string | null) => void;
+  /**
+   * Selects a chain on behalf of something outside the view (the dock's Open) and leaves the "Not
+   * placed" pane, like `selectChain`, and counts it in `openedCount`. The view's own reconcile
+   * replaces a selection through `selectChain`, which does not count: that is the loss itself.
+   */
+  openChain: (chainId: string) => void;
   /** Shows the "Not placed" pane. The selected chain is kept, to be there when the pane is left. */
   showUnplaced: () => void;
 }
@@ -32,17 +44,21 @@ interface EvtxCorrelationSelectionState {
 export const useEvtxCorrelationStore = create<EvtxCorrelationSelectionState>()((set) => ({
   selectedChainId: null,
   unplacedOpen: false,
+  openedCount: 0,
   selectChain: (chainId) => set({ selectedChainId: chainId, unplacedOpen: false }),
+  openChain: (chainId) =>
+    set((state) => ({ selectedChainId: chainId, unplacedOpen: false, openedCount: state.openedCount + 1 })),
   showUnplaced: () => set({ unplacedOpen: true }),
 }));
 
 /**
- * Switches to the Correlation view, preselecting `chainId` when one is given. A call without one
- * (the rail card's "Open correlation view") leaves the current selection alone.
+ * Switches to the Correlation view, preselecting `chainId` when one is given (through `openChain`,
+ * so a loss the view holds is dropped). A call without one (the rail card's "Open correlation
+ * view") leaves the current selection alone.
  */
 export function openCorrelationView(chainId?: string | null): void {
   if (chainId !== undefined && chainId !== null) {
-    useEvtxCorrelationStore.getState().selectChain(chainId);
+    useEvtxCorrelationStore.getState().openChain(chainId);
   }
   useEvtxLayoutStore.getState().setActiveView("correlation");
 }
