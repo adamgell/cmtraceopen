@@ -152,7 +152,12 @@ export function panWindow(window: TimeWindow, domain: TimeWindow, deltaMs: numbe
   );
 }
 
-/** One edge moved to `toMs`: inside the domain, and never closer to the other edge than the minimum. */
+/**
+ * One edge moved to `toMs`: inside the domain, and never closer to the other edge than the minimum.
+ * The result is made legal for the domain as a whole, not only at the edge that moved: the other
+ * edge belongs to a window that was legal when the gesture began, and a live rebuild can have
+ * changed the domain since, so it is moved in with the width kept (`clampWindow`).
+ */
 export function resizeEdge(
   window: TimeWindow,
   domain: TimeWindow,
@@ -162,10 +167,10 @@ export function resizeEdge(
   const minimum = Math.min(CORRELATION_MIN_WINDOW_MS, domain.endMs - domain.startMs);
   if (edge === "start") {
     const start = Math.min(window.endMs - minimum, Math.max(domain.startMs, toMs));
-    return { startMs: Math.max(domain.startMs, start), endMs: window.endMs };
+    return clampWindow({ startMs: Math.max(domain.startMs, start), endMs: window.endMs }, domain);
   }
   const end = Math.max(window.startMs + minimum, Math.min(domain.endMs, toMs));
-  return { startMs: window.startMs, endMs: Math.min(domain.endMs, end) };
+  return clampWindow({ startMs: window.startMs, endMs: Math.min(domain.endMs, end) }, domain);
 }
 
 /** What a pointer press on the band took hold of, and where the band was then. */

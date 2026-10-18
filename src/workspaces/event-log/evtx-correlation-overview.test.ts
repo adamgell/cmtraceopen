@@ -169,6 +169,18 @@ describe("the band's geometry", () => {
     expect(resizeEdge(win(100, 200), domain, "end", T0 + 9_999 * S)).toEqual(win(100, 1_000));
   });
 
+  it("makes the whole window legal, not only the edge that moved, when the domain changed under it", () => {
+    // A gesture began with a window inside the old domain; a live rebuild moved the domain.
+    const moved = win(500, 600);
+    const next = resizeEdge(win(100, 700), moved, "start", T0 + 550 * S);
+    expect(next.startMs).toBeGreaterThanOrEqual(moved.startMs);
+    expect(next.endMs).toBeLessThanOrEqual(moved.endMs);
+    expect(next.endMs - next.startMs).toBeGreaterThanOrEqual(CORRELATION_MIN_WINDOW_MS);
+    const farOff = resizeEdge(win(900, 1_000), win(0, 300), "end", T0 + 950 * S);
+    expect(farOff.startMs).toBeGreaterThanOrEqual(T0);
+    expect(farOff.endMs).toBeLessThanOrEqual(T0 + 300 * S);
+  });
+
   it("leaves the other edge where it is", () => {
     expect(resizeEdge(win(100, 200), domain, "start", T0 + 120 * S).endMs).toBe(T0 + 200 * S);
     expect(resizeEdge(win(100, 200), domain, "end", T0 + 220 * S).startMs).toBe(T0 + 100 * S);
@@ -184,6 +196,19 @@ describe("a pointer gesture is measured from the press", () => {
     expect(dragBand(drag, T0 + 250 * S, domain)).toEqual(win(200, 300));
     expect(dragBand(drag, T0 + 150 * S, domain)).toEqual(origin);
     expect(dragBand(drag, T0 + 9_000 * S, domain)).toEqual(win(900, 1_000));
+  });
+
+  it("stays inside a domain that changed mid-gesture, whatever the origin and the pointer say", () => {
+    const changed = win(0, 300);
+    for (const part of ["body", "start", "end"] as const) {
+      const drag = { part, origin: win(800, 900), grabMs: T0 + 850 * S };
+      for (const pointer of [100, 850, 5_000]) {
+        const next = dragBand(drag, T0 + pointer * S, changed);
+        expect(next.startMs, `${part} ${pointer}`).toBeGreaterThanOrEqual(changed.startMs);
+        expect(next.endMs, `${part} ${pointer}`).toBeLessThanOrEqual(changed.endMs);
+        expect(next.endMs - next.startMs, `${part} ${pointer}`).toBeGreaterThanOrEqual(CORRELATION_MIN_WINDOW_MS);
+      }
+    }
   });
 
   it("resizes the pressed edge by that distance, without jumping to the pointer", () => {

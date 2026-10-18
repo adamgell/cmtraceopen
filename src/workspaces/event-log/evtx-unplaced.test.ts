@@ -295,20 +295,27 @@ describe("the Insights card's line (8.13 item 6)", () => {
 describe("Open in Log Viewer (R4)", () => {
   const file = "C:\\Logs\\ccm1.log";
   const other = "C:\\Logs\\other.log";
-  const entries = [
-    { filePath: file, lineNumber: 7 },
-    { filePath: file, lineNumber: 8 },
-  ];
-  const bothFiles = [...entries, { filePath: other, lineNumber: 7 }];
+  /** A Log Viewer entry. The lines an unplaced row names are untimed (timestamp null). */
+  const entry = (filePath: string, lineNumber: number, timestamp: number | null = null) => ({
+    filePath,
+    lineNumber,
+    timestamp,
+  });
+  const entries = [entry(file, 7), entry(file, 8)];
+  const bothFiles = [...entries, entry(other, 7)];
   /** The Log Viewer as the log store holds it: its open file, its mode and its entries. */
   const viewer = (
     openFilePath: string | null,
     mode: SourceOpenMode = "single-file",
     loaded = entries,
-  ) => logViewerLines(openFilePath, mode, loaded);
+    wanted: ReadonlySet<number> | null = null,
+  ) => logViewerLines(openFilePath, mode, loaded, wanted);
+  /** Availability while the correlation data is current, unless a test says it is updating. */
+  const check = (v: ReturnType<typeof viewer>, f: string, line: number, updating = false) =>
+    openAtLineAvailability(v, f, line, updating);
 
-  it("is enabled only for a single file, open, holding that exact line", () => {
-    expect(openAtLineAvailability(viewer(file), file, 7)).toEqual({
+  it("is enabled only for a single file, open, holding that exact untimed line", () => {
+    expect(check(viewer(file), file, 7)).toEqual({
       enabled: true,
       reason: null,
       name: "Open ccm1.log in the Log Viewer near line 7",
@@ -319,7 +326,7 @@ describe("Open in Log Viewer (R4)", () => {
   // file is the line's file and holds the exact line, which is what the file and line rules alone
   // would accept; the mode is what refuses.
   it("is disabled in a merged view with every file shown", () => {
-    const result = openAtLineAvailability(viewer(file, "merged", bothFiles), file, 7);
+    const result = check(viewer(file, "merged", bothFiles), file, 7);
     expect(result.enabled).toBe(false);
     expect(result.reason).toBe(
       "The Log Viewer is showing a merged view of several files, which does not keep each file's lines in order.",
@@ -332,13 +339,13 @@ describe("Open in Log Viewer (R4)", () => {
     // 7 or more, which is not line 7.
     const hidden = viewer(file, "merged", entries);
     expect(hidden.lines.has(7)).toBe(true);
-    const result = openAtLineAvailability(hidden, file, 7);
+    const result = check(hidden, file, 7);
     expect(result.enabled).toBe(false);
     expect(result.reason).toContain("merged view");
   });
 
   it("is disabled in diff mode, where the diff is mounted instead of the list that consumes the target", () => {
-    const result = openAtLineAvailability(viewer(file, "diff"), file, 7);
+    const result = check(viewer(file, "diff"), file, 7);
     expect(result.enabled).toBe(false);
     expect(result.reason).toBe(
       "The Log Viewer is showing a comparison, not the file, so it cannot open this line there.",
@@ -347,7 +354,7 @@ describe("Open in Log Viewer (R4)", () => {
 
   it("is disabled in an aggregate folder, with or without an open file", () => {
     for (const open of [null, file]) {
-      const result = openAtLineAvailability(viewer(open, "aggregate-folder", bothFiles), file, 7);
+      const result = check(viewer(open, "aggregate-folder", bothFiles), file, 7);
       expect(result.enabled, String(open)).toBe(false);
       expect(result.reason).toBe(
         "The Log Viewer is showing a folder of files, so it cannot open one line of one file there.",
@@ -356,7 +363,7 @@ describe("Open in Log Viewer (R4)", () => {
   });
 
   it("is disabled with no mode, as after a diff is closed, whatever the open file and entries say", () => {
-    const result = openAtLineAvailability(viewer(file, null), file, 7);
+    const result = check(viewer(file, null), file, 7);
     expect(result.enabled).toBe(false);
     expect(result.reason).toBe("The Log Viewer has no single file open, so this line cannot be opened there.");
   });
@@ -364,18 +371,18 @@ describe("Open in Log Viewer (R4)", () => {
   // The aggregate firewall tail (#967) writes a file's rows into its "single-file" snapshot in the
   // aggregate's timestamp order, untimed rows last, and the sidebar restores it as the open file.
   const firewallOrder = [
-    { filePath: file, lineNumber: 1 },
-    { filePath: file, lineNumber: 2 },
-    { filePath: file, lineNumber: 4 },
-    { filePath: file, lineNumber: 5 },
-    { filePath: file, lineNumber: 3 },
+    entry(file, 1, 100),
+    entry(file, 2, 200),
+    entry(file, 4, 300),
+    entry(file, 5, 400),
+    entry(file, 3),
   ];
 
   it("is disabled in single-file mode when the entries are out of line order, the untimed row last, though the line is loaded", () => {
     const restored = viewer(file, "single-file", firewallOrder);
     expect(restored.lines.has(3)).toBe(true);
     expect(restored.inLineOrder).toBe(false);
-    const result = openAtLineAvailability(restored, file, 3);
+    const result = check(restored, file, 3);
     expect(result.enabled).toBe(false);
     expect(result.reason).toBe(
       "The Log Viewer is not showing this file in its own line order, so it cannot open this line at its place.",
@@ -385,43 +392,84 @@ describe("Open in Log Viewer (R4)", () => {
   it("is enabled in single-file mode when several entries share a line number, as a parser may emit", () => {
     // "Never decreases", not "strictly increases": equal numbers in a row do not move the find.
     const repeated = [
-      { filePath: file, lineNumber: 1 },
-      { filePath: file, lineNumber: 2 },
-      { filePath: file, lineNumber: 2 },
-      { filePath: file, lineNumber: 3 },
-      { filePath: file, lineNumber: 7 },
-      { filePath: file, lineNumber: 7 },
+      entry(file, 1, 10),
+      entry(file, 2, 20),
+      entry(file, 2, 21),
+      entry(file, 3, 30),
+      entry(file, 7),
+      entry(file, 7),
     ];
-    const result = openAtLineAvailability(viewer(file, "single-file", repeated), file, 7);
     expect(viewer(file, "single-file", repeated).inLineOrder).toBe(true);
-    expect(result.enabled).toBe(true);
+    expect(check(viewer(file, "single-file", repeated), file, 7).enabled).toBe(true);
   });
 
   it("refuses the hidden-merged state on the order alone, whatever the mode says", () => {
-    // Mode lied about as single-file: the entries are the open file's lines in timestamp order.
-    const result = openAtLineAvailability(viewer(file, "single-file", firewallOrder), file, 5);
-    expect(result.enabled).toBe(false);
+    expect(check(viewer(file, "single-file", firewallOrder), file, 3).enabled).toBe(false);
   });
 
   it("counts an empty list and one entry as in order", () => {
     expect(viewer(file, "single-file", []).inLineOrder).toBe(true);
-    expect(viewer(file, "single-file", [{ filePath: file, lineNumber: 9 }]).inLineOrder).toBe(true);
+    expect(viewer(file, "single-file", [entry(file, 9)]).inLineOrder).toBe(true);
+  });
+
+  // The list on show can be older than the entries (fv2): after a rotation or a reload of the same
+  // path, line n is a different record. An unplaced row names an UNTIMED entry, so a timed one at
+  // that number proves the row stale.
+  it("is disabled when the loaded line n is timed now, as after a rotation, though everything else matches", () => {
+    const rotated = [entry(file, 6, 60), entry(file, 7, 70), entry(file, 8, 80)];
+    const v = viewer(file, "single-file", rotated);
+    expect(v.inLineOrder).toBe(true);
+    expect(v.lines.has(7)).toBe(true);
+    const result = check(v, file, 7);
+    expect(result.enabled).toBe(false);
+    expect(result.reason).toBe(
+      "Line 7 of this file now has a timestamp in the Log Viewer, so the list of lines without one is out of date.",
+    );
+  });
+
+  it("is disabled when line n has a timed entry beside an untimed one", () => {
+    const both = [entry(file, 7, 70), entry(file, 7)];
+    expect(check(viewer(file, "single-file", both), file, 7).enabled).toBe(false);
+  });
+
+  it("is enabled for an untimed line among timed ones", () => {
+    const mixed = [entry(file, 5, 50), entry(file, 6, 60), entry(file, 7), entry(file, 8, 80)];
+    expect(check(viewer(file, "single-file", mixed), file, 7).enabled).toBe(true);
+  });
+
+  it("is disabled while the correlation data is updating, however the Log Viewer looks", () => {
+    const result = check(viewer(file), file, 7, true);
+    expect(result.enabled).toBe(false);
+    expect(result.reason).toBe(
+      "The correlation is being updated, so this list may belong to an earlier session. Try again when it has finished.",
+    );
+  });
+
+  it("narrows its line sets to the lines the list names, and still judges order from every entry", () => {
+    const many = Array.from({ length: 500 }, (_, i) => entry(file, i + 1, i % 50 === 0 ? null : 1000 + i));
+    const narrow = viewer(file, "single-file", many, new Set([1, 51, 500]));
+    expect([...narrow.lines].sort((a, b) => a - b)).toEqual([1, 51, 500]);
+    expect([...narrow.untimed].sort((a, b) => a - b)).toEqual([1, 51]);
+    expect([...narrow.timed]).toEqual([500]);
+    expect(narrow.inLineOrder).toBe(true);
+    const decreasing = viewer(file, "single-file", [entry(file, 9), entry(file, 2)], new Set([9]));
+    expect(decreasing.inLineOrder).toBe(false);
   });
 
   it("is disabled, with its reason, when a single file is meant but none is open", () => {
-    const result = openAtLineAvailability(viewer(null), file, 7);
+    const result = check(viewer(null), file, 7);
     expect(result.enabled).toBe(false);
     expect(result.reason).toBe("The Log Viewer has no single file open, so this line cannot be opened there.");
   });
 
   it("is disabled when a different file is open, naming the file to open first", () => {
-    const result = openAtLineAvailability(viewer(other, "single-file", bothFiles), file, 7);
+    const result = check(viewer(other, "single-file", bothFiles), file, 7);
     expect(result.enabled).toBe(false);
     expect(result.reason).toBe("The Log Viewer has a different file open. Open ccm1.log there first.");
   });
 
   it("is disabled when the open file does not hold that line, even if another file does", () => {
-    const result = openAtLineAvailability(viewer(file), file, 99);
+    const result = check(viewer(file), file, 99);
     expect(result.enabled).toBe(false);
     expect(result.reason).toBe("Line 99 is not among the lines the Log Viewer has loaded.");
     expect(logViewerLines(other, "single-file", bothFiles).lines.has(7)).toBe(true);
@@ -429,17 +477,18 @@ describe("Open in Log Viewer (R4)", () => {
   });
 
   it("is disabled when the open file's lines were not loaded", () => {
-    expect(openAtLineAvailability(viewer(file, "single-file", []), file, 7).enabled).toBe(false);
+    expect(check(viewer(file, "single-file", []), file, 7).enabled).toBe(false);
   });
 
   it("compares the path exactly, with no case or slash folding", () => {
-    expect(openAtLineAvailability(viewer("c:\\logs\\ccm1.log"), file, 7).enabled).toBe(false);
+    expect(check(viewer("c:\\logs\\ccm1.log"), file, 7).enabled).toBe(false);
   });
 
   it("always names the button 'near line n', enabled or not", () => {
     for (const mode of ["single-file", "merged", "diff", "aggregate-folder", null] as const) {
-      expect(openAtLineAvailability(viewer(file, mode), file, 7).name, String(mode)).toContain("near line 7");
+      expect(check(viewer(file, mode), file, 7).name, String(mode)).toContain("near line 7");
     }
+    expect(check(viewer(file), file, 7, true).name).toContain("near line 7");
   });
 });
 
