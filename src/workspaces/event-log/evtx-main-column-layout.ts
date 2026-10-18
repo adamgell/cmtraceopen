@@ -8,7 +8,9 @@
  * claiming their heights, the grid took whatever was left, and that was 52 px at a 900 px window
  * with the dock open and 0 px at 700 (62 px with the dock closed). The rules below stop that:
  *
- * - The Table view keeps `TABLE_GRID_FLOOR_ROWS` grid rows, in every layout.
+ * - Every view keeps a floor (`viewMinHeightPx`), in every layout: the Table its strip and
+ *   `TABLE_GRID_FLOOR_ROWS` grid rows, the Correlation view the height its chain list and its detail
+ *   header need, and the placeholder views one generic minimum.
  * - Secondary panels give way first. The dock is a shrinkable flex item whose floor is its header
  *   plus one lane (`DOCK_MIN_HEIGHT_PX`), so its rendered height is the height the user chose,
  *   clamped to what is left once the view has its floor. The chosen height is never rewritten by
@@ -20,9 +22,10 @@
  * Kept apart from the workspace so the numbers are tested without a layout engine, and so the
  * workspace, which is over 300 lines, only reads them.
  */
-import { MAX_LOG_LIST_FONT_SIZE } from "../../lib/log-accessibility";
+import { MAX_LOG_LIST_FONT_SIZE, getLogListMetrics } from "../../lib/log-accessibility";
 import { correlationSizes } from "./evtx-correlation-sizes";
 import type { EvtxColumnId } from "./evtx-columns";
+import type { EvtxViewId } from "./evtx-layout-store";
 import { UNIFIED_TIMELINE_STRIP_HEIGHT_PX } from "./evtx-timeline-strip";
 
 /** The grid rows the Table view keeps, whatever else is open. */
@@ -74,6 +77,69 @@ export function tableGridFloorPx(gridRowPx: number): number {
 /** The least height the Table view keeps: the strip, then the grid's floor. */
 export function tableViewMinHeightPx(gridRowPx: number, windowHeight: number): number {
   return timelineStripHeightPx(windowHeight) + tableGridFloorPx(gridRowPx);
+}
+
+/**
+ * One line of text as the lists draw it: the log list's own rule, 1.5 times the size and never
+ * under 20 px (`getLogListMetrics`' row line height).
+ */
+function lineHeightPx(textPx: number): number {
+  return Math.max(20, Math.round(textPx * 1.5));
+}
+
+/** The caption above a list: 10 px above and 6 px below one line of label text. */
+function listHeaderPx(logListFontSize: number): number {
+  return 16 + lineHeightPx(correlationSizes(logListFontSize).label);
+}
+
+/** The chain rows the Correlation view keeps in sight, whatever else is open. */
+export const CORRELATION_LIST_FLOOR_ROWS = 3;
+
+/** The rows a placeholder view keeps in sight: the generic minimum of a view. */
+export const GENERIC_VIEW_FLOOR_ROWS = 3;
+
+/**
+ * The least height the Correlation view keeps, its minimum usable height: the chain list's header
+ * and three chain rows, or the detail column's header (its top padding, the title, the key and span
+ * line and the legend) with its bottom padding, whichever is larger. A chain row is 8 px of padding
+ * on both sides, three lines (the badge, the title at f - 1 and the span) 3 px apart, and its 1 px
+ * border.
+ */
+export function correlationViewMinHeightPx(logListFontSize: number): number {
+  const sizes = correlationSizes(logListFontSize);
+  const chainRow = 8 * 2 + 3 * 2 + 1 + 3 * lineHeightPx(sizes.f - 1);
+  const list = listHeaderPx(logListFontSize) + CORRELATION_LIST_FLOOR_ROWS * chainRow;
+  const detailHeader =
+    10 + lineHeightPx(sizes.f + 1) + 4 + lineHeightPx(sizes.lane) + 4 + lineHeightPx(sizes.lane) + 10;
+  return Math.max(list, detailHeader);
+}
+
+/**
+ * The generic minimum of a view that has no layout of its own to size from (the placeholder views):
+ * a list header and `GENERIC_VIEW_FLOOR_ROWS` list rows.
+ */
+export function genericViewMinHeightPx(logListFontSize: number): number {
+  return (
+    listHeaderPx(logListFontSize) +
+    GENERIC_VIEW_FLOOR_ROWS * listRowPx(getLogListMetrics(logListFontSize).rowHeight)
+  );
+}
+
+/** The least height the active view keeps, for any view: the one place a view's floor is decided. */
+export function viewMinHeightPx(input: {
+  view: EvtxViewId;
+  gridRowPx: number;
+  windowHeight: number;
+  logListFontSize: number;
+}): number {
+  switch (input.view) {
+    case "table":
+      return tableViewMinHeightPx(input.gridRowPx, input.windowHeight);
+    case "correlation":
+      return correlationViewMinHeightPx(input.logListFontSize);
+    default:
+      return genericViewMinHeightPx(input.logListFontSize);
+  }
 }
 
 /** The dock's header: 6 px of padding above and below a 24 px control. */

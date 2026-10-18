@@ -210,11 +210,19 @@ describe("EventLogWorkspace three-column shell", () => {
       expect(panel()).toHaveStyle({ minHeight: `${240 + 5 * gridRowPx()}px` });
     });
 
-    it("holds no floor for a view that is not the Table", () => {
+    it("holds a floor for every view, not only the Table", () => {
       Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
       render(<EventLogWorkspace />);
-      act(() => useEvtxLayoutStore.getState().setActiveView("charts"));
-      expect(panel()).toHaveStyle({ minHeight: "0px" });
+      // The Correlation view keeps its chain list header and three rows (36 + 3 * 83 px at the
+      // default font); the placeholder views share one generic minimum (a header and three rows).
+      act(() => useEvtxLayoutStore.getState().setActiveView("correlation"));
+      expect(panel()).toHaveStyle({ minHeight: "285px" });
+      for (const view of ["grouped", "timeline", "charts"] as const) {
+        act(() => useEvtxLayoutStore.getState().setActiveView(view));
+        expect(panel()).toHaveStyle({ minHeight: "111px" });
+      }
+      act(() => useEvtxLayoutStore.getState().setActiveView("table"));
+      expect(panel()).toHaveStyle({ minHeight: `${320 + 5 * gridRowPx()}px` });
     });
 
     it("scrolls the main column instead of clipping it", () => {

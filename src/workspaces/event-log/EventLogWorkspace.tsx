@@ -34,8 +34,8 @@ import {
   dockHandleBounds,
   gridRecordRowPx,
   tableGridFloorPx,
-  tableViewMinHeightPx,
   timelineStripHeightPx,
+  viewMinHeightPx,
 } from "./evtx-main-column-layout";
 import { EvtxInsightsRail } from "./EvtxInsightsRail";
 import { EvtxViewBar } from "./EvtxViewBar";
@@ -165,9 +165,10 @@ function useDockMeasure(
  * The tabpanel the Layout tablist controls. Each view renders inside its own Suspense boundary, so
  * a lazily loaded view shows a fallback here while the tablist and the other regions stay mounted.
  *
- * `minHeightPx` is the least height the active view keeps (the Table's strip and grid floor). The
- * panel is a flex item of the main column, and a flex item that is only `flex: 1` shrinks to
- * nothing; with a floor it holds, and the column scrolls instead (evtx-main-column-layout.ts).
+ * `minHeightPx` is the least height the active view keeps (`viewMinHeightPx`: the Table's strip and
+ * grid floor, the Correlation view's list and detail header, or the generic minimum). The panel is
+ * a flex item of the main column, and a flex item that is only `flex: 1` shrinks to nothing; with
+ * a floor it holds, and the column scrolls instead (evtx-main-column-layout.ts).
  */
 export function EvtxViewHost({
   views,
@@ -454,7 +455,12 @@ export function EventLogWorkspace() {
   const gridRowPx = gridRecordRowPx(getLogListMetrics(logListFontSize).rowHeight, columnOrder);
   const tableGridFloor = tableGridFloorPx(gridRowPx);
   const dockMin = DOCK_MIN_HEIGHT_PX;
-  const viewMin = activeView === "table" ? tableViewMinHeightPx(gridRowPx, viewportHeight) : 0;
+  const viewMin = viewMinHeightPx({
+    view: activeView,
+    gridRowPx,
+    windowHeight: viewportHeight,
+    logListFontSize,
+  });
   // The dock's resize handle speaks for the dock as rendered: its measured height, and what the
   // column leaves it after the active view's floor, never above the store's maximum.
   const [dockSlot, setDockSlot] = useState<HTMLElement | null>(null);

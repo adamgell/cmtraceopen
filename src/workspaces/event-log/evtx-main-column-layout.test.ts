@@ -3,11 +3,14 @@ import { MIN_DOCK_HEIGHT } from "./evtx-layout-store";
 import {
   DOCK_MIN_HEIGHT_PX,
   TABLE_GRID_FLOOR_ROWS,
+  correlationViewMinHeightPx,
   dockHandleBounds,
+  genericViewMinHeightPx,
   listRowPx,
   tableGridFloorPx,
   tableViewMinHeightPx,
   timelineStripHeightPx,
+  viewMinHeightPx,
 } from "./evtx-main-column-layout";
 
 describe("the floors of the main column", () => {
@@ -44,6 +47,38 @@ describe("the floors of the main column", () => {
     // The stored height, the rendered minimum and the handle's range start at the same number, so a
     // handle at its minimum is at the least the dock can be set to.
     expect(MIN_DOCK_HEIGHT).toBe(DOCK_MIN_HEIGHT_PX);
+  });
+});
+
+describe("the floor of every view", () => {
+  it("keeps the Correlation view's chain list header and three chain rows in sight", () => {
+    // At the default font: a 36 px header, and three 83 px rows (16 px of padding, 6 px of gaps, a
+    // 1 px border and three 20 px lines); the detail header and legend need only 88 px.
+    expect(correlationViewMinHeightPx(13)).toBe(36 + 3 * 83);
+  });
+
+  it("raises the Correlation floor with the font, because its lines do", () => {
+    // Text over 13 px outgrows the 20 px minimum line: 26 px for the header, 29 for a row's title.
+    expect(correlationViewMinHeightPx(20)).toBe(16 + 26 + 3 * (23 + 3 * 29));
+    expect(correlationViewMinHeightPx(20)).toBeGreaterThan(correlationViewMinHeightPx(13));
+  });
+
+  it("gives the placeholder views one generic minimum: a header and three list rows", () => {
+    expect(genericViewMinHeightPx(13)).toBe(36 + 3 * 25);
+    expect(genericViewMinHeightPx(20)).toBeGreaterThan(genericViewMinHeightPx(13));
+  });
+
+  it("decides every view's floor in one place", () => {
+    const base = { gridRowPx: 29, windowHeight: 900, logListFontSize: 13 };
+    expect(viewMinHeightPx({ ...base, view: "table" })).toBe(320 + 145);
+    expect(viewMinHeightPx({ ...base, view: "correlation" })).toBe(285);
+    for (const view of ["grouped", "timeline", "charts"] as const) {
+      expect(viewMinHeightPx({ ...base, view })).toBe(111);
+    }
+    // None of them is 0: no view can be squeezed away by the dock.
+    for (const view of ["table", "grouped", "timeline", "charts", "correlation"] as const) {
+      expect(viewMinHeightPx({ ...base, view })).toBeGreaterThan(0);
+    }
   });
 });
 
