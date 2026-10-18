@@ -1429,7 +1429,8 @@ describe("comparing loaded files with their previous period", () => {
     expect(settled()).toEqual({
       status: "unavailable",
       reason: "priorPeriodNotSpanned",
-      detail: "The loaded files do not cover the previous period.",
+      detail:
+        "The loaded files do not cover the previous period. System.evtx (System) does not span it. No other selected channel has entries to compare.",
     });
     expect(invoke).not.toHaveBeenCalled();
   });

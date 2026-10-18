@@ -363,7 +363,10 @@ export interface ComparisonResult {
    * channel that was read in full and held no events is present with a count of 0.
    */
   unreadChannels: string[];
-  /** The channels compared, in order: those selected and loaded (live) or with a capture (files). */
+  /**
+   * The channels compared, in order: those selected and loaded (live), or those whose captures hold
+   * Windows events (files). A text log is a capture but no channel, so it is never listed here.
+   */
   comparedChannels: string[];
   /**
    * Compared channels with a hole somewhere in what was read, in either period, or an event that
@@ -390,7 +393,7 @@ export type ComparisonOutcome =
 
 const FILES_NOT_COVERED = "The loaded files do not cover the previous period.";
 
-/** One loaded capture: the events of one channel from one source, and the span they cover. */
+/** One loaded capture: the entries of one channel from one source, and the span they cover. */
 export interface FilesCapture {
   source: string;
   channel: string;
@@ -458,31 +461,92 @@ export function checkFilesCoverage(
     return {
       covered: false,
       reason: "noTimedRecords",
-      detail: "No events are loaded for the selected channels.",
+      detail: "No entries are loaded for the selected channels.",
     };
   }
+  // The first capture that fails decides the reason; every capture that fails for that same reason
+  // is named, so the operator sees all that must go, not the first of them.
+  let reason: "noTimedRecords" | "priorPeriodNotSpanned" | null = null;
+  const failing: FilesCapture[] = [];
   for (const capture of captures.values()) {
-    if (capture.earliestMs === Number.POSITIVE_INFINITY) {
-      return {
-        covered: false,
-        reason: "noTimedRecords",
-        detail: "A loaded capture has no event with a usable timestamp.",
-      };
-    }
-    if (capture.earliestMs > prior.fromMs || capture.latestMs < prior.toMs) {
-      return { covered: false, reason: "priorPeriodNotSpanned", detail: FILES_NOT_COVERED };
-    }
+    const failure =
+      capture.earliestMs === Number.POSITIVE_INFINITY
+        ? "noTimedRecords"
+        : capture.earliestMs > prior.fromMs || capture.latestMs < prior.toMs
+          ? "priorPeriodNotSpanned"
+          : null;
+    if (failure === null) continue;
+    reason ??= failure;
+    if (failure === reason) failing.push(capture);
+  }
+  if (reason !== null) {
+    return { covered: false, reason, detail: refusalDetail(reason, failing, [...captures.values()]) };
   }
   return { covered: true, captures: [...captures.values()] };
+}
+
+/** A capture as a refusal names it: its file and channel, or just its name for a text log. */
+function captureName(capture: Pick<FilesCapture, "source" | "channel">): string {
+  return capture.source === capture.channel ? capture.source : `${capture.source} (${capture.channel})`;
+}
+
+/** What a capture holds, for the lines that count it: events, or the lines of a text log. */
+function entryNoun(capture: Pick<FilesCapture, "holdsEvents">, number: "one" | "many"): string {
+  if (capture.holdsEvents) return number === "one" ? "event" : "events";
+  return number === "one" ? "log line" : "log lines";
+}
+
+/** The most captures one refusal names; the rest are counted. */
+const MAX_NAMED_CAPTURES = 5;
+
+function nameCaptures(captures: readonly FilesCapture[]): string {
+  const names = captures.slice(0, MAX_NAMED_CAPTURES).map(captureName);
+  const rest = captures.length - MAX_NAMED_CAPTURES;
+  return rest > 0 ? `${names.join(", ")}, and ${rest} more` : names.join(", ");
+}
+
+/**
+ * Why loaded files cannot be compared, naming the captures the refusal is about and the one action
+ * that exists: deselecting a channel leaves its captures out (the selection is by channel, so a
+ * channel's other sources go with them). It promises a comparison of the other channels only when
+ * another selected channel has a capture, and says plainly when none would remain.
+ */
+function refusalDetail(
+  reason: "noTimedRecords" | "priorPeriodNotSpanned",
+  failing: readonly FilesCapture[],
+  all: readonly FilesCapture[]
+): string {
+  const [first] = failing;
+  const single = failing.length === 1;
+  const named = nameCaptures(failing);
+  const what =
+    reason === "noTimedRecords"
+      ? single
+        ? `${named} has no ${entryNoun(first, "one")} with a usable timestamp, so it cannot show whether it covers the previous period.`
+        : `These loaded captures have no entry with a usable timestamp, so they cannot show whether they cover the previous period: ${named}.`
+      : single
+        ? `${FILES_NOT_COVERED} ${named} does not span it.`
+        : `${FILES_NOT_COVERED} These do not span it: ${named}.`;
+
+  const leaving = [...new Set(failing.map((capture) => capture.channel))];
+  const remaining = all.some((capture) => !leaving.includes(capture.channel));
+  const advice = remaining
+    ? `Deselect ${leaving.join(", ")} to compare the other channels.`
+    : "No other selected channel has entries to compare.";
+  return `${what} ${advice}`;
 }
 
 function plural(count: number, singular: string, pluralForm: string): string {
   return count === 1 ? singular : pluralForm;
 }
 
+/**
+ * Files count events and text-log lines together, as the totals and the levels do, so they are
+ * entries; a live source reads no text log, so what it could not place are events.
+ */
 function unplacedGap(count: number, scope: "files" | "live"): string {
   return scope === "files"
-    ? `${count} loaded ${plural(count, "event has", "events have")} no usable timestamp and could not be placed in either period.`
+    ? `${count} loaded ${plural(count, "entry has", "entries have")} no usable timestamp and could not be placed in either period.`
     : `${count} ${plural(count, "event has", "events have")} no usable timestamp and could not be placed in the previous period.`;
 }
 
@@ -730,7 +794,7 @@ export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutco
     ...limitGapLines(
       shortCaptures.map(
         (capture) =>
-          `${capture.source} (${capture.channel}) has no events after ${isoOrUnknown(capture.latestMs)}, so the last ${formatSpan(prior.anchorEpoch - capture.latestMs)} of the current period is not covered.`
+          `${captureName(capture)} has no ${entryNoun(capture, "many")} after ${isoOrUnknown(capture.latestMs)}, so the last ${formatSpan(prior.anchorEpoch - capture.latestMs)} of the current period is not covered.`
       )
     )
   );
