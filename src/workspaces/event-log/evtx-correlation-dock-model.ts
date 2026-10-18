@@ -32,10 +32,10 @@ import {
   type CorrelationChain,
 } from "./evtx-correlation-chains";
 import {
-  AMBIGUOUS_EVENT_NOTE,
   DOCK_SCOPE_NOTE,
   LINKS_LOADING_TEXT,
   NOT_IN_TIMELINE_NOTE,
+  NOT_READ_NOTE,
   STRENGTH_LABELS,
   UNREAD_SOURCES_NOTE,
   coverageGapNotice,
@@ -49,13 +49,21 @@ import {
   scopeDisclosure,
   sourcesText,
   windowNotice,
+  ambiguousEventNote,
+  unmatchableNote,
   type NearbyReason,
   type OpenDisabled,
 } from "./evtx-correlation-copy";
 import { UNKNOWN_CORRELATION_GAPS } from "./evtx-correlation-gaps";
-import { itemsByOriginId, resolveOriginRecords } from "./evtx-correlation-origin-index";
+import {
+  isUnmatchableEvent,
+  itemsByOriginId,
+  logOriginNamesRecord,
+  resolveOriginRecords,
+} from "./evtx-correlation-origin-index";
 import {
   IN_ANOTHER_CHAIN_LABEL,
+  LINK_TO_EVENT_UNKNOWN_LABEL,
   NOT_LINKED_LABEL,
   buildChainPlot,
   describeLanes,
@@ -131,10 +139,24 @@ export interface DockRow {
   otherRows: number;
 }
 
+/**
+ * Which entry of the window is the selected event, decided in this order (an untimed record never
+ * reaches here: it is `DockModel`'s "untimed"):
+ * - `unmatchable`: an event record with no usable record identity, which the join can never name.
+ *   Decided from the record alone, before any entry is looked at. No entry is drawn as context,
+ *   since any of them could be the event itself (an origin input ordinal, #957, is the way out);
+ * - `found`: exactly one entry names the record;
+ * - `ambiguous`: several do. They are left out of the context and counted;
+ * - `notInTimeline`: none does, in a window that was read WHOLE, for a record the join could match;
+ * - `notRead`: none does in what was read, and the read stopped early: the event may be in the part
+ *   that was not read, so nothing is said about whether it is in the timeline.
+ */
 export type DockSelected =
   | { status: "found"; originId: string }
+  | { status: "ambiguous"; candidates: number }
+  | { status: "unmatchable" }
   | { status: "notInTimeline" }
-  | { status: "ambiguous" };
+  | { status: "notRead" };
 
 /** What activating a marker can do: select its record, or nothing, and why. */
 export type MarkerSelectability = "event" | "log" | "selected" | "ambiguous" | "notLoaded";
@@ -204,16 +226,24 @@ function isLinking(strength: CorrelationChain["strength"]): boolean {
 function reasonOfLabel(label: string | null): NearbyReason {
   if (label === NOT_LINKED_LABEL) return "notLinked";
   if (label === IN_ANOTHER_CHAIN_LABEL) return "inAnotherChain";
+  if (label === LINK_TO_EVENT_UNKNOWN_LABEL) return "linkUnknownToEvent";
   return "noLoadedLink";
 }
 
 /**
- * The origin ids of the window's event items that name `record`, found with the origin join's own
- * matchers against an index of that one record. Never a rebuilt stable id.
+ * The origin ids of the window's items that name `record`, found with the origin join's own
+ * matchers: an event record against an index of that one record, an archive text row (`originKind`
+ * "log") with the strict log matcher. Never a rebuilt stable id.
  */
 function originsNaming(record: EvtxRecord, items: readonly TimelineItem[]): Set<string> {
-  const index = buildEvidenceIndex([record]);
   const found = new Set<string>();
+  if (record.originKind === "log") {
+    for (const item of items) {
+      if (logOriginNamesRecord(item.origin, record)) found.add(timelineOriginId(item.origin));
+    }
+    return found;
+  }
+  const index = buildEvidenceIndex([record]);
   for (const item of items) {
     if (item.origin.kind !== "event") continue;
     const resolution = resolveOriginRecords(item.origin, index);
@@ -262,6 +292,22 @@ export function chainInWindow(
   };
 }
 
+/**
+ * Why "Open in Correlation view" has no row to open. What is known of the selected event comes
+ * first: it is true whether or not the links are in. Only an identified event waits for them.
+ */
+function openDisabledReason(selected: DockSelected, paired: boolean): OpenDisabled {
+  switch (selected.status) {
+    case "unmatchable":
+    case "notRead":
+    case "ambiguous":
+    case "notInTimeline":
+      return selected.status;
+    case "found":
+      return paired ? "notInChain" : "loading";
+  }
+}
+
 export function buildDockModel(input: DockModelInput): DockModel {
   const { record, window, counts } = input;
   if (record === null) return { kind: "noSelection" };
@@ -278,14 +324,28 @@ export function buildDockModel(input: DockModelInput): DockModel {
   const items = [...byId.values()];
 
   // ---- the selected event, in the window ----
-  const naming = originsNaming(record, items);
-  const selected: DockSelected =
-    naming.size === 1
+  const unmatchable = isUnmatchableEvent(record);
+  const naming = unmatchable ? new Set<string>() : originsNaming(record, items);
+  const selected: DockSelected = unmatchable
+    ? { status: "unmatchable" }
+    : naming.size === 1
       ? { status: "found", originId: [...naming][0] as string }
-      : naming.size === 0
-        ? { status: "notInTimeline" }
-        : { status: "ambiguous" };
+      : naming.size > 1
+        ? { status: "ambiguous", candidates: naming.size }
+        : window.complete
+          ? { status: "notInTimeline" }
+          : { status: "notRead" };
   const originId = selected.status === "found" ? selected.originId : null;
+  // An entry's link to the selected event can be said only when the event is identified.
+  const identified = selected.status === "found" || selected.status === "notInTimeline";
+  // What may be drawn: nothing when the event cannot be told from the entries, and not the entries
+  // that could each be the event when several name it.
+  const drawItems =
+    selected.status === "unmatchable"
+      ? []
+      : selected.status === "ambiguous"
+        ? items.filter((item) => !naming.has(timelineOriginId(item.origin)))
+        : items;
 
   // ---- its rows, from the uncapped index of the SAME session ----
   const rows =
@@ -302,10 +362,12 @@ export function buildDockModel(input: DockModelInput): DockModel {
   );
 
   // ---- lanes: at most five, the selected event's first, then the chain's, then the busiest ----
-  const laneInfos = describeLanes(items.map((item) => item.origin));
+  const allLaneInfos = describeLanes(items.map((item) => item.origin));
+  const laneInfos =
+    drawItems === items ? allLaneInfos : describeLanes(drawItems.map((item) => item.origin));
   const laneOrder = new Map(laneInfos.map((lane, index) => [lane.key, index]));
   const entriesInLane = new Map<string, number>();
-  for (const item of items) {
+  for (const item of drawItems) {
     const key = laneKeyOf(item.origin);
     entriesInLane.set(key, (entriesInLane.get(key) ?? 0) + 1);
   }
@@ -325,10 +387,10 @@ export function buildDockModel(input: DockModelInput): DockModel {
       )
       .slice(0, DOCK_MAX_LANES),
   );
-  const drawable = items.filter((item) => chosenLanes.has(laneKeyOf(item.origin)));
+  const drawable = drawItems.filter((item) => chosenLanes.has(laneKeyOf(item.origin)));
   const drawableById = itemsByOriginId(drawable);
   const omittedSources = laneInfos.length - chosenLanes.size;
-  const omittedSourceEntries = items.length - drawable.length;
+  const omittedSourceEntries = drawItems.length - drawable.length;
 
   // ---- the part of the row the plot is given ----
   const byTime = (a: string, b: string) =>
@@ -344,7 +406,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
     .filter((item) => !inWindowMembers.has(timelineOriginId(item.origin)))
     .sort(byDistance);
   const drawnContext = context.slice(0, DOCK_NEARBY_MARKER_CAP);
-  const allContextCount = items.filter((item) => !inWindowMembers.has(timelineOriginId(item.origin))).length;
+  const allContextCount = drawItems.filter((item) => !inWindowMembers.has(timelineOriginId(item.origin))).length;
 
   const narrowed = pairedCounts === null ? true : scopeDisclosure(pairedCounts.scope) !== null;
   const plot = buildChainPlot({
@@ -356,6 +418,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
     window: { startMs: window.startMs, endMs: window.endMs },
     nearby: drawnContext,
     linkPartners: pairedCounts === null ? undefined : pairedCounts.linkPartners,
+    selectionIdentified: identified,
   });
 
   // ---- entries the selected event shares a non-linking row with are named for it ----
@@ -387,7 +450,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
 
   // ---- the summary of the row ----
   const keys = row === null ? null : keyHeader(row.keys);
-  const lanesByKey = new Map(laneInfos.map((lane) => [lane.key, lane]));
+  const lanesByKey = new Map(allLaneInfos.map((lane) => [lane.key, lane]));
   const memberItems = [...inWindowMembers].sort(byTime);
   const steps: DockStep[] = memberItems.slice(0, DOCK_STEP_CAP).map((id) => {
     const item = byId.get(id) as TimelineItem;
@@ -460,7 +523,9 @@ export function buildDockModel(input: DockModelInput): DockModel {
   }
   if (input.unreadSources) push(UNREAD_SOURCES_NOTE);
   if (selected.status === "notInTimeline") push(NOT_IN_TIMELINE_NOTE);
-  if (selected.status === "ambiguous") push(AMBIGUOUS_EVENT_NOTE);
+  if (selected.status === "notRead") push(NOT_READ_NOTE);
+  if (selected.status === "ambiguous") push(ambiguousEventNote(selected.candidates));
+  if (selected.status === "unmatchable") push(unmatchableNote(window.windowItems, window.halfWidthMs));
   if (dockRow !== null) push(outsideWindowNote(dockRow.outsideWindow, dockRow.memberCount));
   push(
     dockOmissionNotice({
@@ -488,15 +553,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
   const open: DockReady["open"] =
     dockRow !== null
       ? { rowId: dockRow.id }
-      : {
-          disabled: !paired
-            ? "loading"
-            : selected.status === "notInTimeline"
-              ? "notInTimeline"
-              : selected.status === "ambiguous"
-                ? "ambiguous"
-                : "notInChain",
-        };
+      : { disabled: openDisabledReason(selected, paired) };
 
   return {
     kind: "ready",
@@ -505,8 +562,8 @@ export function buildDockModel(input: DockModelInput): DockModel {
     halfWidthMs: window.halfWidthMs,
     sessionKey: window.sessionKey,
     updating: pairedCounts !== null && pairedCounts.updating,
-    sources: sourcesText(laneInfos.length, window.complete),
-    sourceCount: laneInfos.length,
+    sources: sourcesText(allLaneInfos.length, window.complete),
+    sourceCount: allLaneInfos.length,
     paired,
     selected,
     row: dockRow,

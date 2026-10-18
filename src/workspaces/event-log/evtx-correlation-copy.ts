@@ -472,13 +472,40 @@ export const DOCK_SCOPE_NOTE =
 /** A source was not fully read: the window may be missing entries from it. */
 export const UNREAD_SOURCES_NOTE = "Some sources were not fully read, so entries may be missing from this window.";
 
-/** The selected event is not among the entries the timeline was built from. */
+/**
+ * The selected event is not among the entries the timeline was built from. An absence claim: it is
+ * given ONLY for a window that was read whole (an unread entry could be the event), and only for a
+ * record the join could have matched.
+ */
 export const NOT_IN_TIMELINE_NOTE =
   "This event is not among the entries this timeline was built from (the current filters can hide it), so its links cannot be shown.";
 
-/** More than one entry of the window could be the selected event. */
-export const AMBIGUOUS_EVENT_NOTE =
-  "More than one entry of this window matches this event, so which one it is cannot be told and no link is shown.";
+/**
+ * The read of the window stopped before this event was found. It may be among the entries that
+ * were not read, so nothing is said about whether it is in the timeline or what it is linked to.
+ */
+export const NOT_READ_NOTE =
+  "The read of this window stopped before this event was found, so whether it is among the entries, and what it is linked to, are not known.";
+
+/**
+ * Several entries of the window each match the selected event, so which one it is cannot be told.
+ * They are named by count and left out of the context, since each of them could be the event.
+ */
+export function ambiguousEventNote(candidates: number): string {
+  return `${count(candidates)} entries of this window match this event, so which one it is cannot be told. They are not drawn as context, and no link is shown.`;
+}
+
+/**
+ * The selected event has no record identity the timeline's join can match (an event the provider
+ * never numbered), so which entry of the window is it cannot be told, and none is drawn: any of
+ * them could be the event itself. A way out is an input ordinal on the timeline origins (#957).
+ */
+export function unmatchableNote(entries: number, halfWidthMs: number): string {
+  const width = windowWidthLabel(halfWidthMs);
+  return entries === 0
+    ? `This event has no record identity the timeline can match, so it cannot be found among the entries within ${width}. No link is shown.`
+    : `This event has no record identity the timeline can match, so which of the ${count(entries)} ${entries === 1 ? "entry" : "entries"} within ${width} it is cannot be told. They are not drawn, and no link is shown.`;
+}
 
 /** How many of the row's entries have no item in the window. They are counted, never placed. */
 export function outsideWindowNote(outside: number, memberCount: number): string | null {
@@ -496,6 +523,7 @@ export type NearbyReason =
   | "notLinked"
   | "noLoadedLink"
   | "inAnotherChain"
+  | "linkUnknownToEvent"
   | "ambiguousWithEvent"
   | "coverageBlockedWithEvent";
 
@@ -505,10 +533,13 @@ export type NearbyReason =
  * The three RULED reasons (#842 ruling 2) say the entry is there by TIME ("time only"), then the one
  * thing known about its links; "not linked" appears only for the entry the session can speak for.
  *
- * The other two are ADDITIONS awaiting Main's ruling, and do not begin "time only", because the
- * engine reported a shared identity key for those entries and "time only" would understate it: they
- * share a key with the selected event in a row that establishes no link (ambiguous: several entries
- * could be the same transaction; coverage blocked: a gap stopped the link).
+ * The other three are RECORDED ADDITIONS to ruling 2 (rulings_a1 item 2 for the first two,
+ * rulings_a1_fix A for the third), and do not begin "time only", because each says more than time:
+ * - "ambiguous with this event" and "coverage blocked with this event": the engine reported a shared
+ *   identity key with the selected event in a row that establishes no link (ambiguous: several
+ *   entries could be the same transaction; coverage blocked: a gap stopped the link);
+ * - "linked, but its link to this event is not known": the entry has a loaded partner and the
+ *   selected event could not be identified, so its partner may be the event.
  */
 export function nearbyReason(reason: NearbyReason): string {
   switch (reason) {
@@ -518,6 +549,8 @@ export function nearbyReason(reason: NearbyReason): string {
       return "time only, no loaded link";
     case "inAnotherChain":
       return "time only; in another chain";
+    case "linkUnknownToEvent":
+      return "linked, but its link to this event is not known";
     case "ambiguousWithEvent":
       return "ambiguous with this event";
     case "coverageBlockedWithEvent":
@@ -552,7 +585,13 @@ export function dockOmissionNotice(input: {
 }
 
 /** Why "Open in Correlation view" cannot act, as visible text beside the disabled button. */
-export type OpenDisabled = "loading" | "notInTimeline" | "notInChain" | "ambiguous";
+export type OpenDisabled =
+  | "loading"
+  | "notInTimeline"
+  | "notRead"
+  | "unmatchable"
+  | "notInChain"
+  | "ambiguous";
 
 export function openDisabledText(reason: OpenDisabled): string {
   switch (reason) {
@@ -560,6 +599,10 @@ export function openDisabledText(reason: OpenDisabled): string {
       return "Correlation links are still loading.";
     case "notInTimeline":
       return "Not in the timeline built for these filters.";
+    case "notRead":
+      return "The read of this window did not reach this event.";
+    case "unmatchable":
+      return "This event cannot be matched to an entry.";
     case "notInChain":
       return "Not in a loaded chain.";
     case "ambiguous":

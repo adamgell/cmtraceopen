@@ -10,10 +10,10 @@ import {
   type CorrelationChainStrength,
 } from "./evtx-correlation-chains";
 import {
-  AMBIGUOUS_EVENT_NOTE,
   DOCK_SCOPE_NOTE,
   LINKS_LOADING_TEXT,
   NOT_IN_TIMELINE_NOTE,
+  NOT_READ_NOTE,
   NO_SELECTION_TEXT,
   NO_SESSION_TEXT,
   READING_WINDOW_TEXT,
@@ -21,6 +21,7 @@ import {
   STRENGTH_LABELS,
   UNREAD_SOURCES_NOTE,
   UNTIMED_TEXT,
+  ambiguousEventNote,
   chainCopyText,
   coverageGapNotice,
   dockOmissionNotice,
@@ -39,6 +40,7 @@ import {
   scanNotice,
   scopeDisclosure,
   sourcesText,
+  unmatchableNote,
   unresolvedNotice,
   whyHeading,
   whyStatement,
@@ -535,16 +537,17 @@ describe("chainCopyText", () => {
 describe("no string claims an entry is unplaced without proof", () => {
   const STRING_EXPORTS = new Set([
     // evtx-correlation-copy.ts
-    "AMBIGUOUS_EVENT_NOTE",
     "DOCK_SCOPE_NOTE",
     "LINKS_LOADING_TEXT",
     "NOT_IN_TIMELINE_NOTE",
+    "NOT_READ_NOTE",
     "NO_SELECTION_TEXT",
     "NO_SESSION_TEXT",
     "READING_WINDOW_TEXT",
     "SCOPE_NOT_KNOWN_NOTICE",
     "STRENGTH_LABELS",
     "UNREAD_SOURCES_NOTE",
+    "ambiguousEventNote",
     "chainCopyText",
     "coverageGapNotice",
     "dockOmissionNotice",
@@ -563,6 +566,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "scanNotice",
     "scopeDisclosure",
     "sourcesText",
+    "unmatchableNote",
     "unresolvedNotice",
     "whyHeading",
     "whyStatement",
@@ -643,14 +647,19 @@ describe("no string claims an entry is unplaced without proof", () => {
   function dockStrings(): string[] {
     const partial = { complete: false, windowItems: 40, omittedItems: 15, items: new Array(25), halfWidthMs: 75_000, error: null };
     return [
-      AMBIGUOUS_EVENT_NOTE,
       DOCK_SCOPE_NOTE,
       LINKS_LOADING_TEXT,
       NOT_IN_TIMELINE_NOTE,
+      NOT_READ_NOTE,
       NO_SELECTION_TEXT,
       NO_SESSION_TEXT,
       READING_WINDOW_TEXT,
       UNREAD_SOURCES_NOTE,
+      ambiguousEventNote(2),
+      ambiguousEventNote(5),
+      unmatchableNote(0, 75_000),
+      unmatchableNote(1, 75_000),
+      unmatchableNote(2_500, 120_000),
       ...[30_000, 75_000, 120_000, 300_000, 90_000, 500].map((ms) => windowWidthLabel(ms)),
       sourcesText(3, true),
       sourcesText(1, false),
@@ -669,10 +678,10 @@ describe("no string claims an entry is unplaced without proof", () => {
       outsideWindowNote(1, 3) ?? "",
       outsideWindowNote(3, 5) ?? "",
       partialChainTitle(5, 2),
-      ...(["notLinked", "noLoadedLink", "inAnotherChain", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const).map((reason) => nearbyReason(reason)),
+      ...(["notLinked", "noLoadedLink", "inAnotherChain", "linkUnknownToEvent", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const).map((reason) => nearbyReason(reason)),
       dockOmissionNotice({ omittedMarkers: 2, omittedNearby: 3, omittedConnectors: 1, omittedSources: 2, omittedSourceEntries: 9 }) ?? "",
       dockOmissionNotice({ omittedMarkers: 1, omittedNearby: 1, omittedConnectors: 0, omittedSources: 1, omittedSourceEntries: 1 }) ?? "",
-      ...(["loading", "notInTimeline", "notInChain", "ambiguous"] as const).map((reason) => openDisabledText(reason)),
+      ...(["loading", "notInTimeline", "notRead", "unmatchable", "notInChain", "ambiguous"] as const).map((reason) => openDisabledText(reason)),
     ];
   }
 
@@ -985,7 +994,7 @@ describe("the dock's words (spec 8.12, #842)", () => {
   });
 
   describe("nearbyReason (evidence first: by time, never a link)", () => {
-    const reasons = ["notLinked", "noLoadedLink", "inAnotherChain", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const;
+    const reasons = ["notLinked", "noLoadedLink", "inAnotherChain", "linkUnknownToEvent", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const;
 
     it("says time only in the three ruled reasons", () => {
       for (const reason of ["notLinked", "noLoadedLink", "inAnotherChain"] as const) {
@@ -1010,8 +1019,13 @@ describe("the dock's words (spec 8.12, #842)", () => {
       expect(nearbyReason("inAnotherChain")).toBe("time only; in another chain");
     });
 
-    it("keeps the five reasons apart", () => {
-      expect(new Set(reasons.map((reason) => nearbyReason(reason))).size).toBe(5);
+    it("says an entry is linked but not known to be linked to THIS event, when the event could not be identified", () => {
+      expect(nearbyReason("linkUnknownToEvent")).toBe("linked, but its link to this event is not known");
+      expect(nearbyReason("linkUnknownToEvent")).not.toMatch(/time only|in another chain|not linked/);
+    });
+
+    it("keeps the six reasons apart", () => {
+      expect(new Set(reasons.map((reason) => nearbyReason(reason))).size).toBe(6);
     });
   });
 
@@ -1041,10 +1055,38 @@ describe("the dock's words (spec 8.12, #842)", () => {
     });
   });
 
+  describe("what is said when the selected event cannot be identified (#842, review A1)", () => {
+    it("gives the absence claim its own words and the unread case its own, never the same", () => {
+      expect(NOT_IN_TIMELINE_NOTE).toMatch(/not among the entries this timeline was built from/);
+      expect(NOT_READ_NOTE).toBe(
+        "The read of this window stopped before this event was found, so whether it is among the entries, and what it is linked to, are not known.",
+      );
+      expect(NOT_READ_NOTE).not.toMatch(/not among|filters/);
+    });
+
+    it("counts the entries that could each be the event, and leaves them out of the context", () => {
+      expect(ambiguousEventNote(2)).toBe(
+        "2 entries of this window match this event, so which one it is cannot be told. They are not drawn as context, and no link is shown.",
+      );
+      expect(ambiguousEventNote(1_200)).toContain("1,200 entries");
+    });
+
+    it("says an event with no record identity cannot be found among the entries, with the exact count", () => {
+      expect(unmatchableNote(2_500, 75_000)).toBe(
+        "This event has no record identity the timeline can match, so which of the 2,500 entries within \u00b175 s it is cannot be told. They are not drawn, and no link is shown.",
+      );
+      expect(unmatchableNote(1, 120_000)).toContain("which of the 1 entry within \u00b12 min it is");
+      expect(unmatchableNote(0, 75_000)).toBe(
+        "This event has no record identity the timeline can match, so it cannot be found among the entries within \u00b175 s. No link is shown.",
+      );
+      for (const entries of [0, 1, 2_500]) expect(unmatchableNote(entries, 75_000)).not.toMatch(/not among|filters/);
+    });
+  });
+
   describe("openDisabledText", () => {
     it("gives each reason its own visible words", () => {
-      const reasons = (["loading", "notInTimeline", "notInChain", "ambiguous"] as const).map((r) => openDisabledText(r));
-      expect(new Set(reasons).size).toBe(4);
+      const reasons = (["loading", "notInTimeline", "notRead", "unmatchable", "notInChain", "ambiguous"] as const).map((r) => openDisabledText(r));
+      expect(new Set(reasons).size).toBe(6);
       expect(openDisabledText("notInChain")).toBe("Not in a loaded chain.");
     });
   });
@@ -1052,7 +1094,9 @@ describe("the dock's words (spec 8.12, #842)", () => {
   it("says nothing in the dock reads as cause or consequence", () => {
     const causal = /caused|because of|as a result|led to|results? in|follows from|explains|due to/i;
     const strings = [
-      AMBIGUOUS_EVENT_NOTE,
+      ambiguousEventNote(3),
+      unmatchableNote(40, 75_000),
+      NOT_READ_NOTE,
       DOCK_SCOPE_NOTE,
       LINKS_LOADING_TEXT,
       NOT_IN_TIMELINE_NOTE,
@@ -1062,7 +1106,7 @@ describe("the dock's words (spec 8.12, #842)", () => {
       UNREAD_SOURCES_NOTE,
       emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: true }).text,
       emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false }).text,
-      ...(["notLinked", "noLoadedLink", "inAnotherChain", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const).map((r) => nearbyReason(r)),
+      ...(["notLinked", "noLoadedLink", "inAnotherChain", "linkUnknownToEvent", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const).map((r) => nearbyReason(r)),
     ];
     for (const text of strings) expect(text).not.toMatch(causal);
   });

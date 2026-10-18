@@ -8,11 +8,14 @@ import modelSource from "./evtx-correlation-dock-model.ts?raw";
 import windowSource from "./evtx-correlation-window.ts?raw";
 import { buildCorrelationChains } from "./evtx-correlation-chains";
 import {
-  AMBIGUOUS_EVENT_NOTE,
   DOCK_SCOPE_NOTE,
   LINKS_LOADING_TEXT,
   NOT_IN_TIMELINE_NOTE,
+  NOT_READ_NOTE,
   UNREAD_SOURCES_NOTE,
+  ambiguousEventNote,
+  nearbyReason,
+  unmatchableNote,
 } from "./evtx-correlation-copy";
 import {
   DOCK_MAX_LANES,
@@ -38,6 +41,7 @@ import {
 } from "./evtx-correlation-test-fixtures";
 import {
   IN_ANOTHER_CHAIN_LABEL,
+  LINK_TO_EVENT_UNKNOWN_LABEL,
   NOT_LINKED_LABEL,
   NO_LOADED_LINK_LABEL,
 } from "./evtx-correlation-view-model";
@@ -266,9 +270,9 @@ describe("the selected event, found in the window", () => {
     const second =
       first.origin.kind === "event" ? { ...first, origin: { ...first.origin, stableId: rid(88) } } : first;
     const model = ready({ ...input, window: windowAround(record, [first, second]) });
-    expect(model.selected).toEqual({ status: "ambiguous" });
+    expect(model.selected).toEqual({ status: "ambiguous", candidates: 2 });
     expect(model.row).toBeNull();
-    expect(model.notices).toContain(AMBIGUOUS_EVENT_NOTE);
+    expect(model.notices).toContain(ambiguousEventNote(2));
     expect(model.open).toEqual({ disabled: "ambiguous" });
   });
 
@@ -291,6 +295,218 @@ describe("the selected event, found in the window", () => {
     };
     const model = ready({ ...input, window: windowAround(record, [log]) });
     expect(model.selected).toEqual({ status: "notInTimeline" });
+  });
+});
+
+describe("which entry is the selected event: the statuses (#842, review A1)", () => {
+  const LOG_FILE = "C:\\Logs\\AppEnforce.log";
+  const logRow = (line: number, epoch: number, overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
+    ...recordFor(line),
+    originKind: "log",
+    eventId: 0,
+    sourceLabel: LOG_FILE,
+    channel: LOG_FILE,
+    provider: "CcmExec",
+    computer: "",
+    timestampEpoch: epoch,
+    ...overrides,
+  });
+  /** The log item the engine builds from that row (`origin_of`, timeline.rs). */
+  const logItemFor = (line: number, timestampMs: number, file = LOG_FILE): TimelineItem => ({
+    timestampMs,
+    severity: "info",
+    message: `log line ${line}`,
+    origin: { kind: "log", file, component: "CcmExec", line, source: file, machine: null, bundle: null, recordId: line },
+  });
+  /** A record the join can never name: an event the provider never numbered. */
+  const unnumbered = (epoch: number): EvtxRecord => ({ ...recordFor(1), eventRecordId: 0, eventRecordIdText: null, timestampEpoch: epoch });
+  const stopsEarly = (record: EvtxRecord, items: TimelineItem[]) =>
+    windowAround(record, items, { complete: false, windowItems: 2_500, omittedItems: 2_500 - items.length, stoppedBy: "error", error: "timeline down" });
+
+  describe("notRead: the read stopped before the event, so nothing is said about whether it is in the timeline", () => {
+    const record = recordFor(1);
+    const t = record.timestampEpoch;
+    const early = () => [eventItem(5, t - 20_000), eventItem(6, t - 10_000)];
+
+    it("is notRead, not notInTimeline, when a read that stopped holds no entry that names the event", () => {
+      const model = ready({ record, window: stopsEarly(record, early()), counts: counts([]), unreadSources: false });
+      expect(model.selected).toEqual({ status: "notRead" });
+      expect(model.notices).toContain(NOT_READ_NOTE);
+      expect(model.notices).not.toContain(NOT_IN_TIMELINE_NOTE);
+      expect(model.open).toEqual({ disabled: "notRead" });
+    });
+
+    it("is notInTimeline for the same entries in a window that was read whole", () => {
+      const model = ready({ record, window: windowAround(record, early()), counts: counts([]), unreadSources: false });
+      expect(model.selected).toEqual({ status: "notInTimeline" });
+      expect(model.notices).toContain(NOT_IN_TIMELINE_NOTE);
+      expect(model.notices).not.toContain(NOT_READ_NOTE);
+      expect(model.open).toEqual({ disabled: "notInTimeline" });
+    });
+
+    it("finds the event when the read that stopped did reach it", () => {
+      const items = [eventItem(1, t), eventItem(2, t + 6_000)];
+      const model = ready({ record, window: stopsEarly(record, items), counts: counts(fixtureEdges("exactPair")), unreadSources: false });
+      expect(model.selected).toEqual({ status: "found", originId: rid(1) });
+      expect(model.open).toEqual({ rowId: model.row?.id });
+    });
+
+    it("does not call an entry that has a partner 'in another chain': its partner may be the event", () => {
+      const edges = [synthetic("o", rid(5), rid(11))];
+      const model = ready({ record, window: stopsEarly(record, early()), counts: counts(edges), unreadSources: false });
+      const reasons = Object.fromEntries(model.nearby.map((entry) => [entry.id, entry.reason]));
+      expect(reasons[rid(5)]).toBe("linkUnknownToEvent");
+      expect(nearbyReason(reasons[rid(5)]!)).toBe("linked, but its link to this event is not known");
+      // What the entry itself shows stands: no partner, every edge loaded, nothing narrowed.
+      expect(reasons[rid(6)]).toBe("notLinked");
+      expect(model.plot.nearby.find((m) => m.id === rid(5))?.linkLabel).toBe(LINK_TO_EVENT_UNKNOWN_LABEL);
+    });
+
+    it("keeps 'in another chain' when the event is known not to be in a window read whole", () => {
+      const edges = [synthetic("o", rid(5), rid(11))];
+      const model = ready({ record, window: windowAround(record, early()), counts: counts(edges), unreadSources: false });
+      const reasons = Object.fromEntries(model.nearby.map((entry) => [entry.id, entry.reason]));
+      expect(reasons[rid(5)]).toBe("inAnotherChain");
+      expect(model.plot.nearby.find((m) => m.id === rid(5))?.linkLabel).toBe(IN_ANOTHER_CHAIN_LABEL);
+    });
+  });
+
+  it("names what is known of the event before the links are in: the Open reason is the status, not 'loading'", () => {
+    const record = recordFor(1);
+    const t = record.timestampEpoch;
+    const noCounts = { counts: null, unreadSources: false };
+    const unmatchableRecord = unnumbered(t);
+    expect(ready({ record: unmatchableRecord, window: windowAround(unmatchableRecord, []), ...noCounts }).open).toEqual({ disabled: "unmatchable" });
+    expect(ready({ record, window: stopsEarly(record, []), ...noCounts }).open).toEqual({ disabled: "notRead" });
+    expect(ready({ record, window: windowAround(record, []), ...noCounts }).open).toEqual({ disabled: "notInTimeline" });
+    const first = eventItem(1, t);
+    const twin = first.origin.kind === "event" ? { ...first, origin: { ...first.origin, stableId: rid(88) } } : first;
+    expect(ready({ record, window: windowAround(record, [first, twin]), ...noCounts }).open).toEqual({ disabled: "ambiguous" });
+    // An identified event waits for the links.
+    expect(ready({ record, window: windowAround(record, [first]), ...noCounts }).open).toEqual({ disabled: "loading" });
+  });
+
+  describe("an archive text row (originKind log) is matchable", () => {
+    const t = T0 + 5_000;
+    const row = logRow(7, t);
+
+    it("is found by the strict log matcher, and is the selected entry rather than context", () => {
+      const items = [logItemFor(7, t), eventItem(2, t + 3_000)];
+      const model = ready({ record: row, window: windowAround(row, items), counts: counts([]), unreadSources: false });
+      expect(model.selected.status).toBe("found");
+      expect(model.plot.members.map((m) => m.kind)).toEqual(["log"]);
+      expect(model.plot.nearby.map((m) => m.id)).toEqual([rid(2)]);
+      expect(model.nearby.map((entry) => entry.id)).toEqual([rid(2)]);
+      expect(model.notices).not.toContain(NOT_IN_TIMELINE_NOTE);
+    });
+
+    it("is not unmatchable for lacking an event identity, even numbered 0", () => {
+      const zero = logRow(0, t, { eventRecordId: 0, eventRecordIdText: null });
+      const model = ready({ record: zero, window: windowAround(zero, [logItemFor(0, t)]), counts: counts([]), unreadSources: false });
+      expect(model.selected.status).toBe("found");
+    });
+
+    it("is not found by an entry of another file, line or bundle, and is notInTimeline then (window whole)", () => {
+      for (const item of [logItemFor(7, t, "C:\\Logs\\Other.log"), logItemFor(8, t)]) {
+        const model = ready({ record: row, window: windowAround(row, [item]), counts: counts([]), unreadSources: false });
+        expect(model.selected).toEqual({ status: "notInTimeline" });
+      }
+    });
+
+    it("is notRead when the read stopped before it, and notInTimeline only when the window was whole", () => {
+      const model = ready({ record: row, window: stopsEarly(row, [eventItem(2, t - 5_000)]), counts: counts([]), unreadSources: false });
+      expect(model.selected).toEqual({ status: "notRead" });
+    });
+
+    it("is found by its own line among the other lines of the same file, which are context", () => {
+      const items = [logItemFor(6, t - 1_000), logItemFor(7, t), logItemFor(8, t + 1_000)];
+      const model = ready({ record: row, window: windowAround(row, items), counts: counts([]), unreadSources: false });
+      expect(model.selected.status).toBe("found");
+      expect(model.plot.members).toHaveLength(1);
+      expect(model.plot.nearby).toHaveLength(2);
+    });
+  });
+
+  describe("unmatchable: an event with no record identity cannot be told from the entries", () => {
+    const record = unnumbered(recordFor(1).timestampEpoch);
+    const t = record.timestampEpoch;
+    const items = () => [eventItem(1, t), eventItem(2, t + 4_000), onChannel(3, t + 8_000, "Application")];
+
+    it("is decided from the record alone, before any entry is looked at", () => {
+      const model = ready({ record, window: windowAround(record, items()), counts: counts(fixtureEdges("exactPair")), unreadSources: false });
+      expect(model.selected).toEqual({ status: "unmatchable" });
+      expect(model.open).toEqual({ disabled: "unmatchable" });
+      // The same, with the window empty and with the read stopped: it never depends on the entries.
+      expect(ready({ record, window: windowAround(record, []), counts: counts([]), unreadSources: false }).selected).toEqual({ status: "unmatchable" });
+      expect(ready({ record, window: stopsEarly(record, []), counts: counts([]), unreadSources: false }).selected).toEqual({ status: "unmatchable" });
+    });
+
+    it("draws no labelled context: no marker, no 'Also nearby', no member, no connector", () => {
+      const model = ready({ record, window: windowAround(record, items()), counts: counts(fixtureEdges("exactPair")), unreadSources: false });
+      expect(model.plot.members).toEqual([]);
+      expect(model.plot.nearby).toEqual([]);
+      expect(model.plot.lanes).toEqual([]);
+      expect(model.plot.connectors).toEqual([]);
+      expect(model.nearby).toEqual([]);
+      expect(model.moreNearby).toBe(0);
+      expect(model.steps).toEqual([]);
+      expect(model.row).toBeNull();
+      expect([...model.facts.keys()]).toEqual([]);
+    });
+
+    it("says why, with the window's exact entry count, and still counts the sources", () => {
+      const model = ready({ record, window: windowAround(record, items()), counts: counts([]), unreadSources: false });
+      expect(model.notices).toContain(unmatchableNote(3, 75_000));
+      expect(model.notices).not.toContain(NOT_IN_TIMELINE_NOTE);
+      expect(model.sourceCount).toBe(2);
+      expect(model.sources).toBe("2 sources");
+      const partial = ready({ record, window: stopsEarly(record, items()), counts: counts([]), unreadSources: false });
+      expect(partial.notices).toContain(unmatchableNote(2_500, 75_000));
+      expect(partial.sources).toBe("at least 2 sources");
+    });
+
+    it("is not claimed for an event record that has an identity, or for a log row", () => {
+      const numbered = { ...record, eventRecordId: 1, eventRecordIdText: "1" };
+      expect(ready({ record: numbered, window: windowAround(numbered, items()), counts: counts([]), unreadSources: false }).selected.status).not.toBe("unmatchable");
+    });
+  });
+
+  describe("ambiguous: the entries that could each be the event are not context", () => {
+    const record = recordFor(1);
+    const t = record.timestampEpoch;
+    const twinOf = (item: TimelineItem, stableId: string): TimelineItem =>
+      item.origin.kind === "event" ? { ...item, origin: { ...item.origin, stableId } } : item;
+    const first = eventItem(1, t);
+    const scene = (extra: TimelineItem[] = []) => [first, twinOf(first, rid(88)), twinOf(first, rid(89)), ...extra];
+
+    it("counts the entries that name the event and does not draw any of them", () => {
+      const model = ready({ record, window: windowAround(record, scene([eventItem(9, t + 3_000)])), counts: counts([]), unreadSources: false });
+      expect(model.selected).toEqual({ status: "ambiguous", candidates: 3 });
+      expect(model.plot.nearby.map((m) => m.id)).toEqual([rid(9)]);
+      expect(model.nearby.map((entry) => entry.id)).toEqual([rid(9)]);
+      expect(model.moreNearby).toBe(0);
+      expect(model.plot.members).toEqual([]);
+      expect(model.notices).toContain(ambiguousEventNote(3));
+    });
+
+    it("never heads 'Also nearby' with the event itself at 0 ms", () => {
+      const model = ready({ record, window: windowAround(record, scene()), counts: counts([]), unreadSources: false });
+      expect(model.nearby).toEqual([]);
+      expect(model.plot.nearby).toEqual([]);
+    });
+
+    it("does not call an entry with a partner 'time only' or 'in another chain'", () => {
+      const edges = [synthetic("o", rid(9), rid(11))];
+      const model = ready({ record, window: windowAround(record, scene([eventItem(9, t + 3_000), eventItem(10, t + 4_000)])), counts: counts(edges), unreadSources: false });
+      const reasons = Object.fromEntries(model.nearby.map((entry) => [entry.id, entry.reason]));
+      expect(reasons[rid(9)]).toBe("linkUnknownToEvent");
+      expect(reasons[rid(10)]).toBe("notLinked");
+    });
+
+    it("still counts every source of the window, including the candidates' lane", () => {
+      const model = ready({ record, window: windowAround(record, scene([onChannel(9, t + 3_000, "Application")])), counts: counts([]), unreadSources: false });
+      expect(model.sourceCount).toBe(2);
+    });
   });
 });
 
