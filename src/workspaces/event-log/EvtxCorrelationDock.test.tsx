@@ -25,6 +25,7 @@ vi.mock("./evtx-correlation-dock-model", async (importOriginal) => {
   };
 });
 
+import { tokens } from "@fluentui/react-components";
 import { useUiStore } from "../../stores/ui-store";
 import EvtxCorrelationDock from "./EvtxCorrelationDock";
 import { EvtxAnalysisSessionProvider } from "./evtx-analysis-session";
@@ -534,6 +535,28 @@ describe("Open in Correlation view", () => {
     await ready();
     expect(screen.getByTestId("correlation-dock-open-reason")).toHaveTextContent(openDisabledText("loading"));
     expect(screen.getByRole("button", { name: "Open in Correlation view" })).toHaveAttribute("aria-disabled", "true");
+  });
+});
+
+describe("layout: nothing in the dock can be squeezed to a sliver", () => {
+  it("lays its body out in max-content rows, so the lane plot (a scroll container) keeps its content height", async () => {
+    renderDock();
+    const figure = await ready();
+    const grid = figure.parentElement as HTMLElement;
+    expect(grid.style.display).toBe("grid");
+    expect(grid.style.gridAutoRows).toBe("max-content");
+    // The dock variant has no cap of its own: its content height is its height.
+    expect(figure.style.maxHeight).toBe("");
+  });
+
+  it("keeps the header in reach while the slot scrolls, and keeps the subtitle from vanishing", async () => {
+    renderDock();
+    await ready();
+    const header = screen.getByTestId("correlation-dock-header");
+    expect(header.style.position).toBe("sticky");
+    expect(header.style.top).toBe("0px");
+    expect(header.style.backgroundColor).toBe(tokens.colorNeutralBackground2);
+    expect(screen.getByTestId("correlation-dock-subtitle").style.minWidth).toBe("10ch");
   });
 });
 

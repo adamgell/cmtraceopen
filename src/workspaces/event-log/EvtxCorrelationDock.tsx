@@ -239,7 +239,18 @@ export default function EvtxCorrelationDock({
     >
       <div
         data-testid="correlation-dock-header"
-        style={{ display: "flex", alignItems: "center", gap: "10px", padding: "6px 12px", minWidth: 0 }}
+        // Sticky: the workspace's slot scrolls the whole dock, and the controls stay in reach.
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "10px",
+          padding: "6px 12px",
+          minWidth: 0,
+          position: "sticky",
+          top: 0,
+          zIndex: 1,
+          backgroundColor: tokens.colorNeutralBackground2,
+        }}
       >
         <span style={{ fontSize: `${sizes.f - 1}px`, fontWeight: 600, color: primary, flexShrink: 0 }}>
           Correlation
@@ -255,7 +266,10 @@ export default function EvtxCorrelationDock({
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
-              minWidth: 0,
+              // The one text container in the header that gives way to the controls (an ellipsis,
+              // with the whole line in its title). A floor keeps it from vanishing: past it the
+              // header overflows and the slot scrolls.
+              minWidth: "10ch",
             }}
           >
             {subtitle}
@@ -330,7 +344,11 @@ export default function EvtxCorrelationDock({
 
       <div id={bodyId} hidden={collapsed}>
         {!collapsed && (
-          <div style={{ padding: "0 12px 8px", display: "grid", gap: "6px" }}>
+          // `max-content` rows: the lane plot is a scroll container (overflow-x hidden makes the
+          // other axis auto), and a scroll container's automatic minimum size is 0, so as an `auto`
+          // row of a grid with a height of its own it would be squeezed to a sliver instead of the
+          // slot scrolling. Here the grid is as tall as its content, and the rows say so.
+          <div style={{ padding: "0 12px 8px", display: "grid", gridAutoRows: "max-content", gap: "6px" }}>
             {ready === null ? (
               <DockMessage text={messageFor(model, status)} color={secondary} size={sizes.lane}>
                 {model !== null && model.kind === "failed" && (
