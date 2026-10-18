@@ -28,6 +28,7 @@ import { EvtxHistogram } from "./EvtxHistogram";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
+import { UNIFIED_TIMELINE_STRIP_HEIGHT_PX } from "./evtx-timeline-strip";
 import { EvtxInsightsRail } from "./EvtxInsightsRail";
 import { EvtxViewBar } from "./EvtxViewBar";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
@@ -595,7 +596,7 @@ export function EventLogWorkspace() {
     <>
       <div
         style={{
-          height: "320px",
+          height: `${UNIFIED_TIMELINE_STRIP_HEIGHT_PX}px`,
           minHeight: "240px",
           maxHeight: "50vh",
           flexShrink: 0,
