@@ -52,6 +52,7 @@ import {
   sessionSpeaksForAbsence,
 } from "./evtx-correlation-view-model";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
+import { chipForOriginKind } from "./evtx-kind-chip-value";
 import { TIME_RANGE_SEPARATOR } from "./evtx-time";
 import {
   assertUnifiedTimelineShape,
@@ -1151,6 +1152,32 @@ describe("chainSequence", () => {
     const sequence = chainSequence(chainOf(fixtureEdges("exactPair"), items), mapOf(items));
     expect(sequence.entries).toHaveLength(1);
     expect(sequence.itemlessIds).toEqual([rid(2)]);
+  });
+
+  describe("the chip of each entry (#841)", () => {
+    const line = logItem("C:\\Logs\\AppEnforce.log", 9, T0 + 2_000);
+
+    it("is EVT for a Windows event and LOG for a text-log line, from the one rule", () => {
+      const items = [eventItem(1, T0), line, eventItem(3, T0 + 4_000)];
+      const edges = [
+        synthetic("e1", rid(1), timelineOriginId(line.origin)),
+        synthetic("e2", timelineOriginId(line.origin), rid(3)),
+      ];
+      const sequence = chainSequence(chainOf(edges, items), mapOf(items));
+      expect(sequence.entries.map((entry) => [entry.id, entry.chip])).toEqual([
+        [rid(1), chipForOriginKind("event")],
+        [timelineOriginId(line.origin), chipForOriginKind("log")],
+        [rid(3), chipForOriginKind("event")],
+      ]);
+      expect(sequence.entries.map((entry) => entry.chip)).toEqual(["EVT", "LOG", "EVT"]);
+    });
+
+    it("follows the entry's origin kind, not its message or its lane", () => {
+      const odd = { ...eventItem(1, T0), message: "LOG line EVT" };
+      const items = [odd, eventItem(2, T0 + 1_000)];
+      const sequence = chainSequence(chainOf(fixtureEdges("exactPair"), items), mapOf(items));
+      expect(sequence.entries.map((entry) => entry.chip)).toEqual(["EVT", "EVT"]);
+    });
   });
 });
 

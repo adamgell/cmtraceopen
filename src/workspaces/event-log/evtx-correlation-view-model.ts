@@ -27,6 +27,7 @@ import {
   type CorrelationEvidenceRow,
 } from "./evtx-correlation-chains";
 import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
+import { chipForOriginKind, type KindChip } from "./evtx-kind-chip-value";
 import {
   eventDateKey,
   formatClock,
@@ -833,6 +834,8 @@ export interface SequenceEntry {
   sameTimeAsPrevious: boolean;
   /** The member the title is drawn from (D19): highest severity, then earliest, then id. */
   highestSeverity: boolean;
+  /** `EVT` for a Windows event, `LOG` for a text-log line: the chip's one rule, `chipForOriginKind`. */
+  chip: KindChip;
 }
 
 export interface ChainSequence {
@@ -885,6 +888,7 @@ export function chainSequence(
       sameTimeAsPrevious:
         index > 0 && placed[index - 1]!.item.timestampMs === item.timestampMs,
       highestSeverity: index === best,
+      chip: chipForOriginKind(item.origin.kind),
     };
   });
   return {

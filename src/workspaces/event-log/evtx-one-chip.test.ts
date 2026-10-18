@@ -178,14 +178,26 @@ describe("EVT and LOG chips are drawn by one component", () => {
     for (const file of ["UnifiedTimelineView.tsx", "EvtxDetailContext.tsx", "EvtxUnplacedList.tsx"]) {
       expect(sources[file], file).toMatch(/<EvtxKindChip\b[^>]*\bchip=\{/);
     }
-    for (const file of ["UnifiedTimelineView.tsx", "evtx-unplaced.ts", "evtx-detail-context-model.ts"]) {
+    for (const file of [
+      "UnifiedTimelineView.tsx",
+      "evtx-unplaced.ts",
+      "evtx-detail-context-model.ts",
+      "evtx-correlation-view-model.ts",
+    ]) {
       expect(sources[file], file).toMatch(/\bchipForOriginKind\(/);
     }
   });
 
-  it("is called by nothing but those three, so there is one producer and three callers", () => {
+  it("is called by nothing but those four, so there is one producer and four callers", () => {
+    // The Chains tab's steps take their chip from the Sequence model (`SequenceEntry.chip`), so the
+    // fourth caller is the model and the tab calls none (#841).
     const callers = files.filter((file) => file !== "evtx-kind-chip-value.ts" && /\bchipForOriginKind\b/.test(sources[file]!));
-    expect(callers.sort()).toEqual(["UnifiedTimelineView.tsx", "evtx-detail-context-model.ts", "evtx-unplaced.ts"]);
+    expect(callers.sort()).toEqual([
+      "UnifiedTimelineView.tsx",
+      "evtx-correlation-view-model.ts",
+      "evtx-detail-context-model.ts",
+      "evtx-unplaced.ts",
+    ]);
   });
 });
 
