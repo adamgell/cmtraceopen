@@ -101,7 +101,13 @@ beforeEach(() => {
   onEscape = vi.fn();
   vi.mocked(writeText).mockReset();
   vi.mocked(writeText).mockResolvedValue(undefined);
-  useUiStore.setState({ themeId: "light", logListFontSize: 13, activeWorkspace: "event-log", activeView: "event-log" });
+  useUiStore.setState({
+    themeId: "light",
+    logListFontSize: 13,
+    activeWorkspace: "event-log",
+    activeView: "event-log",
+    enabledWorkspaces: null,
+  });
   useLogStore.setState({ openFilePath: null, sourceOpenMode: null, entries: [], pendingScrollTarget: null });
 });
 afterEach(() => {
@@ -269,6 +275,19 @@ describe("Open in Log Viewer: arming the target", () => {
     // No reload: the entries are the very ones that were loaded.
     expect(useLogStore.getState().entries).toBe(entriesBefore);
     expect(onFail).not.toHaveBeenCalled();
+  });
+
+  it("leaves no target armed when the switch to the Log view is refused", () => {
+    // The Log view is always available in a build, but setActiveView refuses a workspace that is not
+    // enabled, and a target armed with no Log view to consume it would scroll a later load.
+    singleFileViewer();
+    useUiStore.setState({ enabledWorkspaces: ["event-log"] });
+    mount();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    fireEvent.click(openButtons()[0]!);
+    expect(useUiStore.getState().activeView).toBe("event-log");
+    expect(useLogStore.getState().pendingScrollTarget).toBeNull();
+    expect(onFail).toHaveBeenCalledWith("Not opened: the Log Viewer is not available here.");
   });
 
   // One test per state that must not arm. In each the button is disabled with its reason and a click

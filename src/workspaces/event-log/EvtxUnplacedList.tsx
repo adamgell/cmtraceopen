@@ -93,6 +93,13 @@ export function EvtxUnplacedList({ list, updating, sizes, onReply, onFail, onEsc
     }
     state.setPendingScrollTarget({ filePath: row.file, lineNumber: row.line });
     useUiStore.getState().setActiveView("log");
+    // The Log view is always built in (the backend's workspace list starts with it), but the switch
+    // refuses a workspace that is not available, and a target armed with no Log view to consume it
+    // would scroll a later load. So an armed target is never left behind by a switch that did not happen.
+    if (useUiStore.getState().activeView !== "log") {
+      state.setPendingScrollTarget(null);
+      onFail("Not opened: the Log Viewer is not available here.");
+    }
   };
 
   const copy = async () => {
