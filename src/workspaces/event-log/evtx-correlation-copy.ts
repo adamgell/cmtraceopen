@@ -451,23 +451,38 @@ export interface EmptyWindowInput {
    * one exists because events were added or the load changed, so the claim may already be false.
    */
   updating: boolean;
+  /**
+   * How many entries the session could not place in time (`CorrelationCounts.unplacedList.total`,
+   * the engine's own count from the same run), or null when it is not known. An entry the engine
+   * could not place is in NO window, so a window cannot speak for it: the claim needs a KNOWN zero.
+   */
+  unplacedTotal: number | null;
 }
 
 /**
  * The dock's "no other sources" sentence. The spec's own words are an absence claim, so they are
  * said only when all of these hold: the window was read whole (the caller asks only then), nothing
- * is narrowed, no source went unread, and the pair is not an earlier session's. Otherwise the
- * sentence says what it was looked for IN, and what was not looked at.
+ * is narrowed, no source went unread, the pair is not an earlier session's, and the session's count
+ * of entries it could not place in time is a known zero. Otherwise the sentence says what it was
+ * looked for IN, and what was not looked at. (A correlation coverage gap does not bear on it: no
+ * gap removes an entry from the window; gaps withdraw "not linked", and the dock does that.)
  */
 export function emptyWindowText(input: EmptyWindowInput): { text: string; absolute: boolean } {
   const width = windowWidthLabel(input.halfWidthMs);
-  if (!input.narrowed && !input.unreadSources && !input.updating) {
+  if (!input.narrowed && !input.unreadSources && !input.updating && input.unplacedTotal === 0) {
     return { text: `No other sources have entries within ${width}.`, absolute: true };
   }
   const parts = [`No other visible sources have entries within ${width}.`];
   if (input.narrowed) parts.push("Events hidden by the current filters or time range are not searched.");
   if (input.unreadSources) parts.push("Some sources were not fully read, so entries may be missing.");
   if (input.updating) parts.push("The timeline is being rebuilt, so this may change.");
+  if (input.unplacedTotal === null) {
+    parts.push("How many entries have no usable time is not known, and such entries are in no window.");
+  } else if (input.unplacedTotal > 0) {
+    parts.push(
+      `${count(input.unplacedTotal)} ${input.unplacedTotal === 1 ? "entry has" : "entries have"} no usable time and ${input.unplacedTotal === 1 ? "appears" : "appear"} in no window.`,
+    );
+  }
   return { text: parts.join(" "), absolute: false };
 }
 

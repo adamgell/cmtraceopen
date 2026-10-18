@@ -1028,6 +1028,44 @@ describe("what the dock does not claim", () => {
     expect(model.empty?.text).toMatch(/^No other visible sources/);
   });
 
+  describe("entries the session could not place are in no window (#842, review A1)", () => {
+    const own = () => [eventItem(1, t)];
+    const withUnplaced = (unplacedList: { items: never[]; total: number | null }, extra: Partial<DockModelInput> = {}) =>
+      ready({ record, window: windowAround(record, own()), counts: counts([], { unplacedList }), unreadSources: false, ...extra });
+
+    it("makes the absence claim for a known count of zero, from the paired counts", () => {
+      expect(withUnplaced({ items: [], total: 0 }).empty).toEqual({
+        text: "No other sources have entries within \u00b175 s.",
+        absolute: true,
+      });
+    });
+
+    it("withdraws it for a positive count and names the count", () => {
+      const model = withUnplaced({ items: [], total: 7 });
+      expect(model.empty?.absolute).toBe(false);
+      expect(model.empty?.text).toContain("7 entries have no usable time and appear in no window.");
+    });
+
+    it("withdraws it for an unknown count, which is not read as zero", () => {
+      const model = withUnplaced({ items: [], total: null });
+      expect(model.empty?.absolute).toBe(false);
+      expect(model.empty?.text).toContain("How many entries have no usable time is not known");
+    });
+
+    it("reads the count from the counts that are paired with the window, never from other counts", () => {
+      const other = counts([], { builtFor: "session:2", unplacedList: { items: [], total: 0 } });
+      const model = ready({ record, window: windowAround(record, own()), counts: other, unreadSources: false });
+      expect(model.paired).toBe(false);
+      expect(model.empty?.absolute).toBe(false);
+      expect(model.empty?.text).toContain("is not known");
+    });
+
+    it("is not an absence claim at all for a window that was not read whole, whatever the count", () => {
+      const window = windowAround(record, own(), { complete: false, windowItems: 90, omittedItems: 89, stoppedBy: "budget" });
+      expect(ready({ record, window, counts: counts([], { unplacedList: { items: [], total: 0 } }), unreadSources: false }).empty).toBeNull();
+    });
+  });
+
   it("qualifies the claim while the counts are not paired, because the scope is then not known", () => {
     const model = ready({ record, window: windowAround(record, own()), counts: null, unreadSources: false });
     expect(model.empty?.absolute).toBe(false);

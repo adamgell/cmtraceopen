@@ -96,7 +96,7 @@ export const DOCK_NEARBY_LINE_CAP = 4;
 /** The part of the counts-only model the dock reads: one session's rows, partners, gaps and scope. */
 export type DockCounts = Pick<
   CorrelationCounts,
-  "model" | "builtFor" | "linkPartners" | "gaps" | "scope" | "updating"
+  "model" | "builtFor" | "linkPartners" | "gaps" | "scope" | "unplacedList" | "updating"
 >;
 
 export interface DockModelInput {
@@ -577,6 +577,8 @@ export function buildDockModel(input: DockModelInput): DockModel {
           narrowed: scopeNarrowed,
           unreadSources: input.unreadSources,
           updating,
+          // The same run's own count, from the paired counts only; unpaired is not known.
+          unplacedTotal: pairedCounts === null ? null : pairedCounts.unplacedList.total,
         })
       : null;
 
