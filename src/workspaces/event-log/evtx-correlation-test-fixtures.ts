@@ -173,7 +173,7 @@ export function tokenPalette(theme: CMTraceTheme) {
 }
 
 /** An unplaced list the session counts as empty: no item, and a trusted count of 0. */
-export const EMPTY_UNPLACED_LIST: NonNullable<EvtxCorrelationData["unplacedList"]> = { items: [], total: 0 };
+const EMPTY_UNPLACED_LIST: NonNullable<EvtxCorrelationData["unplacedList"]> = { items: [], total: 0 };
 
 /** The edge total the hook would store: a count, or null when none can be trusted. */
 function knownEdgeTotal(total: number): number | null {
@@ -185,7 +185,7 @@ function knownEdgeTotal(total: number): number | null {
  * only for a run, so an unplaced list of null (no run) is refused by the type: it must not become a
  * counted zero here. `makeData` gives no counts for it.
  */
-export function makeCounts(
+function makeCounts(
   options: Omit<DataOptions, "unplacedList"> & {
     unplacedList?: NonNullable<DataOptions["unplacedList"]>;
   },
