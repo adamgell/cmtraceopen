@@ -31,8 +31,10 @@
 import { Fragment, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createFocusOutlineStyle, makeStyles, tokens } from "@fluentui/react-components";
 import { ArrowLeft12Regular, ArrowRight12Regular } from "@fluentui/react-icons";
-import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useRailTextColors } from "./evtx-rail-text";
+import type { CorrelationSizes } from "./evtx-correlation-sizes";
+// Existing importers still take the sizes from here; the next commits move them to the module.
+export { correlationSizes, type CorrelationSizes } from "./evtx-correlation-sizes";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import { tickLabels, type ChainPlot, type PlotConnector, type PlotLane, type PlotMarker } from "./evtx-correlation-view-model";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
@@ -54,31 +56,6 @@ export const CONNECTOR_STYLES = {
 } as const;
 /** Spec 8.11: a pinned entry's fill is drawn at 55% opacity. Only the fill. */
 export const PINNED_FILL_OPACITY = 0.55;
-
-/**
- * The text sizes of the view, from the user's log list font size `f` (spec 7.1, 8.11). The only
- * floors are the spec's own: captions and badge text max(10, f - 3), axis ticks max(9, f - 4).
- * Secondary labels (the lane labels) are f - 2 with none; `f` is at least 11 in the app.
- */
-export interface CorrelationSizes {
-  f: number;
-  /** f - 2: lane labels. */
-  lane: number;
-  /** max(10, f - 3): marker labels, captions. */
-  label: number;
-  /** max(9, f - 4): axis ticks. */
-  tick: number;
-}
-
-export function correlationSizes(logListFontSize: number): CorrelationSizes {
-  const f = getLogListMetrics(logListFontSize).fontSize;
-  return {
-    f,
-    lane: f - 2,
-    label: Math.max(10, f - 3),
-    tick: Math.max(9, f - 4),
-  };
-}
 
 const useStyles = makeStyles({
   marker: {

@@ -230,13 +230,6 @@ describe("the lanes and markers", () => {
     expect(glyph('[data-kind="log"]').style.borderRadius).toBe("3px");
   });
 
-  it("sizes the text by spec 7.1 from the log list font size: literal numbers at the default 13 px, and at both ends", () => {
-    // f - 2 for lane labels, max(10, f - 3) for captions, max(9, f - 4) for axis ticks.
-    expect(correlationSizes(13)).toEqual({ f: 13, lane: 11, label: 10, tick: 9 });
-    expect(correlationSizes(11)).toEqual({ f: 11, lane: 9, label: 10, tick: 9 });
-    expect(correlationSizes(20)).toEqual({ f: 20, lane: 18, label: 17, tick: 16 });
-  });
-
   it("paints the lane label, marker label and axis tick at those sizes at the default 13 px", () => {
     draw(exactPlot({ window: { startMs: T0 + 2_000, endMs: T0 + 3_000 } }), { sizes: correlationSizes(13) });
     expect((document.querySelector("[data-lane-label]") as HTMLElement).style.fontSize).toBe("11px");
