@@ -1,0 +1,77 @@
+/**
+ * Builders for the tests of the window facts, the Details context model and its component (#843).
+ * They sit on the shared correlation fixtures (`evtx-correlation-test-fixtures.ts`, which the dock
+ * lane also edits, so nothing is added there): the same synthetic events, the same loaded records,
+ * the same real chain model over real edges.
+ *
+ * Test code only: nothing outside a test file imports it.
+ */
+import { makeCounts, recordFor, type DataOptions } from "./evtx-correlation-test-fixtures";
+import type { LoadedCorrelationWindow } from "./evtx-correlation-window";
+import type { TimelineCorrelationEdge, TimelineItem } from "./unified-timeline";
+import type { EvtxRecord } from "./types";
+
+export const SESSION_KEY = "session:1";
+
+/** Half of the Details context's window: ±5 min. */
+export const FIVE_MIN = 300_000;
+
+/** The window the loader would return for `record` over `items`: whole, unless overridden. */
+export function windowAround(
+  record: EvtxRecord,
+  items: TimelineItem[],
+  overrides: Partial<LoadedCorrelationWindow> = {},
+  halfWidthMs = FIVE_MIN,
+): LoadedCorrelationWindow {
+  return {
+    sessionKey: SESSION_KEY,
+    centerMs: record.timestampEpoch,
+    halfWidthMs,
+    startMs: record.timestampEpoch - halfWidthMs,
+    endMs: record.timestampEpoch + halfWidthMs,
+    items,
+    windowItems: items.length,
+    omittedItems: 0,
+    complete: true,
+    stoppedBy: null,
+    error: null,
+    retainedBytes: 1_000,
+    calls: 1,
+    ...overrides,
+  };
+}
+
+/** A read that stopped (the call limit) with `items` read of `windowItems` in the window. */
+export function stoppedWindow(
+  record: EvtxRecord,
+  items: TimelineItem[],
+  windowItems: number,
+  overrides: Partial<LoadedCorrelationWindow> = {},
+): LoadedCorrelationWindow {
+  return windowAround(record, items, {
+    complete: false,
+    windowItems,
+    omittedItems: windowItems - items.length,
+    stoppedBy: "callLimit",
+    ...overrides,
+  });
+}
+
+type CountsOptions = Partial<Omit<DataOptions, "unplacedList">> & {
+  unplacedList?: NonNullable<DataOptions["unplacedList"]>;
+};
+
+/** The counts-only model of session `SESSION_KEY` over `edges`, as the hook keeps it. */
+export function countsFor(edges: TimelineCorrelationEdge[], extra: CountsOptions = {}) {
+  return makeCounts({ items: [], edges, builtFor: SESSION_KEY, ...extra });
+}
+
+/** A second entry that names the same record as `item` (another stable id, every field equal). */
+export function twinOf(item: TimelineItem, stableId: string): TimelineItem {
+  return item.origin.kind === "event" ? { ...item, origin: { ...item.origin, stableId } } : item;
+}
+
+/** A record the join can never name: an event the provider never numbered. */
+export function unnumbered(epoch: number): EvtxRecord {
+  return { ...recordFor(1), eventRecordId: 0, eventRecordIdText: null, timestampEpoch: epoch };
+}
