@@ -1,10 +1,10 @@
 {
   "about": "Replies captured from the real event-log analysis engine (EventLogAnalysisSession) over the records in event-log-data.ts. Do not edit by hand. Regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`; engineCommit is the commit the engine was built from.",
   "provenance": {
-    "engineCommit": "7c0a8f33c935adc3431b7f9c6faf388f4739c47a",
-    "engineTreeDirty": false,
+    "engineCommit": "1084204611bb2302f9f498a185a40efd2a0029b5",
+    "engineTreeDirty": true,
     "capturedBy": "e2e/fixtures/capture-event-log-replies.mjs",
-    "inputSha256": "60b994535f2ee08096ef64bbffbe10c7c7a7664c8e9d25213a97c70258d57908",
+    "inputSha256": "8daea2d9dae72adb7a1b368b478f684df5767cba3031148f7141dee4161e7920",
     "engineSourceSha256": "9f4e549471b5e7345177b7059a3f0c809c226b47dc4f62ec19b9a3ee40d8c2c3"
   },
   "sessionId": "00000000-0000-4000-8000-000000000828",
@@ -24601,6 +24601,194 @@
           }
         ],
         "serializedBytes": 5878
+      }
+    },
+    {
+      "name": "dockContext",
+      "centerMs": 1791364318000,
+      "halfWidthMs": 300000,
+      "startMs": 1791364018000,
+      "endMs": 1791364618000,
+      "limit": 1000,
+      "window": {
+        "sessionId": "00000000-0000-4000-8000-000000000828",
+        "revision": 3,
+        "startMs": 1791364018000,
+        "endMs": 1791364618000,
+        "offset": 1228,
+        "nextOffset": null,
+        "totalItems": 1331,
+        "windowItems": 9,
+        "omittedItems": 0,
+        "items": [
+          {
+            "timestampMs": 1791364101000,
+            "severity": "info",
+            "message": "The Background Intelligent Transfer Service service entered the stopped state.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source32:C:\\Fixture\\EventLogs\\System.evtx|machine12:CONTOSO-PC01|channel6:System|record91900",
+              "source": "C:\\Fixture\\EventLogs\\System.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "System",
+              "provider": "Service Control Manager",
+              "processId": null,
+              "eventId": 7036,
+              "recordId": 91900,
+              "recordIdText": "91900"
+            }
+          },
+          {
+            "timestampMs": 1791364103000,
+            "severity": "warning",
+            "message": "Token broker operation failed.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source41:C:\\Fixture\\EventLogs\\AAD-Operational.evtx|machine12:CONTOSO-PC01|channel33:Microsoft-Windows-AAD/Operational|record91903",
+              "source": "C:\\Fixture\\EventLogs\\AAD-Operational.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Microsoft-Windows-AAD/Operational",
+              "provider": "Microsoft-Windows-AAD",
+              "processId": null,
+              "eventId": 1098,
+              "recordId": 91903,
+              "recordIdText": "91903"
+            }
+          },
+          {
+            "timestampMs": 1791364115000,
+            "severity": "warning",
+            "message": "Http request status: 400. Method: POST.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source41:C:\\Fixture\\EventLogs\\AAD-Operational.evtx|machine12:CONTOSO-PC01|channel33:Microsoft-Windows-AAD/Operational|record91906",
+              "source": "C:\\Fixture\\EventLogs\\AAD-Operational.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Microsoft-Windows-AAD/Operational",
+              "provider": "Microsoft-Windows-AAD",
+              "processId": null,
+              "eventId": 1097,
+              "recordId": 91906,
+              "recordIdText": "91906"
+            }
+          },
+          {
+            "timestampMs": 1791364252000,
+            "severity": "info",
+            "message": "The start type of the Background Intelligent Transfer Service service was changed from demand start to auto start.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source32:C:\\Fixture\\EventLogs\\System.evtx|machine12:CONTOSO-PC01|channel6:System|record91909",
+              "source": "C:\\Fixture\\EventLogs\\System.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "System",
+              "provider": "Service Control Manager",
+              "processId": null,
+              "eventId": 7040,
+              "recordId": 91909,
+              "recordIdText": "91909"
+            }
+          },
+          {
+            "timestampMs": 1791364312000,
+            "severity": "info",
+            "message": "MDM Enroll: auto-enrollment triggered by policy",
+            "origin": {
+              "kind": "event",
+              "stableId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91912",
+              "source": "C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+              "processId": null,
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}",
+              "eventId": 72,
+              "recordId": 91912,
+              "recordIdText": "91912"
+            }
+          },
+          {
+            "timestampMs": 1791364318000,
+            "severity": "error",
+            "message": "Auto MDM Enroll: Failed",
+            "origin": {
+              "kind": "event",
+              "stableId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91915",
+              "source": "C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+              "processId": null,
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}",
+              "eventId": 76,
+              "recordId": 91915,
+              "recordIdText": "91915"
+            }
+          },
+          {
+            "timestampMs": 1791364498000,
+            "severity": "warning",
+            "message": "Name resolution for the name enrollment.manage.microsoft.com timed out after none of the configured DNS servers responded.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source32:C:\\Fixture\\EventLogs\\System.evtx|machine12:CONTOSO-PC01|channel6:System|record91918",
+              "source": "C:\\Fixture\\EventLogs\\System.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "System",
+              "provider": "Microsoft-Windows-DNS-Client",
+              "processId": null,
+              "eventId": 1014,
+              "recordId": 91918,
+              "recordIdText": "91918"
+            }
+          },
+          {
+            "timestampMs": 1791364558000,
+            "severity": "info",
+            "message": "MDM Enroll: auto-enrollment triggered by policy",
+            "origin": {
+              "kind": "event",
+              "stableId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91921",
+              "source": "C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+              "processId": null,
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}",
+              "eventId": 72,
+              "recordId": 91921,
+              "recordIdText": "91921"
+            }
+          },
+          {
+            "timestampMs": 1791364565000,
+            "severity": "error",
+            "message": "Auto MDM Enroll: Failed",
+            "origin": {
+              "kind": "event",
+              "stableId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91924",
+              "source": "C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+              "processId": null,
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}",
+              "eventId": 76,
+              "recordId": 91924,
+              "recordIdText": "91924"
+            }
+          }
+        ],
+        "serializedBytes": 5638
       }
     }
   ],

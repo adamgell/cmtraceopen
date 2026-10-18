@@ -506,8 +506,11 @@ interface FixtureRecordRef {
  *   record the "Correlation dock" capture selects: the "Auto MDM Enroll: Failed" (76) of the
  *   dataset's first Exact pair, whose 72 comes 6 s before it.
  * - `selectedContext`: +/-300 s (the Details context list, #843) around the record the "selected
- *   record" capture selects: the DeviceManagement 404 at record 89131. Nothing asks for it yet;
- *   it is captured here so the Details context's capture needs no second Rust change.
+ *   record" capture selects: the DeviceManagement 404 at record 89131. The Details tab reads it
+ *   when that record is selected, and the dock's widest setting reads it too.
+ * - `dockContext`: +/-300 s around the dock's record (DM 76, record 91915). Selecting that record
+ *   opens Details, whose Context section reads this window while the dock reads its own `dock`
+ *   window around the same record, so a dock user's selection asks for both.
  */
 const TIMELINE_WINDOW_REQUESTS: readonly {
   name: string;
@@ -520,6 +523,7 @@ const TIMELINE_WINDOW_REQUESTS: readonly {
     record: { channel: "dm", eventId: 404, eventRecordId: 89131 },
     halfWidthMs: 300_000,
   },
+  { name: "dockContext", record: { channel: "dm", eventId: 76, eventRecordId: 91915 }, halfWidthMs: 300_000 },
 ];
 
 /**

@@ -22,7 +22,7 @@
  *   anything runs, the hash of the engine input is compared with the one recorded at capture.
  *   Each override then checks the part of the request the capture saw: the session id, the
  *   records of every append chunk, the offset and limit of a timeline page, the start, end and
- *   limit of a time window (only the two windows the engine capture holds exist), the coverage gaps
+ *   limit of a time window (only the windows the engine capture holds exist), the coverage gaps
  *   of the diagnosis. No edge page was captured, so that command always fails. A failed check
  *   carries a message saying what to regenerate or update, is also kept on the page, and the
  *   afterEach fails the test that raised it. That catches a replay that no longer matches its
@@ -878,9 +878,10 @@ test.describe("event-logs screenshots", () => {
 
   test("event-logs correlation dock", async ({ page }) => {
     // The dock (spec 8.12) reads the analysis session for a window of timeline items around the
-    // selected record. The replayed engine holds exactly two windows (`timelineWindows` of the
-    // engine capture), and the override answers no other: this test selects the record the "dock"
-    // window was captured around, at the dock's default width, and the last step uses the other.
+    // selected record, and the Details section reads its own +/-5 min window around it. The replayed
+    // engine holds exactly three windows (`timelineWindows` of the engine capture), and the override
+    // answers no other: the dock's default width ("dock") and the Details window ("dockContext")
+    // around the dock record, and, for the other record, its +/-5 min window ("selectedContext").
     const parseResult = buildParseResult();
     const replies = loadEngineReplies();
     const capturedWindow = (name: string) => {
@@ -891,6 +892,7 @@ test.describe("event-logs screenshots", () => {
     const dockCapture = capturedWindow("dock");
     const dockRecord = timelineWindowRecord(parseResult, "dock");
     const contextCapture = capturedWindow("selectedContext");
+    const dockContextCapture = capturedWindow("dockContext");
     const contextRecord = timelineWindowRecord(parseResult, "selectedContext");
     // The lanes a window shows: an event lane is a source and a channel, a log lane a file.
     const laneCount = (capture: ReturnType<typeof capturedWindow>) =>
@@ -910,22 +912,28 @@ test.describe("event-logs screenshots", () => {
       endMs: capture.endMs,
       limit: capture.limit,
     });
+    // The reads, named by who makes them: the dock's default +/-75 s window around the dock record,
+    // the Details section's +/-5 min window around the dock record, and the same +/-5 min window
+    // around the other record, which the Details section reads and the dock reads at its widest.
+    const dockRead = requestOf(dockCapture);
+    const detailsOfDock = requestOf(dockContextCapture);
+    const fiveMinutesAround = requestOf(contextCapture);
 
     const queries = () => page.evaluate(() => window.__evtxWindowQueries ?? []);
-    // Selects a record the way an arrow-key move does: the store's selection, with the rail left on
-    // its tab and no Details pane. A row click also opens Details, and the Details tab's Context
-    // section then reads its own +/-5 min window around the record (the "selected record" capture
-    // asserts that), which would be a read of the dock's counted queries that is not the dock's and,
-    // around the dock record, of a window nobody captured. The record lies far below the fold of a
-    // virtualized list, so it is selected through the store.
+    // What the real row click does with a record (select it, show Details). The dock record lies far
+    // below the fold of a virtualized list, so it is selected through the action every view calls.
+    // Showing Details also starts the Context section's read of its own +/-5 min window around the
+    // record, so a selection with the Insights panel shown makes two reads: the Details one and,
+    // while the dock is open, the dock's.
     const select = (record: { id: number; eventId: number; eventRecordId: number }) =>
       page.evaluate(async ({ id, eventId, eventRecordId }) => {
         const { useEvtxStore } = await import("/src/workspaces/event-log/evtx-store.ts");
+        const { selectRecordAndShowDetails } = await import("/src/workspaces/event-log/evtx-select-record.ts");
         const loaded = useEvtxStore.getState().records.find((candidate) => candidate.id === id);
         if (loaded?.eventId !== eventId || loaded.eventRecordId !== eventRecordId) {
           throw new Error(`[event-logs fixture] record ${id} is not event ${eventId} / record ${eventRecordId}`);
         }
-        useEvtxStore.getState().setSelectedRecordId(id);
+        selectRecordAndShowDetails(id);
       }, record);
     // A read waits 150 ms after a selection, so this much quiet means none was going to be made.
     const quiet = () => page.waitForTimeout(600);
@@ -941,14 +949,15 @@ test.describe("event-logs screenshots", () => {
     await expect(slot).toBeHidden();
     await expect(dock).toHaveCount(0);
     await select(dockRecord);
-    // The selection landed: the rail's tab names the event. Details is not open, so nothing but the
-    // dock could read, and the dock is not mounted.
+    await expect(page.getByRole("region", { name: "Event log details" })).toBeVisible();
     await expect(
-      page.getByRole("tablist", { name: "Rail tabs" }).getByRole("tab", { name: `Event ${dockRecord.eventId}` }),
-    ).toBeVisible();
-    await expect(page.getByRole("region", { name: "Event log details" })).toHaveCount(0);
+      page
+        .getByRole("region", { name: "Event log details" })
+        .getByRole("group", { name: `Context \u00b1${dockContextCapture.halfWidthMs / 60_000} min` }),
+    ).toBeVisible({ timeout: 15_000 });
     await quiet();
-    expect(await queries()).toEqual([]);
+    // The dock is not mounted, so the only read is the Details section's: its +/-5 min window.
+    expect(await queries()).toEqual([detailsOfDock]);
 
     // Open it. One read, of the window the capture holds, and its lanes and chain summary draw.
     await toggle.click();
@@ -958,7 +967,8 @@ test.describe("event-logs screenshots", () => {
     await expect(dock.getByTestId("correlation-dock-summary")).toBeVisible();
     await expect(dock.getByTestId("correlation-dock-updating")).toHaveCount(0);
     await expect(open).not.toHaveAttribute("aria-disabled", "true");
-    expect(await queries()).toEqual([requestOf(dockCapture)]);
+    // The dock's +/-75 s window and the Details +/-5 min window, each once.
+    expect(await queries()).toEqual([detailsOfDock, dockRead]);
     await assertNoHostPaths(page);
     await page.screenshot({
       path: outPath("event-logs-correlation-dock.png"),
@@ -1227,12 +1237,13 @@ test.describe("event-logs screenshots", () => {
     await expect(plot).toBeHidden();
     await select(contextRecord);
     await quiet();
-    expect(await queries()).toEqual([requestOf(dockCapture)]);
+    // Only the Details section read, for the new record: the collapsed dock added none.
+    expect(await queries()).toEqual([detailsOfDock, dockRead, fiveMinutesAround]);
     await select(dockRecord);
     await dock.getByRole("button", { name: "Expand correlation" }).click();
     await expect(plot).toBeVisible();
     await quiet();
-    expect(await queries()).toEqual([requestOf(dockCapture)]);
+    expect(await queries()).toEqual([detailsOfDock, dockRead, fiveMinutesAround, detailsOfDock]);
 
     // Close returns focus to the toggle that opened the dock and unmounts it; a hidden dock reads
     // nothing when the selection moves.
@@ -1249,11 +1260,11 @@ test.describe("event-logs screenshots", () => {
     await page.setViewportSize(tallWindow as { width: number; height: number });
     await select(contextRecord);
     await quiet();
-    expect(await queries()).toEqual([requestOf(dockCapture)]);
+    expect(await queries()).toEqual([detailsOfDock, dockRead, fiveMinutesAround, detailsOfDock, fiveMinutesAround]);
 
-    // The second captured window: the record of the "selected record" capture at the widest
-    // setting. The width is set first, because opening the dock reads at once and a read at the
-    // default width around this record was never captured.
+    // The dock at its widest setting around the other record: the "selectedContext" window, which is
+    // the one the Details section read for it. The width is set first, because opening the dock reads
+    // at once and a read at the default width around this record was never captured.
     await page.evaluate(async () => {
       const { useEvtxLayoutStore } = await import("/src/workspaces/event-log/evtx-layout-store.ts");
       useEvtxLayoutStore.getState().setDockWindowMs(300_000);
@@ -1264,7 +1275,14 @@ test.describe("event-logs screenshots", () => {
     await expect(subtitle).toContainText("window \u00b15 min");
     await expect(subtitle).toHaveText(sourcesAt(contextCapture));
     await expect(plot.locator("button[data-marker]")).toHaveCount(contextCapture.window.items.length);
-    expect(await queries()).toEqual([requestOf(dockCapture), requestOf(contextCapture)]);
+    expect(await queries()).toEqual([
+      detailsOfDock,
+      dockRead,
+      fiveMinutesAround,
+      detailsOfDock,
+      fiveMinutesAround,
+      fiveMinutesAround,
+    ]);
   });
 
   test("event-logs correlation view keeps its floor beside the dock", async ({ page }) => {
