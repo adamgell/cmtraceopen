@@ -72,6 +72,116 @@ async function dismissSplash(
 // Timestamps render in local time; pin the zone and locale so the PNGs do not depend on the host.
 test.use({ timezoneId: "UTC", locale: "en-US" });
 
+/**
+ * Selects the DeviceManagement 404 at record 89131 by a real row click: the record the "selected
+ * record" capture and the Details context window (`selectedContext`, +/-300 s) are about. Newest
+ * first, this record is row 1026 of 1331, below the fold of a virtualized list, so scroll it into
+ * the rendered window first (the way the Phase 2 capture did), then click it.
+ */
+async function selectDeviceManagement404(
+  page: import("@playwright/test").Page,
+  gridName: string,
+): Promise<void> {
+  const grid = page.getByRole("grid", { name: gridName });
+  await grid.evaluate((el) => {
+    // Rows are not a fixed height (the level badge column varies), so scale by the list's own
+    // height: a few rows above row 1026 of 1331.
+    el.scrollTop = Math.floor((el.scrollHeight * 1022) / 1331);
+  });
+  const row = grid
+    .getByRole("row")
+    .filter({ hasText: "15:43:23" })
+    .filter({ hasText: "MDM Configurati" })
+    .first();
+  await expect(row).toBeVisible();
+  await row.click();
+}
+
+/**
+ * What the Details tab's "Context +/-5 min" section must show for the selected record, derived from
+ * the engine reply the capture holds (`timelineWindows` "selectedContext") and from the edges the
+ * first timeline page previews, and from nothing written down here: a count, a time, a message or
+ * a link the reply does not give is not asserted. A precondition the derivation rests on (the
+ * window was read whole, fits the list, has no repeated entry, and the record is in it once) is
+ * checked and named, so a recapture that breaks it fails with the reason and not with a mismatch.
+ */
+function selectedContextExpectations(replies: ReturnType<typeof loadEngineReplies>) {
+  const captured = replies.timelineWindows.find((entry) => entry.name === "selectedContext");
+  if (captured === undefined) throw new Error('[event-logs fixture] no captured window named "selectedContext"');
+  const { window: read } = captured;
+  const originId = (item: (typeof read.items)[number]): string => {
+    if (item.origin.kind !== "event") {
+      throw new Error("[event-logs fixture] the selectedContext window holds a log line: extend this derivation");
+    }
+    return item.origin.stableId;
+  };
+  const ids = read.items.map(originId);
+  const listCap = 12;
+  const preconditions: [boolean, string][] = [
+    [read.nextOffset === null && read.omittedItems === 0, "the window was not read whole"],
+    [read.items.length === read.windowItems, "the window holds entries the reply does not list"],
+    [new Set(ids).size === ids.length, "an entry is read twice"],
+    [read.items.length <= listCap, `the window holds more than the list's ${listCap} rows`],
+  ];
+  for (const [holds, reason] of preconditions) {
+    if (!holds) throw new Error(`[event-logs fixture] selectedContext: ${reason}; the derivation of the caption and rows no longer holds`);
+  }
+  const selected = centerOriginIdOf(captured);
+  const selectedItems = read.items.filter((item) => originId(item) === selected);
+  if (selectedItems.length !== 1) throw new Error("[event-logs fixture] selectedContext: the record is not in its own window once");
+
+  // The rows: time order, the selected record among them.
+  const rows = [...read.items]
+    .sort((a, b) => a.timestampMs - b.timestampMs || (originId(a) < originId(b) ? -1 : 1))
+    .map((item) => ({
+      id: originId(item),
+      isSelected: originId(item) === selected,
+      clock: new Date(item.timestampMs).toISOString().slice(11, 19),
+      message: item.message,
+      chip: (item.origin.kind === "event" ? "EVT" : "LOG") as "EVT" | "LOG",
+    }));
+
+  // The direct links: an Exact or Candidate edge of the first timeline page's preview that has the
+  // record at one end and is not blocked by a coverage gap. The preview holds every edge only while
+  // `totalEdges` is its length.
+  const firstPage = replies.timelinePages.find((entry) => entry.offset === 0)!.page;
+  if (firstPage.edgesPreview.length !== firstPage.totalEdges) {
+    throw new Error("[event-logs fixture] the first timeline page does not preview every edge: extend this derivation");
+  }
+  const linked = new Set<string>();
+  for (const edge of firstPage.edgesPreview) {
+    if (edge.toId === null || edge.coverage.state !== "covered") continue;
+    if (edge.strength !== "exact" && edge.strength !== "candidate") continue;
+    if (edge.fromId === selected) linked.add(edge.toId);
+    if (edge.toId === selected) linked.add(edge.fromId);
+  }
+
+  const entries = (count: number) => `${count.toLocaleString("en-US")} ${count === 1 ? "entry" : "entries"}`;
+  const width = `\u00b1${captured.halfWidthMs / 60_000} min`;
+  return {
+    query: { startMs: captured.startMs, endMs: captured.endMs, limit: captured.limit },
+    title: `Context ${width}`,
+    // A window read whole that fits the list: every entry is a row, said as a count of the window.
+    caption: `${entries(read.windowItems)} within ${width}`,
+    rows,
+    linkedIds: linked,
+  };
+}
+
+/** The origin id of the record a named window is centered on, read from the window's own entries. */
+function centerOriginIdOf(captured: ReturnType<typeof loadEngineReplies>["timelineWindows"][number]): string {
+  const center = captured.centerMs;
+  const atCenter = captured.window.items.filter((item) => item.timestampMs === center);
+  if (atCenter.length !== 1 || atCenter[0]!.origin.kind !== "event") {
+    throw new Error(`[event-logs fixture] window "${captured.name}": its center is not one event of the window`);
+  }
+  return atCenter[0]!.origin.stableId;
+}
+
+/** Words a row of the section never carries: they say how an entry relates to the event. */
+const RELATIONSHIP_WORDS =
+  /not linked|no loaded link|in another chain|not in this chain|link to this event not known|ambiguous with this event|coverage blocked with this event|linked, but its link|time only[,;]/i;
+
 test.describe("event-logs screenshots", () => {
   let timelineGridName: string;
 
@@ -422,30 +532,205 @@ test.describe("event-logs screenshots", () => {
     // 404 at record 89131, the first piece of evidence of the top finding. The engine's evidence is
     // the redacted display projection (machine as a [host:...] token, source as the file path), and
     // the callout matches on event ID, provider, channel and record ID, so this record matches
-    // uniquely. A real row click drives it into Details: newest first, this record is row 1026 of
-    // 1331, below the fold of a virtualized list, so scroll it into the rendered window first (the
-    // way the Phase 2 capture did), then click it.
-    const grid = page.getByRole("grid", { name: timelineGridName });
-    await grid.evaluate((el) => {
-      // Rows are not a fixed height (the level badge column varies), so scale by the list's own
-      // height: a few rows above row 1026 of 1331.
-      el.scrollTop = Math.floor((el.scrollHeight * 1022) / 1331);
-    });
-    const row = grid
-      .getByRole("row")
-      .filter({ hasText: "15:43:23" })
-      .filter({ hasText: "MDM Configurati" })
-      .first();
-    await expect(row).toBeVisible();
-    await row.click();
+    // uniquely. A real row click drives it into Details.
+    await selectDeviceManagement404(page, timelineGridName);
     const detail = page.getByRole("region", { name: "Event log details" });
     await expect(detail).toContainText("Command failure status");
     await expect(detail.getByRole("button", { name: /Part of finding/ })).toBeVisible();
+
+    // The "Context +/-5 min" section (#843) reads the captured +/-300 s window around this record.
+    // Everything it must show is derived from that reply (see selectedContextExpectations).
+    const expected = selectedContextExpectations(loadEngineReplies());
+    const section = detail.getByRole("group", { name: expected.title });
+    await expect(section).toBeVisible({ timeout: 15_000 });
+    await expect(section.locator('[data-evtx-ctx="eyebrow"]')).toHaveText(expected.title);
+    await expect(section.locator('[data-evtx-ctx="kinds"]')).toHaveText("events + text logs");
+    await expect(section.locator('[data-evtx-ctx="caption"]')).toHaveText(expected.caption);
+
+    const list = section.getByRole("list", { name: "Entries around this event" });
+    const rows = list.getByRole("listitem");
+    await expect(rows).toHaveCount(expected.rows.length);
+    for (const [index, want] of expected.rows.entries()) {
+      const row = rows.nth(index);
+      await expect(row.locator('[data-evtx-ctx="time"]'), `row ${index}`).toHaveText(want.clock);
+      await expect(row.locator('[data-evtx-ctx="message"]'), `row ${index}`).toHaveText(want.message);
+      // The selected record is the one highlighted row and says so; no other row is current.
+      if (want.isSelected) {
+        await expect(row).toHaveAttribute("aria-current", "true");
+        await expect(row.locator('[data-evtx-ctx="offset"]')).toContainText("this event");
+      } else {
+        expect(await row.evaluate((element) => element.hasAttribute("aria-current")), `row ${index}`).toBe(false);
+        await expect(row.locator('[data-evtx-ctx="offset"]')).not.toContainText("this event");
+      }
+      // Every row shows the shared kind chip, and it names the kind of the entry.
+      const chip = row.locator("[data-chip]");
+      await expect(chip).toHaveCount(1);
+      await expect(chip).toHaveAttribute("data-chip", want.chip);
+      await expect(chip).toHaveText(want.chip);
+      await expect(row.getByRole("img", { name: want.chip === "EVT" ? "Windows event" : "Text log line" })).toHaveCount(1);
+      // A link icon only where the captured edges give a direct Exact or Candidate link to the record.
+      const icon = row.getByRole("img", { name: /link to this event/ });
+      await expect(icon, `row ${index} link icon`).toHaveCount(expected.linkedIds.has(want.id) ? 1 : 0);
+      // Nothing in a row says how it relates to the event: the icon is the only mark.
+      const text = (await row.innerText()).replace(/\s+/g, " ");
+      expect(text, `row ${index}`).not.toMatch(RELATIONSHIP_WORDS);
+      if (!expected.linkedIds.has(want.id)) {
+        expect(text, `row ${index}`).not.toMatch(/\blink/i);
+        await expect(row.locator('[aria-label*="link" i]')).toHaveCount(0);
+      }
+    }
+    await expect(section.locator('li[aria-current="true"]')).toHaveCount(1);
+    // The legend names the icon only when a row has it.
+    await expect(section.locator('[data-evtx-ctx="legend"]')).toHaveCount(expected.linkedIds.size > 0 ? 1 : 0);
+    expect(await section.getByRole("img", { name: /link to this event/ }).count()).toBe(
+      expected.rows.filter((row) => expected.linkedIds.has(row.id)).length,
+    );
+
+    // One read, of the captured window and no other: the afterEach fails a window nobody captured,
+    // and this fails an extra request for the captured one.
+    await expect
+      .poll(() => page.evaluate(() => window.__evtxWindowQueries ?? []))
+      .toEqual([expected.query]);
     await assertNoHostPaths(page);
     await page.screenshot({
       path: outPath("event-logs-selected.png"),
       animations: "disabled",
     });
+
+    // "Open full correlation timeline" switches the main view to Correlation and moves focus to its
+    // tab, and reads nothing more.
+    await section.getByRole("button", { name: "Open full correlation timeline" }).click();
+    const correlationTab = page.getByRole("tab", { name: "Correlation", exact: true });
+    await expect(correlationTab).toHaveAttribute("aria-selected", "true");
+    await expect(correlationTab).toBeFocused();
+    expect(await page.evaluate(() => window.__evtxWindowQueries ?? [])).toEqual([expected.query]);
+  });
+
+  test("event-logs selected record reads nothing while the Insights panel is hidden", async ({ page }) => {
+    // The section reads only while the Insights panel is shown and the rail is on Details. With the
+    // panel hidden a selected record asks the engine for nothing; showing the panel again reads the
+    // one captured window.
+    //
+    // A row click would show the panel again (spec section 9: it selects, switches the rail to
+    // Details and shows the rail), so the record is selected the way a selection that must not
+    // reopen the rail is: through the store, with the rail on Details.
+    const expected = selectedContextExpectations(loadEngineReplies());
+    const record = timelineWindowRecord(buildParseResult(), "selectedContext");
+    const insights = page.getByRole("button", { name: "Insights", exact: true });
+    await expect(insights).toHaveAttribute("aria-pressed", "true");
+    await insights.click();
+    await expect(insights).toHaveAttribute("aria-pressed", "false");
+    await expect(page.locator("#evtx-rail-panel-insights")).toBeHidden();
+
+    await page.evaluate(
+      async ({ channel, eventId, eventRecordId }) => {
+        const { useEvtxStore } = await import("/src/workspaces/event-log/evtx-store.ts");
+        const { useEvtxLayoutStore } = await import("/src/workspaces/event-log/evtx-layout-store.ts");
+        const loaded = useEvtxStore
+          .getState()
+          .records.find(
+            (candidate) =>
+              candidate.channel === channel &&
+              candidate.eventId === eventId &&
+              candidate.eventRecordId === eventRecordId,
+          );
+        if (loaded === undefined) {
+          throw new Error(`[event-logs fixture] no ${channel} event ${eventId} with record ID ${eventRecordId}`);
+        }
+        useEvtxLayoutStore.getState().setRailTab("details");
+        useEvtxStore.getState().setSelectedRecordId(loaded.id);
+      },
+      { channel: record.channel, eventId: record.eventId, eventRecordId: record.eventRecordId },
+    );
+    // The rail is on Details with the record selected, and the panel is still hidden.
+    await expect(insights).toHaveAttribute("aria-pressed", "false");
+    // A read waits 150 ms after a selection, so this much quiet means none was going to be made.
+    await page.waitForTimeout(1_500);
+    expect(await page.evaluate(() => window.__evtxWindowQueries ?? [])).toEqual([]);
+    await expect(page.getByRole("group", { name: expected.title })).toBeHidden();
+
+    await insights.click();
+    await expect(insights).toHaveAttribute("aria-pressed", "true");
+    const section = page.getByRole("region", { name: "Event log details" }).getByRole("group", { name: expected.title });
+    await expect(section).toBeVisible({ timeout: 15_000 });
+    await expect(section.locator('[data-evtx-ctx="caption"]')).toHaveText(expected.caption);
+    await expect
+      .poll(() => page.evaluate(() => window.__evtxWindowQueries ?? []))
+      .toEqual([expected.query]);
+  });
+
+  test("event-logs selected record keeps the rail's cards whole at 1440 x 700 and the pane scrolls", async ({ page }, testInfo) => {
+    // The Z1/Z2 class: a card in a flex column with a section added beside it must not be squeezed
+    // to nothing (a scroll container's automatic minimum size is 0), and a pane taller than the
+    // rail must scroll. jsdom does no layout, so this is measured here, at the shortest window the
+    // layout specs use, with the Details tab open on the record whose section is the tallest.
+    await page.setViewportSize({ width: 1440, height: 700 });
+    await selectDeviceManagement404(page, timelineGridName);
+    const expected = selectedContextExpectations(loadEngineReplies());
+    const section = page
+      .getByRole("region", { name: "Event log details" })
+      .getByRole("group", { name: expected.title });
+    await expect(section.locator('[data-evtx-ctx="caption"]')).toHaveText(expected.caption);
+    await expect(section.getByRole("listitem")).toHaveCount(expected.rows.length);
+
+    const measure = () =>
+      section.evaluate((element) => {
+        const column = element.parentElement as HTMLElement;
+        let scroller: HTMLElement | null = column;
+        while (scroller !== null) {
+          const overflow = getComputedStyle(scroller).overflowY;
+          if (overflow === "auto" || overflow === "scroll") break;
+          scroller = scroller.parentElement;
+        }
+        if (scroller === null) throw new Error("the Details pane has no scroll container");
+        const box = (node: Element) => node.getBoundingClientRect();
+        const cards = Array.from(column.children)
+          .filter((child) => getComputedStyle(child).display !== "none")
+          .map((child) => ({
+            name: (child.getAttribute("aria-label") ?? child.textContent ?? "").trim().slice(0, 32),
+            height: Math.round(box(child).height * 10) / 10,
+            natural: (child as HTMLElement).scrollHeight,
+          }));
+        const rows = Array.from(element.querySelectorAll('li[data-evtx-ctx="row"]')).map((row) => box(row).height);
+        const scrollerBox = box(scroller);
+        return {
+          clientHeight: scroller.clientHeight,
+          scrollHeight: scroller.scrollHeight,
+          scrollTop: scroller.scrollTop,
+          scrollerBottom: scrollerBox.bottom,
+          cards,
+          rowHeights: rows,
+          sectionHeight: box(element).height,
+          lastCardBottom: box(column.lastElementChild as Element).bottom,
+        };
+      });
+
+    const top = await measure();
+    // Not vacuous: the pane is taller than the rail, so it must scroll.
+    expect(top.scrollHeight).toBeGreaterThan(top.clientHeight);
+    // No card is squeezed: each is as tall as its own content, and none is nothing.
+    for (const card of top.cards) {
+      expect(card.height, `card "${card.name}" has no height`).toBeGreaterThan(0);
+      expect(card.height, `card "${card.name}" is squeezed under its content`).toBeGreaterThanOrEqual(card.natural - 1);
+    }
+    // Every row of the section is drawn with a height of its own.
+    expect(top.rowHeights).toHaveLength(expected.rows.length);
+    for (const height of top.rowHeights) expect(height).toBeGreaterThan(0);
+
+    // Scrolled to its end, the pane brings its last card into view and the scrollTop moved.
+    await section.evaluate((element) => {
+      let scroller: HTMLElement | null = element.parentElement;
+      while (scroller !== null && !["auto", "scroll"].includes(getComputedStyle(scroller).overflowY)) {
+        scroller = scroller.parentElement;
+      }
+      if (scroller === null) throw new Error("the Details pane has no scroll container");
+      scroller.scrollTop = scroller.scrollHeight;
+    });
+    const bottom = await measure();
+    expect(bottom.scrollTop).toBeGreaterThan(0);
+    expect(bottom.lastCardBottom).toBeLessThanOrEqual(bottom.scrollerBottom + 1);
+    for (const card of bottom.cards) expect(card.height, `card "${card.name}"`).toBeGreaterThan(0);
+    testInfo.annotations.push({ type: "rail measurements (1440 x 700)", description: JSON.stringify({ top, bottom }) });
   });
 
   test("event-logs insights lower cards", async ({ page }) => {
@@ -627,17 +912,20 @@ test.describe("event-logs screenshots", () => {
     });
 
     const queries = () => page.evaluate(() => window.__evtxWindowQueries ?? []);
-    // What the real row click does with a record (select it, show Details). The dock record lies far
-    // below the fold of a virtualized list, so it is selected through the action every view calls.
+    // Selects a record the way an arrow-key move does: the store's selection, with the rail left on
+    // its tab and no Details pane. A row click also opens Details, and the Details tab's Context
+    // section then reads its own +/-5 min window around the record (the "selected record" capture
+    // asserts that), which would be a read of the dock's counted queries that is not the dock's and,
+    // around the dock record, of a window nobody captured. The record lies far below the fold of a
+    // virtualized list, so it is selected through the store.
     const select = (record: { id: number; eventId: number; eventRecordId: number }) =>
       page.evaluate(async ({ id, eventId, eventRecordId }) => {
         const { useEvtxStore } = await import("/src/workspaces/event-log/evtx-store.ts");
-        const { selectRecordAndShowDetails } = await import("/src/workspaces/event-log/evtx-select-record.ts");
         const loaded = useEvtxStore.getState().records.find((candidate) => candidate.id === id);
         if (loaded?.eventId !== eventId || loaded.eventRecordId !== eventRecordId) {
           throw new Error(`[event-logs fixture] record ${id} is not event ${eventId} / record ${eventRecordId}`);
         }
-        selectRecordAndShowDetails(id);
+        useEvtxStore.getState().setSelectedRecordId(id);
       }, record);
     // A read waits 150 ms after a selection, so this much quiet means none was going to be made.
     const quiet = () => page.waitForTimeout(600);
@@ -653,7 +941,12 @@ test.describe("event-logs screenshots", () => {
     await expect(slot).toBeHidden();
     await expect(dock).toHaveCount(0);
     await select(dockRecord);
-    await expect(page.getByRole("region", { name: "Event log details" })).toBeVisible();
+    // The selection landed: the rail's tab names the event. Details is not open, so nothing but the
+    // dock could read, and the dock is not mounted.
+    await expect(
+      page.getByRole("tablist", { name: "Rail tabs" }).getByRole("tab", { name: `Event ${dockRecord.eventId}` }),
+    ).toBeVisible();
+    await expect(page.getByRole("region", { name: "Event log details" })).toHaveCount(0);
     await quiet();
     expect(await queries()).toEqual([]);
 
