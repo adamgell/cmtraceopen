@@ -77,6 +77,7 @@ import {
   fixtureEdges,
   recordFor,
 } from "./evtx-correlation-test-fixtures";
+import { ANALYSIS_BUILDING_TEXT } from "./evtx-correlation-copy";
 import { evtxViewTabId, sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { useEvtxStore } from "./evtx-store";
@@ -480,6 +481,26 @@ describe("the correlation dock in the workspace", () => {
     expect(mocks.queryWindow).toHaveBeenCalledTimes(1);
     expect(mocks.queryWindow.mock.calls[0]).toEqual(["session-1", center - 75_000, center + 75_000, 1000]);
     expect(screen.getByTestId("correlation-dock-subtitle")).toHaveTextContent("around Event 101");
+  });
+
+  it("says the analysis is being built while the session is, then draws once it is published (not 'no analysis')", async () => {
+    showDock(true);
+    const build = deferred<ReturnType<typeof analysisResult>>();
+    mocks.buildAnalysis.mockImplementationOnce(() => build.promise);
+    render(<EventLogWorkspace />);
+    await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+    const message = await screen.findByTestId("correlation-dock-message");
+    expect(message).toHaveTextContent(ANALYSIS_BUILDING_TEXT);
+    expect(message.textContent).not.toMatch(/Load events/);
+    expect(screen.getByRole("region", { name: "Correlation dock" })).toHaveAttribute("aria-busy", "true");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(mocks.queryWindow).not.toHaveBeenCalled();
+    await act(async () => {
+      build.resolve(analysisResult("built-late"));
+    });
+    await dockPlot();
+    expect(screen.queryByTestId("correlation-dock-message")).toBeNull();
+    expect(mocks.queryWindow.mock.calls[0]![0]).toBe("built-late");
   });
 
   it("reads nothing while the dock is hidden or collapsed, and recenters when it is shown again", async () => {

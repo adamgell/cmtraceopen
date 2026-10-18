@@ -32,6 +32,7 @@ import { EvtxAnalysisSessionProvider } from "./evtx-analysis-session";
 import dockSource from "./EvtxCorrelationDock.tsx?raw";
 import dockWindowSource from "./useEvtxCorrelationWindow.ts?raw";
 import {
+  ANALYSIS_BUILDING_TEXT,
   NO_SELECTION_TEXT,
   NO_SESSION_TEXT,
   READING_WINDOW_TEXT,
@@ -250,6 +251,75 @@ describe("what it says before there is a window to draw", () => {
     expect(screen.getByTestId("correlation-dock-message")).toHaveTextContent(NO_SESSION_TEXT);
     await idle();
     expect(queryWindow).not.toHaveBeenCalled();
+  });
+
+  describe("no session is two states: one on the way, and none (the status-null class)", () => {
+    /** The correlation hook's own shapes: pending while a session is built, unavailable when none is coming. */
+    const pending = { stage: "pending", unplacedList: null } as const;
+    const none = { stage: "unavailable", unplacedList: null } as const;
+    const message = () => screen.getByTestId("correlation-dock-message");
+
+    it("says the analysis is being built while it is, and waits: busy, nothing asked for, nobody told to load", async () => {
+      const { queryWindow } = renderDock({ status: null, data: pending });
+      expect(message()).toHaveTextContent(ANALYSIS_BUILDING_TEXT);
+      expect(message().textContent).not.toMatch(/load events/i);
+      expect(dock()).toHaveAttribute("aria-busy", "true");
+      await idle();
+      expect(queryWindow).not.toHaveBeenCalled();
+    });
+
+    it("says there is no analysis only when none is coming, and is not busy", async () => {
+      const { queryWindow } = renderDock({ status: null, data: none });
+      expect(message()).toHaveTextContent(NO_SESSION_TEXT);
+      expect(message()).not.toHaveTextContent(ANALYSIS_BUILDING_TEXT);
+      expect(dock()).not.toHaveAttribute("aria-busy");
+      await idle();
+      expect(queryWindow).not.toHaveBeenCalled();
+    });
+
+    it("also says no analysis outside a workspace, where the correlation data is the unavailable shape", () => {
+      renderDock({ status: null, data: { unplacedList: null } });
+      expect(message()).toHaveTextContent(NO_SESSION_TEXT);
+    });
+
+    it("says what is true of the selection whatever the session is: none selected, an event with no timestamp", () => {
+      seedRecords(allRecords(), null);
+      renderDock({ status: null, data: pending });
+      expect(message()).toHaveTextContent(NO_SELECTION_TEXT);
+      expect(dock()).not.toHaveAttribute("aria-busy");
+      cleanup();
+      seedRecords([{ ...recordFor(1), timestampEpoch: 0 }], 1);
+      renderDock({ status: null, data: pending });
+      expect(message()).toHaveTextContent(UNTIMED_TEXT);
+      expect(dock()).not.toHaveAttribute("aria-busy");
+    });
+
+    it("goes from building to reading to the lanes when the session is published", async () => {
+      vi.useFakeTimers();
+      const { rerender } = renderDock({ status: null, data: pending, settle: 150 });
+      expect(message()).toHaveTextContent(ANALYSIS_BUILDING_TEXT);
+      rerender({ status: STATUS, data: makeData({ items: scene(), edges: sceneEdges() }) });
+      expect(message()).toHaveTextContent(READING_WINDOW_TEXT);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      expect(screen.getByTestId("lane-plot")).toBeInTheDocument();
+      expect(screen.queryByTestId("correlation-dock-message")).toBeNull();
+    });
+
+    it("goes from building to no analysis when the build ends without a session", () => {
+      const { rerender } = renderDock({ status: null, data: pending });
+      expect(message()).toHaveTextContent(ANALYSIS_BUILDING_TEXT);
+      rerender({ data: makeData({ items: [], edges: [], ...none }) });
+      expect(message()).toHaveTextContent(NO_SESSION_TEXT);
+    });
+
+    it("reads, not building, once there IS a session, whatever the correlation stage says", async () => {
+      vi.useFakeTimers();
+      renderDock({ status: STATUS, data: { stage: "pending" }, settle: 150 });
+      expect(message()).toHaveTextContent(READING_WINDOW_TEXT);
+      expect(message()).not.toHaveTextContent(ANALYSIS_BUILDING_TEXT);
+    });
   });
 
   it("says it is reading until the window is in", async () => {

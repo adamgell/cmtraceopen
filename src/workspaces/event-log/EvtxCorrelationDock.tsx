@@ -35,6 +35,7 @@ import { CorrelationLegend, EvtxCorrelationLanes } from "./EvtxCorrelationLanes"
 import { correlationSizes, type CorrelationSizes } from "./evtx-correlation-sizes";
 import { EvtxStrengthBadge } from "./EvtxStrengthBadge";
 import {
+  ANALYSIS_BUILDING_TEXT,
   NO_SELECTION_TEXT,
   NO_SESSION_TEXT,
   READING_WINDOW_TEXT,
@@ -73,7 +74,7 @@ import { useEvtxStore } from "./evtx-store";
 import { formatClock } from "./evtx-time";
 import type { PlotMarker } from "./evtx-correlation-view-model";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
-import { useEvtxCorrelationData } from "./useEvtxCorrelation";
+import { useEvtxCorrelationData, type EvtxCorrelationData } from "./useEvtxCorrelation";
 import { useEvtxCorrelationWindow } from "./useEvtxCorrelationWindow";
 import { useUnreadSources } from "./useUnreadSources";
 
@@ -110,7 +111,9 @@ export default function EvtxCorrelationDock({
   const collapsed = useEvtxLayoutStore((s) => s.dockCollapsed);
   const setDockWindowMs = useEvtxLayoutStore((s) => s.setDockWindowMs);
   const setDockCollapsed = useEvtxLayoutStore((s) => s.setDockCollapsed);
-  const counts = useEvtxCorrelationData().counts;
+  const correlation = useEvtxCorrelationData();
+  const counts = correlation.counts;
+  const stage = correlation.stage;
   // The session comes from the workspace's provider, the unread sources from the store's coverage:
   // the same two readings the Details context list takes, so there is one of each.
   const status = useEvtxAnalysisSession();
@@ -221,7 +224,9 @@ export default function EvtxCorrelationDock({
 
   const openDisabled = ready !== null && "disabled" in ready.open ? ready.open.disabled : null;
   const canOpen = ready !== null && "rowId" in ready.open;
-  const busy = !collapsed && (reading || (ready !== null && ready.updating));
+  // Waiting for a session that is on the way is busy too: the body says so, and a reader is told.
+  const waitingForSession = model !== null && model.kind === "unread" && status === null && stage === "pending";
+  const busy = !collapsed && (reading || waitingForSession || (ready !== null && ready.updating));
   const primary = railText.primary;
   const secondary = railText.secondary;
 
@@ -351,7 +356,7 @@ export default function EvtxCorrelationDock({
           // slot scrolling. Here the grid is as tall as its content, and the rows say so.
           <div style={{ padding: "0 12px 8px", display: "grid", gridAutoRows: "max-content", gap: "6px" }}>
             {ready === null ? (
-              <DockMessage text={messageFor(model, status)} color={secondary} size={sizes.lane}>
+              <DockMessage text={messageFor(model, status, stage)} color={secondary} size={sizes.lane}>
                 {model !== null && model.kind === "failed" && (
                   <div
                     role="alert"
@@ -385,7 +390,11 @@ export default function EvtxCorrelationDock({
 }
 
 /** The sentence for a dock with nothing to draw yet, or null when the failure's alert says it. */
-function messageFor(model: DockModel | null, status: EvtxAnalysisSession | null): string | null {
+function messageFor(
+  model: DockModel | null,
+  status: EvtxAnalysisSession | null,
+  stage: EvtxCorrelationData["stage"],
+): string | null {
   if (model === null) return "";
   switch (model.kind) {
     case "noSelection":
@@ -396,7 +405,10 @@ function messageFor(model: DockModel | null, status: EvtxAnalysisSession | null)
       return null;
     case "unread":
     case "ready":
-      return status === null ? NO_SESSION_TEXT : READING_WINDOW_TEXT;
+      // No session is two states: one is on the way (the events are loaded and the analysis is being
+      // built or rebuilt), or none is and none is coming. Only the second says there is nothing.
+      if (status !== null) return READING_WINDOW_TEXT;
+      return stage === "pending" ? ANALYSIS_BUILDING_TEXT : NO_SESSION_TEXT;
   }
 }
 
