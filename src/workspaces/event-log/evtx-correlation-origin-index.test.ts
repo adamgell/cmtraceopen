@@ -10,6 +10,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
 import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
 import fixtureDocument from "./__fixtures__/correlation-edges.json";
+import vectorDocument from "./__fixtures__/engine-compaction-vectors.json";
+import { timelineReference } from "./evtx-engine-compaction-test-fixtures";
 import { buildCorrelationChains } from "./evtx-correlation-chains";
 import {
   originLookup,
@@ -90,6 +92,11 @@ function engineRecordIdText(text: string | null | undefined): string | null {
   return /^\d+$/.test(trimmed) ? trimmed : null;
 }
 
+/**
+ * The origin of a record the TRANSPORT projected (over 8 MiB): its identity texts reached the engine
+ * already bounded to 256 bytes in the transport's own form, which the engine leaves alone.
+ * `engineOriginOf` (below) is the origin of a record that reached the engine whole, the common case.
+ */
 function originOf(source: EvtxRecord, overrides: Partial<EventOrigin> = {}): EventOrigin {
   return {
     kind: "event",
@@ -1117,5 +1124,289 @@ describe("linkCountsByRecord", () => {
       complete: true,
     });
     expect(recordLinkStatus(result, loaded[0]!)).toEqual({ kind: "none" });
+  });
+});
+
+/**
+ * The origin the ENGINE builds from a record that reached it whole (`origin_of`, then
+ * `compact_timeline_origin`): source label, channel and provider over 256 bytes in the engine's own
+ * `...[{len} bytes; digest={hex}]` form, and the machine trimmed BEFORE it is compacted. The format
+ * is `timelineReference`, checked against the Rust vectors in evtx-engine-compaction.test.ts.
+ */
+function engineOriginOf(source: EvtxRecord, overrides: Partial<EventOrigin> = {}): EventOrigin {
+  const machine = normalizedMachine(source.computer);
+  return originOf(source, {
+    source: timelineReference(source.sourceLabel),
+    channel: timelineReference(source.channel),
+    provider: timelineReference(source.provider),
+    machine: machine === null ? null : timelineReference(machine),
+    ...overrides,
+  });
+}
+
+const vectorText = (name: string) =>
+  (vectorDocument.timelineText.find((c) => c.name === name) as { input: string }).input;
+
+/** The same text with its last character replaced by another of the same UTF-8 width. */
+function sameWidthVariant(text: string): string {
+  const characters = [...text];
+  const last = characters.pop() as string;
+  const width = new TextEncoder().encode(last).length;
+  const swap = width === 3 ? (last === "\u4ef6" ? "\u6848" : "\u4ef6") : last === "Q" ? "R" : "Q";
+  return `${characters.join("")}${swap}`;
+}
+
+const LONG_LABELS: readonly (readonly [string, string])[] = [
+  ["257 bytes", vectorText("ascii-257")],
+  ["300 bytes with backslashes", vectorText("ascii-300-backslashes")],
+  ["a collector bundle path of 276 bytes", vectorText("bundle-path-276")],
+  ["3-byte characters past 256 bytes", vectorText("cjk-273")],
+];
+
+describe("an origin the engine compacted (a record that reached the engine whole)", () => {
+  it.each(LONG_LABELS)("names the record whose source label is %s", (_why, label) => {
+    const wanted = record(42, { sourceLabel: label });
+    const resolution = resolveOriginRecords(
+      engineOriginOf(wanted),
+      indexOf([record(41), wanted, record(43)]),
+    );
+    expect(wanted.sourceLabel).not.toBe(engineOriginOf(wanted).source);
+    expect(resolution).toEqual({ kind: "matches", records: [wanted] });
+  });
+
+  it.each(LONG_LABELS)("names the record whose channel is %s", (_why, label) => {
+    const wanted = record(42, { channel: label });
+    expect(resolveOriginRecords(engineOriginOf(wanted), indexOf([record(41), wanted]))).toEqual({
+      kind: "matches",
+      records: [wanted],
+    });
+  });
+
+  it.each(LONG_LABELS)("names the record whose provider is %s", (_why, label) => {
+    const wanted = record(42, { provider: label });
+    expect(resolveOriginRecords(engineOriginOf(wanted), indexOf([record(41), wanted]))).toEqual({
+      kind: "matches",
+      records: [wanted],
+    });
+  });
+
+  it.each(LONG_LABELS)(
+    "does not name a record with the same prefix and another length or digest (%s)",
+    (_why, label) => {
+      const wanted = record(42, { sourceLabel: label });
+      const longer = record(42, { sourceLabel: `${label}z` });
+      const otherDigest = record(42, { sourceLabel: sameWidthVariant(label) });
+      expect(otherDigest.sourceLabel).not.toBe(label);
+      expect(
+        resolveOriginRecords(engineOriginOf(wanted), indexOf([longer, otherDigest, wanted])),
+      ).toEqual({ kind: "matches", records: [wanted] });
+      // And the other way round: neither of them is named by the origin of the wanted record.
+      expect(
+        resolveOriginRecords(engineOriginOf(wanted), indexOf([longer, otherDigest])),
+      ).toEqual({ kind: "matches", records: [] });
+    },
+  );
+
+  it("does not name a record when the origin's suffix names another length, with its digest and prefix untouched", () => {
+    const label = vectorText("ascii-300-backslashes");
+    const wanted = record(42, { sourceLabel: label });
+    const compacted = engineOriginOf(wanted).source;
+    expect(compacted).toContain("[300 bytes;");
+    const forged = engineOriginOf(wanted, { source: compacted.replace("[300 bytes;", "[301 bytes;") });
+    expect(resolveOriginRecords(forged, indexOf([wanted]))).toEqual({ kind: "matches", records: [] });
+  });
+
+  it("finds the record through a short source label that stays exact", () => {
+    const wanted = record(42);
+    expect(engineOriginOf(wanted).source).toBe("Live");
+    expect(resolveOriginRecords(engineOriginOf(wanted), indexOf([wanted, record(42, { sourceLabel: "Live2" })]))).toEqual({
+      kind: "matches",
+      records: [wanted],
+    });
+  });
+
+  it.each([
+    ["padded past 256 bytes and fitting once trimmed", `  ${"H".repeat(254)}  `],
+    ["padded and over 256 bytes once trimmed", `  ${"H".repeat(300)}  `],
+    ["padded and short", "  DESKTOP-01  "],
+  ])("names a record whose machine is %s", (_why, computer) => {
+    const wanted = record(42, { computer });
+    const origin = engineOriginOf(wanted);
+    expect(origin.machine).toBe(
+      computer.trim().length > 256 ? timelineReference(computer.trim()) : computer.trim(),
+    );
+    expect(resolveOriginRecords(origin, indexOf([wanted]))).toEqual({
+      kind: "matches",
+      records: [wanted],
+    });
+  });
+
+  it("does not name a record whose machine differs from the origin's, however it is padded", () => {
+    const wanted = record(42, { computer: `  ${"H".repeat(300)}  ` });
+    const other = record(42, { computer: `  ${"H".repeat(299)}J  ` });
+    const shorter = record(42, { computer: `  ${"H".repeat(299)}  ` });
+    expect(
+      resolveOriginRecords(engineOriginOf(wanted), indexOf([other, shorter])),
+    ).toEqual({ kind: "matches", records: [] });
+  });
+
+  it("reads a placeholder machine as none, padded or not", () => {
+    const wanted = record(42, { computer: "  N/A  " });
+    expect(engineOriginOf(wanted).machine).toBeNull();
+    expect(resolveOriginRecords(engineOriginOf(wanted), indexOf([wanted]))).toEqual({
+      kind: "matches",
+      records: [wanted],
+    });
+    expect(
+      resolveOriginRecords(engineOriginOf(wanted), indexOf([record(42, { computer: "DESKTOP-01" })])),
+    ).toEqual({ kind: "matches", records: [] });
+  });
+
+  it("still names a record the transport projected, whose texts are in the transport's form", () => {
+    const label = vectorText("ascii-300-backslashes");
+    const wanted = record(42, { sourceLabel: label, computer: `  ${"H".repeat(300)}  ` });
+    expect(originOf(wanted).source).toMatch(/\u2026\[truncated:/);
+    expect(resolveOriginRecords(originOf(wanted), indexOf([wanted]))).toEqual({
+      kind: "matches",
+      records: [wanted],
+    });
+  });
+
+  it("selects the marker's record by its origin (soleRecordForOrigin)", () => {
+    const wanted = record(42, { sourceLabel: vectorText("bundle-path-276") });
+    expect(soleRecordForOrigin(engineOriginOf(wanted), indexOf([record(41), wanted]))).toBe(wanted);
+  });
+
+  it("scopes a chain whose records carry long source labels, counting nothing as missing", () => {
+    const pairs = [1, 2].map((n) => {
+      const source = record(n, { eventId: 100 + n, sourceLabel: vectorText("bundle-path-276") });
+      return { source, item: itemOf(engineOriginOf(source, { stableId: rid(n) }), 1_000 * n) };
+    });
+    const model = buildCorrelationChains({
+      items: pairs.map((pair) => pair.item),
+      timelineEdges: fixtureEdges("exactPair"),
+      totalTimelineEdges: 1,
+      findings: [],
+    });
+    const scope = scopeForChain(
+      model.chains[0]!,
+      originLookup(pairs.map((pair) => pair.item), []),
+      indexOf(pairs.map((pair) => pair.source)),
+      { edgeInputComplete: model.edgeInputComplete },
+    );
+    expect(scope.records).toEqual(pairs.map((pair) => pair.source));
+    expect(scope.references).toEqual(pairs.map((pair) => [pair.source]));
+    expect(scope.counts).toEqual({ notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false });
+  });
+
+  it("counts a linked record with a long source label as linked, not as an origin whose record is not here", () => {
+    const pairs = [1, 2].map((n) => {
+      const source = record(n, { eventId: 100 + n, sourceLabel: vectorText("cjk-273") });
+      return { source, item: itemOf(engineOriginOf(source, { stableId: rid(n) }), 1_000 * n) };
+    });
+    const loaded = pairs.map((pair) => pair.source);
+    const result = linkCountsByRecord(
+      linkPartnerCounts([{ left: rid(1), right: rid(2) }]),
+      originLookup(pairs.map((pair) => pair.item), []),
+      indexOf(loaded),
+      { records: loaded, edgeInputComplete: true, scanComplete: true, gaps: CLEAR_GAPS },
+    );
+    expect(result).toMatchObject({ unloadedOrigins: 0, ambiguousOrigins: 0, unmatchedOrigins: 0, complete: true });
+    expect(recordLinkStatus(result, loaded[0]!)).toEqual({ kind: "linked", count: 1, atLeast: false });
+    expect(recordLinkStatus(result, loaded[1]!)).toEqual({ kind: "linked", count: 1, atLeast: false });
+  });
+
+  it("marks the records of a lane unknown when an origin there has no usable identity, with a long source and channel", () => {
+    const label = vectorText("bundle-path-276");
+    const channel = vectorText("ascii-257");
+    const unidentified = record(7, { sourceLabel: label, channel, eventRecordId: 0, eventRecordIdText: null });
+    const sameLane = record(8, { sourceLabel: label, channel });
+    const otherLane = record(9, { sourceLabel: `${label}z`, channel });
+    const origin = engineOriginOf(unidentified, { recordId: 0, recordIdText: null, stableId: rid(7) });
+    const partner = fixturePair(1);
+    const loaded = [sameLane, otherLane, partner.source];
+    const result = linkCountsByRecord(
+      linkPartnerCounts([{ left: rid(7), right: rid(1) }]),
+      originLookup([itemOf(origin), partner.item], []),
+      indexOf(loaded),
+      { records: loaded, edgeInputComplete: true, scanComplete: true, gaps: CLEAR_GAPS },
+    );
+    expect(result.unknownRecords.has(sameLane)).toBe(true);
+    expect(result.unknownRecords.has(otherLane)).toBe(false);
+  });
+});
+
+describe("an origin the engine rewrote because it refused the record's identity", () => {
+  type IdentityVector = {
+    name: string;
+    originKind: string;
+    text: string | null;
+    id: number;
+    originRecordIdText: string | null;
+    originRecordId: number;
+  };
+  const vectors = (vectorDocument.identities as unknown as IdentityVector[]).filter(
+    (c) => c.originKind === "event",
+  );
+  const loadedRecord = (c: IdentityVector, overrides: Partial<EvtxRecord> = {}) =>
+    record(c.id, { eventRecordId: c.id, eventRecordIdText: c.text, ...overrides });
+  const engineOrigin = (c: IdentityVector, source: EvtxRecord) =>
+    engineOriginOf(source, { recordId: c.originRecordId, recordIdText: c.originRecordIdText });
+
+  it.each(vectors.map((c) => [c.name, c] as const))(
+    "joins the record to the origin the engine built for %s",
+    (_name, c) => {
+      const wanted = loadedRecord(c);
+      const origin = engineOrigin(c, wanted);
+      const resolution = resolveOriginRecords(origin, indexOf([wanted, record(3_000)]));
+      if (originIdentityText(origin) === null) {
+        // The engine left the origin no identity: it is counted as having none, never as not loaded.
+        expect(resolution).toEqual({ kind: "noUsableIdentity" });
+      } else {
+        expect(resolution).toEqual({ kind: "matches", records: [wanted] });
+      }
+    },
+  );
+
+  it("does not find a record under the identity it came with when the engine rewrote it", () => {
+    const rewritten = vectors.find((c) => c.name === "conflict-positive-number") as IdentityVector;
+    expect(rewritten).toMatchObject({ text: "5", id: 9, originRecordIdText: "9" });
+    const wanted = loadedRecord(rewritten);
+    // An origin for a record whose identity really is 5 does not name it, and one for 9 does.
+    const askingForFive = engineOriginOf(record(5));
+    expect(resolveOriginRecords(askingForFive, indexOf([wanted]))).toEqual({ kind: "matches", records: [] });
+    expect(resolveOriginRecords(engineOriginOf(record(9)), indexOf([wanted]))).toEqual({
+      kind: "matches",
+      records: [wanted],
+    });
+  });
+
+  it("counts a chain member the engine left no identity as having none, not as not loaded", () => {
+    const refused = vectors.find((c) => c.name === "conflict-zero-number") as IdentityVector;
+    const source = loadedRecord(refused, { eventId: 101 });
+    const origin = engineOrigin(refused, { ...source, eventId: 101 });
+    const scope = scopeForChain(
+      { memberIds: [rid(1)], unresolvedMemberIds: [] },
+      originLookup([itemOf({ ...origin, stableId: rid(1) })], []),
+      indexOf([source]),
+      { edgeInputComplete: true },
+    );
+    expect(scope.counts).toMatchObject({ noUsableIdentity: 1, notLoaded: 0 });
+    expect(scope.records).toEqual([]);
+  });
+
+  it("does not count an origin with a rewritten identity as an origin whose record is not here", () => {
+    const rewritten = vectors.find((c) => c.name === "padded-text-other-number") as IdentityVector;
+    const a = loadedRecord(rewritten, { eventId: 101 });
+    const b = fixturePair(2);
+    const loaded = [a, b.source];
+    const result = linkCountsByRecord(
+      linkPartnerCounts([{ left: rid(1), right: rid(2) }]),
+      originLookup([itemOf({ ...engineOrigin(rewritten, a), eventId: 101, stableId: rid(1) }), b.item], []),
+      indexOf(loaded),
+      { records: loaded, edgeInputComplete: true, scanComplete: true, gaps: CLEAR_GAPS },
+    );
+    expect(result.unloadedOrigins).toBe(0);
+    expect(result.counts.get(a)).toBe(1);
   });
 });

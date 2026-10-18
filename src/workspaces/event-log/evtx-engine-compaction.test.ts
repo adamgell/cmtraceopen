@@ -381,6 +381,20 @@ describe("engineTimelineRecordIdentity: the identity the engine puts on the orig
     expect(engineTimelineRecordIdentity(record(same.text, same.id, "event"))).toBe("7");
   });
 
+  it("reads a record with no origin kind as an event, which is the engine's default", () => {
+    const refused = vectors.identities.find((c) => c.name === "conflict-positive-number") as IdentityCase;
+    const withoutKind = {
+      id: 1,
+      eventRecordId: refused.id,
+      eventRecordIdText: refused.text,
+      eventId: 1,
+    } as unknown as EvtxRecord;
+    expect(withoutKind.originKind).toBeUndefined();
+    expect(engineTimelineRecordIdentity(withoutKind)).toBe(
+      engineRecordIdentity(refused.originRecordIdText, refused.originRecordId),
+    );
+  });
+
   it("gives no identity to a record the transport could not send", () => {
     expect(engineTimelineRecordIdentity(record(null, -1, "event"))).toBeNull();
     expect(engineTimelineRecordIdentity(record(null, 1.5, "event"))).toBeNull();

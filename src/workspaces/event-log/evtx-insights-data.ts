@@ -354,15 +354,16 @@ function isMalformedEngineIdentity(text: string | null, sentId: number): boolean
  * (`sanitize_malformed_timeline_record`, event_log/analysis_session.rs): it keeps its numeric id
  * when that is 1 to 2^53 - 1, as the text of that number, and otherwise has no identity at all. The
  * diagnosis never sees such a record, so finding evidence keeps using `engineRecordIdentity`. A
- * text-log record is never rewritten. A record the transport cannot send (a negative or fractional
- * id) builds no origin and has none here.
+ * text-log record is never rewritten; a record with no `originKind` is an event, as the engine's
+ * default is. A record the transport cannot send (a negative or fractional id) builds no origin and
+ * has none here.
  */
 export function engineTimelineRecordIdentity(record: EvtxRecord): string | null {
   const numeric = record.eventRecordId;
   if (!Number.isInteger(numeric) || numeric < 0) return null;
   const text = typeof record.eventRecordIdText === "string" ? record.eventRecordIdText : null;
   const sent = Number.isSafeInteger(numeric) ? numeric : ENGINE_MAX_SAFE_EVENT_RECORD_ID + 1;
-  if (record.originKind === "event" && isMalformedEngineIdentity(text, sent)) {
+  if (record.originKind !== "log" && isMalformedEngineIdentity(text, sent)) {
     return sent > 0 && sent <= ENGINE_MAX_SAFE_EVENT_RECORD_ID ? String(sent) : null;
   }
   return engineRecordIdentity(text, numeric);

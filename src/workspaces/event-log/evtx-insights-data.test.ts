@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
 import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
 import { countByLevel, EVTX_LEVELS } from "./evtx-filter";
+import { displayReference } from "./evtx-engine-compaction-test-fixtures";
 import {
   buildEvidenceIndex,
   buildSameIdSeries,
@@ -286,6 +287,36 @@ describe("findingForRecord", () => {
     const other = record(1, { provider: `${longProvider}-b`, channel: longChannel });
     expect(findingForRecord([finding], other, [other])).toBeNull();
   });
+  it("matches evidence the diagnosis compacted at 4096 bytes (compact_display_text), and only the record it was compacted from", () => {
+    const longSource = `C:\\Users\\case.user\\Cases\\${"x".repeat(5000)}.evtx`;
+    const longProvider = `Provider-${"y".repeat(4200)}`;
+    const longChannel = `Channel/${"z".repeat(4100)}`;
+    const longMachine = `HOST-${"m".repeat(4300)}`;
+    const rec = record(1, {
+      sourceLabel: longSource,
+      provider: longProvider,
+      channel: longChannel,
+      computer: longMachine,
+    });
+    const compacted = {
+      // The engine compacts first and redacts the kept prefix afterwards.
+      source: displayReference(longSource).replace("case.user", USER),
+      provider: displayReference(longProvider),
+      channel: displayReference(longChannel),
+      machine: displayReference(longMachine),
+    };
+    for (const text of Object.values(compacted)) expect(text).toMatch(/\.\.\.\[\d+ bytes; digest=[0-9a-f]{8}\]$/);
+    const finding = findingWith(evidence(compacted));
+    expect(findingForRecord([finding], rec, [rec])).toBe(finding);
+    // The same prefix with another tail has another length and digest, and is not the record.
+    for (const other of [
+      record(1, { sourceLabel: `${longSource}z`, provider: longProvider, channel: longChannel, computer: longMachine }),
+      record(1, { sourceLabel: longSource, provider: `${longProvider}z`, channel: longChannel, computer: longMachine }),
+      record(1, { sourceLabel: longSource, provider: longProvider, channel: longChannel, computer: `${longMachine}z` }),
+    ]) {
+      expect(findingForRecord([finding], other, [other])).toBeNull();
+    }
+  });
   it("rejects a different raw machine or source around a token", () => {
     const wrong = findingWith(evidence({ machine: "PC-2" }));
     expect(findingForRecord([wrong], selected, loaded)).toBeNull();
@@ -445,6 +476,14 @@ describe("scopeForFinding", () => {
     const scope = find(finding, loaded);
     expect(names(scope.records)).toEqual([1, 3]);
     expect(scope.records[0]).toBe(loaded[0]);
+    expect(scope.counts).toEqual({ notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false });
+  });
+
+  it("resolves a record whose source label the engine compacted in the evidence, counting nothing as not loaded", () => {
+    const longSource = `bundle\\${"d".repeat(5000)}\\System.evtx`;
+    const loaded = [record(1, { sourceLabel: longSource }), record(2)];
+    const scope = find(findingWith(evidence({ recordId: 1001, source: displayReference(longSource) })), loaded);
+    expect(names(scope.records)).toEqual([1]);
     expect(scope.counts).toEqual({ notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false });
   });
 
