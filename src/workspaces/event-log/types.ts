@@ -211,17 +211,31 @@ export const EVTX_TIME_WINDOW_LABELS: Record<EvtxTimeWindow, string> = {
 };
 
 /**
+ * The time span of a query, mirroring `cmtraceopen_parser::event_query::TimeWindow`.
+ *
+ * Rust tags the enum with `kind` and camel-cases the variant names, so the wire shape is
+ * `{"kind":"last","milliseconds":n}` or `{"kind":"between","from":"...","to":"..."}`. `from` and
+ * `to` are ISO 8601 UTC strings such as `2026-08-09T00:00:00.000Z`, and both bounds are inclusive.
+ * A `null` or absent bound leaves that end of the range open, and a `between` with neither bound
+ * compiles to no time predicate at all, which reads the whole channel. Always send both when a
+ * bounded period is meant.
+ */
+export type EventQueryTimeWindow =
+  | { kind: "last"; milliseconds: number }
+  | { kind: "between"; from?: string | null; to?: string | null };
+
+/**
  * The subset of the backend's query filter this workspace currently sends.
  *
  * Deliberately not the whole contract. `cmtraceopen_parser::event_query::EventQueryFilter` also
- * carries `eventIds`, `eventIdMode`, `providerMode` and `keywords`, and its `TimeWindow` has a
- * `between` variant as well as `last`. The Rust struct is `#[serde(default)]`, so omitting them
- * deserializes to defaults and this works; what is absent is UI for them, not backend support.
+ * carries `eventIds`, `eventIdMode`, `providerMode` and `keywords`. The Rust struct is
+ * `#[serde(default)]`, so omitting them deserializes to defaults and this works; what is absent is
+ * UI for them, not backend support.
  *
  * Named as a subset so nobody reads a missing field here as a capability the backend lacks.
  */
 export interface EventQueryFilterSubset {
-  time?: { kind: "last"; milliseconds: number };
+  time?: EventQueryTimeWindow;
   levels?: number[];
   providers?: string[];
 }

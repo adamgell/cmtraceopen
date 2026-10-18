@@ -136,6 +136,19 @@ export const DEFAULT_QUICK_FILTER: EvtxQuickFilter = {
   caseSensitive: false,
   highlight: true,
 };
+/**
+ * Whether a record is a Windows event, as opposed to a line of an archived text log.
+ *
+ * A text-log line is shaped like a record (archive.rs `text_entry_to_record`) but has no event ID
+ * (it carries 0), names its component as the provider and its source label as the channel, so
+ * anything keyed by event identity or by channel must set it aside. Levels and totals follow the
+ * visible rows and do count it. The origin decides, never the event ID: an event may carry ID 0.
+ * Every consumer asks here, so the rule has one definition.
+ */
+export function isEventRecord(record: Pick<EvtxRecord, "originKind">): boolean {
+  return record.originKind !== "log";
+}
+
 /** Tests the same inclusive lower boundary used by the server's `timediff <=` XPath predicate. */
 export function isWithinTimeWindow(
   timestampEpoch: number,
