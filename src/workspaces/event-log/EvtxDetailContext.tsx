@@ -13,8 +13,9 @@
  * - No row carries a relationship word. The icon is the only mark, and it is a role="img" with its
  *   own name; everything else in a row is its time, its kind, its message, its offset and its source.
  * - Nothing is announced: no live region, no status. A reader finds the section; it does not speak.
- * - Text sizes come from the log list font size through `getLogListMetrics`, with the spec's floor of
- *   10 px. The time column is as wide as eight digits of its own size (`8ch`), so it never clips.
+ * - Text sizes come from the log list font size through the shared correlation sizes, with the
+ *   spec's floor of 10 px. The time column is as wide as eight digits of its own size (`8ch`), so it
+ *   never clips.
  * - Every text sets its color, and sits on a surface whose pair was measured at 4.5:1 in all seven
  *   themes (the rail text colors on the rail, the card text colors on the card, the selection
  *   triplet on the selected row); the link icons reach 3:1.
@@ -22,9 +23,10 @@
 import { useId, useMemo } from "react";
 import { Link, tokens } from "@fluentui/react-components";
 import { ArrowRight12Regular, Link12Regular } from "@fluentui/react-icons";
-import { LOG_UI_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
+import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { EvtxKindChip } from "./EvtxKindChip";
+import { correlationSizes } from "./evtx-correlation-sizes";
 import { openCorrelationView } from "./evtx-correlation-store";
 import {
   DETAIL_CONTEXT_KINDS_LABEL,
@@ -42,23 +44,6 @@ export interface EvtxDetailContextProps extends DetailContextInput {
   /** The record the Details tab shows; the section is about this event. */
   record: NonNullable<DetailContextInput["record"]>;
   timeZoneMode: EvtxTimeZoneMode;
-}
-
-export interface DetailContextSizes {
-  /** The log list font size. */
-  f: number;
-  /** The message and the link: f - 2. */
-  message: number;
-  /** The eyebrow, time, offset line, caption and notes: max(10, f - 3). */
-  label: number;
-  /** The kind chip: max(10, f - 4). */
-  chip: number;
-}
-
-/** The text sizes of the section from the user's log list font size `f` (spec 7.1). */
-export function detailContextSizes(logListFontSize: number): DetailContextSizes {
-  const f = getLogListMetrics(logListFontSize).fontSize;
-  return { f, message: Math.max(10, f - 2), label: Math.max(10, f - 3), chip: Math.max(10, f - 4) };
 }
 
 /** The "Open full correlation timeline" action: the Correlation view, with the chain selection left alone. */
@@ -79,7 +64,16 @@ export function EvtxDetailContext({
   const railText = useRailTextColors();
   const visuals = useEvtxVisualTokens();
   const logListFontSize = useUiStore((s) => s.logListFontSize);
-  const sizes = useMemo(() => detailContextSizes(logListFontSize), [logListFontSize]);
+  // The correlation surfaces' sizes (f - 2, max(10, f - 3), max(9, f - 4)), with the 10 px floor the
+  // spec puts on text: the message is f - 2 and the chip f - 4, and neither may go under it.
+  const sizes = useMemo(() => {
+    const correlation = correlationSizes(logListFontSize);
+    return {
+      message: Math.max(10, correlation.lane),
+      label: correlation.label,
+      chip: Math.max(10, correlation.tick),
+    };
+  }, [logListFontSize]);
 
   // `counts` is a new object on every run change, scan progress included; the model reads only these.
   const model = useMemo(

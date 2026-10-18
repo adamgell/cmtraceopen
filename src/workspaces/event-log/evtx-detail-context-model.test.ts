@@ -9,7 +9,9 @@
  * when it is proven.
  */
 import { describe, expect, it } from "vitest";
+import modelSource from "./evtx-detail-context-model.ts?raw";
 import {
+  ANALYSIS_BUILDING_TEXT,
   DOCK_SCOPE_NOTE,
   LINKS_LOADING_TEXT,
   NOT_IN_TIMELINE_NOTE,
@@ -18,6 +20,7 @@ import {
   READING_WINDOW_TEXT,
   UNREAD_SOURCES_NOTE,
   UNTIMED_TEXT,
+  UPDATING_CORRELATION_TEXT,
   ambiguousEventNote,
   emptyWindowText,
   sharedOriginNote,
@@ -35,14 +38,12 @@ import {
   T0,
 } from "./evtx-correlation-test-fixtures";
 import {
-  BUILDING_TIMELINE_TEXT,
   DETAIL_CONTEXT_HALF_WIDTH_MS,
   DETAIL_CONTEXT_KINDS_LABEL,
   DETAIL_CONTEXT_ROW_CAP,
   DETAIL_CONTEXT_TITLE,
   LINKS_MAY_BE_MISSING_TEXT,
   LINK_LEGEND_TEXT,
-  TIMELINE_UPDATING_NOTE,
   buildDetailContext,
   directLinks,
   type DetailContextInput,
@@ -99,17 +100,17 @@ describe("which state the list is in", () => {
 
   it.each([
     ["no session", "none", { kind: "noSession", text: NO_SESSION_TEXT }],
-    ["a session being built", "building", { kind: "building", text: BUILDING_TIMELINE_TEXT }],
+    ["a session being built", "building", { kind: "building", text: ANALYSIS_BUILDING_TEXT }],
     ["a session whose window is being read", "available", { kind: "reading", text: READING_WINDOW_TEXT }],
   ] as const)("has nothing to list for %s before any window", (_why, session, expected) => {
     expect(buildDetailContext(input({ window: null, session }))).toEqual(expected);
   });
 
-  it("says the analysis is being built, not that it is missing, while the session is pending", () => {
-    expect(BUILDING_TIMELINE_TEXT).toBe(
-      "The event analysis is being built, so the entries around this event are not available yet.",
-    );
-    expect(BUILDING_TIMELINE_TEXT).not.toBe(NO_SESSION_TEXT);
+  it("says the analysis is being built, not that it is missing, in the words the dock says it in", () => {
+    const model = buildDetailContext(input({ window: null, session: "building" }));
+    expect(model).toEqual({ kind: "building", text: ANALYSIS_BUILDING_TEXT });
+    expect(ANALYSIS_BUILDING_TEXT).not.toBe(NO_SESSION_TEXT);
+    expect(modelSource).not.toMatch(/being built/);
   });
 
   it("never lists another selection's window under this record", () => {
@@ -130,7 +131,7 @@ describe("which state the list is in", () => {
   it("lists the kept window of a session being rebuilt as an earlier session's pair, with the updating note", () => {
     const model = ready({ session: "building", counts: countsFor([], { updating: true }) });
     expect(model.updating).toBe(true);
-    expect(model.notices).toContain(TIMELINE_UPDATING_NOTE);
+    expect(model.notices).toContain(UPDATING_CORRELATION_TEXT);
   });
 
   it("never lists a window under no session: none says so, whatever window it is given", () => {
@@ -377,7 +378,7 @@ describe("the link icon marks a DIRECT Exact or Candidate edge between the entry
     const model = linked([exactTo(21)], { counts: countsFor([exactTo(21)], { updating: true }) });
     expect(model.updating).toBe(true);
     expect(linkOf(model, 21)?.strength).toBe("exact");
-    expect(model.notices).toContain(TIMELINE_UPDATING_NOTE);
+    expect(model.notices).toContain(UPDATING_CORRELATION_TEXT);
   });
 
   it("finds the partners of an origin in every row that holds it, the weaker label when two disagree", () => {
@@ -1064,10 +1065,10 @@ describe("no row, caption or note claims a relationship the evidence does not gi
 
   it("holds the words it adds to ASCII and the middle dot and plus-minus sign, with no dash", () => {
     for (const text of [
-      BUILDING_TIMELINE_TEXT,
+      ANALYSIS_BUILDING_TEXT,
       LINK_LEGEND_TEXT,
       LINKS_MAY_BE_MISSING_TEXT,
-      TIMELINE_UPDATING_NOTE,
+      UPDATING_CORRELATION_TEXT,
       NO_SESSION_TEXT,
     ]) {
       expect(text).not.toMatch(/[‒-―−]/);

@@ -32,6 +32,7 @@
  */
 import type { CorrelationChain } from "./evtx-correlation-chains";
 import {
+  ANALYSIS_BUILDING_TEXT,
   DOCK_SCOPE_NOTE,
   LINKS_LOADING_TEXT,
   NOT_IN_TIMELINE_NOTE,
@@ -41,6 +42,7 @@ import {
   STRENGTH_LABELS,
   UNREAD_SOURCES_NOTE,
   UNTIMED_TEXT,
+  UPDATING_CORRELATION_TEXT,
   ambiguousEventNote,
   coverageGapNotice,
   edgeInputNotice,
@@ -80,13 +82,6 @@ export const DETAIL_CONTEXT_TITLE = `Context ${windowWidthLabel(DETAIL_CONTEXT_H
 /** The eyebrow's right side. */
 export const DETAIL_CONTEXT_KINDS_LABEL = "events + text logs";
 
-/**
- * The list body while the analysis session is still being built (a pending session is not a missing
- * one: `NO_SESSION_TEXT` tells the reader to load events, which are loaded).
- */
-export const BUILDING_TIMELINE_TEXT =
-  "The event analysis is being built, so the entries around this event are not available yet.";
-
 /** Said when at least one row carries the link icon. */
 export const LINK_LEGEND_TEXT = "Link icon: Exact or Candidate link to this event.";
 
@@ -97,9 +92,6 @@ export const LINK_LEGEND_TEXT = "Link icon: Exact or Candidate link to this even
  */
 export const LINKS_MAY_BE_MISSING_TEXT =
   "Links may be missing, so an entry without a link icon may still be linked to this event.";
-
-/** Said while the counts shown are an earlier session's, which a newer one is replacing. */
-export const TIMELINE_UPDATING_NOTE = "The timeline is being rebuilt, so links shown here may change.";
 
 export interface DetailContextInput extends DockModelInput {
   /**
@@ -284,7 +276,7 @@ function captionFor(input: {
 
 function unreadState(session: EvtxAnalysisSessionState): DetailContextModel {
   if (session === "none") return { kind: "noSession", text: NO_SESSION_TEXT };
-  if (session === "building") return { kind: "building", text: BUILDING_TIMELINE_TEXT };
+  if (session === "building") return { kind: "building", text: ANALYSIS_BUILDING_TEXT };
   return { kind: "reading", text: READING_WINDOW_TEXT };
 }
 
@@ -378,7 +370,7 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
     }
   }
   if (unreadSources) push(UNREAD_SOURCES_NOTE);
-  if (updating) push(TIMELINE_UPDATING_NOTE);
+  if (updating) push(UPDATING_CORRELATION_TEXT);
   if (selected.status === "notInTimeline") push(NOT_IN_TIMELINE_NOTE);
   if (selected.status === "notRead") push(NOT_READ_NOTE);
   if (selected.status === "ambiguous") push(ambiguousEventNote(selected.candidates, "list"));

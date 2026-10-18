@@ -27,12 +27,18 @@ import {
   getLogListMetrics,
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
-import { NOT_IN_TIMELINE_NOTE, READING_WINDOW_TEXT, UNTIMED_TEXT, windowFailureText } from "./evtx-correlation-copy";
+import {
+  ANALYSIS_BUILDING_TEXT,
+  NOT_IN_TIMELINE_NOTE,
+  READING_WINDOW_TEXT,
+  UNTIMED_TEXT,
+  UPDATING_CORRELATION_TEXT,
+  windowFailureText,
+} from "./evtx-correlation-copy";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { eventItem, recordFor, rid, synthetic, T0 } from "./evtx-correlation-test-fixtures";
 import {
-  BUILDING_TIMELINE_TEXT,
   DETAIL_CONTEXT_TITLE,
   LINKS_MAY_BE_MISSING_TEXT,
   LINK_LEGEND_TEXT,
@@ -46,9 +52,10 @@ import {
   unnumbered,
   windowAround,
 } from "./evtx-detail-context-test-helpers";
+import { correlationSizes } from "./evtx-correlation-sizes";
 import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
 import { resolveToken } from "./evtx-visual-tokens";
-import { EvtxDetailContext, detailContextSizes, type EvtxDetailContextProps } from "./EvtxDetailContext";
+import { EvtxDetailContext, type EvtxDetailContextProps } from "./EvtxDetailContext";
 import chipSource from "./EvtxKindChip.tsx?raw";
 import componentSource from "./EvtxDetailContext.tsx?raw";
 import modelSource from "./evtx-detail-context-model.ts?raw";
@@ -259,7 +266,7 @@ describe("a section follows its inputs", () => {
       ["the session they belong to", { builtFor: "session:2" }, "still loading"],
       ["the gaps", { gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) }, "The engine limited correlation"],
       ["the scope", { scope: { visibleCount: 2, loadedCount: 9, textLogCount: 0 } }, "computed over the 2 events visible"],
-      ["whether they are an earlier session's", { updating: true }, "being rebuilt"],
+      ["whether they are an earlier session's", { updating: true }, UPDATING_CORRELATION_TEXT],
     ] as const)("reads %s of the counts", (_part, change, expected) => {
       const view = render(<EvtxDetailContext {...base} />);
       expect(text()).not.toContain(expected);
@@ -294,7 +301,7 @@ describe("a section follows its inputs", () => {
       const view = render(<EvtxDetailContext {...waiting} />);
       expect(text()).toContain(READING_WINDOW_TEXT);
       view.rerender(<EvtxDetailContext {...waiting} session="building" />);
-      expect(text()).toContain(BUILDING_TIMELINE_TEXT);
+      expect(text()).toContain(ANALYSIS_BUILDING_TEXT);
     });
   });
 
@@ -341,7 +348,7 @@ describe("a section before there is a window to list", () => {
   it.each([
     ["no record time", { record: { ...record, timestampEpoch: 0 } }, UNTIMED_TEXT],
     ["no session", { window: null, session: "none" as const }, "No event analysis is available. Load events to see what is around an event."],
-    ["a session being built", { window: null, session: "building" as const }, BUILDING_TIMELINE_TEXT],
+    ["a session being built", { window: null, session: "building" as const }, ANALYSIS_BUILDING_TEXT],
     ["a window being read", { window: null }, READING_WINDOW_TEXT],
     [
       "a window that failed",
@@ -483,9 +490,13 @@ describe("sizes follow the log list font size", () => {
     }
   });
 
-  it("is computed from the log list size by one function", () => {
-    expect(detailContextSizes(MAX_LOG_LIST_FONT_SIZE)).toEqual({ f: 20, message: 18, label: 17, chip: 16 });
-    expect(detailContextSizes(MIN_LOG_LIST_FONT_SIZE)).toEqual({ f: 11, message: 10, label: 10, chip: 10 });
+  it("takes its sizes from the correlation sizes, with a floor of 10 px on the message and the chip", () => {
+    expect(componentSource).toContain('from "./evtx-correlation-sizes"');
+    expect(componentSource).toMatch(/correlationSizes\(logListFontSize\)/);
+    expect(componentSource).not.toMatch(/logListFontSize\s*-\s*\d/);
+    expect(componentSource).not.toContain("getLogListMetrics");
+    // The correlation sizes alone go under 10 px at the smallest font; the section's floor is its own.
+    expect(correlationSizes(MIN_LOG_LIST_FONT_SIZE)).toMatchObject({ lane: 9, label: 10, tick: 9 });
   });
 
   it("never sets a text size under 10 px", () => {
