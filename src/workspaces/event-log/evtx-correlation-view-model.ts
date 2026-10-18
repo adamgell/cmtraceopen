@@ -130,7 +130,7 @@ export function axisTicks(window: TimeWindow, count = CORRELATION_AXIS_TICKS): n
   );
 }
 
-export interface TickLabelOptions {
+interface TickLabelOptions {
   /**
    * Seconds on every label. By default they are shown when the ticks are less than a minute apart,
    * so two neighbours never read as the same minute.

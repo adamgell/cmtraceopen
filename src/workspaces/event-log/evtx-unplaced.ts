@@ -226,7 +226,7 @@ export function unplacedCardLine(list: UnplacedListInput | null): string | null 
  * What the Log Viewer holds: the log store's own mode, the file it has open, which lines of that
  * file are loaded, and whether the entries are in line order.
  */
-export interface LogViewerLines {
+interface LogViewerLines {
   openFilePath: string | null;
   /**
    * The log store's `sourceOpenMode`. The modes other than "single-file" keep `openFilePath` and the
@@ -238,8 +238,19 @@ export interface LogViewerLines {
    * necessary and the order is checked as well (`inLineOrder`).
    */
   sourceOpenMode: SourceOpenMode;
-  /** The line numbers loaded for `openFilePath`. */
+  /** The wanted line numbers loaded for `openFilePath`. */
   lines: ReadonlySet<number>;
+  /**
+   * Of those, the lines that have an UNTIMED entry. An unplaced log row always names an entry whose
+   * timestamp is null (unified_timeline/mod.rs, `from_log_entry`), so a line the list names must be
+   * untimed here.
+   */
+  untimed: ReadonlySet<number>;
+  /**
+   * Of those, the lines that have a TIMED entry. One at a line the list names proves the list is
+   * stale: after a rotation or a reload of the same path, line n is a different record now.
+   */
+  timed: ReadonlySet<number>;
   /**
    * The entries' line numbers never decrease, in the order the Log Viewer holds them. This is the
    * order the consumer of a scroll target needs: it selects the first shown entry whose line is at
@@ -251,32 +262,55 @@ export interface LogViewerLines {
 }
 
 /**
- * The Log Viewer's mode, open file, that file's loaded lines and whether the entries are in line
- * order, in one pass over the entries.
+ * The Log Viewer's mode, open file, that file's loaded lines (timed and untimed apart) and whether
+ * the entries are in line order, in one pass over the entries.
+ *
+ * `wanted` narrows the three line sets to the lines the list names (at most a hundred), so a large
+ * tailed file does not build a set of every line. The caller memoizes the result on the entries it
+ * read; the pass is O(n) and the sets are small. Null keeps every line.
  */
 export function logViewerLines(
   openFilePath: string | null,
   sourceOpenMode: SourceOpenMode,
-  entries: readonly { filePath: string; lineNumber: number }[],
+  entries: readonly { filePath: string; lineNumber: number; timestamp: number | null }[],
+  wanted: ReadonlySet<number> | null = null,
 ): LogViewerLines {
   const lines = new Set<number>();
+  const untimed = new Set<number>();
+  const timed = new Set<number>();
   let inLineOrder = true;
   let previous = Number.NEGATIVE_INFINITY;
   for (const entry of entries) {
-    if (entry.filePath === openFilePath) lines.add(entry.lineNumber);
+    if (entry.filePath === openFilePath && (wanted === null || wanted.has(entry.lineNumber))) {
+      lines.add(entry.lineNumber);
+      (entry.timestamp === null ? untimed : timed).add(entry.lineNumber);
+    }
     if (entry.lineNumber < previous) inLineOrder = false;
     previous = entry.lineNumber;
   }
-  return { openFilePath, sourceOpenMode, lines, inLineOrder };
+  return { openFilePath, sourceOpenMode, lines, untimed, timed, inLineOrder };
 }
 
-export interface OpenAtLine {
+interface OpenAtLine {
   enabled: boolean;
   /** Why it is disabled; null when enabled. */
   reason: string | null;
-  /** The accessible name: it says "near", because the Log Viewer selects the next line it shows. */
+  /**
+   * The accessible name. It begins with the button's visible label (WCAG 2.5.3, Label in Name), so a
+   * person who says the words on the button reaches it, then says which file and "near" the line,
+   * because the Log Viewer selects the next line it shows.
+   */
   name: string;
 }
+
+/** The visible text of the button; the accessible name starts with it. */
+export const OPEN_IN_LOG_VIEWER_LABEL = "Open in Log Viewer";
+
+/**
+ * Why an action that reads the model on show is disabled while the data is `updating`: that model
+ * belongs to an earlier session than the one being built. The chain's actions give the same reason.
+ */
+export const WAIT_FOR_UPDATE_REASON = "Wait for the update to finish.";
 
 const NO_SINGLE_FILE = "The Log Viewer has no single file open, so this line cannot be opened there.";
 
@@ -295,8 +329,9 @@ const MODE_REASONS: Record<Exclude<SourceOpenMode, "single-file" | null>, string
  * SHOWS whose number is at or after the target, without looking at the file. That is the right line
  * only when the entries are the one file in file order and that list is the one mounted. So it is
  * enabled only when the log store is in "single-file" mode, its open file is exactly the line's
- * file, the entries' line numbers never decrease, and it holds exactly that line. Every other state
- * is disabled with its reason:
+ * file, the entries' line numbers never decrease, it holds exactly that line, that line is UNTIMED
+ * there, and the correlation data is not being updated. Every other state is disabled with its
+ * reason:
  * - merged: the entries are in timestamp order, untimed lines last, so with the other files hidden
  *   the open file's line 7 is loaded and a click selects some other line; with them shown it can
  *   select another file's line;
@@ -306,16 +341,25 @@ const MODE_REASONS: Record<Exclude<SourceOpenMode, "single-file" | null>, string
  * - single-file with the entries out of line order (#967): the aggregate firewall tail leaves a
  *   file's rows in timestamp order with the untimed ones last, so line 7 is loaded, at the end,
  *   and the first shown line at or after 7 is some other row. The order check also refuses the
- *   hidden-merged state on its own, whatever the mode.
+ *   hidden-merged state on its own, whatever the mode;
+ * - a TIMED entry at the line: an unplaced row names an entry with no timestamp, so the list on
+ *   show is stale (a rotation or a reload of the same path made line n a different record);
+ * - updating: the list belongs to the model on show, an older session than the one being scanned.
  * The button is "near line n" because a filter in the Log Viewer can hide the line itself.
  */
 export function openAtLineAvailability(
   viewer: LogViewerLines,
   file: string,
   line: number,
+  updating: boolean,
 ): OpenAtLine {
-  const name = `Open ${getBaseName(file)} in the Log Viewer near line ${count(line)}`;
+  const name = `${OPEN_IN_LOG_VIEWER_LABEL}: ${getBaseName(file)}, near line ${count(line)}`;
   const no = (reason: string): OpenAtLine => ({ enabled: false, reason, name });
+  if (updating) {
+    return no(
+      "The correlation is being updated, so this list may belong to an earlier session. Try again when it has finished.",
+    );
+  }
   if (viewer.sourceOpenMode !== "single-file") {
     return no(
       viewer.sourceOpenMode === null
@@ -334,6 +378,11 @@ export function openAtLineAvailability(
   }
   if (!viewer.lines.has(line)) {
     return no(`Line ${count(line)} is not among the lines the Log Viewer has loaded.`);
+  }
+  if (viewer.timed.has(line)) {
+    return no(
+      `Line ${count(line)} of this file now has a timestamp in the Log Viewer, so the list of lines without one is out of date.`,
+    );
   }
   return { enabled: true, reason: null, name };
 }

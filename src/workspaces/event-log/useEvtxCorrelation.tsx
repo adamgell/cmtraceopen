@@ -117,7 +117,7 @@ export interface CorrelationEdgeState {
  * The list is a bounded preview (at most 100 items, within a byte budget, with no pager), so the
  * count is what says how many more there are. Both come from the page the model was built from.
  */
-export interface UnplacedListData {
+interface UnplacedListData {
   /** The preview, in the engine's order. Each item is on the engine's unplaced list, so each is proven. */
   items: readonly UnplacedItem[];
   /**

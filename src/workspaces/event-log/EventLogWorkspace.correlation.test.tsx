@@ -385,4 +385,23 @@ describe("the Correlation view in the workspace", () => {
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(useEvtxStore.getState().timeRange).toBeNull();
   });
+
+  it("keeps an active time range when Escape is pressed on the overview band, which never writes it", async () => {
+    await openView();
+    await screen.findByRole("figure");
+    const range = { startMs: T0, endMs: T0 + 60_000 };
+    act(() => useEvtxStore.getState().setTimeRange(range));
+    const band = screen.getByRole("slider", { name: "Zoom window of the lane plot" });
+    band.focus();
+    // The REAL workspace handler: the band spends Escape with preventDefault, so it steps aside.
+    expect(fireEvent.keyDown(band, { key: "Escape" })).toBe(false);
+    expect(useEvtxStore.getState().timeRange).toEqual(range);
+    // Moving the band changes the lane window and nothing the table, histogram or diagnosis read.
+    fireEvent.keyDown(band, { key: "ArrowRight" });
+    fireEvent.keyDown(band, { key: "Home" });
+    expect(useEvtxStore.getState().timeRange).toEqual(range);
+    // Anywhere else in the workspace Escape is still the time range's.
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(useEvtxStore.getState().timeRange).toBeNull();
+  });
 });
