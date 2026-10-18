@@ -464,10 +464,11 @@ export function checkFilesCoverage(
       detail: "No entries are loaded for the selected channels.",
     };
   }
-  // The first capture that fails decides the reason; every capture that fails for that same reason
-  // is named, so the operator sees all that must go, not the first of them.
+  // Every capture that fails is collected, whatever its reason, so the refusal names all that stand
+  // in the way and its advice is judged against all of them. The first to fail gives the reason code.
   let reason: "noTimedRecords" | "priorPeriodNotSpanned" | null = null;
-  const failing: FilesCapture[] = [];
+  const unspanned: FilesCapture[] = [];
+  const untimed: FilesCapture[] = [];
   for (const capture of captures.values()) {
     const failure =
       capture.earliestMs === Number.POSITIVE_INFINITY
@@ -477,10 +478,14 @@ export function checkFilesCoverage(
           : null;
     if (failure === null) continue;
     reason ??= failure;
-    if (failure === reason) failing.push(capture);
+    (failure === "noTimedRecords" ? untimed : unspanned).push(capture);
   }
   if (reason !== null) {
-    return { covered: false, reason, detail: refusalDetail(reason, failing, [...captures.values()]) };
+    return {
+      covered: false,
+      reason,
+      detail: refusalDetail(unspanned, untimed, [...captures.values()]),
+    };
   }
   return { covered: true, captures: [...captures.values()] };
 }
@@ -496,44 +501,65 @@ function entryNoun(capture: Pick<FilesCapture, "holdsEvents">, number: "one" | "
   return number === "one" ? "log line" : "log lines";
 }
 
-/** The most captures one refusal names; the rest are counted. */
+/** The most captures, or channels, one refusal names; the rest are counted. */
 const MAX_NAMED_CAPTURES = 5;
 
-function nameCaptures(captures: readonly FilesCapture[]): string {
-  const names = captures.slice(0, MAX_NAMED_CAPTURES).map(captureName);
-  const rest = captures.length - MAX_NAMED_CAPTURES;
-  return rest > 0 ? `${names.join(", ")}, and ${rest} more` : names.join(", ");
+function nameUpToTheCap(names: readonly string[]): string {
+  const rest = names.length - MAX_NAMED_CAPTURES;
+  const shown = names.slice(0, MAX_NAMED_CAPTURES).join(", ");
+  return rest > 0 ? `${shown}, and ${rest} more` : shown;
+}
+
+/** The sentence about the captures that cannot show whether they cover the period. */
+function untimedSentence(untimed: readonly FilesCapture[]): string {
+  const named = nameUpToTheCap(untimed.map(captureName));
+  return untimed.length === 1
+    ? `${named} has no ${entryNoun(untimed[0], "one")} with a usable timestamp, so it cannot show whether it covers the previous period.`
+    : `These loaded captures have no entry with a usable timestamp, so they cannot show whether they cover the previous period: ${named}.`;
+}
+
+/** The sentence about the captures that do not span the period; it opens with the spec's sentence. */
+function unspannedSentence(unspanned: readonly FilesCapture[]): string {
+  const named = nameUpToTheCap(unspanned.map(captureName));
+  return unspanned.length === 1
+    ? `${FILES_NOT_COVERED} ${named} does not span it.`
+    : `${FILES_NOT_COVERED} These do not span it: ${named}.`;
 }
 
 /**
- * Why loaded files cannot be compared, naming the captures the refusal is about and the one action
- * that exists: deselecting a channel leaves its captures out (the selection is by channel, so a
- * channel's other sources go with them). It promises a comparison of the other channels only when
- * another selected channel has a capture, and says plainly when none would remain.
+ * Why loaded files cannot be compared. Every capture that stands in the way is named under the
+ * sentence for its reason, and the spec's sentence comes first whenever any does not span the
+ * period. The one action that exists is deselecting a channel (a selection is by channel, so a
+ * channel's other sources go with it). It is promised as "to compare the other channels" only when,
+ * with every failing capture's channel deselected, a selected channel remains, and every capture of
+ * such a channel passes. When none remains it says that no channel can be compared, in words that
+ * hold whichever reasons the captures failed for.
  */
 function refusalDetail(
-  reason: "noTimedRecords" | "priorPeriodNotSpanned",
-  failing: readonly FilesCapture[],
+  unspanned: readonly FilesCapture[],
+  untimed: readonly FilesCapture[],
   all: readonly FilesCapture[]
 ): string {
-  const [first] = failing;
-  const single = failing.length === 1;
-  const named = nameCaptures(failing);
-  const what =
-    reason === "noTimedRecords"
-      ? single
-        ? `${named} has no ${entryNoun(first, "one")} with a usable timestamp, so it cannot show whether it covers the previous period.`
-        : `These loaded captures have no entry with a usable timestamp, so they cannot show whether they cover the previous period: ${named}.`
-      : single
-        ? `${FILES_NOT_COVERED} ${named} does not span it.`
-        : `${FILES_NOT_COVERED} These do not span it: ${named}.`;
+  const sentences = [
+    ...(unspanned.length > 0 ? [unspannedSentence(unspanned)] : []),
+    ...(untimed.length > 0 ? [untimedSentence(untimed)] : []),
+  ];
 
-  const leaving = [...new Set(failing.map((capture) => capture.channel))];
+  // A channel with any failing capture is leaving, so a channel that remains has only passing ones.
+  const leaving = [...new Set([...unspanned, ...untimed].map((capture) => capture.channel))];
   const remaining = all.some((capture) => !leaving.includes(capture.channel));
-  const advice = remaining
-    ? `Deselect ${leaving.join(", ")} to compare the other channels.`
-    : "No other selected channel has entries to compare.";
-  return `${what} ${advice}`;
+  if (remaining) {
+    sentences.push(`Deselect ${nameUpToTheCap(leaving)} to compare the other channels.`);
+  } else {
+    const why =
+      untimed.length === 0
+        ? "does not cover the previous period"
+        : unspanned.length === 0
+          ? "cannot show whether it covers the previous period"
+          : "does not cover the previous period or cannot show whether it does";
+    sentences.push(`No selected channel can be compared: every one has a capture that ${why}.`);
+  }
+  return sentences.join(" ");
 }
 
 function plural(count: number, singular: string, pluralForm: string): string {
