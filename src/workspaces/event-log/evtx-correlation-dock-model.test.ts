@@ -603,6 +603,63 @@ describe("a record whose identity text the engine compacted is found, never 'not
     expect(model.plot.nearby.map((m) => m.id)).toEqual([rid(2)]);
   });
 
+  describe("an archive text row's machine, component and bundle, read as the engine built them", () => {
+    type LogOrigin = Extract<TimelineItem["origin"], { kind: "log" }>;
+    const BUNDLE_SOURCE = `C:\\Cases\\${COLLECTOR_SEGMENT.split("::")[1]}\\evidence\\logs\\CcmExec.log`;
+    const bundleOfBundleSource = COLLECTOR_SEGMENT.split("::")[1] as string;
+
+    /** An archive row, and the entry the engine made for it, whose origin fields the case overrides. */
+    function archive(rowFields: Partial<EvtxRecord>, originFields: Partial<LogOrigin>) {
+      const t = T0 + 5_000;
+      const row: EvtxRecord = {
+        ...recordFor(7),
+        originKind: "log",
+        eventId: 0,
+        sourceLabel: "C:\\Cases\\CcmExec.log",
+        channel: "C:\\Cases\\CcmExec.log",
+        provider: "CcmExec",
+        computer: "",
+        timestampEpoch: t,
+        ...rowFields,
+      };
+      const item: TimelineItem = {
+        timestampMs: t,
+        severity: "info",
+        message: "log line 7",
+        origin: {
+          kind: "log",
+          file: row.sourceLabel,
+          component: "CcmExec",
+          line: 7,
+          source: row.sourceLabel,
+          machine: null,
+          bundle: null,
+          recordId: 7,
+          ...originFields,
+        },
+      };
+      return ready({ record: row, window: windowAround(row, [item, eventItem(2, t + 3_000)]), counts: counts([]), unreadSources: false });
+    }
+
+    it("finds a row whose machine and component the engine trimmed before it built the origin", () => {
+      expect(archive({ computer: "  DESKTOP-01  ", provider: "  CcmExec  " }, { machine: "DESKTOP-01", component: "CcmExec" }).selected.status).toBe("found");
+    });
+
+    it("finds a row whose machine and component are placeholder words, which the engine leaves out", () => {
+      expect(archive({ computer: " Unknown ", provider: "N/A" }, { machine: null, component: null }).selected.status).toBe("found");
+    });
+
+    it("does not find a row whose machine or component the entry names differently", () => {
+      expect(archive({ computer: "DESKTOP-01" }, { machine: "DESKTOP-02" }).selected).toEqual({ status: "notInTimeline" });
+      expect(archive({ provider: "CcmExec" }, { component: "Other" }).selected).toEqual({ status: "notInTimeline" });
+    });
+
+    it("finds a row inside a collector bundle by that bundle, and not by another", () => {
+      expect(archive({ sourceLabel: BUNDLE_SOURCE, channel: BUNDLE_SOURCE }, { file: BUNDLE_SOURCE, source: BUNDLE_SOURCE, bundle: bundleOfBundleSource }).selected.status).toBe("found");
+      expect(archive({ sourceLabel: BUNDLE_SOURCE, channel: BUNDLE_SOURCE }, { file: BUNDLE_SOURCE, source: BUNDLE_SOURCE, bundle: null }).selected).toEqual({ status: "notInTimeline" });
+    });
+  });
+
   it("finds a record whose machine is padded, as the engine trims it before it compacts it", () => {
     const record = { ...recordFor(1), computer: "  DESKTOP-01  " };
     const model = ready({ record, window: windowAround(record, [eventItem(1, record.timestampEpoch)]), counts: counts([]), unreadSources: false });
