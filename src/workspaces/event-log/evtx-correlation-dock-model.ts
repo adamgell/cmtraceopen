@@ -368,7 +368,7 @@ export interface WindowRead {
   unplacedTotal: number | null;
 }
 
-export type WindowFacts =
+type WindowFacts =
   | { kind: "noSelection" }
   | { kind: "untimed" }
   /** There is no read for this selection (yet): the window is null or answers another center. */

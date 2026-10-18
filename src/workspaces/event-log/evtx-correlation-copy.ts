@@ -553,7 +553,7 @@ export function sharedOriginNote(duplicates: number): string | null {
 }
 
 /** Where the entries of a window are shown: the dock draws them, the Details list lists them. */
-export type NoteSurface = "dock" | "list";
+type NoteSurface = "dock" | "list";
 
 /**
  * Several entries of the window each match the selected event, so which one it is cannot be told.

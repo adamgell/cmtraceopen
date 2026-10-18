@@ -500,7 +500,7 @@ function isLinkingStrength(strength: CorrelationChainStrength): strength is "exa
   return strength === "exact" || strength === "candidate";
 }
 
-export interface AbsenceInput {
+interface AbsenceInput {
   /** Every timeline edge of the session was loaded. */
   edgeInputComplete: boolean;
   /** The view is narrowed (see `ChainPlotInput.narrowed`). */
