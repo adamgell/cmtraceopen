@@ -16,6 +16,8 @@
  * 3:1 on the strip and under the wash in almost every theme (recorded deviation from spec 8.11).
  *
  * The strip is 48 px (bars and band); the caption sits above it and the five ticks below it. The
+ * caption row wraps rather than clips, because it carries the note that the extent is only the chains
+ * shown (spec 8.11), so its height, and the strip's total, are minimums that hold on one line. The
  * bars are not read by assistive technology: the chain list is their equivalent, and the band is a
  * slider whose value text names its two ends and its width. The handles are not tab stops: the
  * keyboard resizes with Shift+Left and Shift+Right.
@@ -185,22 +187,22 @@ export function EvtxCorrelationOverview({
     <div
       data-testid="overview-caption"
       style={{
-        height: `${captionHeight}px`,
+        // A minimum, not a height: at a large font size, or with the side panes open, the row wraps
+        // to a second line instead of cutting off the extent note.
+        minHeight: `${captionHeight}px`,
         marginBottom: `${CAPTION_GAP_PX}px`,
         display: "flex",
         alignItems: "baseline",
-        flexWrap: "nowrap",
-        gap: "8px",
-        overflow: "hidden",
-        whiteSpace: "nowrap",
+        flexWrap: "wrap",
+        columnGap: "8px",
         fontSize: `${sizes.label}px`,
         lineHeight: `${captionHeight}px`,
         color: cardSecondary,
       }}
     >
       <span style={{ fontWeight: 600 }}>{OVERVIEW_CAPTION}</span>
-      <span>{OVERVIEW_HINT}</span>
-      <span>{"·"}</span>
+      {/* The dot stays with the hint, so it never starts a wrapped line. */}
+      <span style={{ whiteSpace: "nowrap" }}>{`${OVERVIEW_HINT} ·`}</span>
       <span>{OVERVIEW_EXTENT_NOTE}</span>
     </div>
   );

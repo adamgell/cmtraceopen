@@ -2,7 +2,7 @@
  * The overview strip draws what the pure layer decided and moves the band by the pointer and the
  * keyboard. The geometry is stubbed (jsdom has no layout): the box is 720 px wide at x = 100.
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/event", () => ({
@@ -121,8 +121,9 @@ describe("what it draws", () => {
     expect(OVERVIEW_BOX_HEIGHT_PX).toBe(48);
     const caption = screen.getByTestId("overview-caption");
     const axis = screen.getByTestId("overview-axis");
-    // f = 13: caption row 10 + 4 = 14 px, 4 px gap, the 48 px box, 2 px gap, tick row 9 + 6 = 15 px.
-    expect(caption.style.height).toBe("14px");
+    // f = 13: caption row at least 10 + 4 = 14 px (it wraps, so that is a minimum), 4 px gap, the 48 px
+    // box, 2 px gap, tick row 9 + 6 = 15 px. The total is therefore at least 83 px.
+    expect(caption.style.minHeight).toBe("14px");
     expect(caption.style.marginBottom).toBe("4px");
     expect(axis.style.height).toBe("15px");
     expect(axis.style.marginTop).toBe("2px");
@@ -134,7 +135,7 @@ describe("what it draws", () => {
 
   it("scales the caption row and the ticks with the log list font size (f = 20: 21 + 4 + 48 + 2 + 22 = 97)", () => {
     mount({}, correlationSizes(20));
-    expect(screen.getByTestId("overview-caption").style.height).toBe("21px");
+    expect(screen.getByTestId("overview-caption").style.minHeight).toBe("21px");
     expect(screen.getByTestId("overview-axis").style.height).toBe("22px");
     expect(21 + 4 + 48 + 2 + 22).toBe(97);
   });
@@ -145,6 +146,22 @@ describe("what it draws", () => {
     expect(caption).toHaveTextContent("Overview");
     expect(caption).toHaveTextContent("drag the band to zoom");
     expect(caption).toHaveTextContent("Spans the chains shown, not the whole session.");
+  });
+
+  it("lets the caption wrap instead of clipping the note that the extent is only the chains shown", () => {
+    // jsdom has no layout, so this reads the styles that would clip: a fixed height, a hidden overflow
+    // or a no-wrap row cut the note off at a large font size with the side panes open.
+    mount({}, correlationSizes(20));
+    const caption = screen.getByTestId("overview-caption");
+    expect(caption.style.flexWrap).toBe("wrap");
+    expect(caption.style.height).toBe("");
+    expect(caption.style.overflow).not.toBe("hidden");
+    expect(caption.style.whiteSpace).not.toBe("nowrap");
+    const note = within(caption).getByText("Spans the chains shown, not the whole session.");
+    expect(note.style.whiteSpace).not.toBe("nowrap");
+    expect(note.style.overflow).not.toBe("hidden");
+    // The separator dot rides with the hint, so a wrapped line never starts with it.
+    expect(within(caption).getByText("drag the band to zoom ·").style.whiteSpace).toBe("nowrap");
   });
 
   it("sizes the caption from the font setting: max(10, f - 3), and the ticks max(9, f - 4)", () => {
