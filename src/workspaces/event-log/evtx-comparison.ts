@@ -17,7 +17,7 @@
 
 import { create } from "zustand";
 import { assertParseResultShape, formatCoverageGap } from "./evtx-coverage";
-import { selectVisibleRecords, type VisibleRecordsInput } from "./evtx-filter";
+import { isEventRecord, selectVisibleRecords, type VisibleRecordsInput } from "./evtx-filter";
 import {
   EVTX_TIME_WINDOW_MS,
   type EventLogSourceCoverage,
@@ -225,8 +225,14 @@ export function createAggregator(
         } else {
           total++;
           levels[candidate.level]++;
-          channels.set(candidate.channel, (channels.get(candidate.channel) ?? 0) + 1);
-          distinctEvents.add(eventIdentityKey(candidate.provider, candidate.eventId));
+          // The total and the levels follow the visible rows, as the Charts tiles do, so a delta
+          // sits beside the figure it is compared with. A text-log line has no event identity and
+          // no channel, so it enters neither (its "channel" is its source label and its event ID
+          // is 0), and the Distinct IDs tile and the channel figures leave it out the same way.
+          if (isEventRecord(candidate)) {
+            channels.set(candidate.channel, (channels.get(candidate.channel) ?? 0) + 1);
+            distinctEvents.add(eventIdentityKey(candidate.provider, candidate.eventId));
+          }
         }
       }
     },
@@ -390,6 +396,12 @@ export interface FilesCapture {
   channel: string;
   earliestMs: number;
   latestMs: number;
+  /**
+   * Whether the capture holds Windows events. A text log is a capture too, because its lines count
+   * in the levels and must therefore span the previous period, but it is no channel: it is neither
+   * compared as one nor given a count of 0.
+   */
+  holdsEvents: boolean;
 }
 
 export type FilesCoverage =
@@ -432,9 +444,11 @@ export function checkFilesCoverage(
         channel: candidate.channel,
         earliestMs: Number.POSITIVE_INFINITY,
         latestMs: Number.NEGATIVE_INFINITY,
+        holdsEvents: false,
       };
       captures.set(key, capture);
     }
+    if (isEventRecord(candidate)) capture.holdsEvents = true;
     if (!hasUsableTimestamp(candidate.timestampEpoch)) continue;
     capture.earliestMs = Math.min(capture.earliestMs, candidate.timestampEpoch);
     capture.latestMs = Math.max(capture.latestMs, candidate.timestampEpoch);
@@ -679,7 +693,11 @@ export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutco
       .filter((capture) => gapSources.has(capture.source))
       .map((capture) => capture.channel)
   );
-  const comparedChannels = [...new Set(coverage.captures.map((capture) => capture.channel))];
+  const comparedChannels = [
+    ...new Set(
+      coverage.captures.filter((capture) => capture.holdsEvents).map((capture) => capture.channel)
+    ),
+  ];
   // A capture that stops before the anchor leaves the end of the current period unread too.
   const shortChannels = new Set(shortCaptures.map((capture) => capture.channel));
   const channelsWithGaps = comparedChannels.filter(
@@ -691,6 +709,7 @@ export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutco
   );
   for (const capture of coverage.captures) {
     if (
+      capture.holdsEvents &&
       !counted.has(capture.channel) &&
       !holeInAnUnplacedSource &&
       !channelsWithAHole.has(capture.channel) &&

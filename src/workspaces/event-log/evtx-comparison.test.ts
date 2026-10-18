@@ -61,6 +61,21 @@ function record(overrides: Partial<EvtxRecord> = {}): EvtxRecord {
   };
 }
 
+/**
+ * An archived text-log line as the archive reader shapes it (archive.rs `text_entry_to_record`):
+ * event ID 0, the component as the provider and the source label as the channel.
+ */
+function textLogLine(overrides: Partial<EvtxRecord> = {}): EvtxRecord {
+  return record({
+    originKind: "log",
+    eventId: 0,
+    provider: "Contoso Setup",
+    channel: "setup.log",
+    sourceLabel: "setup.log",
+    ...overrides,
+  });
+}
+
 function visibility(overrides: Partial<ComparisonVisibility> = {}): ComparisonVisibility {
   return {
     selectedChannels: new Set(["System", "Application"]),
@@ -191,6 +206,57 @@ describe("createAggregator", () => {
     );
     expect(unplacedRecords).toBe(0);
     expect(outsideWindowRecords).toBe(0);
+  });
+
+  describe("archived text-log lines", () => {
+    it("count in the totals and levels the Charts tiles count, but are no event identity and no channel", () => {
+      const prior = priorFor();
+      const at = prior.fromMs + HOUR;
+      const aggregator = createAggregator(
+        prior,
+        visibility({ selectedChannels: new Set(["System", "setup.log"]) })
+      );
+      aggregator.add([
+        record({ timestampEpoch: at, level: "Error", eventId: 7, provider: "A", channel: "System" }),
+        textLogLine({ timestampEpoch: at, level: "Error" }),
+        textLogLine({ timestampEpoch: at, level: "Warning", provider: "Contoso Agent" }),
+      ]);
+
+      const { counts } = aggregator.finish();
+      expect(counts.total).toBe(3);
+      expect(counts.levels.Error).toBe(2);
+      expect(counts.levels.Warning).toBe(1);
+      // The pseudo identities (provider, 0) never reach the set a "new IDs" figure is read from.
+      expect([...counts.distinctEvents]).toEqual([eventIdentityKey("A", 7)]);
+      expect(Object.fromEntries(counts.channels)).toEqual({ System: 1 });
+    });
+
+    it("do not hide a real event whose ID is 0", () => {
+      const prior = priorFor();
+      const at = prior.fromMs + HOUR;
+      const aggregator = createAggregator(prior, visibility());
+      aggregator.add([
+        record({ timestampEpoch: at, eventId: 0, provider: "A", originKind: "event" }),
+        record({ timestampEpoch: at, eventId: 0, provider: "B" }),
+      ]);
+      const { counts } = aggregator.finish();
+      expect([...counts.distinctEvents].sort()).toEqual(
+        [eventIdentityKey("A", 0), eventIdentityKey("B", 0)].sort()
+      );
+      expect(counts.channels.get("System")).toBe(2);
+    });
+
+    it("still place a line without a usable timestamp, so its level count is not a quiet zero", () => {
+      const prior = priorFor();
+      const aggregator = createAggregator(
+        prior,
+        visibility({ selectedChannels: new Set(["setup.log"]) })
+      );
+      aggregator.add([textLogLine({ timestampEpoch: 0, level: "Error" })]);
+      const tally = aggregator.finish();
+      expect(tally.unplacedRecords).toBe(1);
+      expect(tally.counts.levels.Error).toBe(0);
+    });
   });
 
   it("counts both inclusive bounds and nothing one millisecond beyond either", () => {
@@ -334,6 +400,22 @@ describe("countCurrentPeriod", () => {
     const current = countCurrentPeriod([loaded, lateArrival], basisOf(prior), visibility());
 
     expect(current.counts.total).toBe(1);
+  });
+
+  it("counts a text-log line in the levels but never as an event identity or a channel", () => {
+    const prior = priorFor("24h");
+    const records = [
+      record({ timestampEpoch: ANCHOR - HOUR, level: "Error", provider: "A", eventId: 7 }),
+      textLogLine({ timestampEpoch: ANCHOR - HOUR, level: "Error" }),
+    ];
+    const current = countCurrentPeriod(
+      records,
+      basisOf(prior, ["System"]),
+      visibility({ selectedChannels: new Set(["System", "setup.log"]) })
+    );
+    expect(current.counts.levels.Error).toBe(2);
+    expect([...current.counts.distinctEvents]).toEqual([eventIdentityKey("A", 7)]);
+    expect(Object.fromEntries(current.counts.channels)).toEqual({ System: 1 });
   });
 
   describe("the tail rows it sets aside", () => {
@@ -647,7 +729,25 @@ describe("checkFilesCoverage", () => {
         channel: "System",
         earliestMs: prior.fromMs,
         latestMs: prior.toMs,
+        holdsEvents: true,
       },
+    ]);
+  });
+
+  it("marks a text log as a capture that holds no events, and an event capture as one that does", () => {
+    const prior = priorFor();
+    const coverage = checkFilesCoverage(
+      [
+        ...spanning(prior),
+        textLogLine({ timestampEpoch: prior.fromMs }),
+        textLogLine({ timestampEpoch: prior.toMs }),
+      ],
+      new Set(["System", "setup.log"]),
+      prior
+    );
+    expect(coverage.covered && coverage.captures.map((c) => [c.channel, c.holdsEvents])).toEqual([
+      ["System", true],
+      ["setup.log", false],
     ]);
   });
 
@@ -856,6 +956,72 @@ describe("compareLoadedFiles", () => {
     if (outcome.status !== "complete") return;
     expect(outcome.result.counts.total).toBe(2);
     expect(outcome.result.counts.levels.Warning).toBe(0);
+  });
+
+  describe("archived text-log lines", () => {
+    /** One event capture and one text log, both bracketing the previous period and reaching the anchor. */
+    function eventsAndATextLog(prior: PriorWindow, logOverrides: Partial<EvtxRecord> = {}) {
+      return [
+        record({ timestampEpoch: prior.fromMs, provider: "A", eventId: 1, level: "Error" }),
+        record({ timestampEpoch: ANCHOR, provider: "A", eventId: 1 }),
+        textLogLine({ timestampEpoch: prior.fromMs, level: "Error", ...logOverrides }),
+        textLogLine({ timestampEpoch: prior.fromMs + HOUR, level: "Error", ...logOverrides }),
+        textLogLine({ timestampEpoch: ANCHOR, ...logOverrides }),
+      ];
+    }
+    const both = visibility({ selectedChannels: new Set(["System", "setup.log"]) });
+
+    it("count in the levels, like the tiles, but add no event identity to the previous period", () => {
+      const prior = priorFor();
+      const outcome = compareLoadedFiles(input(eventsAndATextLog(prior), { visibility: both }));
+      expect(outcome.status).toBe("complete");
+      if (outcome.status !== "complete") return;
+      expect(outcome.result.counts.levels.Error).toBe(3);
+      expect([...outcome.result.counts.distinctEvents]).toEqual([eventIdentityKey("A", 1)]);
+    });
+
+    it("are not a compared channel, and are never called a channel of 0 events", () => {
+      const prior = priorFor();
+      const outcome = compareLoadedFiles(input(eventsAndATextLog(prior), { visibility: both }));
+      expect(outcome.status).toBe("complete");
+      if (outcome.status !== "complete") return;
+      expect(outcome.result.comparedChannels).toEqual(["System"]);
+      expect(outcome.result.counts.channels.has("setup.log")).toBe(false);
+      expect(outcome.result.channelsWithGaps).toEqual([]);
+    });
+
+    it("must still span the previous period, because their lines are counted in the levels", () => {
+      const prior = priorFor();
+      const records = [
+        record({ timestampEpoch: prior.fromMs, provider: "A", eventId: 1 }),
+        record({ timestampEpoch: ANCHOR, provider: "A", eventId: 1 }),
+        // The log only starts inside the previous period, so its errors there would be undercounted.
+        textLogLine({ timestampEpoch: prior.fromMs + 6 * HOUR, level: "Error" }),
+        textLogLine({ timestampEpoch: ANCHOR }),
+      ];
+      expect(compareLoadedFiles(input(records, { visibility: both }))).toEqual({
+        status: "unavailable",
+        reason: "priorPeriodNotSpanned",
+        detail: "The loaded files do not cover the previous period.",
+      });
+    });
+
+    it("leave an event channel's zero alone when only the text log holds the period's lines", () => {
+      const prior = priorFor();
+      const records = [
+        record({ timestampEpoch: prior.fromMs - HOUR, provider: "A", eventId: 1 }),
+        record({ timestampEpoch: ANCHOR, provider: "A", eventId: 1 }),
+        textLogLine({ timestampEpoch: prior.fromMs, level: "Error" }),
+        textLogLine({ timestampEpoch: ANCHOR }),
+      ];
+      const outcome = compareLoadedFiles(input(records, { visibility: both }));
+      expect(outcome.status).toBe("complete");
+      if (outcome.status !== "complete") return;
+      // System was read in full and holds nothing in the period: a real zero. The text log's line
+      // is not System's.
+      expect(outcome.result.counts.channels.get("System")).toBe(0);
+      expect(outcome.result.counts.levels.Error).toBe(1);
+    });
   });
 
   describe("the current period", () => {
