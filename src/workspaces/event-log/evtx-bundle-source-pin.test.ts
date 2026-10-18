@@ -1,8 +1,9 @@
 /**
  * Drift guard for the bundle mirror (the style of evtx-engine-compaction-pin.test.ts): the Rust
  * rules that `bundleOfSource` and the log matcher copy, pinned in the Rust source. If the engine
- * changes any of them this file fails and says which, and `isCollectorBundleId`, `bundleOfSource`
- * and `logOriginNamesRecord` (evtx-correlation-origin-index.ts) have to be revisited with it.
+ * changes any of them this file fails and says which, and `isCollectorBundleId` and `bundleOfSource`
+ * (evtx-collector-bundle.ts) and `logOriginNamesRecord` (evtx-correlation-origin-index.ts) have to be
+ * revisited with it.
  *
  * Pinned, each as the function's source with whitespace and `//` comments ignored, so reformatting
  * and a reworded comment do not matter:
