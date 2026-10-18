@@ -15,6 +15,7 @@ import {
   filterTableToChain,
   loadedEvidenceIndex,
   openChainInCorrelationView,
+  openUnplacedInCorrelationView,
   scopeFailureText,
 } from "./evtx-correlation-actions";
 import { WAIT_FOR_ENTRIES_REASON } from "./evtx-correlation-copy";
@@ -198,6 +199,20 @@ describe("openChainInCorrelationView", () => {
   });
 });
 
+describe("openUnplacedInCorrelationView", () => {
+  it("shows the Not placed list, keeps the chain selection, shows the view and focuses its tab", () => {
+    const tab = arm("correlation");
+    useEvtxLayoutStore.setState({ activeView: "table" });
+    useEvtxCorrelationStore.setState({ selectedChainId: "kept", unplacedOpen: false });
+    openUnplacedInCorrelationView();
+    expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(true);
+    expect(useEvtxCorrelationStore.getState().selectedChainId).toBe("kept");
+    expect(useEvtxCorrelationStore.getState().openedCount).toBe(0);
+    expect(useEvtxLayoutStore.getState().activeView).toBe("correlation");
+    expect(tab).toHaveFocus();
+  });
+});
+
 describe("chainActionAvailability", () => {
   it("allows the actions only on a chain whose entries were read, in a model that is not being rebuilt", () => {
     expect(chainActionAvailability({ hasItems: true, updating: false, hasChain: true })).toEqual({
@@ -253,8 +268,20 @@ describe("one definition of opening and focusing a view tab", () => {
     ["EvtxCorrelationView.tsx", /\bfilterTableToChain\(/],
     ["EvtxCorrelationDock.tsx", /\bopenChainInCorrelationView\(/],
     ["EvtxDetailContext.tsx", /\bopenChainInCorrelationView\(/],
+    ["EventDiagnosisPanel.tsx", /\bopenChainInCorrelationView\(/],
+    ["EventDiagnosisPanel.tsx", /\bopenUnplacedInCorrelationView\(/],
   ])("is called by %s", (file, call) => {
     expect(sources[file], file).toMatch(call);
+  });
+
+  it("is the only way in: no component calls the store's openers, which do not move focus", () => {
+    // `openCorrelationView` and `openUnplacedList` switch the view and nothing else; every Open in the
+    // workspace goes through the actions module, which also moves focus to the Correlation tab.
+    const callers = Object.entries(sources)
+      .filter(([file]) => file !== "evtx-correlation-store.ts" && file !== "evtx-correlation-actions.ts")
+      .filter(([, source]) => /\b(?:openCorrelationView|openUnplacedList)\(/.test(source))
+      .map(([file]) => file);
+    expect(callers).toEqual([]);
   });
 
   it("is not imported from the lazy view by anything", () => {

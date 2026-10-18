@@ -38,7 +38,7 @@ import { Disclosure, RailCard, useRailSizes, type RailSizes } from "./EvtxRailPa
 import { useRailTextColors } from "./evtx-rail-text";
 import { correlationChainCount } from "./evtx-correlation-chains";
 import { edgeInputNotice } from "./evtx-correlation-copy";
-import { openCorrelationView, openUnplacedList } from "./evtx-correlation-store";
+import { openChainInCorrelationView, openUnplacedInCorrelationView } from "./evtx-correlation-actions";
 import { describeUnplaced, unplacedCardLine } from "./evtx-unplaced";
 import { useEvtxCorrelationData } from "./useEvtxCorrelation";
 import {
@@ -822,7 +822,7 @@ function CorrelationSummaryCard({ sizes, stale }: { sizes: RailSizes; stale: boo
         <Link
           as="button"
           type="button"
-          onClick={() => openUnplacedList()}
+          onClick={() => openUnplacedInCorrelationView()}
           style={{ justifySelf: "start", fontSize: `${sizes.small}px`, fontWeight: 600 }}
         >
           Review unplaced lines <ArrowRight12Regular aria-hidden="true" style={{ verticalAlign: "middle" }} />
@@ -831,7 +831,7 @@ function CorrelationSummaryCard({ sizes, stale }: { sizes: RailSizes; stale: boo
       <Link
         as="button"
         type="button"
-        onClick={() => openCorrelationView()}
+        onClick={() => openChainInCorrelationView()}
         style={{ justifySelf: "start", fontSize: `${sizes.small}px`, fontWeight: 600 }}
       >
         Open correlation view <ArrowRight12Regular aria-hidden="true" style={{ verticalAlign: "middle" }} />

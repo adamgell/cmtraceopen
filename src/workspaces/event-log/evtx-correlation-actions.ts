@@ -10,7 +10,7 @@ import type { CorrelationChain } from "./evtx-correlation-chains";
 import { WAIT_FOR_ENTRIES_REASON } from "./evtx-correlation-copy";
 import type { EvtxRecordScopeCounts } from "./evtx-filter";
 import { scopeForChain, type OriginLookup } from "./evtx-correlation-origin-index";
-import { openCorrelationView } from "./evtx-correlation-store";
+import { openCorrelationView, openUnplacedList } from "./evtx-correlation-store";
 import { chainTitle } from "./evtx-correlation-view-model";
 import { buildEvidenceIndex, describeScopeCounts, type EvidenceIndex } from "./evtx-insights-data";
 import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
@@ -81,6 +81,15 @@ export function filterTableToChain(input: {
  */
 export function openChainInCorrelationView(chainId?: string | null): void {
   openCorrelationView(chainId);
+  document.getElementById(evtxViewTabId("correlation"))?.focus();
+}
+
+/**
+ * "Review unplaced lines" (spec 8.11a): shows the Correlation view with the Not placed list open, the
+ * chain selection left alone, and moves focus to the Correlation tab like every other Open.
+ */
+export function openUnplacedInCorrelationView(): void {
+  openUnplacedList();
   document.getElementById(evtxViewTabId("correlation"))?.focus();
 }
 

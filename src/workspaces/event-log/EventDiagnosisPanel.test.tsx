@@ -8,7 +8,7 @@ import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import { DETAIL_RENDER_CAP, OUTCOME_LABELS, EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { fixtureEdges, makeData, type DataOptions } from "./evtx-correlation-test-fixtures";
-import { useEvtxLayoutStore } from "./evtx-layout-store";
+import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
 import type { UnplacedItem } from "./unified-timeline";
 import {
   EvtxCorrelationProvider,
@@ -703,6 +703,18 @@ describe("EventDiagnosisPanel", () => {
       expect(useEvtxCorrelationStore.getState().selectedChainId).toBe("keep");
     });
 
+    it("moves focus to the Correlation tab when the Correlation view is opened, as every Open does", () => {
+      const tab = document.createElement("button");
+      tab.id = evtxViewTabId("correlation");
+      document.body.appendChild(tab);
+      renderCard(counted());
+      fireEvent.click(within(card()).getByRole("button", { name: "Open correlation view" }));
+      expect(tab).toHaveFocus();
+      // It opens no chain, so the view's lost-selection record is not dropped by it.
+      expect(useEvtxCorrelationStore.getState().openedCount).toBe(0);
+      tab.remove();
+    });
+
     it("keeps the link in an unknown state, where the view says what is being read", () => {
       renderCard({ ...UNAVAILABLE_CORRELATION, stage: "pending" });
       expect(within(card()).getByRole("button", { name: "Open correlation view" })).toBeInTheDocument();
@@ -821,6 +833,17 @@ describe("EventDiagnosisPanel", () => {
       expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
       expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(true);
       expect(useEvtxCorrelationStore.getState().selectedChainId).toBe("keep");
+    });
+
+    it("moves focus to the Correlation tab when the Not placed list is opened, like the other Open", () => {
+      const tab = document.createElement("button");
+      tab.id = evtxViewTabId("correlation");
+      document.body.appendChild(tab);
+      useEvtxLayoutStore.setState({ activeView: "table" });
+      renderCard(counted({ unplacedList: { items: [unplacedLog(1)], total: 1 } }));
+      fireEvent.click(reviewLink()!);
+      expect(tab).toHaveFocus();
+      tab.remove();
     });
 
     it("builds no item to count: a model without items is enough", () => {
