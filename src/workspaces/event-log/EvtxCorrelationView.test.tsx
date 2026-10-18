@@ -26,6 +26,18 @@ vi.mock("./evtx-insights-data", async (importOriginal) => {
   };
 });
 
+const plotBuilds = vi.hoisted(() => vi.fn());
+vi.mock("./evtx-correlation-view-model", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./evtx-correlation-view-model")>();
+  return {
+    ...actual,
+    buildChainPlot: (...args: Parameters<typeof actual.buildChainPlot>) => {
+      plotBuilds();
+      return actual.buildChainPlot(...args);
+    },
+  };
+});
+
 import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
@@ -56,7 +68,7 @@ import {
   type DataOptions,
 } from "./evtx-correlation-test-fixtures";
 import type { EvtxRecord } from "./types";
-import type { TimelineCorrelationEdge, TimelineItem } from "./unified-timeline";
+import type { TimelineCorrelationEdge, TimelineItem, UnplacedItem } from "./unified-timeline";
 
 const NO_UNPROVEN_CLAIM = /not placed|no timeline position|without a timeline position|no timestamp/i;
 
@@ -104,10 +116,11 @@ const alertText = () => screen.getByTestId("correlation-action-alert");
 beforeEach(() => {
   localStorage.clear();
   useUiStore.setState({ themeId: "light" });
-  useEvtxCorrelationStore.setState({ selectedChainId: null });
+  useEvtxCorrelationStore.setState({ selectedChainId: null, unplacedOpen: false });
   useEvtxLayoutStore.setState({ activeView: "correlation" });
   seedStore();
   vi.mocked(writeText).mockReset();
+  plotBuilds.mockClear();
 });
 afterEach(() => {
   cleanup();
@@ -1024,3 +1037,316 @@ describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
     });
   },
 );
+
+// ---- the overview strip and the Not placed pane (Phase 10b, #840) --------------------------------
+
+/** Log lines with no timestamp, as the engine lists them. */
+function unplacedLog(n: number): UnplacedItem {
+  return {
+    reason: "missingTimestamp",
+    origin: {
+      kind: "log",
+      file: "C:\\Logs\\IntuneManagementExtension.log",
+      component: null,
+      line: n,
+      source: "writer.cpp",
+      machine: null,
+      bundle: null,
+      recordId: n,
+    },
+  };
+}
+const unplacedItems = (count: number) => Array.from({ length: count }, (_, i) => unplacedLog(i + 1));
+const slider = () => screen.getByRole("slider", { name: "Zoom window of the lane plot" });
+const axisLabels = () =>
+  Array.from((document.querySelector("[data-axis]") as HTMLElement).children).map((node) => node.textContent);
+const pinned = () => document.querySelectorAll("[data-pinned]").length;
+
+describe("the overview strip in the view (spec 8.11)", () => {
+  it("sits between the header (with its legend) and the lane plot, above the plot", () => {
+    show(mixedData());
+    const legend = screen.getByTestId("correlation-legend");
+    const overview = screen.getByTestId("correlation-overview");
+    const plot = screen.getByTestId("lane-plot");
+    expect(legend.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(overview.compareDocumentPosition(plot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The marker-shape legend is in the detail header, as spec 8.11 places it.
+    expect(legend).toHaveTextContent("Event");
+    expect(legend).toHaveTextContent("Log line");
+  });
+
+  it("is not drawn before the entries are read, where there is no plot either", () => {
+    show(pairData({ hasItems: false, stage: "edgesOnly" }));
+    expect(screen.queryByTestId("correlation-overview")).toBeNull();
+    expect(screen.queryByRole("slider")).toBeNull();
+  });
+
+  it("draws a bar for every chain with a position, and the selected chain's solid", () => {
+    show(mixedData());
+    const bars = document.querySelectorAll("[data-bar]");
+    expect(bars).toHaveLength(rows().length);
+    expect(document.querySelectorAll('[data-bar][data-selected="true"]')).toHaveLength(1);
+  });
+
+  it("starts at the chain's default window, which the plot also uses", () => {
+    show(mixedData());
+    const before = axisLabels();
+    expect(slider().getAttribute("aria-valuetext")).toMatch(/ to .*, 10 s wide$/);
+    expect(before).toHaveLength(5);
+    expect(screen.getByTestId("lane-plot")).toBeInTheDocument();
+  });
+
+  it("sets the lane window: moving the band pins the entries it leaves outside, and Home brings them back", () => {
+    show(mixedData());
+    const initial = axisLabels();
+    expect(pinned()).toBe(0);
+    for (let press = 0; press < 5; press += 1) fireEvent.keyDown(slider(), { key: "ArrowRight" });
+    expect(axisLabels()).not.toEqual(initial);
+    expect(pinned()).toBeGreaterThan(0);
+    fireEvent.keyDown(slider(), { key: "Home" });
+    expect(axisLabels()).toEqual(initial);
+    expect(pinned()).toBe(0);
+  });
+
+  it("widens the lane window with Shift+Right, which the plot's ticks show, and cannot narrow below 10 s", () => {
+    show(mixedData());
+    const initial = axisLabels();
+    fireEvent.keyDown(slider(), { key: "ArrowLeft", shiftKey: true });
+    expect(slider().getAttribute("aria-valuetext")).toMatch(/, 10 s wide$/);
+    expect(axisLabels()).toEqual(initial);
+    fireEvent.keyDown(slider(), { key: "ArrowRight", shiftKey: true });
+    // The first chain's window starts at the strip's start, so only its end can grow: 11 s.
+    expect(slider().getAttribute("aria-valuetext")).toMatch(/, 11 s wide$/);
+    expect(axisLabels()).not.toEqual(initial);
+  });
+
+  it("never turns the default window into null, which would draw nothing", () => {
+    show(mixedData());
+    expect(screen.getByTestId("lane-plot")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/nothing to plot/);
+    fireEvent.keyDown(slider(), { key: "ArrowRight" });
+    fireEvent.keyDown(slider(), { key: "Home" });
+    expect(screen.getByTestId("lane-plot")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/nothing to plot/);
+  });
+
+  it("starts the next chain from its own default, and so does coming back", () => {
+    show(mixedData());
+    const first = slider().getAttribute("aria-valuetext");
+    for (let press = 0; press < 3; press += 1) fireEvent.keyDown(slider(), { key: "ArrowRight" });
+    const moved = slider().getAttribute("aria-valuetext");
+    expect(moved).not.toBe(first);
+    fireEvent.click(rows()[1]!);
+    const second = slider().getAttribute("aria-valuetext");
+    expect(second).not.toBe(moved);
+    fireEvent.click(rows()[0]!);
+    expect(slider().getAttribute("aria-valuetext")).toBe(first);
+  });
+
+  it("keeps the band, in absolute time, through a live rebuild of the same chain", () => {
+    const view = show(mixedData());
+    for (let press = 0; press < 3; press += 1) fireEvent.keyDown(slider(), { key: "ArrowRight" });
+    const moved = slider().getAttribute("aria-valuetext");
+    view.update(mixedData({ builtFor: "session:2" }));
+    expect(slider().getAttribute("aria-valuetext")).toBe(moved);
+  });
+
+  it("writes nothing to the time range, whatever is done on the band", () => {
+    const original = useEvtxStore.getState().setTimeRange;
+    const spy = vi.fn(original);
+    useEvtxStore.setState({ setTimeRange: spy as typeof original });
+    try {
+      show(mixedData());
+      for (const key of ["ArrowRight", "ArrowLeft", "Home", "Escape"]) fireEvent.keyDown(slider(), { key });
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      useEvtxStore.setState({ setTimeRange: original });
+    }
+  });
+
+  it("is untouched by the unplaced items, which are never positioned on any timeline", () => {
+    const without = show(mixedData());
+    const barsWithout = Array.from(document.querySelectorAll("[data-bar]")).map((bar) => bar.outerHTML);
+    const markersWithout = Array.from(document.querySelectorAll("[data-marker]")).map((marker) => marker.getAttribute("data-marker"));
+    without.unmount();
+    show(mixedData({ unplacedList: { items: unplacedItems(5), total: 5 } }));
+    expect(Array.from(document.querySelectorAll("[data-bar]")).map((bar) => bar.outerHTML)).toEqual(barsWithout);
+    expect(Array.from(document.querySelectorAll("[data-marker]")).map((marker) => marker.getAttribute("data-marker"))).toEqual(markersWithout);
+    expect(screen.getByTestId("lane-plot").textContent).not.toMatch(/IntuneManagementExtension/);
+  });
+});
+
+describe("the Not placed option (spec 8.11, 8.11a)", () => {
+  const options = () => screen.getAllByRole("option");
+  const notPlaced = () => document.querySelector("[data-unplaced-option]") as HTMLElement;
+
+  it("is the last option of the same listbox, labelled from the engine's count", () => {
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    const all = options();
+    expect(all[all.length - 1]).toBe(notPlaced());
+    expect(notPlaced()).toHaveAccessibleName(
+      "Not placed (3). Text-log lines without timestamps are listed, never guessed onto the timeline.",
+    );
+    expect(screen.getByRole("listbox")).toContainElement(notPlaced());
+    expect(screen.getByRole("listbox")).toHaveAccessibleName(
+      "Correlation chains, strongest first, and items that are not placed",
+    );
+  });
+
+  it("has no row for a session that counted none", () => {
+    show(mixedData());
+    expect(notPlaced()).toBeNull();
+    expect(screen.getByRole("listbox")).toHaveAccessibleName("Correlation chains, strongest first");
+  });
+
+  it("labels an unknown count as unknown, never as 0, even with nothing listed", () => {
+    show(mixedData({ unplacedList: { items: [], total: null } }));
+    expect(notPlaced()).toHaveTextContent("Not placed (count unknown)");
+    expect(notPlaced().textContent).not.toMatch(/\b0\b/);
+  });
+
+  it("uses the count, not the preview's length, and the neutral caption for a partial list", () => {
+    show(mixedData({ unplacedList: { items: unplacedItems(100), total: 5_000 } }));
+    expect(notPlaced()).toHaveTextContent("Not placed (5,000)");
+    expect(notPlaced()).toHaveTextContent("Entries without timestamps are listed, never guessed onto the timeline.");
+  });
+
+  it("is there when the session has no chain at all", () => {
+    show(makeData({ items: [], edges: [], totalEdges: 0, unplacedList: { items: unplacedItems(2), total: 2 } }));
+    expect(screen.getByTestId("correlation-view")).toHaveTextContent("No correlation chains were found in this session.");
+    expect(options()).toHaveLength(1);
+    expect(notPlaced()).toHaveTextContent("Not placed (2)");
+  });
+
+  it("is there in the counts-only stage, before any entry is read", () => {
+    show(pairData({ hasItems: false, stage: "edgesOnly", unplacedList: { items: unplacedItems(4), total: 4 } }));
+    expect(notPlaced()).toHaveTextContent("Not placed (4)");
+  });
+
+  it("is reached by the arrow keys, Home and End, and selecting it replaces the detail with the list", () => {
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    const listbox = screen.getByRole("listbox");
+    const chainCount = options().length - 1;
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(true);
+    expect(notPlaced()).toHaveAttribute("aria-selected", "true");
+    expect(listbox.getAttribute("aria-activedescendant")).toBe(notPlaced().id);
+    expect(options().filter((row) => row.getAttribute("aria-selected") === "true")).toHaveLength(1);
+    // The detail is the list: no chain header, no overview, no plot, no cards.
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+    expect(screen.queryByTestId("lane-plot")).toBeNull();
+    expect(screen.queryByTestId("correlation-overview")).toBeNull();
+    expect(screen.queryByRole("heading", { name: /Why these are linked|Sequence/ })).toBeNull();
+    // ArrowDown at the end stays; ArrowUp returns to the last chain, closing the pane.
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(notPlaced()).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(listbox, { key: "ArrowUp" });
+    expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(false);
+    expect(options()[chainCount - 1]).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("lane-plot")).toBeInTheDocument();
+    fireEvent.keyDown(listbox, { key: "Home" });
+    expect(options()[0]).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("is selected by a click, and a chain click leaves it", () => {
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    fireEvent.click(notPlaced());
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+    fireEvent.click(options()[0]!);
+    expect(screen.queryByTestId("unplaced-pane")).toBeNull();
+    expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(false);
+  });
+
+  it("stays open when 'Review unplaced lines' opens it before any chain is selected (the reconcile does not call selectChain)", () => {
+    useEvtxCorrelationStore.setState({ selectedChainId: null, unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+    expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(true);
+    // No chain was chosen for the operator, who asked for this pane.
+    expect(useEvtxCorrelationStore.getState().selectedChainId).toBeNull();
+    expect(notPlaced()).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("leaves the pane for a chain, and says so once, when nothing is left to list", () => {
+    vi.useFakeTimers();
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    const view = show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+    view.update(mixedData({ unplacedList: { items: [], total: 0 }, builtFor: "session:2" }));
+    expect(screen.queryByTestId("unplaced-pane")).toBeNull();
+    expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(false);
+    expect(notPlaced()).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(CORRELATION_ANNOUNCE_MS + 100);
+    });
+    expect(announcer().textContent).toContain("Nothing is listed under Not placed any more, showing a chain");
+  });
+
+  it("keeps showing the model's own list while a newer session is rebuilt", () => {
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 }, updating: true, builtFor: "old:1" }));
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+    expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(true);
+  });
+
+  it("holds exactly two status regions with the pane open, and its replies use the action region", async () => {
+    vi.mocked(writeText).mockResolvedValue(undefined);
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    const regions = () => screen.getAllByRole("status").map((node) => node.getAttribute("data-testid")).sort();
+    expect(regions()).toEqual(["correlation-action-status", "correlation-announcer"]);
+    fireEvent.click(screen.getByRole("button", { name: "Copy as text" }));
+    await waitFor(() => expect(status()).toHaveTextContent("Copied the unplaced list as text."));
+    expect(announcer().textContent).not.toContain("Copied");
+    expect(regions()).toEqual(["correlation-action-status", "correlation-announcer"]);
+  });
+
+  it("reports a failed copy from the pane as an alert, with no third status", async () => {
+    vi.mocked(writeText).mockRejectedValue(new Error("clipboard denied"));
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy as text" }));
+    await waitFor(() => expect(alertText()).toHaveTextContent("Copy failed: clipboard denied"));
+    expect(screen.getAllByRole("status")).toHaveLength(2);
+  });
+
+  it("does not announce a lost chain while the pane is the thing shown", () => {
+    vi.useFakeTimers();
+    useEvtxCorrelationStore.setState({ selectedChainId: "a-chain-that-is-gone", unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    act(() => {
+      vi.advanceTimersByTime(CORRELATION_ANNOUNCE_MS + 100);
+    });
+    expect(announcer().textContent).not.toContain("no longer present");
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+  });
+
+  it("holds exactly two status regions with the pane open and no chain at all", () => {
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(makeData({ items: [], edges: [], totalEdges: 0, unplacedList: { items: unplacedItems(2), total: 2 } }));
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+    expect(screen.getAllByRole("status").map((node) => node.getAttribute("data-testid")).sort()).toEqual([
+      "correlation-action-status",
+      "correlation-announcer",
+    ]);
+  });
+
+  it("spends Escape in the pane and returns focus to the list, never reaching the time range", () => {
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    const copy = screen.getByRole("button", { name: "Copy as text" });
+    expect(fireEvent.keyDown(copy, { key: "Escape" })).toBe(false);
+    expect(document.activeElement).toBe(screen.getByRole("listbox"));
+  });
+
+  it("does not build the plot while the pane is shown, and builds it for a chain", () => {
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    expect(document.querySelectorAll("[data-marker]")).toHaveLength(0);
+    expect(plotBuilds).not.toHaveBeenCalled();
+    cleanup();
+    useEvtxCorrelationStore.setState({ unplacedOpen: false });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    expect(plotBuilds).toHaveBeenCalled();
+  });
+});

@@ -24,6 +24,8 @@ import {
   correlationSizes,
   type CorrelationSizes,
 } from "./EvtxCorrelationLanes";
+import { EvtxCorrelationOverview } from "./EvtxCorrelationOverview";
+import { EvtxUnplacedList } from "./EvtxUnplacedList";
 import {
   STRENGTH_LABELS,
   chainCopyText,
@@ -44,13 +46,16 @@ import {
   resolveOriginRecords,
   scopeForChain,
 } from "./evtx-correlation-origin-index";
+import { zoomWindowFor, type ZoomState } from "./evtx-correlation-overview";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
+import { describeUnplaced, notPlacedCaption, notPlacedLabel, type UnplacedView } from "./evtx-unplaced";
 import {
   CORRELATION_SEQUENCE_INITIAL,
   buildChainPlot,
   chainAccessibleName,
   chainSequence,
   chainTitle,
+  defaultLaneWindow,
   entriesText,
   formatDelta,
   isPartialChain,
@@ -60,6 +65,7 @@ import {
   spanText,
   whyRows,
   type PlotMarker,
+  type TimeWindow,
 } from "./evtx-correlation-view-model";
 import { useEvtxCorrelationData } from "./useEvtxCorrelation";
 import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
@@ -268,6 +274,55 @@ function ChainRow({
   );
 }
 
+/**
+ * The last option of the chain list (spec 8.11): "Not placed (u)", with the caption that says its
+ * items are listed and never guessed onto the timeline. Selecting it replaces the detail area with
+ * the unplaced list. It is an option of the same listbox, so the arrow keys reach it, and it has
+ * the selection look a chain row has.
+ */
+function NotPlacedRow({
+  id,
+  view,
+  selected,
+  palette,
+  onSelect,
+}: {
+  id: string;
+  view: UnplacedView;
+  selected: boolean;
+  palette: Palette;
+  onSelect: () => void;
+}) {
+  const styles = useStyles();
+  const { sizes, visuals } = palette;
+  return (
+    <div
+      role="option"
+      id={id}
+      aria-label={`${notPlacedLabel(view)}. ${notPlacedCaption(view)}`}
+      aria-selected={selected}
+      data-unplaced-option=""
+      className={styles.option}
+      onClick={onSelect}
+      style={{
+        display: "grid",
+        gap: "3px",
+        padding: "8px 12px",
+        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+        backgroundColor: selected ? visuals.selection.background : "transparent",
+        boxShadow: selected ? `inset 3px 0 0 ${visuals.selection.border}` : undefined,
+        color: selected ? visuals.selection.foreground : palette.listPrimary,
+        fontFamily: LOG_UI_FONT_FAMILY,
+      }}
+    >
+      <div style={{ fontSize: `${Math.max(10, sizes.f - 1)}px`, fontWeight: 600 }}>{notPlacedLabel(view)}</div>
+      <div style={{ fontSize: `${sizes.label}px`, color: selected ? visuals.selection.foreground : palette.listSecondary }}>
+        {notPlacedCaption(view)}
+      </div>
+    </div>
+  );
+}
+
 function CardHeading({ children, palette }: { children: string; palette: Palette }) {
   return (
     <h3
@@ -329,6 +384,8 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const selectedChainId = useEvtxCorrelationStore((s) => s.selectedChainId);
   const selectChain = useEvtxCorrelationStore((s) => s.selectChain);
+  const unplacedOpen = useEvtxCorrelationStore((s) => s.unplacedOpen);
+  const showUnplaced = useEvtxCorrelationStore((s) => s.showUnplaced);
   const listRef = useRef<HTMLDivElement>(null);
   const palette = useMemo<Palette>(
     () => ({
@@ -351,13 +408,26 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
     () => model?.chains.find((row) => row.id === reconciled.selectedId) ?? null,
     [model, reconciled.selectedId],
   );
+  // The "Not placed" pane: its list is the model's own (it was stored with it), null is no run, and
+  // an unknown count is a list that is shown as unknown.
+  const unplacedView = useMemo(() => describeUnplaced(data.unplacedList), [data.unplacedList]);
+  const unplacedPresent = model !== null && unplacedView.present;
+  const showPane = unplacedOpen && unplacedPresent;
   // A selection that no longer exists is replaced, not kept: a stale id would reappear if a chain
   // with that id came back. Only once the model is current, so a rebuild does not lose the choice.
+  // While the "Not placed" pane is open nothing here may call selectChain, which leaves the pane:
+  // "Review unplaced lines" before any chain is selected would close it as soon as it opened. A pane
+  // that is open with nothing left to list is left for the chain, and said once.
+  const [unplacedLost, setUnplacedLost] = useState(false);
   useEffect(() => {
-    if (model !== null && !data.updating && reconciled.selectedId !== selectedChainId) {
+    if (model === null || data.updating || showPane) return;
+    if (unplacedOpen) {
+      setUnplacedLost(true);
       selectChain(reconciled.selectedId);
+      return;
     }
-  }, [model, data.updating, reconciled.selectedId, selectedChainId, selectChain]);
+    if (reconciled.selectedId !== selectedChainId) selectChain(reconciled.selectedId);
+  }, [model, data.updating, showPane, unplacedOpen, reconciled.selectedId, selectedChainId, selectChain]);
 
   // The scope of the session the shown model was built from; it travels with the model, so it is
   // never a newer session's. A scope that is not known is disclosed as such and reads as narrowed:
@@ -365,9 +435,24 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
   const scope = scopeDisclosure(data.scope);
   const narrowed = scope !== null;
 
+  // The zoom band's window is view-local and belongs to its chain: another chain starts from its own
+  // default. It reaches the plot as `undefined` for that default (null would mean no window at all)
+  // and is never the time-range criterion.
+  const [zoom, setZoom] = useState<ZoomState | null>(null);
+  const zoomWindow = zoomWindowFor(zoom, chain?.id ?? null);
+  const bandWindow: TimeWindow | null =
+    zoomWindow ?? (chain === null ? null : defaultLaneWindow(chain.startMs, chain.endMs));
+  const zoomChainId = chain?.id ?? null;
+  const onBandChange = useCallback(
+    (next: TimeWindow | null) => {
+      if (zoomChainId === null) return;
+      setZoom(next === null ? null : { chainId: zoomChainId, window: next });
+    },
+    [zoomChainId],
+  );
   const plot = useMemo(
     () =>
-      chain !== null && model !== null && hasItems
+      chain !== null && model !== null && hasItems && !showPane
         ? buildChainPlot({
             chain,
             itemsById,
@@ -375,9 +460,10 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
             narrowed,
             gaps,
             nearby,
+            window: zoomWindow ?? undefined,
           })
         : null,
-    [chain, model, hasItems, itemsById, narrowed, gaps, nearby],
+    [chain, model, hasItems, showPane, itemsById, narrowed, gaps, nearby, zoomWindow],
   );
   const sequence = useMemo(
     () => (chain !== null && hasItems ? chainSequence(chain, itemsById) : null),
@@ -406,17 +492,28 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
     setShowAllSequence(false);
     setShowAllWhy(false);
     setActionMessage(null);
-  }, [chain?.id]);
+  }, [chain?.id, showPane]);
   useEffect(() => {
-    if (reconciled.lost) setSelectionLost(true);
-  }, [reconciled.lost]);
+    if (reconciled.lost && !showPane) setSelectionLost(true);
+  }, [reconciled.lost, showPane]);
+  // The band belongs to its chain: choosing another starts from that chain's default window, and so
+  // does coming back. (A live rebuild keeps the chain's id, so it keeps the band.)
+  useEffect(() => {
+    setZoom(null);
+  }, [chain?.id]);
   const pickChain = useCallback(
     (chainId: string | null) => {
       setSelectionLost(false);
+      setUnplacedLost(false);
       selectChain(chainId);
     },
     [selectChain],
   );
+  const pickUnplaced = useCallback(() => {
+    setSelectionLost(false);
+    setUnplacedLost(false);
+    showUnplaced();
+  }, [showUnplaced]);
 
   const announcement = useMemo(() => {
     if (model === null) {
@@ -428,23 +525,28 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
       `${model.totalCount.toLocaleString()} ${model.totalCount === 1 ? "chain" : "chains"}`,
       model.edgeInputComplete ? null : "Correlation edges are partial",
       selectionLost ? "The selected chain is no longer present, showing another" : null,
+      unplacedLost ? "Nothing is listed under Not placed any more, showing a chain" : null,
       data.updating ? "Updating" : null,
     ]
       .filter((part): part is string => part !== null)
       .join(". ");
-  }, [model, selectionLost, data.updating, data.error, data.stage]);
+  }, [model, selectionLost, unplacedLost, data.updating, data.error, data.stage]);
   const spoken = useThrottledValue(announcement, CORRELATION_ANNOUNCE_MS);
 
   const optionId = (index: number) => `${uid}-chain-${index}`;
+  // The options of the listbox: the chains, then "Not placed" last when the session has unplaced items.
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const chains = model?.chains ?? [];
-    const current = chains.findIndex((row) => row.id === reconciled.selectedId);
+    const count = chains.length + (unplacedPresent ? 1 : 0);
+    const current = showPane ? chains.length : chains.findIndex((row) => row.id === reconciled.selectedId);
     const go = (index: number) => {
-      const target = chains[Math.min(Math.max(index, 0), chains.length - 1)];
-      if (target === undefined) return;
+      if (count === 0) return;
+      const at = Math.min(Math.max(index, 0), count - 1);
       event.preventDefault();
-      pickChain(target.id);
-      document.getElementById(optionId(chains.indexOf(target)))?.scrollIntoView?.({ block: "nearest" });
+      const target = chains[at];
+      if (target === undefined) pickUnplaced();
+      else pickChain(target.id);
+      document.getElementById(optionId(at))?.scrollIntoView?.({ block: "nearest" });
     };
     switch (event.key) {
       case "ArrowDown":
@@ -457,7 +559,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
         go(0);
         return;
       case "End":
-        go(chains.length - 1);
+        go(count - 1);
         return;
       case "Escape":
         // Spent here: the workspace's own Escape handler would otherwise clear the time range.
@@ -627,7 +729,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
       omittedCount: model.omittedCount,
     }),
   ].filter((text): text is string => text !== null);
-  const selectedIndex = model.chains.findIndex((row) => row.id === chain?.id);
+  const selectedIndex = showPane ? model.chains.length : model.chains.findIndex((row) => row.id === chain?.id);
   const header = chain === null ? null : keyHeader(chain.keys);
   const visibleSequence = sequence === null ? [] : showAllSequence ? sequence.entries : sequence.entries.slice(0, CORRELATION_SEQUENCE_INITIAL);
   const visibleWhy = showAllWhy ? why : why.slice(0, CORRELATION_SEQUENCE_INITIAL);
@@ -665,33 +767,47 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
         >
           Chains {"·"} strongest first
         </div>
-        {model.chains.length === 0 ? (
+        {model.chains.length === 0 && (
           <div style={{ padding: "8px 12px", fontSize: `${sizes.lane}px`, color: palette.listPrimary }}>
             {model.edgeInputComplete
               ? "No correlation chains were found in this session."
               : "No chains were found among the edges that were loaded."}
           </div>
-        ) : (
+        )}
+        {(model.chains.length > 0 || unplacedPresent) && (
           <div
             ref={listRef}
             role="listbox"
             tabIndex={0}
-            aria-label="Correlation chains, strongest first"
+            aria-label={
+              unplacedPresent
+                ? "Correlation chains, strongest first, and items that are not placed"
+                : "Correlation chains, strongest first"
+            }
             aria-activedescendant={selectedIndex >= 0 ? optionId(selectedIndex) : undefined}
             onKeyDown={onListKeyDown}
-            style={{ overflowY: "auto", flex: 1, minHeight: 0 }}
+            style={{ overflowY: "auto", flex: model.chains.length > 0 ? 1 : undefined, minHeight: 0 }}
           >
             {model.chains.map((row, index) => (
               <ChainRow
                 key={row.id}
                 chain={row}
                 id={optionId(index)}
-                selected={row.id === chain?.id}
+                selected={!showPane && row.id === chain?.id}
                 timeZoneMode={timeZoneMode}
                 palette={palette}
                 onSelect={pickChain}
               />
             ))}
+            {unplacedPresent && (
+              <NotPlacedRow
+                id={optionId(model.chains.length)}
+                view={unplacedView}
+                selected={showPane}
+                palette={palette}
+                onSelect={pickUnplaced}
+              />
+            )}
           </div>
         )}
       </div>
@@ -731,7 +847,19 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
             {`Correlation could not be updated: ${data.error}`}
           </div>
         )}
-        {chain === null ? null : (
+        {showPane ? (
+          <>
+            <EvtxUnplacedList
+              list={data.unplacedList}
+              updating={data.updating}
+              sizes={sizes}
+              onReply={reply}
+              onFail={fail}
+              onEscape={() => listRef.current?.focus()}
+            />
+            {feedback}
+          </>
+        ) : chain === null ? null : (
           <>
             <div style={{ display: "grid", gap: "4px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
@@ -774,6 +902,14 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
 
             {plot !== null ? (
               <>
+                <EvtxCorrelationOverview
+                  chains={model.chains}
+                  selectedId={chain.id}
+                  window={bandWindow}
+                  onWindowChange={onBandChange}
+                  timeZoneMode={timeZoneMode}
+                  sizes={sizes}
+                />
                 <EvtxCorrelationLanes
                   plot={plot}
                   timeZoneMode={timeZoneMode}
@@ -932,7 +1068,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
             </div>
           </>
         )}
-        {chain === null && feedback}
+        {!showPane && chain === null && feedback}
       </div>
     </div>
   );
