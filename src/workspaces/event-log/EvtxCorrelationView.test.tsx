@@ -69,7 +69,7 @@ import {
 } from "./evtx-correlation-test-fixtures";
 import type { TimeWindow } from "./evtx-correlation-view-model";
 import type { EvtxRecord } from "./types";
-import type { TimelineCorrelationEdge, TimelineItem, UnplacedItem } from "./unified-timeline";
+import { timelineOriginId, type TimelineCorrelationEdge, type TimelineItem, type UnplacedItem } from "./unified-timeline";
 
 const NO_UNPROVEN_CLAIM = /not placed|no timeline position|without a timeline position|no timestamp/i;
 
@@ -267,20 +267,24 @@ describe("the chain list (spec 8.11)", () => {
   });
 
   describe("a selected row the cap dropped (#842, ruling 3)", () => {
-    function manyData() {
+    function manyData(extra: Partial<DataOptions> = {}, without: ReadonlySet<string> = new Set()) {
       const edges: TimelineCorrelationEdge[] = [];
       const items: TimelineItem[] = [];
       for (let i = 0; i < 120; i += 1) {
+        const pair = [eventItem(1 + i * 2, T0 + i * 1_000), eventItem(2 + i * 2, T0 + i * 1_000 + 500)];
+        if (pair.some((item) => without.has(timelineOriginId(item.origin)))) continue;
         edges.push(synthetic(`e${i}`, rid(1 + i * 2), rid(2 + i * 2)));
-        items.push(eventItem(1 + i * 2, T0 + i * 1_000), eventItem(2 + i * 2, T0 + i * 1_000 + 500));
+        items.push(...pair);
       }
-      const data = makeData({ items, edges });
+      const data = makeData({ items, edges, ...extra });
       const shown = new Set((data.model?.chains ?? []).map((row) => row.id));
       const pastCap = [...(data.model?.rowsByMember.values() ?? [])]
         .map((list) => list[0]!)
-        .find((row) => !shown.has(row.id))!;
-      return { data, pastCap };
+        .find((row) => !shown.has(row.id));
+      return { data, pastCap: pastCap as NonNullable<typeof pastCap> };
     }
+    const chainRows = () => Array.from(document.querySelectorAll<HTMLElement>("[data-chain-id]"));
+    const notPlacedOption = () => document.querySelector<HTMLElement>("[data-unplaced-option]")!;
     const notes = () => screen.getByTestId("correlation-notices").textContent ?? "";
 
     it("lists it after the 100, selected, and says why it is there", () => {
@@ -331,6 +335,53 @@ describe("the chain list (spec 8.11)", () => {
       show(data);
       expect(rows()).toHaveLength(100);
       expect(notes()).not.toContain("past the first");
+    });
+
+    it("puts the Not placed option one past the listed rows, with an id of its own, and walks to it", () => {
+      const { data, pastCap } = manyData({ unplacedList: { items: unplacedItems(3), total: 3 } });
+      useEvtxCorrelationStore.setState({ selectedChainId: pastCap.id });
+      show(data);
+      const listbox = screen.getByRole("listbox");
+      expect(chainRows()).toHaveLength(101);
+      expect(rows()).toHaveLength(102);
+      const ids = rows().map((row) => row.id);
+      // The option after row 100 (the dropped one) is not row 100's id again.
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(rows()[101]).toBe(notPlacedOption());
+      expect(listbox.getAttribute("aria-activedescendant")).toBe(rows()[100]!.id);
+      fireEvent.keyDown(listbox, { key: "End" });
+      expect(notPlacedOption()).toHaveAttribute("aria-selected", "true");
+      expect(listbox.getAttribute("aria-activedescendant")).toBe(notPlacedOption().id);
+      expect(document.getElementById(listbox.getAttribute("aria-activedescendant")!)).toBe(notPlacedOption());
+      // Up returns to the listed row, which the cap had dropped, and closes the pane.
+      fireEvent.keyDown(listbox, { key: "ArrowUp" });
+      expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(false);
+      expect(useEvtxCorrelationStore.getState().selectedChainId).toBe(pastCap.id);
+      expect(chainRows()[100]).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("draws the dropped row in the overview strip, selected, with the others", () => {
+      const { data, pastCap } = manyData();
+      useEvtxCorrelationStore.setState({ selectedChainId: pastCap.id });
+      show(data);
+      expect(document.querySelectorAll("[data-bar]")).toHaveLength(101);
+      expect(document.querySelectorAll('[data-bar][data-selected="true"]')).toHaveLength(1);
+    });
+
+    it("stops saying a chain is lost once an outside selection brings it back as a dropped row", () => {
+      const full = manyData();
+      const missing = new Set([...full.pastCap.memberIds, ...full.pastCap.unresolvedMemberIds]);
+      const without = manyData({}, missing);
+      expect(without.data.model?.rowsByMember.has([...missing][0]!)).toBe(false);
+      useEvtxCorrelationStore.setState({ selectedChainId: full.pastCap.id });
+      const view = show(without.data);
+      expect(notes()).toContain("The chain that was selected is no longer present.");
+      // The chain is back in the data, past the cap. The operator has not selected it: still said.
+      view.update(full.data);
+      expect(notes()).toContain("The chain that was selected is no longer present.");
+      act(() => useEvtxCorrelationStore.getState().selectChain(full.pastCap.id));
+      expect(chainRows()[100]).toHaveAttribute("aria-selected", "true");
+      expect(notes()).not.toContain("no longer present");
     });
   });
 
