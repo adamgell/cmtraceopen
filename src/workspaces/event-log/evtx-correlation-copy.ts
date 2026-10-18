@@ -446,22 +446,28 @@ export interface EmptyWindowInput {
   narrowed: boolean;
   /** A source was not fully read (a channel needs elevation, a file failed): entries may be missing. */
   unreadSources: boolean;
+  /**
+   * The window and its counts are an earlier session's, shown while a newer one is read: the newer
+   * one exists because events were added or the load changed, so the claim may already be false.
+   */
+  updating: boolean;
 }
 
 /**
  * The dock's "no other sources" sentence. The spec's own words are an absence claim, so they are
- * said only when all three hold: the window was read whole (the caller asks only then), nothing is
- * narrowed, and no source went unread. Otherwise the sentence says what it was looked for IN, and
- * what was not looked at.
+ * said only when all of these hold: the window was read whole (the caller asks only then), nothing
+ * is narrowed, no source went unread, and the pair is not an earlier session's. Otherwise the
+ * sentence says what it was looked for IN, and what was not looked at.
  */
 export function emptyWindowText(input: EmptyWindowInput): { text: string; absolute: boolean } {
   const width = windowWidthLabel(input.halfWidthMs);
-  if (!input.narrowed && !input.unreadSources) {
+  if (!input.narrowed && !input.unreadSources && !input.updating) {
     return { text: `No other sources have entries within ${width}.`, absolute: true };
   }
   const parts = [`No other visible sources have entries within ${width}.`];
   if (input.narrowed) parts.push("Events hidden by the current filters or time range are not searched.");
   if (input.unreadSources) parts.push("Some sources were not fully read, so entries may be missing.");
+  if (input.updating) parts.push("The timeline is being rebuilt, so this may change.");
   return { text: parts.join(" "), absolute: false };
 }
 
@@ -507,15 +513,42 @@ export function unmatchableNote(entries: number, halfWidthMs: number): string {
     : `This event has no record identity the timeline can match, so which of the ${count(entries)} ${entries === 1 ? "entry" : "entries"} within ${width} it is cannot be told. They are not drawn, and no link is shown.`;
 }
 
-/** How many of the row's entries have no item in the window. They are counted, never placed. */
+/**
+ * How many of the row's entries are outside the window. They are counted, never placed. For a window
+ * that was read WHOLE only: in a window that was not, an entry without an item may be inside it and
+ * simply unread, and `notReadNote` is the sentence for that.
+ */
 export function outsideWindowNote(outside: number, memberCount: number): string | null {
   if (outside <= 0) return null;
   return `${count(outside)} of ${count(memberCount)} ${memberCount === 1 ? "entry" : "entries"} of this chain ${outside === 1 ? "is" : "are"} outside this window, so ${outside === 1 ? "it is" : "they are"} not shown here.`;
 }
 
-/** The row title when the window holds only some of the row's entries: no title is claimed for the whole. */
-export function partialChainTitle(memberCount: number, inWindow: number): string {
-  return `Chain of ${entriesText(memberCount)} (${count(inWindow)} in this window)`;
+/**
+ * How many of the row's entries are not among the entries that were read, for a window that was NOT
+ * read whole. The number is exact; where those entries are (outside the window, or inside it and
+ * unread) is not known, so it is never said to be "outside".
+ */
+export function notReadNote(notShown: number, memberCount: number): string | null {
+  if (notShown <= 0) return null;
+  return `${count(notShown)} of ${count(memberCount)} ${memberCount === 1 ? "entry" : "entries"} of this chain ${notShown === 1 ? "is" : "are"} not among the entries read, so ${notShown === 1 ? "it is" : "they are"} not shown here.`;
+}
+
+/**
+ * The row title when the entries read are only some of the row's: no title is claimed for the whole.
+ * `read` counts the entries read. For a window read whole they are the ones in the window; for one
+ * that was not, the others may be inside it, so the count says "read" and nothing about the window.
+ */
+export function partialChainTitle(memberCount: number, read: number, windowComplete: boolean): string {
+  return `Chain of ${entriesText(memberCount)} (${count(read)} ${windowComplete ? "in this window" : "read"})`;
+}
+
+/**
+ * "+3 more" when the count is exact, "at least 3 more" when it is a lower bound: a list taken from
+ * the entries READ of a window that was not read whole has more entries than it can count.
+ */
+export function moreText(more: number, exact: boolean): string | null {
+  if (more <= 0) return null;
+  return exact ? `+${count(more)} more` : `at least ${count(more)} more`;
 }
 
 /** What a context entry's words may be, from the facts the dock holds about it. */

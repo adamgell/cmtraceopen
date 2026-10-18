@@ -15,6 +15,8 @@ import {
   UNREAD_SOURCES_NOTE,
   ambiguousEventNote,
   nearbyReason,
+  notReadNote,
+  outsideWindowNote,
   unmatchableNote,
 } from "./evtx-correlation-copy";
 import {
@@ -516,7 +518,8 @@ describe("the row of the selected event", () => {
     expect(model.row).toMatchObject({
       strength: "exact",
       memberCount: 2,
-      inWindow: 2,
+      read: 2,
+      notShown: 0,
       outsideWindow: 0,
       otherRows: 0,
     });
@@ -544,7 +547,7 @@ describe("the row of the selected event", () => {
   it("counts the entries the window does not hold, never places them, and claims no whole-chain title", () => {
     const { input, record } = pairScene();
     const model = ready({ ...input, window: windowAround(record, [eventItem(1, record.timestampEpoch)]) });
-    expect(model.row).toMatchObject({ memberCount: 2, inWindow: 1, outsideWindow: 1 });
+    expect(model.row).toMatchObject({ memberCount: 2, read: 1, notShown: 1, outsideWindow: 1 });
     expect(model.row?.title).toBe("Chain of 2 entries (1 in this window)");
     expect(model.notices).toContain("1 of 2 entries of this chain is outside this window, so it is not shown here.");
     expect(model.plot.connectors).toEqual([]);
@@ -618,6 +621,125 @@ describe("what a step and a marker say of an entry's message", () => {
     expect(model.steps[1]?.message).toBe(`${"x".repeat(77)}...`);
     const marker = model.plot.members.find((m) => m.id === rid(1))!;
     expect(dockMarkerName(model, marker, "utc")).toContain(", first line of one,");
+  });
+});
+
+describe("a window that was not read whole makes no definite claim about the rest (#842, review A1)", () => {
+  const record = recordFor(1);
+  const t = record.timestampEpoch;
+  const cut = (items: TimelineItem[]) =>
+    windowAround(record, items, { complete: false, windowItems: 900, omittedItems: 900 - items.length, stoppedBy: "budget" });
+
+  it("says a member of the row that was not read is not among the entries read, never 'outside this window'", () => {
+    // The read stopped just after the event; its exact partner, 20 s later, is inside the window and unread.
+    const model = ready({ record, window: cut([eventItem(1, t)]), counts: counts(fixtureEdges("exactPair")), unreadSources: false });
+    expect(model.row).toMatchObject({ memberCount: 2, read: 1, notShown: 1, outsideWindow: null });
+    expect(model.notices).toContain(notReadNote(1, 2));
+    expect(model.notices).not.toContain(outsideWindowNote(1, 2));
+    expect(model.notices.some((text) => /outside this window/.test(text))).toBe(false);
+    expect(model.row?.title).toBe("Chain of 2 entries (1 read)");
+  });
+
+  it("still says it is outside the window for a window read whole", () => {
+    const model = ready({ record, window: windowAround(record, [eventItem(1, t)]), counts: counts(fixtureEdges("exactPair")), unreadSources: false });
+    expect(model.row).toMatchObject({ notShown: 1, outsideWindow: 1 });
+    expect(model.notices).toContain(outsideWindowNote(1, 2));
+    expect(model.notices.some((text) => /not among the entries read/.test(text))).toBe(false);
+    expect(model.row?.title).toBe("Chain of 2 entries (1 in this window)");
+  });
+
+  it("keeps the whole-chain title when every member was read, even if the window was not read whole", () => {
+    const items = [eventItem(1, t), eventItem(2, t + 6_000)];
+    const model = ready({ record, window: cut(items), counts: counts(fixtureEdges("exactPair")), unreadSources: false });
+    expect(model.row).toMatchObject({ notShown: 0, outsideWindow: null });
+    expect(model.row?.title).toBe("101 · message 1");
+    expect(model.notices.some((text) => /not among the entries read|outside this window/.test(text))).toBe(false);
+  });
+
+  it("words the counts of what the lists leave out as lower bounds, and as exact ones for a window read whole", () => {
+    const members = [1, 2, 3, 4, 5, 6];
+    const edges = members.slice(1).map((n) => synthetic(`e${n}`, rid(1), rid(n)));
+    const items = members.map((n) => eventItem(n, t + (6 - n) * 1_000));
+    const context = [20, 21, 22, 23, 24, 25].map((n, i) => eventItem(n, t + 10_000 + i * 1_000));
+    const whole = ready({ record, window: windowAround(record, [...items, ...context]), counts: counts(edges), unreadSources: false });
+    expect(whole.complete).toBe(true);
+    expect([whole.moreSteps, whole.moreStepsText]).toEqual([2, "+2 more"]);
+    expect([whole.moreNearby, whole.moreNearbyText]).toEqual([2, "+2 more"]);
+    const partial = ready({ record, window: cut([...items, ...context]), counts: counts(edges), unreadSources: false });
+    expect(partial.complete).toBe(false);
+    expect([partial.moreSteps, partial.moreStepsText]).toEqual([2, "at least 2 more"]);
+    expect([partial.moreNearby, partial.moreNearbyText]).toEqual([2, "at least 2 more"]);
+  });
+
+  it("says nothing of 'more' when there is none to count", () => {
+    const model = ready({ record, window: cut([eventItem(1, t), eventItem(2, t + 1_000)]), counts: counts(fixtureEdges("exactPair")), unreadSources: false });
+    expect([model.moreStepsText, model.moreNearbyText]).toEqual([null, null]);
+  });
+});
+
+describe("unread sources and an updating pair withdraw 'not linked' (#842, review A1)", () => {
+  const record = recordFor(1);
+  const t = record.timestampEpoch;
+  const scene = (extra: Partial<DockModelInput>, counted: Partial<DataOptions> = {}) =>
+    ready({
+      record,
+      window: windowAround(record, [eventItem(1, t), eventItem(2, t + 6_000), eventItem(9, t + 3_000)]),
+      counts: counts(fixtureEdges("exactPair"), counted),
+      unreadSources: false,
+      ...extra,
+    });
+
+  it("says 'time only, not linked' on an otherwise clear session", () => {
+    const model = scene({});
+    expect(model.nearby.map((entry) => entry.reason)).toEqual(["notLinked"]);
+    expect(model.plot.nearby[0]?.linkLabel).toBe(NOT_LINKED_LABEL);
+  });
+
+  it("says 'no loaded link' instead when a source was not read: its records could carry the link", () => {
+    const model = scene({ unreadSources: true });
+    expect(model.nearby.map((entry) => entry.reason)).toEqual(["noLoadedLink"]);
+    expect(model.plot.nearby[0]?.linkLabel).toBe(NO_LOADED_LINK_LABEL);
+    expect(model.plot.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
+    expect(model.notices).toContain(UNREAD_SOURCES_NOTE);
+  });
+
+  it("says 'no loaded link' while the pair is an earlier session's, which a newer one is replacing", () => {
+    const model = scene({}, { updating: true });
+    expect(model.updating).toBe(true);
+    expect(model.nearby.map((entry) => entry.reason)).toEqual(["noLoadedLink"]);
+    expect(model.plot.nearby[0]?.linkLabel).toBe(NO_LOADED_LINK_LABEL);
+  });
+
+  it("keeps an entry's loaded partner a fact whatever else is withdrawn", () => {
+    const edges = [...fixtureEdges("exactPair"), synthetic("o", rid(9), rid(10))];
+    const model = ready({
+      record,
+      window: windowAround(record, [eventItem(1, t), eventItem(2, t + 6_000), eventItem(9, t + 3_000)]),
+      counts: counts(edges, { updating: true }),
+      unreadSources: true,
+    });
+    expect(model.nearby.map((entry) => entry.reason)).toEqual(["inAnotherChain"]);
+  });
+
+  describe("the absence claim also waits for a pair that is not updating", () => {
+    const own = () => [eventItem(1, t)];
+
+    it("names only the reason that applies: an unread source or a rebuild is not 'hidden by the filters'", () => {
+      const unread = ready({ record, window: windowAround(record, own()), counts: counts([]), unreadSources: true });
+      expect(unread.empty?.text).toContain("Some sources were not fully read");
+      expect(unread.empty?.text).not.toMatch(/hidden by the current filters|being rebuilt/);
+      const rebuilding = ready({ record, window: windowAround(record, own()), counts: counts([], { updating: true }), unreadSources: false });
+      expect(rebuilding.empty?.text).not.toMatch(/hidden by the current filters|not fully read/);
+    });
+
+    it("is absolute only when the pair is current", () => {
+      const current = ready({ record, window: windowAround(record, own()), counts: counts([]), unreadSources: false });
+      expect(current.empty).toEqual({ text: "No other sources have entries within \u00b175 s.", absolute: true });
+      const updating = ready({ record, window: windowAround(record, own()), counts: counts([], { updating: true }), unreadSources: false });
+      expect(updating.empty?.absolute).toBe(false);
+      expect(updating.empty?.text).toContain("The timeline is being rebuilt, so this may change.");
+      expect(updating.empty?.text).toMatch(/^No other visible sources/);
+    });
   });
 });
 

@@ -50,6 +50,8 @@ import {
   sourcesText,
   windowNotice,
   ambiguousEventNote,
+  moreText,
+  notReadNote,
   unmatchableNote,
   type NearbyReason,
   type OpenDisabled,
@@ -131,10 +133,15 @@ export interface DockRow {
   title: string;
   key: KeyHeader | null;
   memberCount: number;
-  /** Members that have an item in the window. */
-  inWindow: number;
-  /** Members that have none: counted, never placed. */
-  outsideWindow: number;
+  /** Members that have an item among the entries READ. */
+  read: number;
+  /** Members that have none: an exact count, never placed. Where they are is `outsideWindow`'s. */
+  notShown: number;
+  /**
+   * How many of those are outside the window, known only when the window was read whole. In a window
+   * that was not, a member without an item may be inside it and unread: null, never `notShown`.
+   */
+  outsideWindow: number | null;
   /** Other rows the selected event is also in. */
   otherRows: number;
 }
@@ -189,13 +196,22 @@ export interface DockReady {
    * They agree with each other and with nothing newer; the dock says it is updating.
    */
   updating: boolean;
+  /**
+   * Every entry of the window was read. When false, every list below is taken from the entries READ:
+   * "nearest" means the nearest of those (nearer ones may be unread), and the counts of what a list
+   * leaves out are lower bounds (`moreStepsText` and `moreNearbyText` say "at least").
+   */
+  complete: boolean;
   selected: DockSelected;
   row: DockRow | null;
   steps: DockStep[];
+  /** Members read that the steps do not name; a lower bound when the window was not read whole. */
   moreSteps: number;
+  moreStepsText: string | null;
   nearby: DockNearbyEntry[];
-  /** Nearby entries in the window that the line does not name. */
+  /** Nearby entries read that the line does not name; a lower bound when not read whole. */
   moreNearby: number;
+  moreNearbyText: string | null;
   plot: ChainPlot;
   facts: ReadonlyMap<string, MarkerFacts>;
   /** One line each, in the order they are shown. */
@@ -320,6 +336,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
 
   const paired = counts !== null && counts.builtFor === window.sessionKey;
   const pairedCounts = paired ? counts : null;
+  const updating = pairedCounts !== null && pairedCounts.updating;
   const byId = itemsByOriginId(window.items);
   const items = [...byId.values()];
 
@@ -357,7 +374,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
     row === null
       ? []
       : [...new Set([...row.memberIds, ...row.unresolvedMemberIds])].sort(compareStrings);
-  const inWindowMembers = new Set<string>(
+  const readMembers = new Set<string>(
     row === null ? (originId === null ? [] : [originId]) : rowMembers.filter((id) => byId.has(id)),
   );
 
@@ -373,7 +390,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
   }
   const selectedLane = originId === null ? null : laneKeyOf((byId.get(originId) as TimelineItem).origin);
   const memberLanes = new Set(
-    [...inWindowMembers].map((id) => laneKeyOf((byId.get(id) as TimelineItem).origin)),
+    [...readMembers].map((id) => laneKeyOf((byId.get(id) as TimelineItem).origin)),
   );
   const priority = (key: string) => (key === selectedLane ? 0 : memberLanes.has(key) ? 1 : 2);
   const chosenLanes = new Set(
@@ -403,12 +420,16 @@ export function buildDockModel(input: DockModelInput): DockModel {
     Math.abs(a.timestampMs - record.timestampEpoch) - Math.abs(b.timestampMs - record.timestampEpoch) ||
     compareStrings(timelineOriginId(a.origin), timelineOriginId(b.origin));
   const context = drawable
-    .filter((item) => !inWindowMembers.has(timelineOriginId(item.origin)))
+    .filter((item) => !readMembers.has(timelineOriginId(item.origin)))
     .sort(byDistance);
   const drawnContext = context.slice(0, DOCK_NEARBY_MARKER_CAP);
-  const allContextCount = drawItems.filter((item) => !inWindowMembers.has(timelineOriginId(item.origin))).length;
+  const allContextCount = drawItems.filter((item) => !readMembers.has(timelineOriginId(item.origin))).length;
 
-  const narrowed = pairedCounts === null ? true : scopeDisclosure(pairedCounts.scope) !== null;
+  // "Not linked" is a claim that no event missing from the session could carry the link. The scope
+  // says events were left out of it; an unread source is records that never reached it; and a pair
+  // that an earlier session left behind is being replaced because events were added or reloaded.
+  const scopeNarrowed = pairedCounts === null ? true : scopeDisclosure(pairedCounts.scope) !== null;
+  const narrowed = scopeNarrowed || input.unreadSources || updating;
   const plot = buildChainPlot({
     chain: part,
     itemsById: drawableById,
@@ -451,7 +472,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
   // ---- the summary of the row ----
   const keys = row === null ? null : keyHeader(row.keys);
   const lanesByKey = new Map(allLaneInfos.map((lane) => [lane.key, lane]));
-  const memberItems = [...inWindowMembers].sort(byTime);
+  const memberItems = [...readMembers].sort(byTime);
   const steps: DockStep[] = memberItems.slice(0, DOCK_STEP_CAP).map((id) => {
     const item = byId.get(id) as TimelineItem;
     return {
@@ -461,22 +482,24 @@ export function buildDockModel(input: DockModelInput): DockModel {
       message: messageHead(item.message),
     };
   });
-  const outside = row === null ? 0 : rowMembers.filter((id) => !byId.has(id)).length;
+  const notShown = row === null ? 0 : rowMembers.filter((id) => !byId.has(id)).length;
   const dockRow: DockRow | null =
     row === null
       ? null
       : {
           id: row.id,
           strength: row.strength,
-          // The title is the model's own (D19) only when every entry of the row is in the window.
+          // The title is the model's own (D19) only when every entry of the row was read.
           title:
-            outside === 0
-              ? (derivedTitle(rowMembers, byId) ?? partialChainTitle(row.memberCount, inWindowMembers.size))
-              : partialChainTitle(row.memberCount, inWindowMembers.size),
+            notShown === 0
+              ? (derivedTitle(rowMembers, byId) ??
+                partialChainTitle(row.memberCount, readMembers.size, window.complete))
+              : partialChainTitle(row.memberCount, readMembers.size, window.complete),
           key: keys,
           memberCount: row.memberCount,
-          inWindow: inWindowMembers.size,
-          outsideWindow: outside,
+          read: readMembers.size,
+          notShown,
+          outsideWindow: window.complete ? notShown : null,
           otherRows: rows.length - 1,
         };
 
@@ -526,7 +549,13 @@ export function buildDockModel(input: DockModelInput): DockModel {
   if (selected.status === "notRead") push(NOT_READ_NOTE);
   if (selected.status === "ambiguous") push(ambiguousEventNote(selected.candidates));
   if (selected.status === "unmatchable") push(unmatchableNote(window.windowItems, window.halfWidthMs));
-  if (dockRow !== null) push(outsideWindowNote(dockRow.outsideWindow, dockRow.memberCount));
+  if (dockRow !== null) {
+    push(
+      window.complete
+        ? outsideWindowNote(dockRow.notShown, dockRow.memberCount)
+        : notReadNote(dockRow.notShown, dockRow.memberCount),
+    );
+  }
   push(
     dockOmissionNotice({
       omittedMarkers: plot.omittedMarkers,
@@ -545,10 +574,14 @@ export function buildDockModel(input: DockModelInput): DockModel {
     window.complete && !hasOtherSource
       ? emptyWindowText({
           halfWidthMs: window.halfWidthMs,
-          narrowed,
+          narrowed: scopeNarrowed,
           unreadSources: input.unreadSources,
+          updating,
         })
       : null;
+
+  const moreSteps = Math.max(0, readMembers.size - steps.length);
+  const moreNearby = Math.max(0, allContextCount - nearby.length);
 
   const open: DockReady["open"] =
     dockRow !== null
@@ -561,16 +594,19 @@ export function buildDockModel(input: DockModelInput): DockModel {
     centerMs: window.centerMs,
     halfWidthMs: window.halfWidthMs,
     sessionKey: window.sessionKey,
-    updating: pairedCounts !== null && pairedCounts.updating,
+    updating,
     sources: sourcesText(allLaneInfos.length, window.complete),
     sourceCount: allLaneInfos.length,
     paired,
+    complete: window.complete,
     selected,
     row: dockRow,
     steps,
-    moreSteps: Math.max(0, inWindowMembers.size - steps.length),
+    moreSteps,
+    moreStepsText: moreText(moreSteps, window.complete),
     nearby,
-    moreNearby: Math.max(0, allContextCount - nearby.length),
+    moreNearby,
+    moreNearbyText: moreText(moreNearby, window.complete),
     plot,
     facts,
     notices,

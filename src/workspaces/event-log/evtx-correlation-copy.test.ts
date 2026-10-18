@@ -32,6 +32,8 @@ import {
   keyKindLabel,
   nearbyReason,
   openDisabledText,
+  moreText,
+  notReadNote,
   outsideWindowNote,
   partialChainTitle,
   pastCapNotice,
@@ -558,6 +560,8 @@ describe("no string claims an entry is unplaced without proof", () => {
     "keyKindLabel",
     "nearbyReason",
     "openDisabledText",
+    "moreText",
+    "notReadNote",
     "outsideWindowNote",
     "partialChainTitle",
     "pastCapNotice",
@@ -671,13 +675,19 @@ describe("no string claims an entry is unplaced without proof", () => {
       windowNotice({ ...partial, stoppedBy: "budget" }) ?? "",
       windowNotice({ ...partial, stoppedBy: "error", error: "timeline down" }) ?? "",
       windowNotice({ ...partial, windowItems: null, omittedItems: null, items: [], stoppedBy: "error", error: "x" }) ?? "",
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: false }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: true }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: true }).text,
+      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: false }).text,
+      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: false, updating: false }).text,
+      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: true, updating: false }).text,
+      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: true, updating: false }).text,
       outsideWindowNote(1, 3) ?? "",
       outsideWindowNote(3, 5) ?? "",
-      partialChainTitle(5, 2),
+      notReadNote(1, 3) ?? "",
+      notReadNote(3, 5) ?? "",
+      partialChainTitle(5, 2, true),
+      partialChainTitle(5, 2, false),
+      moreText(3, true) ?? "",
+      moreText(3, false) ?? "",
+      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: true }).text,
       ...(["notLinked", "noLoadedLink", "inAnotherChain", "linkUnknownToEvent", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const).map((reason) => nearbyReason(reason)),
       dockOmissionNotice({ omittedMarkers: 2, omittedNearby: 3, omittedConnectors: 1, omittedSources: 2, omittedSourceEntries: 9 }) ?? "",
       dockOmissionNotice({ omittedMarkers: 1, omittedNearby: 1, omittedConnectors: 0, omittedSources: 1, omittedSourceEntries: 1 }) ?? "",
@@ -948,14 +958,14 @@ describe("the dock's words (spec 8.12, #842)", () => {
     const width = 75_000;
 
     it("makes the spec's claim only when nothing is narrowed and no source went unread", () => {
-      expect(emptyWindowText({ halfWidthMs: width, narrowed: false, unreadSources: false })).toEqual({
+      expect(emptyWindowText({ halfWidthMs: width, narrowed: false, unreadSources: false, updating: false })).toEqual({
         text: "No other sources have entries within \u00b175 s.",
         absolute: true,
       });
     });
 
     it("says what it looked in, and what it did not, when narrowed", () => {
-      const { text, absolute } = emptyWindowText({ halfWidthMs: width, narrowed: true, unreadSources: false });
+      const { text, absolute } = emptyWindowText({ halfWidthMs: width, narrowed: true, unreadSources: false, updating: false });
       expect(absolute).toBe(false);
       expect(text).toBe(
         "No other visible sources have entries within \u00b175 s. Events hidden by the current filters or time range are not searched.",
@@ -963,15 +973,21 @@ describe("the dock's words (spec 8.12, #842)", () => {
     });
 
     it("says it when a source went unread", () => {
-      const { text, absolute } = emptyWindowText({ halfWidthMs: width, narrowed: false, unreadSources: true });
+      const { text, absolute } = emptyWindowText({ halfWidthMs: width, narrowed: false, unreadSources: true, updating: false });
       expect(absolute).toBe(false);
       expect(text).toBe(
         "No other visible sources have entries within \u00b175 s. Some sources were not fully read, so entries may be missing.",
       );
     });
 
+    it("withdraws the claim while the pair is an earlier session's, and says the timeline is being rebuilt", () => {
+      const { text, absolute } = emptyWindowText({ halfWidthMs: width, narrowed: false, unreadSources: false, updating: true });
+      expect(absolute).toBe(false);
+      expect(text).toBe("No other visible sources have entries within \u00b175 s. The timeline is being rebuilt, so this may change.");
+    });
+
     it("says both when both hold, and follows the chosen width", () => {
-      const { text } = emptyWindowText({ halfWidthMs: 300_000, narrowed: true, unreadSources: true });
+      const { text } = emptyWindowText({ halfWidthMs: 300_000, narrowed: true, unreadSources: true, updating: false });
       expect(text).toContain("within \u00b15 min.");
       expect(text).toContain("not searched.");
       expect(text).toContain("not fully read");
@@ -989,7 +1005,30 @@ describe("the dock's words (spec 8.12, #842)", () => {
     });
 
     it("claims no title for a row the window holds only part of", () => {
-      expect(partialChainTitle(5, 2)).toBe("Chain of 5 entries (2 in this window)");
+      expect(partialChainTitle(5, 2, true)).toBe("Chain of 5 entries (2 in this window)");
+    });
+  });
+
+  describe("a window that was not read whole never says an entry is outside it (#842, review A1)", () => {
+    it("counts the entries of the row that are not among those read, exactly, and says nothing of where they are", () => {
+      expect(notReadNote(0, 3)).toBeNull();
+      expect(notReadNote(1, 2)).toBe("1 of 2 entries of this chain is not among the entries read, so it is not shown here.");
+      expect(notReadNote(3, 5)).toBe("3 of 5 entries of this chain are not among the entries read, so they are not shown here.");
+      expect(notReadNote(3, 5)).not.toMatch(/outside/);
+    });
+
+    it("titles a row by how many entries were READ when the window was not read whole, and in the window when it was", () => {
+      expect(partialChainTitle(2, 1, false)).toBe("Chain of 2 entries (1 read)");
+      expect(partialChainTitle(2, 1, false)).not.toMatch(/in this window/);
+      expect(partialChainTitle(2, 1, true)).toBe("Chain of 2 entries (1 in this window)");
+    });
+
+    it("says 'at least' for a count taken from the entries read, and '+n' only for an exact one", () => {
+      expect(moreText(0, true)).toBeNull();
+      expect(moreText(0, false)).toBeNull();
+      expect(moreText(6, true)).toBe("+6 more");
+      expect(moreText(6, false)).toBe("at least 6 more");
+      expect(moreText(1_200, false)).toBe("at least 1,200 more");
     });
   });
 
@@ -1104,8 +1143,8 @@ describe("the dock's words (spec 8.12, #842)", () => {
       NO_SESSION_TEXT,
       READING_WINDOW_TEXT,
       UNREAD_SOURCES_NOTE,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: true }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false }).text,
+      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: true, updating: false }).text,
+      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: false }).text,
       ...(["notLinked", "noLoadedLink", "inAnotherChain", "linkUnknownToEvent", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const).map((r) => nearbyReason(r)),
     ];
     for (const text of strings) expect(text).not.toMatch(causal);
