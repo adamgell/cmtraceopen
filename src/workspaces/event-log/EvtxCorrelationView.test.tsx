@@ -507,7 +507,7 @@ describe("the evidence and the sequence", () => {
       expect.stringMatching(/^102 · System\s*activityId =/),
     ]);
     expect(screen.getByRole("heading", { name: "Why these are linked" })).toBeInTheDocument();
-    // A connector exists only where the table shows a row for both its endpoints.
+    // Both endpoints have a row in the table, and the one connector is drawn.
     expect(document.querySelectorAll("line[data-connector]")).toHaveLength(1);
     expect(body).toHaveLength(2);
   });
@@ -944,7 +944,8 @@ describe("text and colors", () => {
 
 /**
  * Contrast in all seven themes (spec 10). Pairs are measured on resolved theme colors and the
- * painted element is pinned to the same token.
+ * painted element's own color is compared with the same token. A selected row's own fill is read
+ * back too; the list surface and the card surface a pair sits on are not.
  */
 describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
   "chain list contrast in the %s theme",
@@ -987,8 +988,8 @@ describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
         atLeast(`${strength} border on the list`, badge.border, tokens.colorNeutralBackground2, 3);
         atLeast(`${strength} border on a selected row`, badge.border, visuals.selection.background, 3);
       }
-      // The rows the first test cannot reach: every badge not on a selected row keeps its own fill
-      // and border, so what was measured is what is painted.
+      // The rows the first test cannot reach: every badge not on a selected row keeps its own text
+      // color and border, read back below. Its fill is not read back for these rows.
       show(mixedData());
       const unselected = rows().filter((row) => row.getAttribute("aria-selected") === "false");
       expect(unselected.length).toBeGreaterThan(0);

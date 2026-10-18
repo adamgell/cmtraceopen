@@ -16,11 +16,23 @@
  * - the field `correlationCount` anywhere (a word, so `correlationCounts` is another name);
  * - `CorrelationRow` and `DiagnosisCorrelationEdge`, the diagnosis row component and its type.
  *
- * WHAT IT DOES NOT CHECK (text-scan limits, no more than that):
+ * WHAT IT DOES NOT CHECK. These are its known limits, not a complete list. This file covers none
+ * of them (the last is covered by the UnifiedTimelineView tests):
  * - a helper that reads the fields added INSIDE one of the two wire files, which are exempt whole;
  * - a read through a dynamic key (`summary[key]`) or through an alias of the summary's type;
- * - code after a `//` inside a string or a regular expression on the same line, which the comment
- *   stripper removes with the comment;
+ * - a read through a string literal passed to a helper (`get(summary, "correlations")`,
+ *   `Reflect.get(summary, "correlations")`): the name appears only inside a string argument, and
+ *   the only pattern here that reads a string reads it inside `[ ]`;
+ * - nested destructuring (`const { summary: { correlations } } = state`): the pattern looks for
+ *   `correlations` inside ONE pair of braces;
+ * - a destructured parameter that is not the first (`function f(a, { correlations })`): the
+ *   function and arrow patterns look at the first parameter only;
+ * - a parameter of a method written in shorthand (`{ show({ correlations }) { ... } }`), which is
+ *   neither a `function` nor an arrow;
+ * - an assignment pattern with no declaration (`({ correlations } = summary)`);
+ * - code after a `//` inside a string or a regular expression on the same line, and everything
+ *   after a `/*` inside a string up to the next `*` + `/`, which the comment stripper removes as if
+ *   it were a comment;
  * - the wrong count coming from somewhere else: this keeps the diagnosis summary out, and says
  *   nothing about the timeline's own edge totals (see the UnifiedTimelineView tests).
  * The wire type and its decoder are the two places that must name the fields (the backend still

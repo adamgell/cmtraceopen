@@ -1677,4 +1677,86 @@ mod tests {
         assert_eq!(timeline.unplaced.len(), 1);
         assert!(!timeline.is_complete());
     }
+
+    /// The engine's own output for the cases the frontend's origin join has to reproduce. The
+    /// fixture is shared with `evtx-engine-compaction.test.ts`, so a change here that moves the
+    /// compaction format fails the Rust side and the frontend side on the same bytes.
+    fn engine_compaction_vectors() -> serde_json::Value {
+        serde_json::from_str(include_str!(
+            "../../../src/workspaces/event-log/__fixtures__/engine-compaction-vectors.json"
+        ))
+        .expect("the engine compaction vectors parse")
+    }
+
+    #[test]
+    fn identity_text_compaction_matches_the_committed_vectors() {
+        let vectors = engine_compaction_vectors();
+        let cases = vectors["timelineText"]
+            .as_array()
+            .expect("timelineText cases");
+        assert!(cases.len() >= 7, "the vectors lost cases");
+        for case in cases {
+            let name = case["name"].as_str().expect("case name");
+            let input = case["input"].as_str().expect("case input");
+            let (compacted, changed) =
+                compact_timeline_text(input, MAX_TIMELINE_IDENTITY_TEXT_BYTES);
+            assert_eq!(compacted, case["compacted"].as_str().unwrap(), "{name}");
+            assert_eq!(changed, case["changed"].as_bool().unwrap(), "{name}");
+            assert_eq!(
+                input.len() as u64,
+                case["inputBytes"].as_u64().unwrap(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn origins_match_the_committed_vectors() {
+        let vectors = engine_compaction_vectors();
+        let cases = vectors["origins"].as_array().expect("origin cases");
+        assert!(cases.len() >= 6, "the vectors lost cases");
+        for case in cases {
+            let name = case["name"].as_str().expect("case name");
+            let mut source = record(1_000, "m", EvtxLevel::Information);
+            source.origin_kind = match case["originKind"].as_str().unwrap() {
+                "log" => EvtxOriginKind::Log,
+                _ => EvtxOriginKind::Event,
+            };
+            source.source_label = case["sourceLabel"].as_str().unwrap().to_string();
+            source.channel = case["channel"].as_str().unwrap().to_string();
+            source.provider = case["provider"].as_str().unwrap().to_string();
+            source.computer = case["computer"].as_str().unwrap().to_string();
+            let mut origin = origin_of(&source, 0);
+            compact_timeline_origin(&mut origin);
+            let expected = &case["origin"];
+            let text = |field: &str| expected[field].as_str().map(str::to_string);
+            match origin {
+                TimelineOrigin::Event {
+                    source,
+                    machine,
+                    channel,
+                    provider,
+                    ..
+                } => {
+                    assert_eq!(Some(source), text("source"), "{name} source");
+                    assert_eq!(machine, text("machine"), "{name} machine");
+                    assert_eq!(Some(channel), text("channel"), "{name} channel");
+                    assert_eq!(Some(provider), text("provider"), "{name} provider");
+                }
+                TimelineOrigin::Log {
+                    file,
+                    source,
+                    machine,
+                    component,
+                    ..
+                } => {
+                    assert_eq!(Some(file), text("file"), "{name} file");
+                    assert_eq!(Some(source), text("source"), "{name} source");
+                    assert_eq!(machine, text("machine"), "{name} machine");
+                    assert_eq!(component, text("component"), "{name} component");
+                }
+                _ => panic!("{name}: unexpected origin variant"),
+            }
+        }
+    }
 }

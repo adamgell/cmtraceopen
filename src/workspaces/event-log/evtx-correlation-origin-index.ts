@@ -6,15 +6,21 @@
  * the per-record links count.
  *
  * Nothing in the engine's reply names the record an origin came from. The join therefore compares
- * the ORIGIN'S OWN FIELDS with the record's, with the same matchers finding evidence uses
- * (`buildEvidenceIndex`, `redactedValueMatches`). It never reads, parses or rebuilds a stable id
+ * the ORIGIN'S OWN FIELDS with the record's. It never reads, parses or rebuilds a stable id
  * string: an origin whose record has no usable identity is recognised from `recordIdText` and
  * `recordId`, not from the `|missing` marker the stable id would carry.
  *
+ * The origin is what the ENGINE made of the record, and the engine changes three things on the way
+ * (event_log/timeline.rs, analysis_session.rs): it compacts every identity text over 256 UTF-8 bytes
+ * into its own `...[{len} bytes; digest={hex}]` form, it trims machine and component and drops
+ * placeholder words BEFORE it compacts them, and it rewrites a record identity it refuses before it
+ * builds the origin. The join reproduces each (`timelineTextMatches`, `provenanceAgrees`,
+ * `engineTimelineRecordIdentity`) and does not compare text any other way.
+ *
  * Rules, all enforced here:
- * - A record names the origin only when the event ID, the record identity (the engine's order: a
- *   usable `recordIdText`, then a non-zero `recordId`), the provider, the channel, the source label
- *   and the normalized machine ALL agree.
+ * - A record names the origin only when the event ID, the record identity (the engine's order, as
+ *   the engine left it on the origin), the provider, the channel, the source label and the
+ *   normalized machine ALL agree.
  * - Several matching records are ONE ambiguous reference. Every candidate is kept and counted, and
  *   none is guessed. Identical duplicates, such as the same archive loaded twice, are therefore
  *   reported as ambiguous.
@@ -29,8 +35,8 @@ import type { CorrelationChain } from "./evtx-correlation-chains";
 import { countScopeReferences, type EvtxRecordScopeCounts } from "./evtx-filter";
 import {
   engineRecordIdentity,
-  recordsForIdentity,
-  redactedValueMatches,
+  recordsForOriginIdentity,
+  timelineTextMatches,
   type EvidenceIndex,
 } from "./evtx-insights-data";
 import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
@@ -89,12 +95,35 @@ const NO_PROVENANCE = new Set([
   "not_applicable",
 ]);
 
-/** The engine's machine normalization: trimmed, and nothing for empty or a placeholder word. */
-function normalizedMachine(value: string): string | null {
+/**
+ * The engine's machine and component normalization (`normalized_provenance`): trimmed, and nothing
+ * for empty or a placeholder word. It runs BEFORE the 256-byte compaction.
+ */
+export function normalizedProvenance(value: string): string | null {
   const trimmed = value.trim();
   if (trimmed === "") return null;
   const lowered = trimmed.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
   return NO_PROVENANCE.has(lowered) ? null : trimmed;
+}
+
+/**
+ * Whether an origin's machine (or a log origin's component) is the record's. The engine normalizes
+ * the record's value first and compacts what is left (`origin_of`, then `compact_timeline_origin`),
+ * so the record's value is normalized here BEFORE it is compared: a name that is padded past 256
+ * bytes and fits once trimmed is not compacted at all, and comparing before trimming would find
+ * another length and digest. `null` on the origin means the engine found no usable value.
+ *
+ * A record the transport projected (over 8 MiB) reached the engine already bounded to the identity
+ * limit, so the engine normalized the BOUNDED text; that order is accepted too.
+ */
+export function provenanceAgrees(origin: string | null, record: string): boolean {
+  const normalized = normalizedProvenance(record);
+  if (origin === null) return normalized === null;
+  if (normalized !== null && timelineTextMatches(origin, normalized)) return true;
+  const seen = normalizedProvenance(
+    boundUtf8WithDigest(record, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT),
+  );
+  return seen !== null && seen === origin;
 }
 
 /**
@@ -109,22 +138,17 @@ export function originIdentityText(origin: EventOrigin): string | null {
 
 /**
  * Whether the origin's own fields, other than its identity, agree with the record's. The engine
- * copies provider, channel and source label from the record after bounding each to the transport's
- * identity limit, and normalizes the machine, so the comparison goes through `redactedValueMatches`
- * (which reproduces the bounding) and the same machine normalization.
+ * copies provider, channel and source label from the record and compacts each over 256 UTF-8 bytes
+ * into its own form (a record the transport projected arrives already bounded in the transport's
+ * form), so those go through `timelineTextMatches`; the machine is normalized first and then
+ * compared (`provenanceAgrees`), which is the engine's order.
  */
 function fieldsAgree(origin: EventOrigin, record: EvtxRecord): boolean {
   if (origin.eventId !== record.eventId) return false;
-  if (!redactedValueMatches(origin.provider, record.provider)) return false;
-  if (!redactedValueMatches(origin.channel, record.channel)) return false;
-  if (!redactedValueMatches(origin.source, record.sourceLabel)) return false;
-  if (origin.machine === null) return normalizedMachine(record.computer) === null;
-  const bounded = boundUtf8WithDigest(
-    record.computer,
-    EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT,
-  );
-  const seen = normalizedMachine(bounded);
-  return seen !== null && seen === origin.machine;
+  if (!timelineTextMatches(origin.provider, record.provider)) return false;
+  if (!timelineTextMatches(origin.channel, record.channel)) return false;
+  if (!timelineTextMatches(origin.source, record.sourceLabel)) return false;
+  return provenanceAgrees(origin.machine, record.computer);
 }
 
 export type OriginResolution =
@@ -148,7 +172,7 @@ export function resolveOriginRecords(
   if (identity === null) return { kind: "noUsableIdentity" };
   return {
     kind: "matches",
-    records: recordsForIdentity(index, origin.eventId, identity).filter((record) =>
+    records: recordsForOriginIdentity(index, origin.eventId, identity).filter((record) =>
       fieldsAgree(origin, record),
     ),
   };
@@ -378,8 +402,8 @@ export function linkCountsByRecord(
     for (const record of options.records) {
       for (const origin of unknownLanes.values()) {
         if (
-          redactedValueMatches(origin.source, record.sourceLabel) &&
-          redactedValueMatches(origin.channel, record.channel)
+          timelineTextMatches(origin.source, record.sourceLabel) &&
+          timelineTextMatches(origin.channel, record.channel)
         ) {
           unknownRecords.add(record);
           break;

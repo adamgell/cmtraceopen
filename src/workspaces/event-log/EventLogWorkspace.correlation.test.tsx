@@ -233,6 +233,9 @@ describe("the scope of a session published after a hidden event arrived during i
       build.resolve(analysisResult("hidden-append"));
     });
     await waitFor(() => expect(lastHookCall().scope).not.toBeNull());
+    // The session that was published is the one whose build was left pending, built exactly once.
+    expect(lastHookCall().status?.sessionId).toBe("hidden-append");
+    expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1);
   }
 
   it("counts the hidden event as loaded, so the session is narrowed (visible < loaded)", async () => {
@@ -340,7 +343,9 @@ describe("the Correlation view in the workspace", () => {
     // The newest session is built from all three events: its own scope narrows nothing.
     const snapshots = mocks.buildAnalysis.mock.calls.map((call) => (call[0] as { records: unknown[] }).records.length);
     expect(snapshots[snapshots.length - 1]).toBe(3);
-    // The model on show is still the first session's, and so is the scope beside it.
+    // The view is still marked updating, and the scope notice beside it is still the first
+    // session's. The scope is stored with the model it was built with, so this is the evidence that
+    // the model on show is the first session's; the model itself is not read back here.
     expect(screen.getByTestId("correlation-updating")).toHaveTextContent("Updating correlation");
     expect(screen.getByTestId("correlation-notices")).toHaveTextContent(
       "Links and strengths are computed over the 2 events visible.",
