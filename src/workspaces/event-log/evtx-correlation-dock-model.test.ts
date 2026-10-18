@@ -26,6 +26,7 @@ import {
   DOCK_STEP_CAP,
   buildDockModel,
   chainInWindow,
+  dockCenterMs,
   dockMarkerName,
   resolveMarkerClick,
   type DockModelInput,
@@ -1558,5 +1559,22 @@ describe("what a click on a marker does (#842, A1 ruling 6)", () => {
       kind: "nothing",
       selectability: "noIdentity",
     });
+  });
+});
+
+describe("the instant the dock centers on", () => {
+  it("is the selected event's timestamp, and nothing for no selection or an event with none", () => {
+    const record = recordFor(1);
+    expect(dockCenterMs(record)).toBe(record.timestampEpoch);
+    expect(dockCenterMs(null)).toBeNull();
+    for (const epoch of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
+      expect(dockCenterMs({ ...record, timestampEpoch: epoch }), String(epoch)).toBeNull();
+    }
+  });
+
+  it("is what makes an event untimed in the model, so the reader and the model cannot disagree", () => {
+    const untimed = { ...recordFor(1), timestampEpoch: 0 };
+    expect(buildDockModel({ record: untimed, window: null, counts: null, unreadSources: false })).toEqual({ kind: "untimed" });
+    expect(buildDockModel({ record: null, window: null, counts: null, unreadSources: false })).toEqual({ kind: "noSelection" });
   });
 });

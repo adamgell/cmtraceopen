@@ -330,12 +330,22 @@ function openDisabledReason(selected: DockSelected, paired: boolean): OpenDisabl
   }
 }
 
+/**
+ * The instant the dock centers its window on: the selected event's own timestamp, or null when it
+ * has none (no selection, or an event the dock cannot place). The reader of the window and the model
+ * decide this with one predicate, the one the time-range criterion uses.
+ */
+export function dockCenterMs(record: EvtxRecord | null): number | null {
+  if (record === null || !hasUsableTimestamp(record) || !Number.isSafeInteger(record.timestampEpoch)) {
+    return null;
+  }
+  return record.timestampEpoch;
+}
+
 export function buildDockModel(input: DockModelInput): DockModel {
   const { record, window, counts } = input;
   if (record === null) return { kind: "noSelection" };
-  if (!hasUsableTimestamp(record) || !Number.isSafeInteger(record.timestampEpoch)) {
-    return { kind: "untimed" };
-  }
+  if (dockCenterMs(record) === null) return { kind: "untimed" };
   // A window answers one center. Another selection's window is never shown under this record.
   if (window === null || window.centerMs !== record.timestampEpoch) return { kind: "unread" };
   if (window.windowItems === null) return { kind: "failed", error: window.error };
