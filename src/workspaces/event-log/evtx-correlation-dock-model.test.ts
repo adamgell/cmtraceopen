@@ -27,6 +27,7 @@ import {
   buildDockModel,
   chainInWindow,
   dockMarkerName,
+  resolveMarkerClick,
   type DockModelInput,
   type DockReady,
 } from "./evtx-correlation-dock-model";
@@ -53,6 +54,7 @@ import type { LoadedCorrelationWindow } from "./evtx-correlation-window";
 import type { EvtxRecord } from "./types";
 import type { TimelineCorrelationEdge, TimelineItem } from "./unified-timeline";
 import { timelineOriginId } from "./unified-timeline";
+import { buildEvidenceIndex } from "./evtx-insights-data";
 
 const HALF = 75_000;
 const SESSION_KEY = "session:1";
@@ -1358,6 +1360,10 @@ describe("marker names", () => {
     expect(nameOf(rid(9), "notLoaded")).toMatch(/no loaded record matches, so activating it selects nothing$/);
   });
 
+  it("says an entry with no usable record identity selects nothing", () => {
+    expect(nameOf(rid(9), "noIdentity")).toMatch(/it has no usable record identity, so activating it selects nothing$/);
+  });
+
   it("names a member of an ambiguous row as establishing no link", () => {
     const edge = synthetic("a", rid(1), rid(2), "ambiguous");
     const ambiguous = ready({ record, window: windowAround(record, items.slice(0, 2)), counts: counts([edge]), unreadSources: false });
@@ -1504,5 +1510,53 @@ describe("what the model and the loader may import", () => {
     expect(withoutComments(modelSource)).not.toMatch(/setTimeout|setInterval|requestAnimationFrame/);
     const timers = withoutComments(windowSource).match(/setTimeout|setInterval/g) ?? [];
     expect(timers).toEqual(["setTimeout"]);
+  });
+});
+
+describe("what a click on a marker does (#842, A1 ruling 6)", () => {
+  const origin = (n: number) => eventItem(n, T0).origin;
+
+  it("selects the record when exactly one loaded record matches the entry", () => {
+    const click = resolveMarkerClick(origin(1), buildEvidenceIndex([recordFor(1), recordFor(2)]));
+    expect(click).toEqual({ kind: "select", recordId: recordFor(1).id });
+  });
+
+  it("selects nothing when no loaded record matches, and says so", () => {
+    expect(resolveMarkerClick(origin(1), buildEvidenceIndex([recordFor(2)]))).toEqual({
+      kind: "nothing",
+      selectability: "notLoaded",
+    });
+    expect(resolveMarkerClick(origin(1), buildEvidenceIndex([]))).toEqual({ kind: "nothing", selectability: "notLoaded" });
+  });
+
+  it("selects nothing when several loaded records match, never the first of them", () => {
+    const twin: EvtxRecord = { ...recordFor(1), id: recordFor(1).id + 1000 };
+    expect(resolveMarkerClick(origin(1), buildEvidenceIndex([recordFor(1), twin]))).toEqual({
+      kind: "nothing",
+      selectability: "ambiguous",
+    });
+  });
+
+  it("selects nothing for a text-log line, which is not an event record", () => {
+    const line: TimelineItem = {
+      timestampMs: T0,
+      severity: "info",
+      message: "log line",
+      origin: { kind: "log", file: "C:\\Logs\\A.log", component: null, line: 3, source: "A.log", machine: null, bundle: null, recordId: 3 },
+    };
+    expect(resolveMarkerClick(line.origin, buildEvidenceIndex([recordFor(1)]))).toEqual({
+      kind: "nothing",
+      selectability: "log",
+    });
+  });
+
+  it("selects nothing for an event entry the join can never name, and says it has no identity", () => {
+    const item = eventItem(1, T0);
+    if (item.origin.kind !== "event") throw new Error("an event origin");
+    const bare = { ...item.origin, recordId: 0, recordIdText: null };
+    expect(resolveMarkerClick(bare, buildEvidenceIndex([recordFor(1)]))).toEqual({
+      kind: "nothing",
+      selectability: "noIdentity",
+    });
   });
 });

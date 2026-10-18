@@ -25,7 +25,7 @@
  * - Every cap says how much it left out: nothing is hidden silently, and an unknown count is never
  *   shown as 0.
  */
-import { buildEvidenceIndex } from "./evtx-insights-data";
+import { buildEvidenceIndex, type EvidenceIndex } from "./evtx-insights-data";
 import {
   derivedTitle,
   messageHead,
@@ -82,7 +82,7 @@ import { hasUsableTimestamp } from "./evtx-filter";
 import { formatClock, type EvtxTimeZoneMode } from "./evtx-time";
 import type { EvtxRecord } from "./types";
 import type { CorrelationCounts } from "./useEvtxCorrelation";
-import { timelineOriginId, type TimelineItem } from "./unified-timeline";
+import { timelineOriginId, type TimelineItem, type TimelineOrigin } from "./unified-timeline";
 
 /** Spec 8.12: up to five lanes. */
 export const DOCK_MAX_LANES = 5;
@@ -166,7 +166,13 @@ export type DockSelected =
   | { status: "notRead" };
 
 /** What activating a marker can do: select its record, or nothing, and why. */
-export type MarkerSelectability = "event" | "log" | "selected" | "ambiguous" | "notLoaded";
+export type MarkerSelectability =
+  | "event"
+  | "log"
+  | "selected"
+  | "ambiguous"
+  | "notLoaded"
+  | "noIdentity";
 
 /** What the dock knows about one drawn marker, for its accessible name. */
 export interface MarkerFacts {
@@ -635,7 +641,29 @@ function selectabilityPhrase(selectability: MarkerSelectability): string {
       return "more than one loaded record matches, so activating it selects nothing";
     case "notLoaded":
       return "no loaded record matches, so activating it selects nothing";
+    case "noIdentity":
+      return "it has no usable record identity, so activating it selects nothing";
   }
+}
+
+/** What activating a marker found: the one record to select, or why there is none. */
+export type MarkerClick =
+  | { kind: "select"; recordId: number }
+  | { kind: "nothing"; selectability: Exclude<MarkerSelectability, "event" | "selected"> };
+
+/**
+ * What a click on a marker does, decided from the loaded records (`index`, built when the click
+ * needs it): it selects the record only when EXACTLY ONE loaded record matches the entry's origin.
+ * A text-log line is not an event record, an entry with no usable identity names none, and no or
+ * several matches would be a guess; each of those selects nothing and says why, and the reason goes
+ * into the marker's accessible name (`dockMarkerName`'s `selectability`).
+ */
+export function resolveMarkerClick(origin: TimelineOrigin, index: EvidenceIndex): MarkerClick {
+  const resolution = resolveOriginRecords(origin, index);
+  if (resolution.kind === "notEvent") return { kind: "nothing", selectability: "log" };
+  if (resolution.kind === "noUsableIdentity") return { kind: "nothing", selectability: "noIdentity" };
+  if (resolution.records.length === 1) return { kind: "select", recordId: (resolution.records[0] as EvtxRecord).id };
+  return { kind: "nothing", selectability: resolution.records.length === 0 ? "notLoaded" : "ambiguous" };
 }
 
 /**
