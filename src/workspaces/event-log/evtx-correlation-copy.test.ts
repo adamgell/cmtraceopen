@@ -1267,21 +1267,22 @@ describe("the notes shared by the dock and the Details context list", () => {
   });
 });
 
-describe("the note about entries that share an origin (#843)", () => {
-  it("is said for one entry and for several, in the dock's plain words", () => {
-    expect(sharedOriginNote(1)).toBe("1 entry shares an origin with another entry of this window, so it is listed once.");
-    expect(sharedOriginNote(3)).toBe("3 entries share an origin with another entry of this window, so they are listed once.");
-    expect(sharedOriginNote(1500)).toBe("1,500 entries share an origin with another entry of this window, so they are listed once.");
+describe("the note about entries read from an origin more than once (#843)", () => {
+  it("is said for one entry and for several, and claims only what the count proves", () => {
+    expect(sharedOriginNote(1)).toBe("1 entry read repeats another entry's origin and is counted once.");
+    expect(sharedOriginNote(3)).toBe("3 entries read repeat another entry's origin and are counted once.");
+    expect(sharedOriginNote(1500)).toBe("1,500 entries read repeat another entry's origin and are counted once.");
+  });
+
+  it("says nothing about a list or about the window, which it cannot know", () => {
+    for (const text of [sharedOriginNote(1), sharedOriginNote(5)]) {
+      expect(text).not.toMatch(/listed|window|shown|drawn/i);
+      expect(text).not.toMatch(NO_UNPROVEN_CLAIM);
+    }
   });
 
   it("is not said when there is nothing to say, and never for a negative count", () => {
     expect(sharedOriginNote(0)).toBeNull();
     expect(sharedOriginNote(-2)).toBeNull();
-  });
-
-  it("claims nothing about the entries' time or place", () => {
-    for (const text of [sharedOriginNote(1), sharedOriginNote(5)]) {
-      expect(text).not.toMatch(NO_UNPROVEN_CLAIM);
-    }
   });
 });

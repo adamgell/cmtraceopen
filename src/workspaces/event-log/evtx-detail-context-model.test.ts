@@ -506,8 +506,8 @@ describe("the caption: nearest is said only when it is proven", () => {
     expect(model.rows).toHaveLength(1);
     expect(model.nearestProven).toBe(false);
     // The three entries READ, as the card above says; the two that name the event are explained by
-    // the ambiguous note.
-    expect(model.caption).toBe("1 nearest of the 3 entries read");
+    // the ambiguous note, and the caption says that one of them is nearer than the row it lists.
+    expect(model.caption).toBe("The nearest, apart from the 2 that may be this event, of the 3 entries read");
   });
 
   it("never says 'of' the window's count when the rows are not proven nearest", () => {
@@ -536,7 +536,7 @@ describe("the caption counts what the card counts, never the list that left entr
     const model = ready({ window });
     expect(model.selected).toEqual({ status: "ambiguous", candidates: 2 });
     expect(model.notices[0]).toBe("Showing 3 of 500 entries within \u00b15 min; reading stopped at its call limit, so entries and sources may be missing.");
-    expect(model.caption).toBe("1 nearest of the 3 entries read");
+    expect(model.caption).toBe("The nearest, apart from the 2 that may be this event, of the 3 entries read");
     expect(model.notices).toContain(ambiguousEventNote(2, "list"));
   });
 
@@ -545,11 +545,11 @@ describe("the caption counts what the card counts, never the list that left entr
     expect(window.windowItems).toBe(42);
     const model = ready({ window });
     expect(model.selected).toEqual({ status: "ambiguous", candidates: 2 });
-    expect(model.caption).toBe("12 nearest of 42 entries within \u00b15 min");
+    expect(model.caption).toBe("The 12 nearest, apart from the 2 that may be this event, of 42 entries within \u00b15 min");
     expect(model.notices).toContain(ambiguousEventNote(2, "list"));
   });
 
-  it("counts a duplicate as read, and says that an entry sharing an origin is listed once", () => {
+  it("counts a duplicate as read, and says that it repeats another entry's origin", () => {
     const read = entries().slice(0, 25);
     const window = stoppedWindow(record, [...read, read[24] as TimelineItem], 500);
     const model = ready({ window });
@@ -557,12 +557,12 @@ describe("the caption counts what the card counts, never the list that left entr
     expect(model.notices[0]).toMatch(/^Showing 26 of 500 entries/);
     expect(model.caption).toBe("12 nearest of the 26 entries read");
     expect(model.notices).toContain(sharedOriginNote(1));
-    expect(sharedOriginNote(1)).toBe("1 entry shares an origin with another entry of this window, so it is listed once.");
+    expect(sharedOriginNote(1)).toBe("1 entry read repeats another entry's origin and is counted once.");
   });
 
   it("says nothing about shared origins when no entry shares one", () => {
     expect(ready().notices).toEqual([]);
-    expect(ready({ window: stoppedWindow(record, entries().slice(0, 25), 500) }).notices.join(" ")).not.toContain("shares an origin");
+    expect(ready({ window: stoppedWindow(record, entries().slice(0, 25), 500) }).notices.join(" ")).not.toContain("origin");
   });
 
   it("agrees with the card on how many entries were read, in every scene where the read stopped", () => {
@@ -592,8 +592,136 @@ describe("the caption counts what the card counts, never the list that left entr
     ];
     for (const [why, window] of scenes) {
       const model = ready({ window });
-      expect(model.caption, why).toBe(`12 nearest of ${(window.windowItems as number).toLocaleString()} entries within \u00b15 min`);
+      expect(model.caption, why).toMatch(
+        new RegExp(`( |^)12 nearest.* of ${(window.windowItems as number).toLocaleString()} entries within \u00b15 min$`),
+      );
     }
+  });
+});
+
+describe("the note about an origin that was read more than once claims only what the count proves", () => {
+  const SHARED = "1 entry read repeats another entry's origin and is counted once.";
+  const byTime = (list: TimelineItem[]) => [...list].sort((a, b) => a.timestampMs - b.timestampMs);
+  /** What the note must never say: that the entry is in the list, or that another entry exists. */
+  const OVERCLAIM = /listed|in this window|another entry of/i;
+
+  it("is worded for the count alone, singular and plural", () => {
+    expect(sharedOriginNote(1)).toBe(SHARED);
+    expect(sharedOriginNote(3)).toBe("3 entries read repeat another entry's origin and are counted once.");
+    expect(sharedOriginNote(1)).not.toMatch(OVERCLAIM);
+    expect(sharedOriginNote(3)).not.toMatch(OVERCLAIM);
+  });
+
+  it("sits beside the absolute 'No other entries' claim without contradicting it: the copy is the event's own entry", () => {
+    const window = windowAround(record, [eventItem(20, t), eventItem(20, t)]);
+    expect(window.windowItems).toBe(2);
+    const model = ready({ window });
+    expect(model.empty).toEqual({ text: "No other entries within \u00b15 min.", absolute: true });
+    expect(model.notices).toEqual([SHARED]);
+    expect(model.rows.map((row) => row.id)).toEqual([rid(20)]);
+    for (const text of [...model.notices, model.empty?.text ?? "", model.caption ?? ""]) {
+      expect(text).not.toMatch(OVERCLAIM);
+    }
+  });
+
+  it("does not say the entry is listed when its origin is outside the 12 rows", () => {
+    const window = windowAround(record, byTime([...entries(), eventItem(30, T0 + 30_000)]));
+    expect(window.windowItems).toBe(42);
+    const model = ready({ window });
+    expect(model.rows.map((row) => row.id)).not.toContain(rid(30));
+    expect(model.notices).toEqual([SHARED]);
+    expect(model.caption).toBe("12 nearest of 42 entries within \u00b15 min");
+    for (const text of [...model.notices, model.caption ?? ""]) expect(text).not.toMatch(OVERCLAIM);
+  });
+
+  it("does not say the entry is listed when the event is unmatchable and nothing is", () => {
+    const unmatchable = unnumbered(t);
+    const nine = Array.from({ length: 8 }, (_, index) => eventItem(40 + index, t - 4_000 + index * 1_000));
+    const window = windowAround(unmatchable, byTime([...nine, nine[3] as TimelineItem]));
+    expect(window.windowItems).toBe(9);
+    const model = ready({ record: unmatchable, window });
+    expect(model.rows).toEqual([]);
+    expect(model.notices).toEqual([SHARED, unmatchableNote(9, FIVE_MIN, "list")]);
+    expect(model.notices[0]).not.toMatch(OVERCLAIM);
+  });
+
+  it("is said in the same words when the read stopped, beside the card", () => {
+    const read = entries().slice(0, 25);
+    const model = ready({ window: stoppedWindow(record, [...read, read[24] as TimelineItem], 500) });
+    expect(model.notices.slice(0, 2)).toEqual([windowNotice(stoppedWindow(record, [...read, read[24] as TimelineItem], 500)) as string, SHARED]);
+  });
+});
+
+describe("'N nearest' is literally true: the caption says when an entry set aside is nearer than a row", () => {
+  const twin = (timestampMs: number) => ({ ...twinOf(eventItem(20, t), rid(88)), timestampMs });
+  const byTime = (list: TimelineItem[]) => [...list].sort((a, b) => a.timestampMs - b.timestampMs);
+  /** Twelve entries 1 to 12 s after the event, none of which names it. */
+  const near = () => Array.from({ length: 12 }, (_, index) => eventItem(101 + index, t + (index + 1) * 1_000));
+
+  it("says so for a window read whole, where both entries that may be the event are nearer than the rows", () => {
+    const model = ready({ window: windowAround(record, [...entries(), twinOf(eventItem(20, t), rid(88))]) });
+    expect(model.selected).toEqual({ status: "ambiguous", candidates: 2 });
+    expect(model.caption).toBe("The 12 nearest, apart from the 2 that may be this event, of 42 entries within \u00b15 min");
+  });
+
+  it("says so when only one of the entries that may be the event is nearer", () => {
+    // Record 20's own entry is 1 s away (nearer than the 12th row, 12 s away); the copy is 200 s away.
+    const window = windowAround(record, byTime([...near(), eventItem(20, t + 500), twin(t + 200_000)]));
+    const model = ready({ window });
+    expect(model.selected.status).toBe("ambiguous");
+    expect(model.rows).toHaveLength(12);
+    expect(model.caption).toBe("The 12 nearest, apart from the 2 that may be this event, of 14 entries within \u00b15 min");
+  });
+
+  it("keeps the plain caption when both entries that may be the event are farther than every row", () => {
+    const window = windowAround(record, byTime([...near(), eventItem(20, t - 200_000), twin(t + 200_000)]));
+    const model = ready({ window });
+    expect(model.selected).toEqual({ status: "ambiguous", candidates: 2 });
+    expect(model.caption).toBe("12 nearest of 14 entries within \u00b15 min");
+    expect(model.notices).toContain(ambiguousEventNote(2, "list"));
+  });
+
+  it("keeps the plain caption when an entry that may be the event is exactly as far as the farthest row", () => {
+    // The 12th row is 12 s away; the copy is also 12 s away, a tie the order settles, not a nearer entry.
+    const window = windowAround(record, byTime([...near().slice(0, 11), eventItem(112, t + 12_000), eventItem(20, t - 200_000), twin(t - 12_000)]));
+    const model = ready({ window });
+    expect(model.selected.status).toBe("ambiguous");
+    expect(model.caption).toBe("12 nearest of 14 entries within \u00b15 min");
+  });
+
+  it("says the nearest, once, for a single row, and keeps the plain caption when the entries set aside are farther", () => {
+    const farther = [eventItem(19, t - 1_000), eventItem(20, t + 5_000), twin(t + 9_000)];
+    const plain = ready({ window: stoppedWindow(record, farther, 500) });
+    expect(plain.rows).toHaveLength(1);
+    expect(plain.caption).toBe("1 nearest of the 3 entries read");
+    const nearer = ready({ window: stoppedWindow(record, [eventItem(19, t - 1_000), eventItem(20, t), twin(t + 9_000)], 500) });
+    expect(nearer.caption).toBe("The nearest, apart from the 2 that may be this event, of the 3 entries read");
+  });
+
+  it("says so in the words of a read that stopped, in both forms", () => {
+    const stopped = byTime([...entries(), twinOf(eventItem(20, t), rid(88))]);
+    const proven = ready({ window: stoppedWindow(record, stopped, 500) });
+    expect(proven.nearestProven).toBe(true);
+    expect(proven.caption).toBe("The 12 nearest entries, apart from the 2 that may be this event, within \u00b15 min");
+    const unproven = ready({ window: stoppedWindow(record, stopped.slice(0, 25), 500) });
+    expect(unproven.nearestProven).toBe(false);
+    expect(unproven.caption).toBe("The 12 nearest, apart from the 2 that may be this event, of the 25 entries read");
+  });
+
+  it("never adds the clause for an event that is not ambiguous", () => {
+    expect(ready().caption).toBe("12 nearest of 41 entries within \u00b15 min");
+    const without = entries().filter((item) => timelineOriginId(item.origin) !== rid(20));
+    expect(ready({ window: windowAround(record, without) }).caption).toBe("12 nearest of 40 entries within \u00b15 min");
+    const unmatchable = unnumbered(t);
+    expect(ready({ record: unmatchable, window: windowAround(unmatchable, entries()) }).caption).toBeNull();
+    expect(ready({ window: stoppedWindow(record, entries().slice(0, 15), 500) }).caption).not.toContain("apart from");
+  });
+
+  it("counts the entries the engine and the card count, with or without the clause", () => {
+    const window = stoppedWindow(record, byTime([...entries(), twinOf(eventItem(20, t), rid(88))]).slice(0, 25), 500);
+    const model = ready({ window });
+    expect(model.notices[0]).toMatch(/^Showing 25 of 500 entries/);
+    expect(model.caption).toMatch(/of the 25 entries read$/);
   });
 });
 

@@ -523,12 +523,14 @@ export const NOT_READ_NOTE =
   "The read of this window stopped before this event was found, so whether it is among the entries, and what it is linked to, are not known.";
 
 /**
- * Entries of a window that share one origin are one entry to the join, so a surface that shows each
- * origin once shows fewer entries than the window holds. This says by how many. Null when none does.
+ * Entries read that repeat the origin of another entry read are one entry to the join, so a count of
+ * the origins is smaller than the count of the entries read. This says by how many, and claims
+ * nothing more: not that the origin is on any list (it may be outside it, or the list may be empty),
+ * and not that another entry exists besides the one it repeats. Null when none does.
  */
 export function sharedOriginNote(duplicates: number): string | null {
   if (duplicates <= 0) return null;
-  return `${count(duplicates)} ${duplicates === 1 ? "entry shares" : "entries share"} an origin with another entry of this window, so ${duplicates === 1 ? "it is" : "they are"} listed once.`;
+  return `${count(duplicates)} ${duplicates === 1 ? "entry read repeats" : "entries read repeat"} another entry's origin and ${duplicates === 1 ? "is" : "are"} counted once.`;
 }
 
 /** Where the entries of a window are shown: the dock draws them, the Details list lists them. */

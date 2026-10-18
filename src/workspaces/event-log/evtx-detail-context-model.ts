@@ -240,6 +240,10 @@ function entriesText(value: number): string {
  * are never the count of the list left after entries were set aside, so a reader can put the two
  * lines side by side; the entries the list leaves out are explained by the notes of their own (the
  * ambiguous event's, and `sharedOriginNote`).
+ *
+ * "N nearest" is literally true. The entries that may be an ambiguous event are set aside, so when
+ * one of them is nearer to the event's instant than the farthest row (`apart`, how many may be the
+ * event), the caption says the rows are the nearest APART from them.
  */
 function captionFor(input: {
   shown: number;
@@ -248,16 +252,20 @@ function captionFor(input: {
   complete: boolean;
   proven: boolean;
   halfWidthMs: number;
+  apart: number | null;
 }): string {
   const width = windowWidthLabel(input.halfWidthMs);
+  const plain = `${count(input.shown)} nearest`;
+  const apart = input.apart === null ? "" : `, apart from the ${count(input.apart)} that may be this event,`;
+  const lead = input.apart === null ? plain : input.shown === 1 ? "The nearest" : `The ${plain}`;
   if (input.complete) {
     return input.windowItems > input.shown
-      ? `${count(input.shown)} nearest of ${entriesText(input.windowItems)} within ${width}`
+      ? `${lead}${apart} of ${entriesText(input.windowItems)} within ${width}`
       : `${entriesText(input.windowItems)} within ${width}`;
   }
-  if (input.proven) return `${count(input.shown)} nearest entries within ${width}`;
+  if (input.proven) return `${lead} entries${apart} within ${width}`;
   return input.read > input.shown
-    ? `${count(input.shown)} nearest of the ${entriesText(input.read)} read`
+    ? `${lead}${apart} of the ${entriesText(input.read)} read`
     : `${entriesText(input.read)} read`;
 }
 
@@ -315,6 +323,16 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
   // negative, so a last entry at or before the event can prove nothing.
   const last = window.items.length === 0 ? null : (window.items[window.items.length - 1] as TimelineItem).timestampMs;
   const farthest = chosen.reduce((max, item) => Math.max(max, Math.abs(item.timestampMs - center)), 0);
+  // A row is "the nearest" only if nothing set aside is nearer: the entries that may be an ambiguous
+  // event are left out of the rows, and one of them may be closer to the event than the farthest row.
+  const nearerSetAside =
+    selected.status === "ambiguous" &&
+    [...read.naming].some((id) => {
+      const setAside = read.byId.get(id);
+      return setAside !== undefined && Math.abs(setAside.timestampMs - center) < farthest;
+    })
+      ? selected.candidates
+      : null;
   const nearestProven =
     window.complete ||
     (chosen.length === DETAIL_CONTEXT_ROW_CAP && last !== null && farthest < last - center);
@@ -401,6 +419,7 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
             complete: window.complete,
             proven: nearestProven,
             halfWidthMs: window.halfWidthMs,
+            apart: nearerSetAside,
           }),
     legend: rows.some((row) => row.link !== null) ? LINK_LEGEND_TEXT : null,
     notices,
