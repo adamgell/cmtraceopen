@@ -880,6 +880,83 @@ describe("the evidence index (P8)", () => {
   });
 });
 
+describe("selecting a log entry's record from the plot (F3, an archive text row is a grid record)", () => {
+  const FILE = "C:\\Logs\\AppEnforce.log";
+  const archiveRow = (line: number, overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
+    ...recordFor(7),
+    id: 900 + line,
+    eventRecordId: line,
+    eventRecordIdText: String(line),
+    originKind: "log",
+    eventId: 0,
+    sourceLabel: FILE,
+    channel: FILE,
+    provider: "CcmExec",
+    computer: "",
+    ...overrides,
+  });
+  /** A chain of the event (1) and the log entry (line 4) of `file`, linked by an exact edge. */
+  function chainWithLog(file = FILE): EvtxCorrelationData {
+    const log: TimelineItem = {
+      timestampMs: T0 + 3_000,
+      severity: "info",
+      message: "log line 4",
+      origin: { kind: "log", file, component: "CcmExec", line: 4, source: file, machine: null, bundle: null, recordId: 4 },
+    };
+    return makeData({
+      items: [eventItem(1, T0, "error", "first failed"), log],
+      edges: [synthetic("l", rid(1), timelineOriginId(log.origin))],
+    });
+  }
+  const logMarker = () => document.querySelector<HTMLElement>('button[data-kind="log"]')!;
+
+  it("selects the archive row when exactly one loaded row matches, and opens Details", () => {
+    seedStore([recordFor(1), archiveRow(3), archiveRow(4)]);
+    useEvtxLayoutStore.setState({ railTab: "insights" });
+    show(chainWithLog());
+    fireEvent.click(logMarker());
+    expect(useEvtxStore.getState().selectedRecordId).toBe(archiveRow(4).id);
+    expect(useEvtxLayoutStore.getState().railTab).toBe("details");
+  });
+
+  it("selects nothing and says several rows match when two identical archive rows do", () => {
+    seedStore([recordFor(1), archiveRow(4), archiveRow(4, { id: 999 })]);
+    show(chainWithLog());
+    fireEvent.click(logMarker());
+    expect(useEvtxStore.getState().selectedRecordId).toBeNull();
+    expect(status()).toHaveTextContent("More than one loaded log record matches this entry, so none is selected.");
+  });
+
+  it("selects nothing and says no loaded record matches when the file's rows are loaded but not this line's", () => {
+    seedStore([recordFor(1), archiveRow(9)]);
+    show(chainWithLog());
+    fireEvent.click(logMarker());
+    expect(useEvtxStore.getState().selectedRecordId).toBeNull();
+    expect(status()).toHaveTextContent("No loaded log record matches this entry, so no record is selected.");
+  });
+
+  it("says a line of a Log Viewer file has no record in the grid, and does not call it something it is not", () => {
+    seedStore([recordFor(1), archiveRow(4)]);
+    show(chainWithLog("C:\\Logs\\FromTheLogViewer.log"));
+    fireEvent.click(logMarker());
+    expect(useEvtxStore.getState().selectedRecordId).toBeNull();
+    expect(status()).toHaveTextContent("This is a line of a log file with no record in the grid, so no record is selected.");
+    expect(status().textContent).not.toMatch(/not an event record/);
+  });
+
+  it("shares the dock's resolver rather than keeping a matcher of its own", () => {
+    expect(viewSource).toMatch(/resolveMarkerClick\(item\.origin, useEvtxStore\.getState\(\)\.records\)/);
+    expect(viewSource).not.toMatch(/logOriginNamesRecord/);
+  });
+
+  it("leaves the event branch as it was: an event entry still names its record through the origin join", () => {
+    seedStore([recordFor(1), archiveRow(4)]);
+    show(chainWithLog());
+    fireEvent.click(document.querySelector(`[data-marker="${rid(1)}"]`)!);
+    expect(useEvtxStore.getState().selectedRecordId).toBe(1);
+  });
+});
+
 describe("selecting an entry's record from the plot", () => {
   it("selects the one loaded record the marker names, and opens Details", () => {
     seedStore([recordFor(1), recordFor(2)]);

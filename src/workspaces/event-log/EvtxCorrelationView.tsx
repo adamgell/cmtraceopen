@@ -43,6 +43,7 @@ import {
   resolveOriginRecords,
   scopeForChain,
 } from "./evtx-correlation-origin-index";
+import { resolveMarkerClick } from "./evtx-correlation-dock-model";
 import { zoomWindowFor, type ZoomState } from "./evtx-correlation-overview";
 import {
   lossStillTrue,
@@ -134,6 +135,14 @@ const useStyles = makeStyles({
     ":hover": { filter: "brightness(0.97)" },
   },
 });
+
+/** Why a click on a log entry's marker selected nothing (an archive text row is selected, so these are the rest). */
+const LOG_ENTRY_NO_SELECTION: Record<Extract<ReturnType<typeof resolveMarkerClick>, { kind: "nothing" }>["selectability"], string> = {
+  log: "This is a line of a log file with no record in the grid, so no record is selected.",
+  notLoaded: "No loaded log record matches this entry, so no record is selected.",
+  ambiguous: "More than one loaded log record matches this entry, so none is selected.",
+  noIdentity: "This entry has no usable record identity, so no record is selected.",
+};
 
 /**
  * The index of the records loaded NOW, built when a click needs it and not before. Loaded records
@@ -644,10 +653,20 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
     (marker: PlotMarker) => {
       const item = itemsById.get(marker.id);
       if (item === undefined) return;
+      if (item.origin.kind === "log") {
+        // An archive text row is a grid record: the dock's resolver, over the strict log matcher.
+        const click = resolveMarkerClick(item.origin, useEvtxStore.getState().records);
+        if (click.kind === "select") {
+          setActionMessage(null);
+          selectRecordAndShowDetails(click.recordId);
+        } else {
+          reply(LOG_ENTRY_NO_SELECTION[click.selectability]);
+        }
+        return;
+      }
       const resolution = resolveOriginRecords(item.origin, loadedEvidenceIndex());
-      if (resolution.kind === "notEvent") {
-        reply("A text-log line is not an event record, so there is no record to select.");
-      } else if (resolution.kind === "noUsableIdentity") {
+      if (resolution.kind === "notEvent") return; // a log entry was handled above
+      if (resolution.kind === "noUsableIdentity") {
         reply("This entry has no usable record identity, so no record is selected.");
       } else if (resolution.records.length === 1) {
         setActionMessage(null);
