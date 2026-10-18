@@ -295,9 +295,16 @@ interface OpenAtLine {
   enabled: boolean;
   /** Why it is disabled; null when enabled. */
   reason: string | null;
-  /** The accessible name: it says "near", because the Log Viewer selects the next line it shows. */
+  /**
+   * The accessible name. It begins with the button's visible label (WCAG 2.5.3, Label in Name), so a
+   * person who says the words on the button reaches it, then says which file and "near" the line,
+   * because the Log Viewer selects the next line it shows.
+   */
   name: string;
 }
+
+/** The visible text of the button; the accessible name starts with it. */
+export const OPEN_IN_LOG_VIEWER_LABEL = "Open in Log Viewer";
 
 const NO_SINGLE_FILE = "The Log Viewer has no single file open, so this line cannot be opened there.";
 
@@ -340,7 +347,7 @@ export function openAtLineAvailability(
   line: number,
   updating: boolean,
 ): OpenAtLine {
-  const name = `Open ${getBaseName(file)} in the Log Viewer near line ${count(line)}`;
+  const name = `${OPEN_IN_LOG_VIEWER_LABEL}: ${getBaseName(file)}, near line ${count(line)}`;
   const no = (reason: string): OpenAtLine => ({ enabled: false, reason, name });
   if (updating) {
     return no(

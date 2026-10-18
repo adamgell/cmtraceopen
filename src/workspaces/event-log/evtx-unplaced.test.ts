@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  OPEN_IN_LOG_VIEWER_LABEL,
   describeUnplaced,
   logViewerLines,
   notPlacedCaption,
@@ -318,7 +319,7 @@ describe("Open in Log Viewer (R4)", () => {
     expect(check(viewer(file), file, 7)).toEqual({
       enabled: true,
       reason: null,
-      name: "Open ccm1.log in the Log Viewer near line 7",
+      name: "Open in Log Viewer: ccm1.log, near line 7",
     });
   });
 
@@ -482,6 +483,14 @@ describe("Open in Log Viewer (R4)", () => {
 
   it("compares the path exactly, with no case or slash folding", () => {
     expect(check(viewer("c:\\logs\\ccm1.log"), file, 7).enabled).toBe(false);
+  });
+
+  it("always starts the name with the button's visible label, enabled or not (WCAG 2.5.3)", () => {
+    expect(OPEN_IN_LOG_VIEWER_LABEL).toBe("Open in Log Viewer");
+    for (const mode of ["single-file", "merged", "diff", "aggregate-folder", null] as const) {
+      expect(check(viewer(file, mode), file, 7).name.startsWith(`${OPEN_IN_LOG_VIEWER_LABEL}: `), String(mode)).toBe(true);
+    }
+    expect(check(viewer(file), file, 7, true).name.startsWith(`${OPEN_IN_LOG_VIEWER_LABEL}: `)).toBe(true);
   });
 
   it("always names the button 'near line n', enabled or not", () => {

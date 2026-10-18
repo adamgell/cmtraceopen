@@ -25,6 +25,7 @@ import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import type { CorrelationSizes } from "./EvtxCorrelationLanes";
 import {
+  OPEN_IN_LOG_VIEWER_LABEL,
   describeUnplaced,
   logViewerLines,
   notPlacedCaption,
@@ -193,7 +194,7 @@ export function EvtxUnplacedList({ list, updating, sizes, onReply, onFail, onEsc
                   disabledFocusable={!availability.enabled}
                   onClick={() => open(row)}
                 >
-                  Open in Log Viewer
+                  {OPEN_IN_LOG_VIEWER_LABEL}
                 </Button>
               )}
             </li>

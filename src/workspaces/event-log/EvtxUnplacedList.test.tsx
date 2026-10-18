@@ -93,7 +93,7 @@ function singleFileViewer(overrides: Record<string, unknown> = {}) {
   });
 }
 
-const openButtons = () => screen.getAllByRole("button", { name: /Open .* in the Log Viewer/ });
+const openButtons = () => screen.getAllByRole("button", { name: /^Open in Log Viewer: / });
 
 beforeEach(() => {
   onReply = vi.fn();
@@ -224,10 +224,30 @@ describe("Open in Log Viewer: which rows get a button, and its name", () => {
     mount();
     const buttons = openButtons();
     expect(buttons).toHaveLength(2);
-    expect(buttons[0]).toHaveAccessibleName("Open IntuneManagementExtension.log in the Log Viewer near line 7");
-    expect(buttons[1]).toHaveAccessibleName("Open IntuneManagementExtension.log in the Log Viewer near line 9");
+    expect(buttons[0]).toHaveAccessibleName("Open in Log Viewer: IntuneManagementExtension.log, near line 7");
+    expect(buttons[1]).toHaveAccessibleName("Open in Log Viewer: IntuneManagementExtension.log, near line 9");
     const eventRow = screen.getAllByRole("listitem")[2]!;
     expect(within(eventRow).queryByRole("button")).toBeNull();
+  });
+
+  it("is named by its visible words first (WCAG 2.5.3), whether it is enabled or disabled", () => {
+    // Enabled: the open single file. Disabled: a merged view. The name is read from the DOM against the
+    // text the button shows, so a rewording of either side is caught.
+    for (const [state, setup] of [
+      ["enabled", () => singleFileViewer()],
+      ["disabled", () => singleFileViewer({ sourceOpenMode: "merged" })],
+    ] as const) {
+      setup();
+      const { unmount } = mount();
+      for (const button of openButtons()) {
+        const visible = button.textContent?.trim() ?? "";
+        expect(visible, state).toBe("Open in Log Viewer");
+        expect(button.getAttribute("aria-label"), state).toMatch(/^Open in Log Viewer(?=: )/);
+        expect(button.getAttribute("aria-label")?.startsWith(visible), state).toBe(true);
+        expect(button).toHaveAccessibleName(expect.stringMatching(/near line \d+$/));
+      }
+      unmount();
+    }
   });
 
   it("is enabled for the open single file when the loaded line is untimed", () => {
