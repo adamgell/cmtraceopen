@@ -28,9 +28,10 @@
  *
  * Colors come from the visual tokens and the theme; text sizes from the log list font size.
  */
-import { Fragment, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { createFocusOutlineStyle, makeStyles, tokens } from "@fluentui/react-components";
 import { ArrowLeft12Regular, ArrowRight12Regular } from "@fluentui/react-icons";
+import { CONNECTOR_STYLES, ConnectorSwatch, LegendItem, MarkerSwatch } from "./EvtxCorrelationLegendParts";
 import { useRailTextColors } from "./evtx-rail-text";
 import type { CorrelationSizes } from "./evtx-correlation-sizes";
 import type { EvtxTimeZoneMode } from "./evtx-time";
@@ -47,11 +48,6 @@ const CORRELATION_PLOT_HEIGHT_PX = 240;
 /** Spec 8.12: the dock draws 12 px markers, a 170 px label column and 24 px lanes. */
 const DOCK_MARKER_PX = 12;
 const DOCK_LANE_LABEL_PX = 170;
-/** Spec 8.11: an exact connector is 2.5 px solid, a candidate one 1.5 px dashed `5 4`. */
-export const CONNECTOR_STYLES = {
-  exact: { width: 2.5, dash: undefined },
-  candidate: { width: 1.5, dash: "5 4" },
-} as const;
 /** Spec 8.11: a pinned entry's fill is drawn at 55% opacity. Only the fill. */
 export const PINNED_FILL_OPACITY = 0.55;
 
@@ -543,15 +539,6 @@ export function EvtxCorrelationLanes({
   );
 }
 
-function LegendItem({ children, label, color, size }: { children: ReactNode; label: string; color: string; size: number }) {
-  return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: `${size}px`, color }}>
-      {children}
-      {label}
-    </span>
-  );
-}
-
 /**
  * The key to the plot (spec 8.11 header): a solid line for exact, a dashed one for candidate, the
  * dotted outline for an entry that is not linked (only when such a marker is drawn), and the two
@@ -559,37 +546,7 @@ function LegendItem({ children, label, color, size }: { children: ReactNode; lab
  * "Not linked" where a marker says "No loaded link".
  */
 export function CorrelationLegend({ plot, sizes }: { plot: ChainPlot; sizes: CorrelationSizes }) {
-  const visuals = useEvtxVisualTokens();
   const { cardSecondary } = useRailTextColors();
-  const swatch = (strength: "exact" | "candidate") => (
-    <svg aria-hidden="true" width="28" height="6" style={{ flexShrink: 0 }}>
-      <line
-        x1="0"
-        x2="28"
-        y1="3"
-        y2="3"
-        strokeWidth={CONNECTOR_STYLES[strength].width}
-        strokeDasharray={CONNECTOR_STYLES[strength].dash}
-        style={{ stroke: visuals.strengths[strength].border, vectorEffect: "non-scaling-stroke" }}
-      />
-    </svg>
-  );
-  const shape = (radius: string, outlined: boolean) => (
-    <span
-      aria-hidden="true"
-      style={{
-        width: "10px",
-        height: "10px",
-        boxSizing: "border-box",
-        borderRadius: radius,
-        border: outlined
-          ? `1px ${visuals.strengths.notCausal.borderStyle} ${visuals.strengths.notCausal.border}`
-          : `1px solid ${tokens.colorNeutralForeground2}`,
-        backgroundColor: outlined ? "transparent" : tokens.colorNeutralForeground2,
-        flexShrink: 0,
-      }}
-    />
-  );
   return (
     <div
       role="group"
@@ -598,21 +555,21 @@ export function CorrelationLegend({ plot, sizes }: { plot: ChainPlot; sizes: Cor
       style={{ display: "flex", flexWrap: "wrap", columnGap: "14px", rowGap: "4px" }}
     >
       <LegendItem label="exact" color={cardSecondary} size={sizes.label}>
-        {swatch("exact")}
+        <ConnectorSwatch strength="exact" />
       </LegendItem>
       <LegendItem label="candidate" color={cardSecondary} size={sizes.label}>
-        {swatch("candidate")}
+        <ConnectorSwatch strength="candidate" />
       </LegendItem>
       {plot.showsNotLinkedLegend && (
         <LegendItem label={`${plot.notLinkedLabel.toLowerCase()} (no line)`} color={cardSecondary} size={sizes.label}>
-          {shape("50%", true)}
+          <MarkerSwatch radius="50%" outlined />
         </LegendItem>
       )}
       <LegendItem label="Event" color={cardSecondary} size={sizes.label}>
-        {shape("50%", false)}
+        <MarkerSwatch radius="50%" outlined={false} />
       </LegendItem>
       <LegendItem label="Log line" color={cardSecondary} size={sizes.label}>
-        {shape("3px", false)}
+        <MarkerSwatch radius="3px" outlined={false} />
       </LegendItem>
     </div>
   );

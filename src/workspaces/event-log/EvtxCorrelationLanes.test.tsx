@@ -13,7 +13,6 @@ import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import {
-  CONNECTOR_STYLES,
   CORRELATION_LANE_LABEL_PX,
   CORRELATION_MARKER_HIT_PX,
   CORRELATION_MARKER_PX,
@@ -21,6 +20,7 @@ import {
   EvtxCorrelationLanes,
   PINNED_FILL_OPACITY,
 } from "./EvtxCorrelationLanes";
+import { CONNECTOR_STYLES } from "./EvtxCorrelationLegendParts";
 import { correlationSizes } from "./evtx-correlation-sizes";
 import { buildCorrelationChains, type CorrelationChain } from "./evtx-correlation-chains";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
