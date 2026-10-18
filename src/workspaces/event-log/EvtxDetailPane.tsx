@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Button, Tab, TabList, tokens } from "@fluentui/react-components";
 import {
   ArrowDown16Regular,
@@ -43,6 +43,13 @@ import {
 import { formatEventTime } from "./evtx-time";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 import { EVTX_TIME_WINDOW_LABELS, type DiagnosisFinding, type EvtxRecord } from "./types";
+
+/**
+ * The Context section (spec 8.13 Details item 7). Loaded when the Details sub-tab first shows a
+ * record, so its model, copy and window reader stay out of the entry chunk. No fallback and no live
+ * region: until it is there the pane is as it was.
+ */
+const EvtxDetailContextSection = lazy(() => import("./EvtxDetailContextSection"));
 
 /** How many EventData fields the Details tab shows before "Show all". */
 const EVENT_DATA_PREVIEW_COUNT = 6;
@@ -696,6 +703,13 @@ export function EvtxDetailPane({
                 </div>
               </div>
             )}
+
+            {/* Context ±5 min: only on the Details sub-tab (the XML sub-tab has no section, so no
+                query); the section itself reads only while the Insights panel is shown and the rail
+                is on its Details tab. */}
+            <Suspense fallback={null}>
+              <EvtxDetailContextSection record={record} timeZoneMode={timeZoneMode} />
+            </Suspense>
 
             {finding && (
               <button

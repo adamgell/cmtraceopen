@@ -5,6 +5,7 @@ import { getAllThemes } from "../../lib/themes";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiagnosisFinding, EvtxRecord } from "./types";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
+import paneSource from "./EvtxDetailPane.tsx?raw";
 
 const invoke = vi.hoisted(() => vi.fn());
 
@@ -14,6 +15,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 const { EvtxDetailPane } = await import("./EvtxDetailPane");
+const { DETAIL_CONTEXT_TITLE } = await import("./evtx-detail-context-model");
 const { useEvtxStore } = await import("./evtx-store");
 const { sanitizeLayout, useEvtxLayoutStore } = await import("./evtx-layout-store");
 const { useMarkerStore } = await import("../../stores/marker-store");
@@ -619,5 +621,40 @@ describe("EvtxDetailPane rail extras", () => {
     expect(valueOf("Channel").style.fontFamily).toBe("");
     expect(valueOf("Provider").style.fontFamily).toBe("");
     expect(valueOf("Record ID").style.fontFamily).toContain("fontFamilyNumeric");
+  });
+
+  describe("the Context section (#843)", () => {
+    const section = () => screen.queryByRole("group", { name: DETAIL_CONTEXT_TITLE });
+    const wait = (ms: number) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+
+    it("is mounted lazily, between the Same ID card and the finding callout", async () => {
+      render(<EvtxDetailPane visibleRecords={records} findings={[finding]} />);
+      const sameId = screen.getByRole("group", { name: "Same ID" });
+      const callout = screen.getByRole("button", { name: /Part of finding/ });
+      // Its module is fetched when the Details sub-tab first shows it (the source check below), so
+      // it can be late; whether it is on the first render depends on which test loaded it first.
+      const context = await screen.findByRole("group", { name: DETAIL_CONTEXT_TITLE });
+      expect(sameId.compareDocumentPosition(context) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(context.compareDocumentPosition(callout) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(paneSource).toMatch(/lazy\(\(\) => import\("\.\/EvtxDetailContextSection"\)\)/);
+      expect(paneSource).not.toMatch(/^import .*EvtxDetailContext(Section)?"/m);
+    });
+
+    it("has no section on the XML sub-tab, and brings it back on the Details sub-tab", async () => {
+      render(<EvtxDetailPane visibleRecords={records} />);
+      fireEvent.click(screen.getByRole("tab", { name: "XML" }));
+      await wait(300);
+      expect(section()).toBeNull();
+      fireEvent.click(screen.getByRole("tab", { name: "Details" }));
+      expect(await screen.findByRole("group", { name: DETAIL_CONTEXT_TITLE })).toBeInTheDocument();
+    });
+
+    it("keeps the earlier sections as they were: one list at most, and the section adds none without data", async () => {
+      render(<EvtxDetailPane visibleRecords={records} />);
+      await screen.findByRole("group", { name: DETAIL_CONTEXT_TITLE });
+      // No session in this tree: the section says so, and has no list of its own.
+      expect(within(screen.getByRole("group", { name: DETAIL_CONTEXT_TITLE })).queryByRole("list")).toBeNull();
+      expect(screen.queryAllByRole("list")).toEqual([]);
+    });
   });
 });
