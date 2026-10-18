@@ -47,6 +47,14 @@ import {
   scopeForChain,
 } from "./evtx-correlation-origin-index";
 import { zoomWindowFor, type ZoomState } from "./evtx-correlation-overview";
+import {
+  lossStillTrue,
+  newSelectionLoss,
+  spokenLoss,
+  visibleLoss,
+  type LossFacts,
+  type SelectionLoss,
+} from "./evtx-correlation-selection-loss";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { describeUnplaced, notPlacedCaption, notPlacedLabel, type UnplacedView } from "./evtx-unplaced";
 import {
@@ -417,17 +425,37 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
   // with that id came back. Only once the model is current, so a rebuild does not lose the choice.
   // While the "Not placed" pane is open nothing here may call selectChain, which leaves the pane:
   // "Review unplaced lines" before any chain is selected would close it as soon as it opened. A pane
-  // that is open with nothing left to list is left for the chain, and said once.
-  const [unplacedLost, setUnplacedLost] = useState(false);
+  // that is open with nothing left to list is left for the chain.
+  // What is lost is an EVENT, recorded here once (`loss`), not a flag the renders go on reading: what
+  // is said about it is derived from the record and from what exists now (evtx-correlation-selection-loss).
+  const [loss, setLoss] = useState<SelectionLoss | null>(null);
   useEffect(() => {
     if (model === null || data.updating || showPane) return;
     if (unplacedOpen) {
-      setUnplacedLost(true);
+      setLoss(newSelectionLoss("unplaced", null));
       selectChain(reconciled.selectedId);
       return;
     }
-    if (reconciled.selectedId !== selectedChainId) selectChain(reconciled.selectedId);
-  }, [model, data.updating, showPane, unplacedOpen, reconciled.selectedId, selectedChainId, selectChain]);
+    if (reconciled.selectedId !== selectedChainId) {
+      if (reconciled.lost) setLoss(newSelectionLoss("chain", selectedChainId));
+      selectChain(reconciled.selectedId);
+    }
+  }, [model, data.updating, showPane, unplacedOpen, reconciled.selectedId, reconciled.lost, selectedChainId, selectChain]);
+  const lossFacts = useMemo<LossFacts>(
+    () => ({
+      chainIds: model?.chains.map((row) => row.id) ?? [],
+      showPane,
+      unplacedPresent,
+      chainShown: chain !== null,
+    }),
+    [model, showPane, unplacedPresent, chain],
+  );
+  // A record that stops being true (the pane is shown, the items are listed again, the chain is back)
+  // is dropped, so it cannot come true again later and be said about something that did not happen.
+  // A pick of a chain drops it in `pickChain`; a pick of Not placed shows the pane, which drops it here.
+  useEffect(() => {
+    setLoss((current) => (current !== null && !lossStillTrue(current, lossFacts) ? null : current));
+  }, [lossFacts]);
 
   // The scope of the session the shown model was built from; it travels with the model, so it is
   // never a newer session's. A scope that is not known is disclosed as such and reads as narrowed:
@@ -492,16 +520,11 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
   const [actionMessage, setActionMessage] = useState<ActionMessage | null>(null);
   const reply = useCallback((text: string) => setActionMessage({ kind: "reply", text }), []);
   const fail = useCallback((text: string) => setActionMessage({ kind: "failure", text }), []);
-  // The chain that was selected is gone and another is shown: said once, until the operator picks.
-  const [selectionLost, setSelectionLost] = useState(false);
   useEffect(() => {
     setShowAllSequence(false);
     setShowAllWhy(false);
     setActionMessage(null);
   }, [chain?.id, showPane]);
-  useEffect(() => {
-    if (reconciled.lost && !showPane) setSelectionLost(true);
-  }, [reconciled.lost, showPane]);
   // The band belongs to its chain: choosing another starts from that chain's default window, and so
   // does coming back. (A live rebuild keeps the chain's id, so it keeps the band.)
   useEffect(() => {
@@ -509,18 +532,13 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
   }, [chain?.id]);
   const pickChain = useCallback(
     (chainId: string | null) => {
-      setSelectionLost(false);
-      setUnplacedLost(false);
+      setLoss(null);
       selectChain(chainId);
     },
     [selectChain],
   );
-  const pickUnplaced = useCallback(() => {
-    setSelectionLost(false);
-    setUnplacedLost(false);
-    showUnplaced();
-  }, [showUnplaced]);
 
+  const lossSentence = spokenLoss(loss, lossFacts);
   const announcement = useMemo(() => {
     if (model === null) {
       // Without a model the one polite status says where things stand; a failure is an alert.
@@ -530,14 +548,19 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
     return [
       `${model.totalCount.toLocaleString()} ${model.totalCount === 1 ? "chain" : "chains"}`,
       model.edgeInputComplete ? null : "Correlation edges are partial",
-      selectionLost ? "The selected chain is no longer present, showing another" : null,
-      unplacedLost ? "Nothing is listed under Not placed any more, showing a chain" : null,
+      lossSentence,
       data.updating ? "Updating" : null,
     ]
       .filter((part): part is string => part !== null)
       .join(". ");
-  }, [model, selectionLost, unplacedLost, data.updating, data.error, data.stage]);
+  }, [model, lossSentence, data.updating, data.error, data.stage]);
   const spoken = useThrottledValue(announcement, CORRELATION_ANNOUNCE_MS);
+  // The loss is given to the polite region until the region has published it once; after that a later
+  // model or "updating" change composes an announcement without it.
+  useEffect(() => {
+    if (lossSentence === null || !spoken.includes(lossSentence)) return;
+    setLoss((current) => (current !== null && !current.announced ? { ...current, announced: true } : current));
+  }, [spoken, lossSentence]);
 
   const optionId = (index: number) => `${uid}-chain-${index}`;
   // The options of the listbox: the chains, then "Not placed" last when the session has unplaced items.
@@ -550,7 +573,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
       const at = Math.min(Math.max(index, 0), count - 1);
       event.preventDefault();
       const target = chains[at];
-      if (target === undefined) pickUnplaced();
+      if (target === undefined) showUnplaced();
       else pickChain(target.id);
       document.getElementById(optionId(at))?.scrollIntoView?.({ block: "nearest" });
     };
@@ -727,7 +750,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
     edgeErrorNotice(edges.error),
     coverageGapNotice(gaps),
     scanNotice(scan),
-    selectionLost ? "The chain that was selected is no longer present. Another chain is shown." : null,
+    visibleLoss(loss, lossFacts),
     ...(scope === null ? [] : [scope.strengthNote, scope.textLogNote]),
     renderCapNotice({
       shown: model.chains.length,
@@ -811,7 +834,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
                 view={unplacedView}
                 selected={showPane}
                 palette={palette}
-                onSelect={pickUnplaced}
+                onSelect={showUnplaced}
               />
             )}
           </div>

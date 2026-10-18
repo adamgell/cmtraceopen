@@ -44,7 +44,7 @@ import { useUiStore } from "../../stores/ui-store";
 import EvtxCorrelationView, { CORRELATION_ANNOUNCE_MS, scopeFailureText } from "./EvtxCorrelationView";
 import viewSource from "./EvtxCorrelationView.tsx?raw";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
-import { useEvtxCorrelationStore } from "./evtx-correlation-store";
+import { openUnplacedList, useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
 import { pickRailTextColors } from "./evtx-rail-text";
 import { useEvtxStore } from "./evtx-store";
@@ -1425,5 +1425,187 @@ describe("the Not placed option (spec 8.11, 8.11a)", () => {
     useEvtxCorrelationStore.setState({ unplacedOpen: false });
     show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
     expect(plotBuilds).toHaveBeenCalled();
+  });
+});
+
+describe("a lost selection is an event, said once and by what exists (the sticky flags of #840 review F1)", () => {
+  const NOTHING_LISTED = "Nothing is listed under Not placed any more";
+  const CHAIN_GONE = "The selected chain is no longer present";
+  const settle = () =>
+    act(() => {
+      vi.advanceTimersByTime(CORRELATION_ANNOUNCE_MS + 100);
+    });
+  /** No chain at all in the session, so no selection can be shown. */
+  const zeroChains = (extra: Partial<DataOptions> = {}) =>
+    makeData({ items: [], edges: [], totalEdges: 0, ...extra });
+  const none = { items: [], total: 0 };
+  const three = () => ({ items: unplacedItems(3), total: 3 });
+  const spokenCount = (heard: string[], sentence: string) => heard.filter((text) => text.includes(sentence)).length;
+
+  describe("the Not placed pane that is left", () => {
+    it("names no chain when there are none, and is said once, not again after a later model or update", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(zeroChains({ unplacedList: three() }));
+      const heard: string[] = [];
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:2" }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      expect(announcer().textContent).toContain(NOTHING_LISTED);
+      expect(announcer().textContent).not.toMatch(/showing/);
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:3" }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:3", updating: true }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:4" }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      expect(spokenCount(heard, NOTHING_LISTED)).toBe(1);
+      expect(announcer().textContent).not.toContain(NOTHING_LISTED);
+    });
+
+    it("says a chain is shown only when one is", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(mixedData({ unplacedList: three() }));
+      view.update(mixedData({ unplacedList: none, builtFor: "session:2" }));
+      settle();
+      expect(announcer().textContent).toContain(`${NOTHING_LISTED}, showing a chain`);
+    });
+
+    it("is gone when the rail's Review unplaced lines shows the pane again", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(mixedData({ unplacedList: three() }));
+      // The list goes (the sentence is waiting for the region), and a later session lists items again.
+      view.update(mixedData({ unplacedList: none, builtFor: "session:2" }));
+      view.update(mixedData({ unplacedList: { items: unplacedItems(2), total: 2 }, builtFor: "session:3" }));
+      act(() => openUnplacedList());
+      settle();
+      expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+      expect(announcer().textContent).not.toContain(NOTHING_LISTED);
+      // Leaving the pane by another route does not bring it back.
+      act(() => useEvtxCorrelationStore.getState().selectChain(null));
+      settle();
+      expect(announcer().textContent).not.toContain(NOTHING_LISTED);
+    });
+
+    it("is gone when a later session lists items again before anything is picked", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(mixedData({ unplacedList: three() }));
+      view.update(mixedData({ unplacedList: none, builtFor: "session:2" }));
+      view.update(mixedData({ unplacedList: { items: unplacedItems(2), total: 2 }, builtFor: "session:3" }));
+      settle();
+      expect(document.querySelector("[data-unplaced-option]")).not.toBeNull();
+      expect(announcer().textContent).not.toContain(NOTHING_LISTED);
+    });
+
+    it("does not come back when the items go away again with the pane closed", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(mixedData({ unplacedList: three() }));
+      view.update(mixedData({ unplacedList: none, builtFor: "session:2" }));
+      view.update(mixedData({ unplacedList: { items: unplacedItems(2), total: 2 }, builtFor: "session:3" }));
+      view.update(mixedData({ unplacedList: none, builtFor: "session:4" }));
+      settle();
+      // The pane was not open when the items went the second time, so nothing was lost.
+      expect(announcer().textContent).not.toContain(NOTHING_LISTED);
+    });
+  });
+
+  describe("the chain that was selected", () => {
+    const notice = () => screen.queryByTestId("correlation-notices")?.textContent ?? "";
+    const GONE_VISIBLE = "The chain that was selected is no longer present.";
+
+    it("names no other chain when there are none, and is said once, not again after a later model or update", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone" });
+      const view = show(zeroChains({ unplacedList: none }));
+      const heard: string[] = [];
+      settle();
+      heard.push(announcer().textContent ?? "");
+      expect(announcer().textContent).toContain(CHAIN_GONE);
+      expect(announcer().textContent).not.toMatch(/showing|another/i);
+      expect(notice()).toContain(GONE_VISIBLE);
+      expect(notice()).not.toMatch(/another/i);
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:2" }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:2", updating: true }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:3" }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      expect(spokenCount(heard, CHAIN_GONE)).toBe(1);
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+    });
+
+    it("says another chain is shown when one is, and says it once", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone" });
+      const view = show(mixedData());
+      settle();
+      expect(announcer().textContent).toContain(`${CHAIN_GONE}, showing another`);
+      expect(notice()).toContain(`${GONE_VISIBLE} Another chain is shown.`);
+      view.update(mixedData({ builtFor: "session:2" }));
+      settle();
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      view.update(mixedData({ builtFor: "session:2", updating: true }));
+      settle();
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+    });
+
+    it("is gone when the rail's Review unplaced lines shows the pane", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone" });
+      show(mixedData({ unplacedList: three() }));
+      act(() => openUnplacedList());
+      settle();
+      expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      expect(document.body.textContent).not.toContain(GONE_VISIBLE);
+      // And leaving the pane by another route does not bring it back.
+      act(() => useEvtxCorrelationStore.getState().selectChain(null));
+      settle();
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      expect(document.body.textContent).not.toContain(GONE_VISIBLE);
+    });
+
+    it("is dropped by a pick of a chain or of Not placed, before it was spoken", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone" });
+      const view = show(mixedData({ unplacedList: three() }));
+      expect(notice()).toContain(GONE_VISIBLE);
+      fireEvent.click(rows()[1]!);
+      settle();
+      expect(notice()).not.toContain(GONE_VISIBLE);
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      view.unmount();
+      cleanup();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone", unplacedOpen: false });
+      show(mixedData({ unplacedList: three() }));
+      expect(notice()).toContain(GONE_VISIBLE);
+      fireEvent.click(document.querySelector("[data-unplaced-option]")!);
+      settle();
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      expect(document.body.textContent).not.toContain(GONE_VISIBLE);
+    });
+
+    it("is gone when a later session has the chain again", () => {
+      vi.useFakeTimers();
+      const later = mixedData();
+      const returning = later.model!.chains[1]!.id;
+      useEvtxCorrelationStore.setState({ selectedChainId: returning });
+      const view = show(pairData());
+      expect(notice()).toContain(GONE_VISIBLE);
+      view.update(later);
+      settle();
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      expect(notice()).not.toContain(GONE_VISIBLE);
+    });
   });
 });
