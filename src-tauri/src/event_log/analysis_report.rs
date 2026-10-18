@@ -21,11 +21,15 @@
 
 use std::collections::BTreeSet;
 
+use cmtraceopen_parser::diagnosis::{
+    redacted_display_projection, CoverageGap, CoverageState, DiagnosisFinding, DiagnosisSummary,
+    EvidenceRef, FindingClass, FindingConfidence, FindingSeverity,
+};
 use cmtraceopen_parser::unified_timeline::{TimelineItem, TimelineOrigin, TimelineSeverity};
 use serde::Deserialize;
 
 use self::safe::{Doc, Redactor, Safe, MIN_SUBSTITUTED_MACHINE_CHARS};
-use super::analysis_session::EventLogAnalysisSessionStatus;
+use super::analysis_session::{EventLogAnalysisSessionStatus, TIMELINE_GAP_SOURCE_PREFIX};
 use super::models::{EvtxCoverageGap, EvtxLevel};
 use super::timeline::MAX_TIMELINE_MESSAGE_BYTES;
 
@@ -37,6 +41,13 @@ pub(crate) const REPORT_EVENT_ROW_CAP: usize = 500;
 pub(crate) const REPORT_MESSAGE_CHARS: usize = 240;
 /// Characters of a channel or provider cell, counted after redaction.
 const REPORT_NAME_CHARS: usize = 120;
+/// Characters of a finding's title, and of its summary and check texts, after redaction.
+const REPORT_FINDING_TITLE_CHARS: usize = 160;
+const REPORT_FINDING_TEXT_CHARS: usize = 1_000;
+/// Characters of a coverage gap's detail, after redaction.
+const REPORT_COVERAGE_DETAIL_CHARS: usize = 240;
+/// Evidence references listed under a finding; the rest are counted.
+const REPORT_FINDING_EVIDENCE_LABELS: usize = 3;
 /// Machine tokens listed in the scope block.
 const REPORT_MACHINE_CAP: usize = 10;
 /// Channel names listed in the filter summary.
@@ -261,11 +272,28 @@ pub(crate) struct ReportSnapshot {
     pub span_ms: Option<(i64, i64)>,
     /// Every machine name an origin in the session carries.
     pub machines: BTreeSet<String>,
+    /// What the engine recorded about shortening what it holds.
+    pub engine_notes: EngineNotes,
+}
+
+/// Facts about the timeline's own compaction. The engine records these as timeline coverage gaps
+/// whose reasons carry counts only, and the diagnosis leaves them out, so the report states them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct EngineNotes {
+    /// Some event messages were shortened to stay inside the message budget.
+    pub messages_shortened: bool,
+    /// Some timeline items had oversized list-view fields compacted.
+    pub items_compacted: bool,
+    /// Some rows were reduced in transport before the session read them.
+    pub transport_projected: bool,
 }
 
 pub(crate) struct ReportInput<'a> {
     pub request: &'a EventLogAnalysisReportRequest,
     pub snapshot: &'a ReportSnapshot,
+    /// The session's diagnosis. It may already be projected; the renderer projects it again at its
+    /// own boundary, so a caller cannot hand it an unprojected summary by mistake.
+    pub summary: &'a DiagnosisSummary,
 }
 
 /// Renders the report, or fails: a report over [`MAX_REPORT_BYTES`] is an error, not a shorter file.
@@ -277,9 +305,12 @@ fn render_report_within(input: &ReportInput<'_>, limit: usize) -> Result<String,
     let request = input.request;
     let snapshot = input.snapshot;
     let redactor = Redactor::new(&snapshot.machines);
+    let summary = redacted_display_projection(input.summary.clone());
     let mut doc = Doc::new();
     render_title(&mut doc);
     render_scope(&mut doc, &redactor, request, snapshot);
+    render_coverage(&mut doc, &redactor, snapshot, &summary);
+    render_findings(&mut doc, &redactor, &summary);
     render_top_event_ids(&mut doc, &request.scope);
     render_level_mix(&mut doc, &request.scope);
     render_events(&mut doc, &redactor, snapshot);
@@ -537,6 +568,289 @@ fn render_filters(doc: &mut Doc, redactor: &Redactor, filters: &ReportFilters) {
             None => "none",
         })
         .nl();
+}
+
+fn render_coverage(
+    doc: &mut Doc,
+    redactor: &Redactor,
+    snapshot: &ReportSnapshot,
+    summary: &DiagnosisSummary,
+) {
+    doc.lit("## Coverage and limits").nl().nl();
+    let (timeline_gaps, listed): (Vec<&CoverageGap>, Vec<&CoverageGap>) = summary
+        .coverage_gaps
+        .iter()
+        .partition(|gap| gap.source.starts_with(TIMELINE_GAP_SOURCE_PREFIX));
+    if listed.is_empty() {
+        doc.lit(if timeline_gaps.is_empty() {
+            "- The engine listed no coverage gap. A channel that was not loaded or not selected \
+             is not a gap and does not appear here."
+        } else {
+            "- The engine listed no coverage gap other than the timeline gaps below."
+        })
+        .nl();
+    } else {
+        doc.lit("- Coverage gaps the engine listed (")
+            .count(listed.len() as u64)
+            .lit("):")
+            .nl();
+        for gap in &listed {
+            doc.lit("  - ")
+                .lit(coverage_state_word(gap.state))
+                .lit(": ")
+                .safe(&redactor.text(display_source(&gap.source), REPORT_NAME_CHARS))
+                .lit(": ")
+                .safe(&redactor.text(&gap.detail, REPORT_COVERAGE_DETAIL_CHARS))
+                .nl();
+        }
+    }
+    if !timeline_gaps.is_empty() {
+        doc.lit("- Correlation and timeline coverage gaps: ")
+            .count(timeline_gaps.len() as u64)
+            .lit(" (");
+        let mut counts: Vec<(&'static str, u64)> = Vec::new();
+        for gap in &timeline_gaps {
+            let word = coverage_state_word(gap.state);
+            match counts.iter_mut().find(|(known, _)| *known == word) {
+                Some((_, count)) => *count += 1,
+                None => counts.push((word, 1)),
+            }
+        }
+        counts.sort_unstable();
+        for (index, (word, count)) in counts.iter().enumerate() {
+            if index > 0 {
+                doc.lit(", ");
+            }
+            doc.lit(word).lit(" ").count(*count);
+        }
+        doc.lit(
+            "). Their details name individual events, so they are counted here and not listed.",
+        )
+        .nl();
+    }
+    let sent = summary.coverage_gaps.len() as u64;
+    let counted = summary.overview.coverage_gap_count as u64;
+    if counted != sent {
+        doc.lit("- The engine counted ")
+            .count(counted)
+            .lit(" coverage gaps and sent ")
+            .count(sent)
+            .lit(" of them: its response is bounded.")
+            .nl();
+    }
+    let notes = snapshot.engine_notes;
+    if notes.messages_shortened {
+        doc.lit("- The engine shortened some event messages to stay inside its message budget.")
+            .nl();
+    }
+    if notes.items_compacted {
+        doc.lit(
+            "- The engine compacted oversized list-view fields of some timeline items; the full \
+             records stay in the event grid.",
+        )
+        .nl();
+    }
+    if notes.transport_projected {
+        doc.lit(
+            "- Some rows were reduced before the session read them, so omitted identity or \
+             derived fields may limit correlation.",
+        )
+        .nl();
+    }
+    doc.nl();
+}
+
+fn render_findings(doc: &mut Doc, redactor: &Redactor, summary: &DiagnosisSummary) {
+    doc.lit("## Findings").nl().nl();
+    doc.lit("Engine summary: ")
+        .safe(&redactor.text(&summary.overview.headline, REPORT_FINDING_TEXT_CHARS))
+        .nl()
+        .nl();
+    let mut actionable: Vec<&DiagnosisFinding> = summary
+        .findings
+        .iter()
+        .filter(|finding| !matches!(finding.class, FindingClass::CoverageGap))
+        .collect();
+    actionable.sort_by(|left, right| {
+        right
+            .severity
+            .cmp(&left.severity)
+            .then_with(|| confidence_rank(right.confidence).cmp(&confidence_rank(left.confidence)))
+    });
+    let counted = summary.overview.actionable_finding_count as u64;
+    let listed = actionable.len() as u64;
+    if listed == 0 && counted == 0 {
+        doc.lit("The engine reported no actionable findings in the events it read.");
+        if !summary.coverage_gaps.is_empty() {
+            doc.lit(" Coverage gaps listed above limit what that means.");
+        }
+        doc.nl().nl();
+    } else if listed == counted {
+        doc.lit("The engine reported ")
+            .count(counted)
+            .lit(" actionable findings.")
+            .nl()
+            .nl();
+    } else {
+        doc.lit("The engine counted ")
+            .count(counted)
+            .lit(" actionable findings and sent ")
+            .count(listed)
+            .lit(" of them: its response is bounded.")
+            .nl()
+            .nl();
+    }
+    for finding in actionable {
+        render_finding(doc, redactor, finding);
+    }
+}
+
+fn render_finding(doc: &mut Doc, redactor: &Redactor, finding: &DiagnosisFinding) {
+    doc.lit("### ")
+        .safe(&redactor.text(&finding.title, REPORT_FINDING_TITLE_CHARS))
+        .nl()
+        .nl();
+    doc.lit("- Class: ")
+        .lit(finding_class_word(finding.class))
+        .lit("; severity: ")
+        .lit(finding_severity_word(finding.severity))
+        .lit("; confidence: ")
+        .lit(finding_confidence_word(finding.confidence))
+        .nl();
+    doc.lit("- Summary: ")
+        .safe(&redactor.text(&finding.summary, REPORT_FINDING_TEXT_CHARS))
+        .nl();
+    if !finding.evidence.is_empty() {
+        doc.lit("- Evidence: ");
+        for (index, evidence) in finding
+            .evidence
+            .iter()
+            .take(REPORT_FINDING_EVIDENCE_LABELS)
+            .enumerate()
+        {
+            if index > 0 {
+                doc.lit("; ");
+            }
+            write_evidence_label(doc, redactor, evidence);
+        }
+        if finding.evidence.len() > REPORT_FINDING_EVIDENCE_LABELS {
+            doc.lit("; and ")
+                .count((finding.evidence.len() - REPORT_FINDING_EVIDENCE_LABELS) as u64)
+                .lit(" more");
+        }
+        doc.nl();
+    }
+    if let Some(first) = finding.recommended_checks.first() {
+        doc.lit("- Recommended check: ")
+            .safe(&redactor.text(first, REPORT_FINDING_TEXT_CHARS));
+        if finding.recommended_checks.len() > 1 {
+            doc.lit("; and ")
+                .count((finding.recommended_checks.len() - 1) as u64)
+                .lit(" more checks");
+        }
+        doc.nl();
+    }
+    doc.nl();
+}
+
+/// How an evidence reference names its record, without the source path or the machine.
+fn write_evidence_label(doc: &mut Doc, redactor: &Redactor, evidence: &EvidenceRef) {
+    match evidence {
+        EvidenceRef::Event(event) => {
+            doc.count(u64::from(event.event_id)).lit(" \u{b7} ");
+            let place = event.channel.as_deref().unwrap_or(&event.provider);
+            doc.safe(&redactor.text(place, REPORT_NAME_CHARS))
+                .lit(" \u{b7} ");
+            let numbered = event
+                .record_id_text
+                .as_deref()
+                .filter(|text| text.chars().any(|digit| digit != '0'));
+            if let Some(text) = numbered {
+                doc.lit("record ").safe(&redactor.text(text, 40));
+            } else if let Some(fallback) =
+                event.fallback_identity.as_deref().filter(|f| !f.is_empty())
+            {
+                let head: String = fallback.chars().take(8).collect();
+                doc.lit("ref ").safe(&redactor.text(&head, 16));
+            } else if event.record_id != 0 {
+                doc.lit("record ").count(event.record_id);
+            } else {
+                doc.lit("no record ID");
+            }
+        }
+        EvidenceRef::TextLog(log) => {
+            doc.safe(&redactor.text(display_source(&log.file_path), REPORT_NAME_CHARS))
+                .lit(" \u{b7} line ")
+                .count(u64::from(log.line_number));
+        }
+        _ => {
+            doc.lit("a source-specific evidence reference");
+        }
+    }
+}
+
+/// A source label for printing: a path is reduced to its last segment, so a folder name above the
+/// file never reaches the report.
+fn display_source(source: &str) -> &str {
+    source.rsplit(['\\', '/']).next().unwrap_or(source)
+}
+
+fn confidence_rank(confidence: FindingConfidence) -> u8 {
+    match confidence {
+        FindingConfidence::High => 3,
+        FindingConfidence::Medium => 2,
+        FindingConfidence::Low => 1,
+        _ => 0,
+    }
+}
+
+fn finding_class_word(class: FindingClass) -> &'static str {
+    match class {
+        FindingClass::ConfirmedFailure => "confirmed failure",
+        FindingClass::LikelyContributor => "likely contributor",
+        FindingClass::Symptom => "symptom",
+        FindingClass::Recovered => "recovered",
+        FindingClass::ContradictoryEvidence => "contradictory evidence",
+        FindingClass::CoverageGap => "coverage gap",
+        FindingClass::Unknown => "unknown",
+        _ => "unclassified",
+    }
+}
+
+fn finding_severity_word(severity: FindingSeverity) -> &'static str {
+    match severity {
+        FindingSeverity::Info => "info",
+        FindingSeverity::Warning => "warning",
+        FindingSeverity::Error => "error",
+        FindingSeverity::Critical => "critical",
+        _ => "unclassified",
+    }
+}
+
+fn finding_confidence_word(confidence: FindingConfidence) -> &'static str {
+    match confidence {
+        FindingConfidence::Unknown => "unknown",
+        FindingConfidence::Low => "low",
+        FindingConfidence::Medium => "medium",
+        FindingConfidence::High => "high",
+        _ => "unclassified",
+    }
+}
+
+fn coverage_state_word(state: CoverageState) -> &'static str {
+    match state {
+        CoverageState::Covered => "covered",
+        CoverageState::Unknown => "unknown",
+        CoverageState::Absent => "absent",
+        CoverageState::AccessDenied => "access denied",
+        CoverageState::Capped => "capped",
+        CoverageState::Skipped => "skipped",
+        CoverageState::Unsupported => "unsupported",
+        CoverageState::Malformed => "malformed",
+        CoverageState::ParseFailed => "parse failed",
+        CoverageState::ProviderDescriptionUnavailable => "provider description unavailable",
+        _ => "other",
+    }
 }
 
 fn render_top_event_ids(doc: &mut Doc, scope: &ReportScope) {
@@ -1019,10 +1333,14 @@ mod safe {
 mod tests {
     use super::safe::{cut_chars, escape, flatten, token_len_at, Doc, Redactor, Safe};
     use super::{
-        render_report, render_report_within, EventLogAnalysisReportRequest, ReportInput,
-        ReportSnapshot, MAX_REPORT_BYTES, REPORT_EVENT_ROW_CAP,
+        render_report, render_report_within, EngineNotes, EventLogAnalysisReportRequest,
+        ReportInput, ReportSnapshot, MAX_REPORT_BYTES, REPORT_EVENT_ROW_CAP,
     };
     use crate::event_log::analysis_session::EventLogAnalysisSessionStatus;
+    use cmtraceopen_parser::diagnosis::{
+        CoverageGap, CoverageState, DiagnosisFinding, DiagnosisSummary, EventEvidenceRef,
+        EvidenceRef, FindingClass, FindingConfidence, FindingSeverity, TextLogEvidenceRef,
+    };
     use cmtraceopen_parser::intune::apps::windows::common::redact_field_value;
     use cmtraceopen_parser::unified_timeline::{TimelineItem, TimelineOrigin, TimelineSeverity};
     use serde_json::json;
@@ -1317,11 +1635,25 @@ mod tests {
             unplaced_text_lines: 0,
             span_ms: Some((FIXTURE_NOW_MS, FIXTURE_NOW_MS + 1000)),
             machines,
+            engine_notes: EngineNotes::default(),
         }
     }
 
     fn render(request: &EventLogAnalysisReportRequest, snapshot: &ReportSnapshot) -> String {
-        render_report(&ReportInput { request, snapshot }).expect("the report renders")
+        render_with(request, snapshot, &DiagnosisSummary::default())
+    }
+
+    fn render_with(
+        request: &EventLogAnalysisReportRequest,
+        snapshot: &ReportSnapshot,
+        summary: &DiagnosisSummary,
+    ) -> String {
+        render_report(&ReportInput {
+            request,
+            snapshot,
+            summary,
+        })
+        .expect("the report renders")
     }
 
     fn table_rows(report: &str) -> usize {
@@ -1676,9 +2008,11 @@ mod tests {
     fn a_report_over_its_cap_is_an_error_and_never_a_shorter_file() {
         let request = base_request();
         let snapshot = snapshot_of((0..50).map(plain_item).collect(), 50);
+        let summary = DiagnosisSummary::default();
         let input = ReportInput {
             request: &request,
             snapshot: &snapshot,
+            summary: &summary,
         };
         let full = render_report_within(&input, MAX_REPORT_BYTES).expect("within the cap");
         assert!(render_report_within(&input, full.len()).is_ok());
@@ -1697,5 +2031,368 @@ mod tests {
         );
         assert!(first.starts_with("# Event Logs report\n"));
         assert!(!first.to_lowercase().contains("no sensitive"));
+    }
+
+    // ---- findings and coverage ----------------------------------------------------------------
+
+    fn finding(
+        id: &str,
+        class: FindingClass,
+        severity: FindingSeverity,
+        confidence: FindingConfidence,
+        title: &str,
+    ) -> DiagnosisFinding {
+        DiagnosisFinding {
+            finding_id: id.to_owned(),
+            class,
+            severity,
+            confidence,
+            title: title.to_owned(),
+            summary: format!("{title} summary."),
+            evidence: Vec::new(),
+            coverage_gaps: Vec::new(),
+            recommended_checks: Vec::new(),
+        }
+    }
+
+    fn event_evidence(
+        event_id: u32,
+        channel: Option<&str>,
+        record_id_text: Option<&str>,
+        record_id: u64,
+        fallback: Option<&str>,
+    ) -> EvidenceRef {
+        EvidenceRef::Event(EventEvidenceRef {
+            source: r"C:\Cases\CASE-0001\System.evtx".to_owned(),
+            provider: "Fixture.Provider".to_owned(),
+            event_id,
+            record_id,
+            record_id_text: record_id_text.map(str::to_owned),
+            fallback_identity: fallback.map(str::to_owned),
+            machine: Some("HOST-0004".to_owned()),
+            channel: channel.map(str::to_owned),
+            activity_id: None,
+        })
+    }
+
+    fn gap(source: &str, state: CoverageState, detail: &str) -> CoverageGap {
+        CoverageGap {
+            id: format!("coverage:{source}:{detail}"),
+            source: source.to_owned(),
+            state,
+            detail: detail.to_owned(),
+            evidence: Vec::new(),
+        }
+    }
+
+    fn summary_of(findings: Vec<DiagnosisFinding>, gaps: Vec<CoverageGap>) -> DiagnosisSummary {
+        let mut summary = DiagnosisSummary {
+            findings,
+            coverage_gaps: gaps,
+            ..DiagnosisSummary::default()
+        };
+        summary.overview.actionable_finding_count = summary
+            .findings
+            .iter()
+            .filter(|finding| !matches!(finding.class, FindingClass::CoverageGap))
+            .count();
+        summary.overview.coverage_gap_count = summary.coverage_gaps.len();
+        summary.overview.finding_count = summary.findings.len();
+        summary
+    }
+
+    #[test]
+    fn findings_are_listed_by_severity_then_confidence_with_bounded_evidence() {
+        let mut first = finding(
+            "a",
+            FindingClass::LikelyContributor,
+            FindingSeverity::Warning,
+            FindingConfidence::High,
+            "Warning high",
+        );
+        let mut second = finding(
+            "b",
+            FindingClass::ConfirmedFailure,
+            FindingSeverity::Critical,
+            FindingConfidence::Low,
+            "Critical low",
+        );
+        let third = finding(
+            "c",
+            FindingClass::Symptom,
+            FindingSeverity::Warning,
+            FindingConfidence::Medium,
+            "Warning medium",
+        );
+        let coverage = finding(
+            "d",
+            FindingClass::CoverageGap,
+            FindingSeverity::Critical,
+            FindingConfidence::High,
+            "A coverage gap is never an actionable finding",
+        );
+        first.evidence = vec![
+            event_evidence(
+                76,
+                Some("DeviceManagement/Admin"),
+                Some("88456"),
+                88456,
+                None,
+            ),
+            event_evidence(77, None, Some("000"), 0, Some("deadbeefcafe")),
+            event_evidence(78, Some("System"), None, 12, None),
+            event_evidence(79, Some("System"), None, 0, None),
+            EvidenceRef::TextLog(TextLogEvidenceRef {
+                source: "IntuneManagementExtension.log".to_owned(),
+                file_path: r"C:\Cases\CASE-0001\Logs\IntuneManagementExtension.log".to_owned(),
+                line_number: 42,
+                entry_id: 7,
+            }),
+        ];
+        second.recommended_checks = vec!["Check one.".to_owned(), "Check two.".to_owned()];
+        let summary = summary_of(vec![first, second, third, coverage], Vec::new());
+        let report = render_with(&base_request(), &snapshot_of(Vec::new(), 0), &summary);
+
+        let position = |needle: &str| report.find(needle).unwrap_or(usize::MAX);
+        assert!(position("### Critical low") < position("### Warning high"));
+        assert!(position("### Warning high") < position("### Warning medium"));
+        assert!(!report.contains("never an actionable finding"));
+        assert!(report.contains("The engine reported 3 actionable findings."));
+        assert!(report.contains("- Class: confirmed failure; severity: critical; confidence: low"));
+        assert!(report.contains("- Summary: Critical low summary."));
+        assert!(report.contains(
+            "- Evidence: 76 \u{b7} DeviceManagement/Admin \u{b7} record 88456; \
+             77 \u{b7} Fixture.Provider \u{b7} ref deadbeef; \
+             78 \u{b7} System \u{b7} record 12; and 2 more"
+        ));
+        assert!(report.contains("- Recommended check: Check one.; and 1 more checks"));
+        // Evidence is named by event, channel and record: never by source path or machine.
+        assert!(!report.contains("CASE-0001"));
+        assert!(!report.contains("HOST-0004"));
+    }
+
+    #[test]
+    fn evidence_without_a_record_number_says_so_and_a_text_log_is_named_by_its_file() {
+        let mut one = finding(
+            "a",
+            FindingClass::Symptom,
+            FindingSeverity::Info,
+            FindingConfidence::Unknown,
+            "Evidence labels",
+        );
+        one.evidence = vec![
+            event_evidence(79, Some("System"), None, 0, None),
+            EvidenceRef::TextLog(TextLogEvidenceRef {
+                source: "x".to_owned(),
+                file_path: r"C:\Cases\CASE-0001\Logs\IntuneManagementExtension.log".to_owned(),
+                line_number: 42,
+                entry_id: 7,
+            }),
+        ];
+        let report = render_with(
+            &base_request(),
+            &snapshot_of(Vec::new(), 0),
+            &summary_of(vec![one], Vec::new()),
+        );
+        assert!(report.contains(
+            "- Evidence: 79 \u{b7} System \u{b7} no record ID; \
+             IntuneManagementExtension.log \u{b7} line 42"
+        ));
+        assert!(!report.contains("CASE-0001"));
+    }
+
+    #[test]
+    fn an_unprojected_summary_is_redacted_by_the_renderer_itself() {
+        // Only the diagnosis projection removes an XML element's content and replaces a machine
+        // the evidence names. The renderer's own redaction cannot know either, so a renderer that
+        // trusted its caller to project would print both.
+        let mut one = finding(
+            "a",
+            FindingClass::ConfirmedFailure,
+            FindingSeverity::Error,
+            FindingConfidence::High,
+            "Enrollment failed",
+        );
+        one.summary =
+            "DESKTOP-JANE rejected <Password>xml-secret-0001</Password> during enrollment"
+                .to_owned();
+        one.evidence = vec![EvidenceRef::Event(EventEvidenceRef {
+            source: "s".to_owned(),
+            provider: "p".to_owned(),
+            event_id: 1,
+            record_id: 1,
+            record_id_text: Some("1".to_owned()),
+            fallback_identity: None,
+            machine: Some("DESKTOP-JANE".to_owned()),
+            channel: None,
+            activity_id: None,
+        })];
+        let summary = summary_of(vec![one], Vec::new());
+        let report = render_with(&base_request(), &snapshot_of(Vec::new(), 0), &summary);
+        assert!(!report.contains("xml-secret-0001"), "{report}");
+        assert!(!report.contains("DESKTOP-JANE"), "{report}");
+        assert!(report.contains("### Enrollment failed"));
+    }
+
+    #[test]
+    fn the_engines_headline_is_printed_and_no_issues_is_never_composed() {
+        let mut summary = summary_of(
+            Vec::new(),
+            vec![gap(
+                "Security",
+                CoverageState::AccessDenied,
+                "Access is denied.",
+            )],
+        );
+        summary.overview.outcome = "insufficientEvidence".to_owned();
+        summary.overview.headline =
+            "Evidence is insufficient to determine whether issues are present.".to_owned();
+        let report = render_with(&base_request(), &snapshot_of(Vec::new(), 0), &summary);
+        assert!(report.contains(
+            "Engine summary: Evidence is insufficient to determine whether issues are present."
+        ));
+        assert!(report.contains(
+            "The engine reported no actionable findings in the events it read. Coverage gaps \
+             listed above limit what that means."
+        ));
+        assert!(!report.contains("No issues detected"));
+
+        // With no gap the engine's own words are printed, as the engine's.
+        let report = render(&base_request(), &snapshot_of(Vec::new(), 0));
+        assert!(report.contains("Engine summary: No issues detected."));
+        assert!(
+            report.contains("The engine reported no actionable findings in the events it read.\n")
+        );
+    }
+
+    #[test]
+    fn a_bounded_response_is_stated_with_both_counts() {
+        let mut summary = summary_of(
+            vec![finding(
+                "a",
+                FindingClass::Symptom,
+                FindingSeverity::Info,
+                FindingConfidence::Low,
+                "Only one",
+            )],
+            vec![gap("Security", CoverageState::Capped, "Capped.")],
+        );
+        summary.overview.actionable_finding_count = 5;
+        summary.overview.coverage_gap_count = 9;
+        let report = render_with(&base_request(), &snapshot_of(Vec::new(), 0), &summary);
+        assert!(report.contains(
+            "The engine counted 5 actionable findings and sent 1 of them: its response is bounded."
+        ));
+        assert!(report.contains(
+            "- The engine counted 9 coverage gaps and sent 1 of them: its response is bounded."
+        ));
+    }
+
+    #[test]
+    fn coverage_gaps_are_listed_by_state_and_timeline_gaps_are_counted_and_never_named() {
+        let timeline_source =
+            "timeline:source9:test.evtx|machine9:HOST-0003|channel11:Application|record5";
+        let summary = summary_of(
+            Vec::new(),
+            vec![
+                gap("Security", CoverageState::AccessDenied, "Access is denied."),
+                gap(
+                    r"C:\Cases\ACME-0001\Archive.evtx",
+                    CoverageState::Unsupported,
+                    "The file could not be read.",
+                ),
+                gap(
+                    timeline_source,
+                    CoverageState::Skipped,
+                    "multiple exact identity candidates remain: source9:test.evtx|machine9:HOST-0003",
+                ),
+                gap(
+                    "timeline:correlation",
+                    CoverageState::Capped,
+                    "correlation edge output budget reached",
+                ),
+                gap(
+                    "timeline:timeline-correlation-projection",
+                    CoverageState::Capped,
+                    "correlation input limit reached",
+                ),
+            ],
+        );
+        let report = render_with(&base_request(), &snapshot_of(Vec::new(), 0), &summary);
+        assert!(report.contains("- Coverage gaps the engine listed (2):"));
+        assert!(report.contains("  - access denied: Security: Access is denied."));
+        assert!(report.contains("  - unsupported: Archive.evtx: The file could not be read."));
+        assert!(report.contains(
+            "- Correlation and timeline coverage gaps: 3 (capped 2, skipped 1). Their details \
+             name individual events, so they are counted here and not listed."
+        ));
+        for leak in [
+            "HOST-0003",
+            "ACME-0001",
+            "test.evtx",
+            "record5",
+            "identity candidates",
+        ] {
+            assert!(!report.contains(leak), "{leak} leaked:\n{report}");
+        }
+    }
+
+    #[test]
+    fn what_the_engine_shortened_is_stated_and_a_clean_run_states_nothing_it_did_not_see() {
+        let mut snapshot = snapshot_of(Vec::new(), 0);
+        let report = render(&base_request(), &snapshot);
+        assert!(!report.contains("shortened some event messages"));
+        assert!(!report.contains("compacted oversized"));
+        assert!(!report.contains("reduced before the session read them"));
+        assert!(report.contains(
+            "- The engine listed no coverage gap. A channel that was not loaded or not selected \
+             is not a gap and does not appear here."
+        ));
+
+        snapshot.engine_notes = EngineNotes {
+            messages_shortened: true,
+            items_compacted: true,
+            transport_projected: true,
+        };
+        let report = render(&base_request(), &snapshot);
+        assert!(report.contains("shortened some event messages to stay inside its message budget"));
+        assert!(report.contains("compacted oversized list-view fields of some timeline items"));
+        assert!(report.contains("reduced before the session read them"));
+    }
+
+    #[test]
+    fn finding_text_is_redacted_cut_and_single_line() {
+        let mut one = finding(
+            "a",
+            FindingClass::Symptom,
+            FindingSeverity::Info,
+            FindingConfidence::Low,
+            "T",
+        );
+        one.title = format!(
+            "Title\nwith | pipe and user_0001@example.invalid {}",
+            "t".repeat(400)
+        );
+        one.summary = format!("{}\r\nsecond line", "s".repeat(2000));
+        let summary = summary_of(vec![one], Vec::new());
+        let report = render_with(&base_request(), &snapshot_of(Vec::new(), 0), &summary);
+        let heading = report
+            .lines()
+            .find(|line| line.starts_with("### "))
+            .unwrap();
+        assert!(heading.contains(r"with \| pipe"), "{heading}");
+        assert!(heading.contains("[upn:"));
+        assert!(!heading.contains("user_0001"));
+        assert!(heading.ends_with("..."));
+        let summary_line = report
+            .lines()
+            .find(|line| line.starts_with("- Summary: "))
+            .unwrap();
+        assert!(
+            summary_line.chars().count() < 1_020,
+            "{}",
+            summary_line.len()
+        );
+        assert!(!summary_line.contains("second line"));
     }
 }

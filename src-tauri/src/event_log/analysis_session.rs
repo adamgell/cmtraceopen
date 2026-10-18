@@ -48,7 +48,11 @@ const MAX_DIAGNOSIS_NESTED_ROWS: usize = 4;
 const MAX_ANALYSIS_APPEND_ROWS: usize = 1_000;
 const MAX_ANALYSIS_APPEND_BYTES: usize = 8 * 1024 * 1024;
 const DIAGNOSIS_INPUT_PROJECTION_SOURCE: &str = "diagnosis-input-projection";
-const TIMELINE_TRANSPORT_PROJECTION_SOURCE: &str = "timeline-transport-projection";
+pub(crate) const TIMELINE_TRANSPORT_PROJECTION_SOURCE: &str = "timeline-transport-projection";
+/// Prefixes the `source` of every diagnosis coverage finding that comes from a timeline gap. The
+/// rest of the source is the gap's own: an origin id (which names a machine and a file) or one of
+/// the engine's global gap sources. The Markdown report counts these and never prints them.
+pub(crate) const TIMELINE_GAP_SOURCE_PREFIX: &str = "timeline:";
 const MAX_ANALYSIS_SESSIONS: usize = 16;
 const ANALYSIS_SESSION_IDLE_TTL: Duration = Duration::from_secs(60 * 60);
 
@@ -774,7 +778,7 @@ impl DiagnosisSnapshot {
         findings.extend(self.diagnosis_input_findings);
         findings.extend(self.timeline_coverage_gaps.iter().map(|gap| {
             cmtraceopen_parser::diagnosis::finding_for_coverage(
-                format!("timeline:{}", gap.source),
+                format!("{TIMELINE_GAP_SOURCE_PREFIX}{}", gap.source),
                 timeline_coverage_state(&gap.reason),
                 gap.reason.clone(),
             )
