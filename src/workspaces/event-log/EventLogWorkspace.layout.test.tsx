@@ -172,9 +172,39 @@ describe("EventLogWorkspace three-column shell", () => {
     expect(region("channels")).not.toBeVisible();
     expect(region("rail")).toHaveStyle({ width: "400px" });
     expect(region("dock")).toHaveStyle({ height: "250px" });
-    // The dock has no content yet, so it stays hidden whatever the envelope says.
+    // The dock is available, so the envelope's choice shows it, with the dock in it.
     expect(region("rail")).toBeVisible();
+    expect(region("dock")).toBeVisible();
+    expect(await screen.findByRole("region", { name: "Correlation dock" })).toBeInTheDocument();
+  });
+
+  it("opens the dock from its toggle, and Close hides it and gives focus back to the toggle", async () => {
+    render(<EventLogWorkspace />);
+    const toggle = screen.getByRole("button", { name: "Correlation dock" });
     expect(region("dock")).not.toBeVisible();
+    expect(screen.queryByRole("region", { name: "Correlation dock" })).toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(region("dock")).toBeVisible();
+    const dock = await screen.findByRole("region", { name: "Correlation dock" });
+    expect(region("dock")).toContainElement(dock);
+    fireEvent.click(screen.getByRole("button", { name: "Close correlation dock" }));
+    expect(region("dock")).not.toBeVisible();
+    expect(screen.queryByRole("region", { name: "Correlation dock" })).toBeNull();
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(toggle).toHaveFocus();
+  });
+
+  it("shows a dock that was collapsed expanded when its toggle opens it again", async () => {
+    render(<EventLogWorkspace />);
+    const toggle = screen.getByRole("button", { name: "Correlation dock" });
+    fireEvent.click(toggle);
+    fireEvent.click(await screen.findByRole("button", { name: "Collapse correlation" }));
+    expect(region("dock")!.style.height).toBe("auto");
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    expect(await screen.findByRole("button", { name: "Collapse correlation" })).toBeInTheDocument();
+    expect(region("dock")).toHaveStyle({ height: "210px" });
   });
 
   it("links the layout tabs and the tabpanel in both directions", () => {

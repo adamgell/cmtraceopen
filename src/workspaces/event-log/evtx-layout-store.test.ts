@@ -4,6 +4,7 @@ import {
   DEFAULT_DOCK_WINDOW_MS,
   DEFAULT_RAIL_WIDTH,
   EVTX_DOCK_WINDOW_OPTIONS_MS,
+  EVTX_PANELS_AVAILABLE,
   EVTX_LAYOUT_STORAGE_KEY,
   EVTX_LAYOUT_VERSION,
   MAX_RAIL_WIDTH,
@@ -58,17 +59,40 @@ describe("evtx-layout-store", () => {
     expect(state.panels).toEqual({ channels: false, insights: true, dock: false });
   });
 
-  it("refuses to show a panel that has no content yet", () => {
+  it("shows and hides the dock like any panel, and it starts off", () => {
+    const store = useEvtxLayoutStore.getState();
+    expect(EVTX_PANELS_AVAILABLE.dock).toBe(true);
+    store.setPanel("dock", true);
+    expect(useEvtxLayoutStore.getState().panels.dock).toBe(true);
+    store.togglePanel("dock");
+    expect(useEvtxLayoutStore.getState().panels.dock).toBe(false);
+    store.togglePanel("dock");
+    expect(useEvtxLayoutStore.getState().panels).toEqual({ channels: true, insights: true, dock: true });
+    store.setPanel("dock", false);
+    expect(useEvtxLayoutStore.getState().panels.dock).toBe(false);
+  });
+
+  it("shows a dock that was collapsed expanded again, by either way of showing it", () => {
     const store = useEvtxLayoutStore.getState();
     store.setPanel("dock", true);
+    store.setDockCollapsed(true);
+    store.setPanel("dock", false);
+    expect(useEvtxLayoutStore.getState().dockCollapsed).toBe(true);
+    store.setPanel("dock", true);
+    expect(useEvtxLayoutStore.getState().dockCollapsed).toBe(false);
+    store.setDockCollapsed(true);
     store.togglePanel("dock");
+    store.togglePanel("dock");
+    expect(useEvtxLayoutStore.getState().panels.dock).toBe(true);
+    expect(useEvtxLayoutStore.getState().dockCollapsed).toBe(false);
+    // Another panel's toggle leaves the dock's collapse alone.
+    store.setDockCollapsed(true);
     store.togglePanel("insights");
     store.togglePanel("insights");
-    expect(useEvtxLayoutStore.getState().panels).toEqual({
-      channels: true,
-      insights: true,
-      dock: false,
-    });
+    store.setPanel("channels", false);
+    store.setPanel("channels", true);
+    store.setPanel("insights", true);
+    expect(useEvtxLayoutStore.getState().dockCollapsed).toBe(true);
   });
 
   it("ignores an unknown view or tab", () => {
@@ -128,8 +152,8 @@ describe("evtx-layout-store", () => {
     });
     const state = useEvtxLayoutStore.getState();
     expect(state.activeView).toBe("charts");
-    // The dock has no content yet, so a persisted true is forced back to false.
-    expect(state.panels).toEqual({ channels: false, insights: true, dock: false });
+    // The dock is available, so a persisted true is the user's own choice.
+    expect(state.panels).toEqual({ channels: false, insights: true, dock: true });
     expect(state.railTab).toBe("chains");
     expect(state.railWidth).toBe(400);
     expect(state.dockHeight).toBe(250);
@@ -273,9 +297,9 @@ describe("evtx-layout-store", () => {
       expect(useEvtxLayoutStore.getState().activeView).toBe("grouped");
     });
 
-    it("keeps the dock unavailable, whatever the envelope says", async () => {
+    it("keeps a version 2 dock choice, and still resets a version 1 envelope to the dock off", async () => {
       await rehydrateFrom(stored(true, true), 2);
-      expect(useEvtxLayoutStore.getState().panels.dock).toBe(false);
+      expect(useEvtxLayoutStore.getState().panels.dock).toBe(true);
       await rehydrateFrom(stored(true, true), 1);
       expect(useEvtxLayoutStore.getState().panels.dock).toBe(false);
     });

@@ -65,17 +65,22 @@ export const MIN_DOCK_HEIGHT = 160;
 export const MAX_DOCK_HEIGHT_RATIO = 0.5;
 
 /**
- * Which panels have content to show. The correlation dock (Phase 11) is not built yet, so its
- * toggle is disabled and a persisted `true` is forced back to `false` on rehydration. The phase
- * that enables a panel must flip it here AND in `DEFAULT_PANELS`, and must bump the persist
- * `version`: an envelope written under an older version is discarded, so the stored layout resets
- * to the defaults and a user who holds `false` still sees the new panel. There is deliberately no
- * `migrate`: no released build wrote the older versions. Phase 4 did this for Insights (version 2).
+ * Which panels have content to show. A panel that has none (a phase that has not built it yet) has
+ * its toggle disabled, and a persisted `true` is forced back to `false` on rehydration. The phase
+ * that enables a panel that defaults ON must flip it here AND in `DEFAULT_PANELS`, and must bump the
+ * persist `version`: an envelope written under an older version is discarded, so the stored layout
+ * resets to the defaults and a user who holds `false` still sees the new panel. There is
+ * deliberately no `migrate`: no released build wrote the older versions. Phase 4 did this for
+ * Insights (version 2).
+ *
+ * The correlation dock (Phase 11) is available but defaults OFF (R4: it would leave the Table grid
+ * about 120 px under the 320 px timeline strip), so its default is the `false` every stored layout
+ * already holds, and shipping it needed no version bump.
  */
 export const EVTX_PANELS_AVAILABLE: EvtxPanels = {
   channels: true,
   insights: true,
-  dock: false,
+  dock: true,
 };
 
 const DEFAULT_PANELS: EvtxPanels = { channels: true, insights: true, dock: false };
@@ -171,11 +176,18 @@ export const useEvtxLayoutStore = create<EvtxLayoutState>()(
       },
       setPanel: (panel, visible) => {
         if (!EVTX_PANELS_AVAILABLE[panel]) return;
-        set((state) => ({ panels: { ...state.panels, [panel]: visible } }));
+        // A dock that is shown again is shown expanded: its toggle asks for the dock, not for a header.
+        set((state) => ({
+          panels: { ...state.panels, [panel]: visible },
+          ...(panel === "dock" && visible ? { dockCollapsed: false } : {}),
+        }));
       },
       togglePanel: (panel) => {
         if (!EVTX_PANELS_AVAILABLE[panel]) return;
-        set((state) => ({ panels: { ...state.panels, [panel]: !state.panels[panel] } }));
+        set((state) => ({
+          panels: { ...state.panels, [panel]: !state.panels[panel] },
+          ...(panel === "dock" && !state.panels.dock ? { dockCollapsed: false } : {}),
+        }));
       },
       setRailTab: (tab) => {
         if (isOneOf(EVTX_RAIL_TAB_IDS, tab)) set({ railTab: tab });

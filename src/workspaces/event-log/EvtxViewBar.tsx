@@ -66,6 +66,7 @@ import {
   EVTX_VIEW_IDS,
   EVTX_VIEW_LABELS,
   EVTX_VIEW_PANEL_ID,
+  evtxPanelToggleId,
   evtxViewTabId,
   useEvtxLayoutStore,
   type EvtxPanelId,
@@ -90,11 +91,7 @@ const PANEL_TOGGLES: ReadonlyArray<{
 }> = [
   { id: "channels", label: "Channels", unavailableReason: "No event log channels loaded" },
   { id: "insights", label: "Insights", unavailableReason: "" },
-  {
-    id: "dock",
-    label: "Correlation dock",
-    unavailableReason: "Available when the correlation dock ships",
-  },
+  { id: "dock", label: "Correlation dock", unavailableReason: "" },
 ];
 
 const useStyles = makeStyles({
@@ -417,6 +414,8 @@ export function EvtxViewBar({ nowEpoch }: EvtxViewBarProps) {
           const checked = available && panels[id];
           const toggle = (
             <ToggleButton
+              // So Close on the dock can return focus to the toggle that opened it.
+              id={evtxPanelToggleId(id)}
               shape="rounded"
               size="small"
               checked={checked}
