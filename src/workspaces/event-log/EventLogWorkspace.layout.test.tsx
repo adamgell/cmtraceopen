@@ -35,6 +35,8 @@ vi.mock("./UnifiedTimelineView", () => ({
 }));
 
 import { useLogStore } from "../../stores/log-store";
+import { useUiStore } from "../../stores/ui-store";
+import { getLogListMetrics } from "../../lib/log-accessibility";
 import { EventLogWorkspace, EvtxViewHost, type EvtxViewEntry } from "./EventLogWorkspace";
 import { EvtxViewBar } from "./EvtxViewBar";
 import {
@@ -44,6 +46,7 @@ import {
   sanitizeLayout,
   useEvtxLayoutStore,
 } from "./evtx-layout-store";
+import { dockMinHeightPx } from "./evtx-main-column-layout";
 import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
 import type { EvtxRecord } from "./types";
@@ -70,7 +73,8 @@ const region = (name: string) =>
 describe("EventLogWorkspace three-column shell", () => {
   beforeEach(() => {
     localStorage.clear();
-    useEvtxLayoutStore.setState(sanitizeLayout(undefined));
+    // Whether the dock is collapsed is not part of the stored layout, so reset it with the rest.
+    useEvtxLayoutStore.setState({ ...sanitizeLayout(undefined), dockCollapsed: false });
     useEvtxStore.getState().reset();
     useEvtxStore.setState({
       records: [RECORD],
@@ -138,6 +142,69 @@ describe("EventLogWorkspace three-column shell", () => {
     act(() => useEvtxLayoutStore.getState().setDockHeight(5000));
     expect(region("dock")).toBe(dock);
     expect(dock).toHaveStyle({ height: "450px" });
+    // Only the rendered height clamps: what the user chose is kept as it was.
+    expect(useEvtxLayoutStore.getState().dockHeight).toBe(5000);
+  });
+
+  // jsdom does no layout, so these are style guards: the numbers the browser spec measures
+  // (e2e/screenshots/event-logs.spec.ts, "event-logs correlation dock") come from the styles below.
+  describe("the floors of the main column", () => {
+    const rowPx = () => getLogListMetrics(useUiStore.getState().logListFontSize).rowHeight + 2;
+    const resizeTo = (height: number) => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+    };
+    const tableView = () => document.querySelector<HTMLElement>('[data-evtx-view="table"]')!;
+    const strip = () => tableView().children[0] as HTMLElement;
+    const gridBox = () => tableView().children[1] as HTMLElement;
+    const panel = () => document.getElementById(EVTX_VIEW_PANEL_ID) as HTMLElement;
+
+    it("gives the Table view its strip and five grid rows as a floor, so a short window scrolls it", () => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      render(<EventLogWorkspace />);
+      expect(strip()).toHaveStyle({ height: "320px", flexShrink: "0" });
+      expect(gridBox()).toHaveStyle({ minHeight: `${5 * rowPx()}px` });
+      expect(panel()).toHaveStyle({ minHeight: `${320 + 5 * rowPx()}px` });
+    });
+
+    it("draws the strip at half the window when that is under 320 px, and never under 240 px", () => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      render(<EventLogWorkspace />);
+      resizeTo(560);
+      expect(strip()).toHaveStyle({ height: "280px" });
+      expect(panel()).toHaveStyle({ minHeight: `${280 + 5 * rowPx()}px` });
+      resizeTo(400);
+      expect(strip()).toHaveStyle({ height: "240px" });
+      expect(panel()).toHaveStyle({ minHeight: `${240 + 5 * rowPx()}px` });
+    });
+
+    it("holds no floor for a view that is not the Table", () => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      render(<EventLogWorkspace />);
+      act(() => useEvtxLayoutStore.getState().setActiveView("charts"));
+      expect(panel()).toHaveStyle({ minHeight: "0px" });
+    });
+
+    it("scrolls the main column instead of clipping it", () => {
+      render(<EventLogWorkspace />);
+      expect(region("main")).toHaveStyle({ overflowX: "hidden", overflowY: "auto" });
+    });
+
+    it("lets an expanded dock give way, down to its header and one lane, and keeps a collapsed one whole", async () => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      render(<EventLogWorkspace />);
+      const dock = region("dock")!;
+      const minimum = dockMinHeightPx(useUiStore.getState().logListFontSize);
+      expect(dock).toHaveStyle({ height: "210px", flexShrink: "1", minHeight: `${minimum}px` });
+      // The minimum is under the least the user can drag it to, so the dock has room to give.
+      expect(minimum).toBeLessThan(useEvtxLayoutStore.getState().dockHeight);
+      act(() => useEvtxLayoutStore.getState().setPanel("dock", true));
+      fireEvent.click(await screen.findByRole("button", { name: "Collapse correlation" }));
+      expect(dock).toHaveStyle({ flexShrink: "0" });
+      expect(dock.style.minHeight).toBe("");
+    });
   });
 
   it("resizes the hidden rail from its separator, clamped to 280 through 480", () => {
