@@ -78,8 +78,6 @@ export function EvtxUnplacedList({ list, updating, sizes, onReply, onFail, onEsc
 
   if (!view.present) return null;
 
-  // The shared chip's size: max(10, f - 4), the spec's 10 px floor on text.
-  const chipSize = Math.max(10, sizes.tick);
   const open = (row: UnplacedRow) => {
     if (row.file === null || row.line === null) return;
     // Judged again from the store as it is NOW, never from the render's copy or a derived list.
@@ -171,7 +169,7 @@ export function EvtxUnplacedList({ list, updating, sizes, onReply, onFail, onEsc
                 color: tokens.colorNeutralForeground1,
               }}
             >
-              <EvtxKindChip chip={row.chip} fontSize={chipSize} />
+              <EvtxKindChip chip={row.chip} />
               <span style={{ fontFamily: tokens.fontFamilyNumeric }}>{row.label}</span>
               <span style={{ color: cardSecondary }}>{row.context}</span>
               <span style={{ fontFamily: tokens.fontFamilyNumeric, color: tokens.colorNeutralForeground2 }}>

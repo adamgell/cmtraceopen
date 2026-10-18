@@ -11,18 +11,23 @@
  */
 import { tokens } from "@fluentui/react-components";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
+import { useUiStore } from "../../stores/ui-store";
+import { correlationSizes } from "./evtx-correlation-sizes";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 
 interface EvtxKindChipProps {
   chip: "EVT" | "LOG";
-  /** Pixels; the caller derives it from the log list font size (spec: mono f - 4). */
-  fontSize: number;
 }
 
 const NAMES = { EVT: "Windows event", LOG: "Text log line" } as const;
 
-export function EvtxKindChip({ chip, fontSize }: EvtxKindChipProps) {
+/**
+ * The chip owns its size: the spec's mono f - 4, with the 10 px floor it puts on text. A caller
+ * cannot pass one, so no surface can draw the chip a different size from the others.
+ */
+export function EvtxKindChip({ chip }: EvtxKindChipProps) {
   const visuals = useEvtxVisualTokens();
+  const fontSize = Math.max(10, correlationSizes(useUiStore((s) => s.logListFontSize)).tick);
   const colors =
     chip === "EVT"
       ? { backgroundColor: visuals.selection.background, color: visuals.selection.foreground }

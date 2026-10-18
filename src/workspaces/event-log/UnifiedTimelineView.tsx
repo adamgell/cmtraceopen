@@ -953,7 +953,7 @@ export function UnifiedTimelineView({
                   }}
                 >
                   <span style={{ width: "40px", flexShrink: 0, display: "flex", justifyContent: "center" }}>
-                    <EvtxKindChip chip={fromEvent ? "EVT" : "LOG"} fontSize={Math.max(10, smallFontSize)} />
+                    <EvtxKindChip chip={fromEvent ? "EVT" : "LOG"} />
                   </span>
 
                   <span

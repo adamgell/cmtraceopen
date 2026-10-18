@@ -4,7 +4,7 @@
  * 4.5:1 on in solarized-dark, and which is the defect of the older inline chip).
  */
 import { tokens } from "@fluentui/react-components";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -12,17 +12,29 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { contrastRatio } from "../../lib/color-contrast";
-import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
+import {
+  LOG_MONOSPACE_FONT_FAMILY,
+  MAX_LOG_LIST_FONT_SIZE,
+  MIN_LOG_LIST_FONT_SIZE,
+} from "../../lib/log-accessibility";
 import { getAllThemes, type ThemeId } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import { EvtxKindChip } from "./EvtxKindChip";
 import { resolveToken } from "./evtx-visual-tokens";
 
+const { themeId: INITIAL_THEME_ID, logListFontSize: INITIAL_FONT_SIZE } = useUiStore.getState();
+
 afterEach(() => {
   cleanup();
+  useUiStore.setState({ themeId: INITIAL_THEME_ID, logListFontSize: INITIAL_FONT_SIZE });
 });
 
 const themes = getAllThemes();
+
+/** The chip's own source, to see that it takes no size. */
+const chipSource = Object.entries(
+  import.meta.glob("./EvtxKindChip.tsx", { query: "?raw", import: "default", eager: true }) as Record<string, string>,
+)[0]![1];
 
 /** Every component source of the workspace, to see which of them draws a chip. */
 const componentSources = import.meta.glob("./*.tsx", { query: "?raw", import: "default", eager: true }) as Record<
@@ -33,7 +45,7 @@ const componentSources = import.meta.glob("./*.tsx", { query: "?raw", import: "d
 /** The colors a chip was drawn with, resolved to hex in `themeId`. */
 function drawn(chip: "EVT" | "LOG", themeId: string) {
   useUiStore.setState({ themeId: themeId as ThemeId });
-  const view = render(<EvtxKindChip chip={chip} fontSize={11} />);
+  const view = render(<EvtxKindChip chip={chip} />);
   const element = view.container.querySelector("[data-chip]") as HTMLElement;
   const theme = themes.find((candidate) => candidate.id === themeId)!;
   const result = {
@@ -49,8 +61,8 @@ describe("EvtxKindChip", () => {
   it("shows EVT for a Windows event and LOG for a text-log line, and names what each is", () => {
     render(
       <>
-        <EvtxKindChip chip="EVT" fontSize={11} />
-        <EvtxKindChip chip="LOG" fontSize={11} />
+        <EvtxKindChip chip="EVT" />
+        <EvtxKindChip chip="LOG" />
       </>,
     );
     expect(screen.getByRole("img", { name: "Windows event" })).toHaveTextContent("EVT");
@@ -70,15 +82,56 @@ describe("EvtxKindChip", () => {
     expect(log.style.color).toBe(tokens.colorNeutralForeground2);
   });
 
-  it("takes its size from the caller, in the mono face, bold, with the spec's padding", () => {
-    const view = render(<EvtxKindChip chip="LOG" fontSize={13} />);
+  it("is drawn in the mono face, bold, with the spec's padding", () => {
+    const view = render(<EvtxKindChip chip="LOG" />);
     const element = view.container.querySelector("[data-chip]") as HTMLElement;
-    expect(element.style.fontSize).toBe("13px");
     expect(element.style.fontFamily).toBe(LOG_MONOSPACE_FONT_FAMILY);
     expect(element.style.fontWeight).toBe("700");
     expect(element.style.padding).toBe("1px 6px");
     expect(element.style.borderRadius).toBe("4px");
     expect(element.style.whiteSpace).toBe("nowrap");
+  });
+
+  describe("owns its size: max(10, f - 4) of the log list font size", () => {
+    const sizeAt = (chip: "EVT" | "LOG", fontSize: number) => {
+      useUiStore.setState({ logListFontSize: fontSize });
+      const view = render(<EvtxKindChip chip={chip} />);
+      const size = (view.container.querySelector("[data-chip]") as HTMLElement).style.fontSize;
+      view.unmount();
+      return size;
+    };
+
+    it.each(["EVT", "LOG"] as const)("%s follows the store at every font size, and never goes under 10 px", (chip) => {
+      const sizes: string[] = [];
+      for (let f = MIN_LOG_LIST_FONT_SIZE; f <= MAX_LOG_LIST_FONT_SIZE; f += 1) {
+        sizes.push(sizeAt(chip, f));
+        expect(sizes[sizes.length - 1], `at ${f}`).toBe(`${Math.max(10, f - 4)}px`);
+      }
+      // The 10 px floor is real at the small end: f - 4 alone is 7 px at 11, and the tick's own floor 9 px.
+      expect(sizes[0]).toBe("10px");
+      expect(sizes[sizes.length - 1]).toBe("16px");
+    });
+
+    it("follows the store while it is mounted", () => {
+      useUiStore.setState({ logListFontSize: MIN_LOG_LIST_FONT_SIZE });
+      const view = render(<EvtxKindChip chip="EVT" />);
+      const chip = () => view.container.querySelector("[data-chip]") as HTMLElement;
+      expect(chip().style.fontSize).toBe("10px");
+      act(() => useUiStore.setState({ logListFontSize: MAX_LOG_LIST_FONT_SIZE }));
+      expect(chip().style.fontSize).toBe("16px");
+    });
+
+    it("takes no size from a caller: a size passed anyway is ignored", () => {
+      useUiStore.setState({ logListFontSize: 14 });
+      const extra = { fontSize: 30, style: { fontSize: "30px" } } as Record<string, unknown>;
+      const view = render(<EvtxKindChip {...extra} chip="LOG" />);
+      expect((view.container.querySelector("[data-chip]") as HTMLElement).style.fontSize).toBe("10px");
+    });
+
+    it("has no size prop to pass: its props are the kind alone", () => {
+      const body = /interface EvtxKindChipProps \{([^}]*)\}/.exec(chipSource)?.[1] ?? "";
+      expect(body.match(/^\s*\w+\??:/gm)?.map((line) => line.trim())).toEqual(["chip:"]);
+    });
   });
 
   it("is the only component of the workspace that draws a kind chip", () => {

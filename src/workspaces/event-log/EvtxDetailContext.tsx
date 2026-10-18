@@ -64,14 +64,13 @@ export function EvtxDetailContext({
   const railText = useRailTextColors();
   const visuals = useEvtxVisualTokens();
   const logListFontSize = useUiStore((s) => s.logListFontSize);
-  // The correlation surfaces' sizes (f - 2, max(10, f - 3), max(9, f - 4)), with the 10 px floor the
-  // spec puts on text: the message is f - 2 and the chip f - 4, and neither may go under it.
+  // The correlation surfaces' sizes (f - 2, max(10, f - 3)), with the 10 px floor the spec puts on
+  // text. The kind chip sizes itself.
   const sizes = useMemo(() => {
     const correlation = correlationSizes(logListFontSize);
     return {
       message: Math.max(10, correlation.lane),
       label: correlation.label,
-      chip: Math.max(10, correlation.tick),
     };
   }, [logListFontSize]);
 
@@ -131,7 +130,7 @@ export function EvtxDetailContext({
         >
           {formatClock(row.timestampMs, timeZoneMode, true)}
         </span>
-        <EvtxKindChip chip={row.chip} fontSize={sizes.chip} />
+        <EvtxKindChip chip={row.chip} />
         <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "2px" }}>
           <span
             data-evtx-ctx="message"
