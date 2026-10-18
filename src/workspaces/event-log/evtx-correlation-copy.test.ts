@@ -17,16 +17,25 @@ import {
   NOT_IN_TIMELINE_NOTE,
   NOT_READ_NOTE,
   ANALYSIS_BUILDING_TEXT,
+  NO_ANALYSIS_TEXT,
+  NO_POSITION_TEXT,
   NO_SELECTION_TEXT,
   NO_SESSION_TEXT,
+  READING_EDGES_TEXT,
   READING_WINDOW_TEXT,
+  SAME_TIME_NOTE,
   SCOPE_NOT_KNOWN_NOTICE,
+  SEQUENCE_ORDER_NOTE,
   STRENGTH_LABELS,
   UNREAD_SOURCES_NOTE,
+  WAIT_FOR_ENTRIES_REASON,
   UNTIMED_TEXT,
   UPDATING_CORRELATION_TEXT,
   ambiguousEventNote,
   chainCopyText,
+  chainRowName,
+  correlationFailureText,
+  correlationNotices,
   coverageGapNotice,
   dockOmissionNotice,
   dockSubtitle,
@@ -35,6 +44,7 @@ import {
   emptyWindowText,
   keyKindLabel,
   nearbyReason,
+  noChainsFoundText,
   openDisabledText,
   moreText,
   notReadNote,
@@ -47,6 +57,7 @@ import {
   sharedOriginNote,
   scopeDisclosure,
   sourcesText,
+  timelineReadingText,
   unmatchableNote,
   unresolvedNotice,
   whyHeading,
@@ -552,15 +563,24 @@ describe("no string claims an entry is unplaced without proof", () => {
     "NOT_IN_TIMELINE_NOTE",
     "NOT_READ_NOTE",
     "ANALYSIS_BUILDING_TEXT",
+    "NO_ANALYSIS_TEXT",
+    "NO_POSITION_TEXT",
     "NO_SELECTION_TEXT",
     "NO_SESSION_TEXT",
+    "READING_EDGES_TEXT",
     "READING_WINDOW_TEXT",
+    "SAME_TIME_NOTE",
     "SCOPE_NOT_KNOWN_NOTICE",
+    "SEQUENCE_ORDER_NOTE",
     "STRENGTH_LABELS",
     "UNREAD_SOURCES_NOTE",
     "UPDATING_CORRELATION_TEXT",
+    "WAIT_FOR_ENTRIES_REASON",
     "ambiguousEventNote",
     "chainCopyText",
+    "chainRowName",
+    "correlationFailureText",
+    "correlationNotices",
     "coverageGapNotice",
     "dockOmissionNotice",
     "dockSubtitle",
@@ -569,6 +589,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "emptyWindowText",
     "keyKindLabel",
     "nearbyReason",
+    "noChainsFoundText",
     "openDisabledText",
     "moreText",
     "notReadNote",
@@ -581,6 +602,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "scopeDisclosure",
     "sharedOriginNote",
     "sourcesText",
+    "timelineReadingText",
     "unmatchableNote",
     "unresolvedNotice",
     "whyHeading",
@@ -716,6 +738,46 @@ describe("no string claims an entry is unplaced without proof", () => {
     ];
   }
 
+  /** Every string the Correlation view and the Chains tab share (#841), over the states that change their words. */
+  function sharedStrings(chain: CorrelationChain): string[] {
+    const gaps = classifyCoverageGaps([], 0);
+    return [
+      NO_ANALYSIS_TEXT,
+      READING_EDGES_TEXT,
+      NO_POSITION_TEXT,
+      WAIT_FOR_ENTRIES_REASON,
+      SEQUENCE_ORDER_NOTE,
+      SAME_TIME_NOTE,
+      correlationFailureText("edges down", "built"),
+      correlationFailureText("edges down", "updated"),
+      timelineReadingText(null),
+      timelineReadingText({ scannedItems: 1_200, totalItems: 5_000 }),
+      noChainsFoundText(true),
+      noChainsFoundText(false),
+      chainRowName(chain),
+      ...correlationNotices({
+        edgeInput: { edgeInputComplete: false, unloadedEdgeCount: 4 },
+        edgeError: "edges down",
+        gaps: { originIds: new Set(), global: true, previewCut: true },
+        scan: { state: "incomplete", stoppedBy: "budget", error: null },
+        selectionLoss: null,
+        scope: scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 }),
+        cap: { shown: 100, totalCount: 120, omittedCount: 20 },
+        pastCapShown: 100,
+      }),
+      ...correlationNotices({
+        edgeInput: COMPLETE,
+        edgeError: null,
+        gaps,
+        scan: { state: "complete", stoppedBy: null, error: null },
+        selectionLoss: null,
+        scope: null,
+        cap: { shown: 3, totalCount: 3, omittedCount: 0 },
+        pastCapShown: null,
+      }),
+    ];
+  }
+
   function everyString(chain: CorrelationChain, read: TimelineItem[], evidence: UnplacedEvidence): string[] {
     const itemsById = mapOf(read);
     const narrowed = scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 });
@@ -769,6 +831,7 @@ describe("no string claims an entry is unplaced without proof", () => {
       edgeInputNotice({ edgeInputComplete: false, unloadedEdgeCount: 0 }) ?? "",
       renderCapNotice({ shown: 100, totalCount: 120, omittedCount: 20 }) ?? "",
       pastCapNotice(100),
+      ...sharedStrings(chain),
       ...dockStrings(),
       plotOmissionNotice({ omittedMarkers: 4, omittedConnectors: 2 }) ?? "",
       coverageGapNotice({ originIds: new Set(), global: true, previewCut: true }) ?? "",
@@ -821,7 +884,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     // never called here fails. Only UNPLACED_ENTRY is left out: it is the one string that may say
     // "not placed", and only with proof, so the audit cannot print it without defeating its own
     // purpose.
-    const called = everyString.toString() + dockStrings.toString();
+    const called = everyString.toString() + dockStrings.toString() + sharedStrings.toString();
     const producers = [...STRING_EXPORTS].filter((name) => name !== "UNPLACED_ENTRY");
     expect(producers.length).toBeGreaterThan(20);
     for (const name of producers) {
@@ -1321,6 +1384,124 @@ describe("the words for a correlation that is being rebuilt (#843)", () => {
     for (const source of [dockSource, viewSource]) {
       expect(source).toContain("UPDATING_CORRELATION_TEXT");
       expect(source).not.toMatch(/Updating correlation/);
+    }
+  });
+});
+
+describe("the words the Correlation view and the Chains tab share (#841)", () => {
+  const items = [eventItem(1, T0, "error", "first failed", 72), eventItem(2, T0 + 6_000, "info", "second ok", 76)];
+
+  it("keeps the two no-model sentences the view said, word for word", () => {
+    expect(NO_ANALYSIS_TEXT).toBe("No event analysis is available. Load events to see correlation.");
+    expect(READING_EDGES_TEXT).toBe("Reading correlation edges...");
+  });
+
+  it("says a failure of the build and of the update in their own words, with the error", () => {
+    expect(correlationFailureText("boom", "built")).toBe("Correlation could not be built: boom");
+    expect(correlationFailureText("boom", "updated")).toBe("Correlation could not be updated: boom");
+  });
+
+  it("says how far reading the timeline has got, and not a number when it does not know", () => {
+    expect(timelineReadingText(null)).toBe("Reading the timeline...");
+    expect(timelineReadingText({ scannedItems: 1_200, totalItems: 5_000 })).toBe(
+      "Reading 1,200 of 5,000 timeline items...",
+    );
+    expect(timelineReadingText(null)).not.toMatch(/\d/);
+  });
+
+  it("says no chain was found in the session only when every edge was loaded", () => {
+    expect(noChainsFoundText(true)).toBe("No correlation chains were found in this session.");
+    expect(noChainsFoundText(false)).toBe("No chains were found among the edges that were loaded.");
+  });
+
+  it("keeps the fixed sentences of the view's rows and Sequence", () => {
+    expect(NO_POSITION_TEXT).toBe("No loaded timeline position");
+    expect(WAIT_FOR_ENTRIES_REASON).toBe("Wait for the entries of this chain to be read.");
+    expect(SEQUENCE_ORDER_NOTE).toBe("Ordered by recorded time. Order is not evidence of cause.");
+    expect(SAME_TIME_NOTE).toBe("(same timestamp as the entry above; their order is not established)");
+  });
+
+  describe("chainRowName", () => {
+    it("names a titled row by strength, title and entry count", () => {
+      const chain = chainFor("exactPair", items);
+      expect(chainRowName(chain)).toBe("Exact, 72 \u00b7 first failed, 2 entries");
+    });
+
+    it("keeps the id of an untitled row, so two of them are told apart, and says when it is partial", () => {
+      const chain = chainFor("exactPair", []);
+      expect(chain.title).toBeNull();
+      expect(chainRowName(chain)).toBe(`Exact, Untitled chain ${chain.id}, 2 entries, partial`);
+    });
+
+    it("names an ambiguous row by its own strength word", () => {
+      expect(chainRowName(chainFor("group3", items))).toMatch(/^Ambiguous, /);
+    });
+  });
+
+  describe("correlationNotices", () => {
+    const base = {
+      edgeInput: { edgeInputComplete: false, unloadedEdgeCount: 4 },
+      edgeError: "edges down",
+      gaps: { originIds: new Set<string>(), global: true, previewCut: false },
+      scan: { state: "incomplete", stoppedBy: "budget", error: null } as const,
+      selectionLoss: "The chain that was selected is no longer present.",
+      scope: scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 }),
+      cap: { shown: 100, totalCount: 120, omittedCount: 20 },
+      pastCapShown: 100,
+    };
+
+    it("lists the notices in the view's order, with the lost selection after the scan and before the scope", () => {
+      const scope = scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 })!;
+      expect(correlationNotices(base)).toEqual([
+        edgeInputNotice(base.edgeInput),
+        edgeErrorNotice("edges down"),
+        coverageGapNotice(base.gaps),
+        scanNotice(base.scan),
+        "The chain that was selected is no longer present.",
+        scope.strengthNote,
+        scope.textLogNote,
+        renderCapNotice(base.cap),
+        pastCapNotice(100),
+      ]);
+    });
+
+    it("drops what has nothing to say, and the lost-selection slot of a surface that holds no selection", () => {
+      expect(
+        correlationNotices({
+          edgeInput: COMPLETE,
+          edgeError: null,
+          gaps: classifyCoverageGaps([], 0),
+          scan: { state: "complete", stoppedBy: null, error: null },
+          selectionLoss: null,
+          scope: null,
+          cap: { shown: 3, totalCount: 3, omittedCount: 0 },
+          pastCapShown: null,
+        }),
+      ).toEqual([]);
+    });
+
+    it("says the past-cap line only when the selected row is listed past the rows the cap kept", () => {
+      expect(correlationNotices({ ...base, pastCapShown: null })).not.toContain(pastCapNotice(100));
+      expect(correlationNotices({ ...base, pastCapShown: 100 })).toContain(pastCapNotice(100));
+    });
+  });
+
+  it("are not spelled out again by the Correlation view, which says them from this module", () => {
+    for (const phrase of [
+      "No event analysis is available",
+      "Reading correlation edges",
+      "could not be built",
+      "could not be updated",
+      "No loaded timeline position",
+      "Wait for the entries of this chain",
+      "Order is not evidence of cause",
+      "their order is not established",
+      "No correlation chains were found",
+      "No chains were found",
+      "Reading the timeline",
+      "timeline items...",
+    ]) {
+      expect(viewSource, phrase).not.toContain(phrase);
     }
   });
 });

@@ -16,10 +16,12 @@ import type {
 } from "./evtx-correlation-chains";
 import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
 import {
+  chainAccessibleName,
   chainSequence,
   chainTitle,
   entriesText,
   formatDelta,
+  isPartialChain,
   isProvenUnplaced,
   partitionUnplaced,
   whyRows,
@@ -178,6 +180,100 @@ export function renderCapNotice(input: {
  */
 export function pastCapNotice(shown: number): string {
   return `The selected chain is past the first ${count(shown)} rows, so it is listed after them.`;
+}
+
+// ---- the words the Correlation view and the Chains tab say alike ---------------------------------
+
+/** Said when no analysis session exists and none is on the way. */
+export const NO_ANALYSIS_TEXT = "No event analysis is available. Load events to see correlation.";
+
+/** Said while a session is built or its edges are read and there is no model yet: never "no chains". */
+export const READING_EDGES_TEXT = "Reading correlation edges...";
+
+/** A row whose members have no loaded position says so, and nothing about why. */
+export const NO_POSITION_TEXT = "No loaded timeline position";
+
+/** Why an action on a chain's entries waits: the entries have not been read yet. */
+export const WAIT_FOR_ENTRIES_REASON = "Wait for the entries of this chain to be read.";
+
+/** Said once above a list of entries in time order: a sequence is not a cause. */
+export const SEQUENCE_ORDER_NOTE = "Ordered by recorded time. Order is not evidence of cause.";
+
+/** Said beside an entry whose timestamp equals the entry above it: time does not order the two. */
+export const SAME_TIME_NOTE = "(same timestamp as the entry above; their order is not established)";
+
+/** A failure that is not a load result: the model could not be built, or could not be updated. */
+export function correlationFailureText(error: string, phase: "built" | "updated"): string {
+  return `Correlation could not be ${phase}: ${error}`;
+}
+
+/**
+ * How far reading the timeline has got, in words that are not a live region's. With no progress it
+ * prints no number at all: a count that is not known is not 0.
+ */
+export function timelineReadingText(
+  progress: { scannedItems: number; totalItems: number } | null,
+): string {
+  return progress === null
+    ? "Reading the timeline..."
+    : `Reading ${count(progress.scannedItems)} of ${count(progress.totalItems)} timeline items...`;
+}
+
+/**
+ * The line for a model that holds no chain. The absolute sentence is said only when every edge was
+ * loaded; with edges missing it says only what was looked at.
+ */
+export function noChainsFoundText(edgeInputComplete: boolean): string {
+  return edgeInputComplete
+    ? "No correlation chains were found in this session."
+    : "No chains were found among the edges that were loaded.";
+}
+
+/**
+ * The name a screen reader gives a chain row: its strength, its title (or "Untitled chain" and its
+ * id, so two untitled rows are told apart), its entry count from ALL members, and "partial" when
+ * members have no loaded position.
+ */
+export function chainRowName(
+  chain: Pick<CorrelationChain, "strength" | "title" | "id" | "memberCount" | "unresolvedMemberIds">,
+): string {
+  return `${STRENGTH_LABELS[chain.strength]}, ${chainAccessibleName(chain)}, ${entriesText(chain.memberCount)}${isPartialChain(chain) ? ", partial" : ""}`;
+}
+
+export interface CorrelationNoticesInput {
+  edgeInput: EdgeInputState;
+  edgeError: string | null;
+  gaps: CorrelationGaps;
+  scan: ScanNoticeInput;
+  /**
+   * The Correlation view's own notice that the chain it had selected is gone, placed after the scan
+   * notice. A surface that holds no selection (the Chains tab) passes null.
+   */
+  selectionLoss: string | null;
+  scope: ScopeDisclosure | null;
+  /** The 100-row cap: rows listed, rows before the cap, rows it dropped. */
+  cap: { shown: number; totalCount: number; omittedCount: number };
+  /** The number of rows the cap kept when the selected row is listed past them; null otherwise. */
+  pastCapShown: number | null;
+}
+
+/**
+ * Everything the model says about what it did not cover, in one order, for every surface that lists
+ * its chains: the edges that were not all loaded, a failed edge page, the engine's coverage gaps,
+ * an unfinished timeline read, a narrowed view, and the render cap. A notice with nothing to say is
+ * left out.
+ */
+export function correlationNotices(input: CorrelationNoticesInput): string[] {
+  return [
+    edgeInputNotice(input.edgeInput),
+    edgeErrorNotice(input.edgeError),
+    coverageGapNotice(input.gaps),
+    scanNotice(input.scan),
+    input.selectionLoss,
+    ...(input.scope === null ? [] : [input.scope.strengthNote, input.scope.textLogNote]),
+    renderCapNotice(input.cap),
+    input.pastCapShown === null ? null : pastCapNotice(input.pastCapShown),
+  ].filter((text): text is string => text !== null);
 }
 
 /**

@@ -23,17 +23,21 @@ import { correlationSizes, type CorrelationSizes } from "./evtx-correlation-size
 import { EvtxCorrelationOverview } from "./EvtxCorrelationOverview";
 import { EvtxUnplacedList } from "./EvtxUnplacedList";
 import {
-  STRENGTH_LABELS,
+  NO_ANALYSIS_TEXT,
+  NO_POSITION_TEXT,
+  READING_EDGES_TEXT,
+  SAME_TIME_NOTE,
+  SEQUENCE_ORDER_NOTE,
+  WAIT_FOR_ENTRIES_REASON,
   chainCopyText,
-  coverageGapNotice,
-  edgeErrorNotice,
-  edgeInputNotice,
+  chainRowName,
+  correlationFailureText,
+  correlationNotices,
   keyKindLabel,
-  pastCapNotice,
+  noChainsFoundText,
   plotOmissionNotice,
-  renderCapNotice,
-  scanNotice,
   scopeDisclosure,
+  timelineReadingText,
   unresolvedNotice,
   whyHeading,
   whyStatement,
@@ -100,8 +104,6 @@ import type { TimelineItem } from "./unified-timeline";
 /** Spec 10: a polite announcement at most once every 5 s. */
 export const CORRELATION_ANNOUNCE_MS = 5_000;
 const LIST_WIDTH_PX = 250;
-const NO_ANALYSIS_TEXT = "No event analysis is available. Load events to see correlation.";
-const READING_EDGES_TEXT = "Reading correlation edges...";
 
 /** A reply to something the operator did, or the failure of it (a failure is announced as an alert). */
 interface ActionMessage {
@@ -207,7 +209,7 @@ function ChainRow({
       id={id}
       // Named from the title, or from the id when there is none, so two untitled rows (the
       // counts-only stage, or members whose items were not read) are still told apart.
-      aria-label={`${STRENGTH_LABELS[chain.strength]}, ${chainAccessibleName(chain)}, ${entriesText(chain.memberCount)}${partial ? ", partial" : ""}`}
+      aria-label={chainRowName(chain)}
       aria-selected={selected}
       data-chain-id={chain.id}
       className={styles.option}
@@ -257,7 +259,7 @@ function ChainRow({
           color: secondary,
         }}
       >
-        {span ?? "No loaded timeline position"}
+        {span ?? NO_POSITION_TEXT}
       </div>
     </div>
   );
@@ -777,7 +779,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
             role="alert"
             style={{ padding: "12px", fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground1 }}
           >
-            {`Correlation could not be built: ${data.error}`}
+            {correlationFailureText(data.error, "built")}
           </div>
         ) : (
           plain(data.stage === "unavailable" ? NO_ANALYSIS_TEXT : READING_EDGES_TEXT)
@@ -789,20 +791,16 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
 
   const reading = data.nextScan?.state === "running" || data.stage === "scanning";
   const progress = data.nextScan?.progress ?? scan.progress;
-  const notices = [
-    edgeInputNotice({ edgeInputComplete: model.edgeInputComplete, unloadedEdgeCount: model.unloadedEdgeCount }),
-    edgeErrorNotice(edges.error),
-    coverageGapNotice(gaps),
-    scanNotice(scan),
-    visibleLoss(loss, lossFacts),
-    ...(scope === null ? [] : [scope.strengthNote, scope.textLogNote]),
-    renderCapNotice({
-      shown: model.chains.length,
-      totalCount: model.totalCount,
-      omittedCount: model.omittedCount,
-    }),
-    listed.pastCapId === null ? null : pastCapNotice(model.chains.length),
-  ].filter((text): text is string => text !== null);
+  const notices = correlationNotices({
+    edgeInput: { edgeInputComplete: model.edgeInputComplete, unloadedEdgeCount: model.unloadedEdgeCount },
+    edgeError: edges.error,
+    gaps,
+    scan,
+    selectionLoss: visibleLoss(loss, lossFacts),
+    scope,
+    cap: { shown: model.chains.length, totalCount: model.totalCount, omittedCount: model.omittedCount },
+    pastCapShown: listed.pastCapId === null ? null : model.chains.length,
+  });
   const selectedIndex = showPane ? listed.rows.length : listed.rows.findIndex((row) => row.id === chain?.id);
   const header = chain === null ? null : keyHeader(chain.keys);
   const visibleSequence = sequence === null ? [] : showAllSequence ? sequence.entries : sequence.entries.slice(0, CORRELATION_SEQUENCE_INITIAL);
@@ -813,7 +811,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
     ? undefined
     : data.updating
       ? WAIT_FOR_UPDATE_REASON
-      : "Wait for the entries of this chain to be read.";
+      : WAIT_FOR_ENTRIES_REASON;
 
   return (
     <div data-testid="correlation-view" aria-busy={data.updating || reading || undefined} style={rootStyle}>
@@ -843,9 +841,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
         </div>
         {model.chains.length === 0 && (
           <div style={{ padding: "8px 12px", fontSize: `${sizes.lane}px`, color: palette.listPrimary }}>
-            {model.edgeInputComplete
-              ? "No correlation chains were found in this session."
-              : "No chains were found among the edges that were loaded."}
+            {noChainsFoundText(model.edgeInputComplete)}
           </div>
         )}
         {(model.chains.length > 0 || unplacedPresent) && (
@@ -892,11 +888,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
           // per page. The announcer says "Updating" once, throttled.
           <div data-testid="correlation-updating" style={{ fontSize: `${sizes.lane}px`, color: palette.caption }}>
             {data.updating ? `${UPDATING_CORRELATION_TEXT} ` : ""}
-            {reading
-              ? progress === null
-                ? "Reading the timeline..."
-                : `Reading ${progress.scannedItems.toLocaleString()} of ${progress.totalItems.toLocaleString()} timeline items...`
-              : ""}
+            {reading ? timelineReadingText(progress) : ""}
           </div>
         )}
         {notices.length > 0 && (
@@ -918,7 +910,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
         )}
         {data.error !== null && (
           <div role="alert" style={{ fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground1 }}>
-            {`Correlation could not be updated: ${data.error}`}
+            {correlationFailureText(data.error, "updated")}
           </div>
         )}
         {showPane ? (
@@ -1070,7 +1062,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
                   <CardHeading palette={palette}>Sequence</CardHeading>
                 </div>
                 <div style={{ fontSize: `${sizes.label}px`, color: palette.caption }}>
-                  Ordered by recorded time. Order is not evidence of cause.
+                  {SEQUENCE_ORDER_NOTE}
                 </div>
                 {sequence !== null && sequence.entries.length === 0 && (
                   <div style={{ fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground2 }}>
@@ -1100,7 +1092,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
                         <span style={{ color: palette.caption }}>[{entry.laneLabel}]</span>{" "}
                         <span style={{ color: tokens.colorNeutralForeground2 }}>{head(entry.message)}</span>
                         {entry.sameTimeAsPrevious && (
-                          <span style={{ color: palette.caption }}> (same timestamp as the entry above; their order is not established)</span>
+                          <span style={{ color: palette.caption }}> {SAME_TIME_NOTE}</span>
                         )}
                       </li>
                     );
