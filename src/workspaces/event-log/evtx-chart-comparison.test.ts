@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   buildComparisonPresentation,
   CLEARED_NOTICE,
@@ -339,7 +339,7 @@ describe("out of date", () => {
     });
     expect(view.status).toBe(
       "Out of date. The comparison covers 2026-08-09 12:00:00.000 to 2026-08-10 12:00:00.000 (UTC); " +
-        "the tiles now show events from 2026-08-09 15:00:00.000. No change is shown.",
+        "the tiles now show events from 2026-08-09 15:00:00.000 (UTC). No change is shown.",
     );
     expect(countCurrent).not.toHaveBeenCalled();
   });
@@ -437,5 +437,101 @@ describe("every state", () => {
       "stale",
       "stale, unusable clock",
     ]);
+  });
+});
+
+describe("under a time zone that observes daylight saving", () => {
+  // The project's TS config has no Node types; Node applies a runtime TZ change to Date.
+  const env = (globalThis as unknown as { process: { env: Record<string, string | undefined> } })
+    .process.env;
+  const previous = env.TZ;
+  beforeAll(() => {
+    // US Eastern: daylight time ends 2026-11-01T06:00Z, from UTC-04:00 to UTC-05:00.
+    env.TZ = "America/New_York";
+  });
+  afterAll(() => {
+    if (previous === undefined) delete env.TZ;
+    else env.TZ = previous;
+  });
+
+  const at = (iso: string) => Date.parse(iso);
+  function priorAt(anchorIso: string): PriorWindow {
+    const result = computePriorWindow("7d", at(anchorIso));
+    if (result.status !== "available") throw new Error("expected an available prior window");
+    return result.prior;
+  }
+  const running = (prior: PriorWindow): ComparisonState => ({
+    phase: "running",
+    mode: "live",
+    requestId: "event-log-compare-3",
+    prior,
+    channels: ["System"],
+    scanned: 0,
+  });
+  /** A complete comparison whose previous period is `prior`. */
+  function completeAt(prior: PriorWindow): ComparisonState {
+    const outcome = filesOutcome();
+    if (outcome.status !== "complete") throw new Error("expected complete");
+    return settledState({ status: "complete", result: { ...outcome.result, window: "7d", prior } });
+  }
+  const local = (overrides: Partial<ComparisonPresentationInput>) =>
+    buildComparisonPresentation(input({ timeZoneMode: "local", ...overrides }));
+
+  it("names each bound's own offset when the previous period crosses the change", () => {
+    // The previous 7 d of an anchor at 2026-11-10T12:00Z runs from 2026-10-27T12:00Z to
+    // 2026-11-03T11:59:59.999Z: the first bound is in daylight time, the second after it ended.
+    const view = local({ state: running(priorAt("2026-11-10T12:00:00.000Z")) });
+    expect(view.label).toBe(
+      "Comparing with 2026-10-27 08:00:00.000 (UTC-04:00) to 2026-11-03 06:59:59.999 (UTC-05:00)",
+    );
+  });
+
+  it("names the offset once when both bounds share it", () => {
+    const view = local({ state: running(priorAt("2026-10-20T12:00:00.000Z")) });
+    expect(view.label).toBe(
+      "Comparing with 2026-10-06 08:00:00.000 to 2026-10-13 07:59:59.999 (UTC-04:00)",
+    );
+    const after = local({ state: running(priorAt("2026-11-20T12:00:00.000Z")) });
+    expect(after.label).toBe(
+      "Comparing with 2026-11-06 07:00:00.000 to 2026-11-13 06:59:59.999 (UTC-05:00)",
+    );
+  });
+
+  it("names the one zone once in UTC, whatever the date", () => {
+    const view = buildComparisonPresentation(
+      input({ timeZoneMode: "utc", state: running(priorAt("2026-11-10T12:00:00.000Z")) }),
+    );
+    expect(view.label).toBe(
+      "Comparing with 2026-10-27 12:00:00.000 to 2026-11-03 11:59:59.999 (UTC)",
+    );
+  });
+
+  it("names each bound of the period an out-of-date comparison covers, and the tiles' own start", () => {
+    // The anchor is 2026-11-05T12:00Z: the period starts in daylight time and ends after it. The
+    // tiles are measured three hours later.
+    const prior = priorAt("2026-11-05T12:00:00.000Z");
+    const view = local({
+      state: completeAt(prior),
+      snapshotEpoch: at("2026-11-05T15:00:00.000Z"),
+    });
+    expect(view.phase).toBe("stale");
+    expect(view.status).toBe(
+      "Out of date. The comparison covers 2026-10-29 08:00:00.000 (UTC-04:00) to 2026-11-05 07:00:00.000 (UTC-05:00); " +
+        "the tiles now show events from 2026-10-29 11:00:00.000 (UTC-04:00). No change is shown.",
+    );
+  });
+
+  it("gives the tiles' start its own offset even when the covered period has a single one", () => {
+    // The period [2026-11-01T07:00Z, 2026-11-08T07:00Z] is wholly in standard time, while the tiles,
+    // measured three hours earlier than the anchor, start at 04:00Z, before the change.
+    const prior = priorAt("2026-11-08T07:00:00.000Z");
+    const view = local({
+      state: completeAt(prior),
+      snapshotEpoch: at("2026-11-08T04:00:00.000Z"),
+    });
+    expect(view.status).toBe(
+      "Out of date. The comparison covers 2026-11-01 02:00:00.000 to 2026-11-08 02:00:00.000 (UTC-05:00); " +
+        "the tiles now show events from 2026-11-01 00:00:00.000 (UTC-04:00). No change is shown.",
+    );
   });
 });

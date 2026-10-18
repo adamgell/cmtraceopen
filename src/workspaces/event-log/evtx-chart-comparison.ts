@@ -17,6 +17,7 @@
  */
 import type { EvtxChartComparison } from "./evtx-chart-data";
 import {
+  currentPeriodOf,
   isComparisonStale,
   type ComparisonOutcome,
   type ComparisonState,
@@ -82,14 +83,29 @@ function zoneName(mode: EvtxTimeZoneMode, epochMs: number): string {
   return timeZoneLabel(mode, epochMs);
 }
 
+/**
+ * Two bounds as a period, each in the operator's clock. The offset in force can differ between the
+ * bounds when the clock changes in between (daylight saving), so each is named when they differ;
+ * when they share one it is named once.
+ */
+function span(fromMs: number, toMs: number, mode: EvtxTimeZoneMode): string {
+  const from = zoneName(mode, fromMs);
+  const to = zoneName(mode, toMs);
+  const start = formatEventTime(fromMs, mode);
+  const end = formatEventTime(toMs, mode);
+  return from === to ? `${start} to ${end} (${from})` : `${start} (${from}) to ${end} (${to})`;
+}
+
 function priorLabel(prior: PriorWindow, mode: EvtxTimeZoneMode): string {
-  return `Comparing with ${formatEventTime(prior.fromMs, mode)} to ${formatEventTime(prior.toMs, mode)} (${zoneName(mode, prior.fromMs)})`;
+  return `Comparing with ${span(prior.fromMs, prior.toMs, mode)}`;
 }
 
 function staleStatus(prior: PriorWindow, snapshotEpoch: number, mode: EvtxTimeZoneMode): string {
-  const covers = `${formatEventTime(prior.anchorEpoch - prior.lengthMs, mode)} to ${formatEventTime(prior.anchorEpoch, mode)} (${zoneName(mode, prior.anchorEpoch)})`;
+  const covered = currentPeriodOf(prior);
+  const covers = span(covered.fromMs, covered.toMs, mode);
+  const tilesFrom = snapshotEpoch - prior.lengthMs;
   const tiles = Number.isFinite(snapshotEpoch)
-    ? `the tiles now show events from ${formatEventTime(snapshotEpoch - prior.lengthMs, mode)}`
+    ? `the tiles now show events from ${formatEventTime(tilesFrom, mode)} (${zoneName(mode, tilesFrom)})`
     : "the time the tiles are measured from is not known";
   return `Out of date. The comparison covers ${covers}; ${tiles}. No change is shown.`;
 }
