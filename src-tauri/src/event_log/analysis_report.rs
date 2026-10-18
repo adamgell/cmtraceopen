@@ -19,12 +19,673 @@
 // The renderer is wired to the Tauri command by a later commit of the same lane.
 #![allow(dead_code)]
 
+use std::collections::BTreeSet;
+
+use cmtraceopen_parser::unified_timeline::{TimelineItem, TimelineOrigin, TimelineSeverity};
+use serde::Deserialize;
+
+use self::safe::{Doc, Redactor, Safe, MIN_SUBSTITUTED_MACHINE_CHARS};
+use super::analysis_session::EventLogAnalysisSessionStatus;
+use super::models::{EvtxCoverageGap, EvtxLevel};
+use super::timeline::MAX_TIMELINE_MESSAGE_BYTES;
+
 /// The most bytes a rendered report may have. Over this the export fails.
 pub(crate) const MAX_REPORT_BYTES: usize = 2 * 1024 * 1024;
 /// Rows in the events table. The rest is counted, not listed.
 pub(crate) const REPORT_EVENT_ROW_CAP: usize = 500;
 /// Characters of a message cell, counted after redaction.
 pub(crate) const REPORT_MESSAGE_CHARS: usize = 240;
+/// Characters of a channel or provider cell, counted after redaction.
+const REPORT_NAME_CHARS: usize = 120;
+/// Machine tokens listed in the scope block.
+const REPORT_MACHINE_CAP: usize = 10;
+/// Channel names listed in the filter summary.
+const REPORT_CHANNEL_NAMES_SHOWN: usize = 10;
+
+/// Request bounds. The request carries ids, enums and numbers, so these only stop a malformed
+/// caller from asking for an unbounded amount of work.
+const MAX_REPORT_CHANNELS: usize = 64;
+const MAX_REPORT_CHANNEL_BYTES: usize = 512;
+const MAX_REPORT_EVENT_ID_SELECTORS: usize = 64;
+const MAX_REPORT_TOP_EVENT_IDS: usize = 50;
+const REPORT_LEVEL_COUNT: usize = 5;
+
+/// What the app asks the backend to render. It names the session and carries only numbers, enum
+/// words and the coverage gaps the rail was diagnosed with. No search text, quick-filter text,
+/// scope title, chain title or record content can be sent: the request type has no field for them
+/// and refuses unknown fields.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EventLogAnalysisReportRequest {
+    pub session_id: String,
+    /// The revision of the session the app was showing. A different revision is refused.
+    pub expected_revision: u64,
+    /// When the report was asked for. The renderer never reads the wall clock.
+    pub generated_at_ms: i64,
+    /// The merged coverage gaps the rail was diagnosed with, so the findings match the screen.
+    #[serde(default)]
+    pub coverage_gaps: Vec<EvtxCoverageGap>,
+    pub scope: ReportScope,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReportSourceMode {
+    Files,
+    Live,
+}
+
+/// What the session was built from, captured by the app when the session was published.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportScope {
+    pub source_mode: ReportSourceMode,
+    /// Records the app holds, of every kind.
+    pub loaded_record_count: u64,
+    /// Event records the session was built from.
+    pub event_record_count: u64,
+    /// Archive text rows (log-origin records) the session was built from.
+    pub archive_text_record_count: u64,
+    /// Text-log entries given to the session.
+    pub text_log_entry_count: u64,
+    /// Counted by the app over the event records above, most severe first.
+    pub level_mix: Vec<ReportLevelCount>,
+    /// The most frequent event IDs among the event records above.
+    pub top_event_ids: Vec<ReportEventIdCount>,
+    /// Distinct event IDs among the event records above, when the app counted them.
+    pub distinct_event_id_count: Option<u64>,
+    pub filters: ReportFilters,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportLevelCount {
+    pub level: EvtxLevel,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportEventIdCount {
+    pub event_id: u32,
+    pub count: u64,
+}
+
+/// The filters in force when the session was built. Typed fields only: what the operator typed
+/// is reported as "active" and never as text.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportFilters {
+    pub levels: Vec<EvtxLevel>,
+    pub channels_selected: Vec<String>,
+    pub channels_held: u64,
+    pub event_id_selectors: Vec<ReportEventIdSelector>,
+    pub time_window: ReportTimeWindow,
+    pub time_range: Option<ReportTimeRange>,
+    pub search_active: bool,
+    pub quick_filter_active: bool,
+    pub record_scope: Option<ReportRecordScopeKind>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ReportEventIdSelector {
+    Single { id: u32 },
+    Range { low: u32, high: u32 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum ReportTimeWindow {
+    #[serde(rename = "1h")]
+    LastHour,
+    #[serde(rename = "24h")]
+    Last24Hours,
+    #[serde(rename = "7d")]
+    Last7Days,
+    #[serde(rename = "30d")]
+    Last30Days,
+    #[serde(rename = "all")]
+    All,
+}
+
+/// A half-open span of event time: `start_ms` is inside it, `end_ms` is not.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportTimeRange {
+    pub start_ms: i64,
+    pub end_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReportRecordScopeKind {
+    Finding,
+    Chain,
+}
+
+impl EventLogAnalysisReportRequest {
+    /// Refuses a request that cannot be true. Errors name the field, never its content.
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        let scope = &self.scope;
+        let events = scope.event_record_count;
+        if scope.level_mix.len() > REPORT_LEVEL_COUNT {
+            return Err("report scope: too many level counts".to_owned());
+        }
+        for (index, entry) in scope.level_mix.iter().enumerate() {
+            if scope.level_mix[..index]
+                .iter()
+                .any(|earlier| earlier.level == entry.level)
+            {
+                return Err("report scope: a level is counted twice".to_owned());
+            }
+        }
+        if scope
+            .level_mix
+            .iter()
+            .try_fold(0u64, |sum, entry| {
+                sum.checked_add(entry.count)
+                    .filter(|total| *total <= events)
+            })
+            .is_none()
+        {
+            return Err("report scope: level counts exceed the events in scope".to_owned());
+        }
+        if scope.top_event_ids.len() > MAX_REPORT_TOP_EVENT_IDS {
+            return Err("report scope: too many event ID counts".to_owned());
+        }
+        for (index, entry) in scope.top_event_ids.iter().enumerate() {
+            if scope.top_event_ids[..index]
+                .iter()
+                .any(|earlier| earlier.event_id == entry.event_id)
+            {
+                return Err("report scope: an event ID is counted twice".to_owned());
+            }
+        }
+        if scope
+            .top_event_ids
+            .iter()
+            .try_fold(0u64, |sum, entry| {
+                sum.checked_add(entry.count)
+                    .filter(|total| *total <= events)
+            })
+            .is_none()
+        {
+            return Err("report scope: event ID counts exceed the events in scope".to_owned());
+        }
+        if let Some(distinct) = scope.distinct_event_id_count {
+            let listed = u64::try_from(scope.top_event_ids.len()).unwrap_or(u64::MAX);
+            if distinct > events || distinct < listed {
+                return Err("report scope: the distinct event ID count is impossible".to_owned());
+            }
+        }
+        let filters = &scope.filters;
+        if filters.levels.len() > REPORT_LEVEL_COUNT {
+            return Err("report filters: too many levels".to_owned());
+        }
+        if filters.channels_selected.len() > MAX_REPORT_CHANNELS
+            || filters
+                .channels_selected
+                .iter()
+                .any(|name| name.len() > MAX_REPORT_CHANNEL_BYTES)
+        {
+            return Err("report filters: a channel list is too large".to_owned());
+        }
+        if filters.event_id_selectors.len() > MAX_REPORT_EVENT_ID_SELECTORS
+            || filters.event_id_selectors.iter().any(|selector| {
+                matches!(selector, ReportEventIdSelector::Range { low, high } if low > high)
+            })
+        {
+            return Err("report filters: the event ID selectors are impossible".to_owned());
+        }
+        if filters
+            .time_range
+            .is_some_and(|range| range.start_ms > range.end_ms)
+        {
+            return Err("report filters: the time range ends before it starts".to_owned());
+        }
+        Ok(())
+    }
+}
+
+/// What the backend gathered from the session for one report, under the session lock.
+pub(crate) struct ReportSnapshot {
+    /// The session's own counts: placed events and text lines, edges, coverage gaps.
+    pub status: EventLogAnalysisSessionStatus,
+    /// The first [`REPORT_EVENT_ROW_CAP`] placed event items, oldest first.
+    pub event_rows: Vec<TimelineItem>,
+    /// Events the session could not place because they carry no usable timestamp.
+    pub unplaced_events: u64,
+    /// Text lines the session could not place for the same reason.
+    pub unplaced_text_lines: u64,
+    /// First and last placed timestamp of any kind of item.
+    pub span_ms: Option<(i64, i64)>,
+    /// Every machine name an origin in the session carries.
+    pub machines: BTreeSet<String>,
+}
+
+pub(crate) struct ReportInput<'a> {
+    pub request: &'a EventLogAnalysisReportRequest,
+    pub snapshot: &'a ReportSnapshot,
+}
+
+/// Renders the report, or fails: a report over [`MAX_REPORT_BYTES`] is an error, not a shorter file.
+pub(crate) fn render_report(input: &ReportInput<'_>) -> Result<String, String> {
+    render_report_within(input, MAX_REPORT_BYTES)
+}
+
+fn render_report_within(input: &ReportInput<'_>, limit: usize) -> Result<String, String> {
+    let request = input.request;
+    let snapshot = input.snapshot;
+    let redactor = Redactor::new(&snapshot.machines);
+    let mut doc = Doc::new();
+    render_title(&mut doc);
+    render_scope(&mut doc, &redactor, request, snapshot);
+    render_top_event_ids(&mut doc, &request.scope);
+    render_level_mix(&mut doc, &request.scope);
+    render_events(&mut doc, &redactor, snapshot);
+    doc.finish(limit)
+}
+
+fn render_title(doc: &mut Doc) {
+    doc.lit("# Event Logs report").nl().nl();
+    doc.lit(
+        "> Values that match known patterns, and machine names found in the loaded events, are \
+         replaced by tokens such as [host:0123456789abcdef]. Free text can still contain \
+         identifiers that no pattern recognizes, for example a computer name inside a sentence, \
+         a bare tenant ID or a folder name in a path. Review this file before sharing it.",
+    )
+    .nl()
+    .nl();
+    doc.lit(
+        "All times are UTC (ISO 8601). The app's time zone setting does not change this report.",
+    )
+    .nl()
+    .nl();
+}
+
+fn render_scope(
+    doc: &mut Doc,
+    redactor: &Redactor,
+    request: &EventLogAnalysisReportRequest,
+    snapshot: &ReportSnapshot,
+) {
+    let scope = &request.scope;
+    let status = &snapshot.status;
+    doc.lit("## Scope and coverage").nl().nl();
+    doc.lit("- Generated: ")
+        .safe(&Safe::utc(request.generated_at_ms))
+        .nl();
+    match scope.source_mode {
+        ReportSourceMode::Files => doc.lit("- Source: opened files").nl(),
+        ReportSourceMode::Live => doc
+            .lit(
+                "- Source: live channels. Events keep arriving, so this report describes the \
+                 events in the analysis session when it was made, not later events.",
+            )
+            .nl(),
+    };
+    render_machines(doc, redactor, snapshot);
+    match snapshot.span_ms {
+        Some((first, last)) => doc
+            .lit("- Observed span of placed entries: ")
+            .safe(&Safe::utc(first))
+            .lit(" to ")
+            .safe(&Safe::utc(last))
+            .nl(),
+        None => doc
+            .lit(
+                "- Observed span of placed entries: no entry in the session has a usable timestamp",
+            )
+            .nl(),
+    };
+    doc.lit("- Records loaded in the app: ")
+        .count(scope.loaded_record_count)
+        .nl();
+    doc.lit("- Events in scope (counted by the app): ")
+        .count(scope.event_record_count)
+        .nl();
+    doc.lit("- Events placed on the timeline (counted by the session): ")
+        .count(status.event_items)
+        .nl();
+    doc.lit("- Events in scope without a usable timestamp, not placed and not listed below: ")
+        .count(snapshot.unplaced_events)
+        .nl();
+    let session_events = status.event_items.saturating_add(snapshot.unplaced_events);
+    if session_events != scope.event_record_count {
+        doc.lit("- The session holds ")
+            .count(session_events)
+            .lit(" events and the app counted ")
+            .count(scope.event_record_count)
+            .lit(" in scope. The two counts are shown as each side reported them.")
+            .nl();
+    }
+    doc.lit("- Archive text rows in scope (counted by the app): ")
+        .count(scope.archive_text_record_count)
+        .nl();
+    doc.lit("- Text-log entries given to the session (counted by the app): ")
+        .count(scope.text_log_entry_count)
+        .nl();
+    doc.lit("- Text lines placed on the timeline (counted by the session): ")
+        .count(status.log_items)
+        .nl();
+    doc.lit("- Text lines without a usable timestamp, not placed: ")
+        .count(snapshot.unplaced_text_lines)
+        .nl();
+    let in_scope = scope
+        .event_record_count
+        .saturating_add(scope.archive_text_record_count);
+    if in_scope < scope.loaded_record_count {
+        doc.lit(
+            "- The session covers fewer records than the app has loaded, so links and strengths \
+             are computed over the events in scope only. Events outside the scope can make an \
+             Exact link ambiguous.",
+        )
+        .nl();
+        if scope.text_log_entry_count > 0 {
+            doc.lit("- Text logs are not scoped.").nl();
+        }
+    }
+    render_filters(doc, redactor, &scope.filters);
+    doc.nl();
+}
+
+fn render_machines(doc: &mut Doc, redactor: &Redactor, snapshot: &ReportSnapshot) {
+    let mut tokens: Vec<Safe> = snapshot
+        .machines
+        .iter()
+        .map(|name| redactor.machine(name))
+        .collect();
+    tokens.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    tokens.dedup();
+    if tokens.is_empty() {
+        let entries = snapshot
+            .status
+            .total_items
+            .saturating_add(snapshot.unplaced_events)
+            .saturating_add(snapshot.unplaced_text_lines);
+        doc.lit(if entries == 0 {
+            "- Machines: the session holds no entries"
+        } else {
+            "- Machines: no entry in the session records a machine name"
+        })
+        .nl();
+    } else {
+        doc.lit("- Machines (")
+            .count(tokens.len() as u64)
+            .lit("): ");
+        for (index, token) in tokens.iter().take(REPORT_MACHINE_CAP).enumerate() {
+            if index > 0 {
+                doc.lit(", ");
+            }
+            doc.safe(token);
+        }
+        if tokens.len() > REPORT_MACHINE_CAP {
+            doc.lit(" and ")
+                .count((tokens.len() - REPORT_MACHINE_CAP) as u64)
+                .lit(" more");
+        }
+        doc.nl();
+    }
+    if redactor.skipped_short() > 0 {
+        doc.lit("- Machine names shorter than ")
+            .count(MIN_SUBSTITUTED_MACHINE_CHARS as u64)
+            .lit(" characters, not searched for in free text: ")
+            .count(redactor.skipped_short() as u64)
+            .nl();
+    }
+}
+
+fn render_filters(doc: &mut Doc, redactor: &Redactor, filters: &ReportFilters) {
+    doc.lit("- Filters when the session was built:").nl();
+    doc.lit("  - Levels: ");
+    if filters.levels.len() == REPORT_LEVEL_COUNT {
+        doc.lit("all");
+    } else if filters.levels.is_empty() {
+        doc.lit("none selected");
+    } else {
+        for (index, level) in filters.levels.iter().enumerate() {
+            if index > 0 {
+                doc.lit(", ");
+            }
+            doc.lit(level_word(*level));
+        }
+    }
+    doc.nl();
+    doc.lit("  - Channels: ")
+        .count(filters.channels_selected.len() as u64)
+        .lit(" of ")
+        .count(filters.channels_held)
+        .lit(" loaded channels selected");
+    if !filters.channels_selected.is_empty() {
+        doc.lit(": ");
+        for (index, name) in filters
+            .channels_selected
+            .iter()
+            .take(REPORT_CHANNEL_NAMES_SHOWN)
+            .enumerate()
+        {
+            if index > 0 {
+                doc.lit(", ");
+            }
+            doc.safe(&redactor.text(name, REPORT_NAME_CHARS));
+        }
+        if filters.channels_selected.len() > REPORT_CHANNEL_NAMES_SHOWN {
+            doc.lit(" and ")
+                .count((filters.channels_selected.len() - REPORT_CHANNEL_NAMES_SHOWN) as u64)
+                .lit(" more");
+        }
+    }
+    doc.nl();
+    doc.lit("  - Event IDs: ");
+    if filters.event_id_selectors.is_empty() {
+        doc.lit("not filtered");
+    }
+    for (index, selector) in filters.event_id_selectors.iter().enumerate() {
+        if index > 0 {
+            doc.lit(", ");
+        }
+        match selector {
+            ReportEventIdSelector::Single { id } => doc.count(u64::from(*id)),
+            ReportEventIdSelector::Range { low, high } => doc
+                .count(u64::from(*low))
+                .lit(" to ")
+                .count(u64::from(*high)),
+        };
+    }
+    doc.nl();
+    doc.lit("  - Time window: ")
+        .lit(match filters.time_window {
+            ReportTimeWindow::LastHour => "last hour",
+            ReportTimeWindow::Last24Hours => "last 24 hours",
+            ReportTimeWindow::Last7Days => "last 7 days",
+            ReportTimeWindow::Last30Days => "last 30 days",
+            ReportTimeWindow::All => "all time",
+        })
+        .nl();
+    doc.lit("  - Brushed time range: ");
+    match filters.time_range {
+        Some(range) => doc
+            .safe(&Safe::utc(range.start_ms))
+            .lit(" to ")
+            .safe(&Safe::utc(range.end_ms))
+            .lit(" (start included, end excluded)"),
+        None => doc.lit("none"),
+    };
+    doc.nl();
+    doc.lit("  - Text search: ")
+        .lit(if filters.search_active {
+            "active (its text is not included in this report)"
+        } else {
+            "not active"
+        })
+        .nl();
+    doc.lit("  - Quick filter: ")
+        .lit(if filters.quick_filter_active {
+            "active (its text is not included in this report)"
+        } else {
+            "not active"
+        })
+        .nl();
+    doc.lit("  - Record scope: ")
+        .lit(match filters.record_scope {
+            Some(ReportRecordScopeKind::Finding) => {
+                "limited to the events one finding cites (its title is not included)"
+            }
+            Some(ReportRecordScopeKind::Chain) => {
+                "limited to the events one chain contains (its title is not included)"
+            }
+            None => "none",
+        })
+        .nl();
+}
+
+fn render_top_event_ids(doc: &mut Doc, scope: &ReportScope) {
+    doc.lit("## Top event IDs").nl().nl();
+    if scope.event_record_count == 0 {
+        doc.lit("No events are in scope.").nl().nl();
+        return;
+    }
+    doc.lit("Counted by the app over the ")
+        .count(scope.event_record_count)
+        .lit(" events in scope. ");
+    match scope.distinct_event_id_count {
+        Some(distinct) => doc
+            .lit("Top ")
+            .count(scope.top_event_ids.len() as u64)
+            .lit(" of ")
+            .count(distinct)
+            .lit(" distinct event IDs."),
+        None => doc
+            .lit("Top ")
+            .count(scope.top_event_ids.len() as u64)
+            .lit(" event IDs; the number of distinct IDs was not counted."),
+    };
+    doc.nl().nl();
+    doc.lit("| Event ID | Events |").nl();
+    doc.lit("| --- | --- |").nl();
+    for entry in &scope.top_event_ids {
+        doc.lit("| ")
+            .count(u64::from(entry.event_id))
+            .lit(" | ")
+            .count(entry.count)
+            .lit(" |")
+            .nl();
+    }
+    doc.nl();
+}
+
+fn render_level_mix(doc: &mut Doc, scope: &ReportScope) {
+    doc.lit("## Level mix").nl().nl();
+    if scope.event_record_count == 0 {
+        doc.lit("No events are in scope.").nl().nl();
+        return;
+    }
+    doc.lit("| Level | Events |").nl();
+    doc.lit("| --- | --- |").nl();
+    let mut counted = 0u64;
+    for entry in &scope.level_mix {
+        counted = counted.saturating_add(entry.count);
+        doc.lit("| ")
+            .lit(level_word(entry.level))
+            .lit(" | ")
+            .count(entry.count)
+            .lit(" |")
+            .nl();
+    }
+    doc.nl();
+    if counted != scope.event_record_count {
+        doc.lit("The level counts cover ")
+            .count(counted)
+            .lit(" of the ")
+            .count(scope.event_record_count)
+            .lit(" events in scope.")
+            .nl()
+            .nl();
+    }
+}
+
+fn render_events(doc: &mut Doc, redactor: &Redactor, snapshot: &ReportSnapshot) {
+    doc.lit("## Events").nl().nl();
+    let placed = snapshot.status.event_items;
+    if placed == 0 {
+        doc.lit("No event in scope is placed on the timeline.")
+            .nl()
+            .nl();
+        return;
+    }
+    doc.lit("Events are listed in time order, oldest first, from the session's timeline. Messages are shortened to ")
+        .count(REPORT_MESSAGE_CHARS as u64)
+        .lit(" characters after redaction, and the engine already shortens messages over ")
+        .count((MAX_TIMELINE_MESSAGE_BYTES / 1024) as u64)
+        .lit(" KiB.")
+        .nl()
+        .nl();
+    let listed = snapshot.event_rows.len().min(REPORT_EVENT_ROW_CAP);
+    let listed_count = listed as u64;
+    if listed_count >= placed {
+        doc.lit("All ")
+            .count(placed)
+            .lit(" placed events are listed.");
+    } else {
+        doc.lit("Showing the first ")
+            .count(listed_count)
+            .lit(" of ")
+            .count(placed)
+            .lit(" placed events; ")
+            .count(placed - listed_count)
+            .lit(" omitted.");
+    }
+    doc.nl().nl();
+    doc.lit("| Time (UTC) | Level | ID | Channel | Provider | Message |")
+        .nl();
+    doc.lit("| --- | --- | --- | --- | --- | --- |").nl();
+    for item in snapshot.event_rows.iter().take(REPORT_EVENT_ROW_CAP) {
+        let TimelineOrigin::Event {
+            event_id,
+            channel,
+            provider,
+            ..
+        } = &item.origin
+        else {
+            continue;
+        };
+        doc.lit("| ")
+            .safe(&Safe::utc(item.timestamp_ms))
+            .lit(" | ")
+            .lit(severity_word(item.severity))
+            .lit(" | ")
+            .count(u64::from(*event_id))
+            .lit(" | ")
+            .safe(&redactor.text(channel, REPORT_NAME_CHARS))
+            .lit(" | ")
+            .safe(&redactor.text(provider, REPORT_NAME_CHARS))
+            .lit(" | ")
+            .safe(&redactor.text(&item.message, REPORT_MESSAGE_CHARS))
+            .lit(" |")
+            .nl();
+    }
+    doc.nl();
+}
+
+fn level_word(level: EvtxLevel) -> &'static str {
+    match level {
+        EvtxLevel::Critical => "Critical",
+        EvtxLevel::Error => "Error",
+        EvtxLevel::Warning => "Warning",
+        EvtxLevel::Information => "Information",
+        EvtxLevel::Verbose => "Verbose",
+    }
+}
+
+fn severity_word(severity: TimelineSeverity) -> &'static str {
+    match severity {
+        TimelineSeverity::Critical => "Critical",
+        TimelineSeverity::Error => "Error",
+        TimelineSeverity::Warning => "Warning",
+        TimelineSeverity::Info => "Information",
+        TimelineSeverity::Verbose => "Verbose",
+    }
+}
 
 mod safe {
     //! The only code that can write text into the report.
@@ -357,8 +1018,15 @@ mod safe {
 #[cfg(test)]
 mod tests {
     use super::safe::{cut_chars, escape, flatten, token_len_at, Doc, Redactor, Safe};
-    use super::MAX_REPORT_BYTES;
+    use super::{
+        render_report, render_report_within, EventLogAnalysisReportRequest, ReportInput,
+        ReportSnapshot, MAX_REPORT_BYTES, REPORT_EVENT_ROW_CAP,
+    };
+    use crate::event_log::analysis_session::EventLogAnalysisSessionStatus;
     use cmtraceopen_parser::intune::apps::windows::common::redact_field_value;
+    use cmtraceopen_parser::unified_timeline::{TimelineItem, TimelineOrigin, TimelineSeverity};
+    use serde_json::json;
+    use std::collections::BTreeSet;
 
     fn redactor(names: &[&str]) -> Redactor {
         let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
@@ -517,5 +1185,517 @@ mod tests {
         doc.lit("0123456789").nl();
         assert!(doc.finish(10).is_err());
         assert_eq!(MAX_REPORT_BYTES, 2 * 1024 * 1024);
+    }
+
+    // ---- the request, the scope block and the events table ------------------------------------
+
+    const FIXTURE_NOW_MS: i64 = 1_791_282_047_123;
+
+    fn request_json() -> serde_json::Value {
+        json!({
+            "sessionId": "test-session",
+            "expectedRevision": 3,
+            "generatedAtMs": FIXTURE_NOW_MS,
+            "coverageGaps": [],
+            "scope": {
+                "sourceMode": "files",
+                "loadedRecordCount": 10,
+                "eventRecordCount": 10,
+                "archiveTextRecordCount": 0,
+                "textLogEntryCount": 0,
+                "levelMix": [
+                    {"level": "Error", "count": 4},
+                    {"level": "Information", "count": 6}
+                ],
+                "topEventIds": [
+                    {"eventId": 100, "count": 6},
+                    {"eventId": 7, "count": 4}
+                ],
+                "distinctEventIdCount": 2,
+                "filters": {
+                    "levels": ["Critical", "Error", "Warning", "Information", "Verbose"],
+                    "channelsSelected": ["Application"],
+                    "channelsHeld": 1,
+                    "eventIdSelectors": [],
+                    "timeWindow": "all",
+                    "timeRange": null,
+                    "searchActive": false,
+                    "quickFilterActive": false,
+                    "recordScope": null
+                }
+            }
+        })
+    }
+
+    fn request_from(value: serde_json::Value) -> EventLogAnalysisReportRequest {
+        serde_json::from_value(value).expect("the request parses")
+    }
+
+    fn base_request() -> EventLogAnalysisReportRequest {
+        request_from(request_json())
+    }
+
+    fn status(event_items: u64, log_items: u64) -> EventLogAnalysisSessionStatus {
+        EventLogAnalysisSessionStatus {
+            session_id: "test-session".to_owned(),
+            revision: 3,
+            total_items: event_items + log_items,
+            event_items,
+            log_items,
+            total_unplaced: 0,
+            total_edges: 0,
+            total_coverage_gaps: 0,
+            finalized: true,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn event_item(
+        timestamp_ms: i64,
+        severity: TimelineSeverity,
+        event_id: u32,
+        channel: &str,
+        provider: &str,
+        machine: Option<&str>,
+        record: u64,
+        message: &str,
+    ) -> TimelineItem {
+        TimelineItem {
+            timestamp_ms,
+            severity,
+            message: message.to_owned(),
+            origin: TimelineOrigin::Event {
+                stable_id: format!("source8:test.evtx|machine0:|channel0:|record{record}"),
+                source: "test.evtx".to_owned(),
+                machine: machine.map(str::to_owned),
+                bundle: None,
+                channel: channel.to_owned(),
+                provider: provider.to_owned(),
+                process_id: None,
+                activity_id: None,
+                related_activity_id: None,
+                session_id: None,
+                device_id: None,
+                user_id: None,
+                process_start_time: None,
+                identity_conflicts: Vec::new(),
+                event_id,
+                record_id: record,
+                record_id_text: Some(record.to_string()),
+            },
+        }
+    }
+
+    fn plain_item(index: u64) -> TimelineItem {
+        event_item(
+            FIXTURE_NOW_MS + index as i64 * 1000,
+            TimelineSeverity::Info,
+            100,
+            "Application",
+            "Ordinary.Provider",
+            Some("HOST-0001"),
+            index + 1,
+            "An ordinary message.",
+        )
+    }
+
+    fn snapshot_of(rows: Vec<TimelineItem>, placed: u64) -> ReportSnapshot {
+        let mut machines = BTreeSet::new();
+        for row in &rows {
+            if let TimelineOrigin::Event {
+                machine: Some(machine),
+                ..
+            } = &row.origin
+            {
+                machines.insert(machine.clone());
+            }
+        }
+        ReportSnapshot {
+            status: status(placed, 0),
+            event_rows: rows,
+            unplaced_events: 0,
+            unplaced_text_lines: 0,
+            span_ms: Some((FIXTURE_NOW_MS, FIXTURE_NOW_MS + 1000)),
+            machines,
+        }
+    }
+
+    fn render(request: &EventLogAnalysisReportRequest, snapshot: &ReportSnapshot) -> String {
+        render_report(&ReportInput { request, snapshot }).expect("the report renders")
+    }
+
+    fn table_rows(report: &str) -> usize {
+        report
+            .lines()
+            .filter(|line| line.starts_with("| 2026-"))
+            .count()
+    }
+
+    #[test]
+    fn the_request_contract_parses_and_refuses_text_it_has_no_field_for() {
+        base_request()
+            .validate()
+            .expect("the base request is valid");
+        for window in ["1h", "24h", "7d", "30d", "all"] {
+            let mut value = request_json();
+            value["scope"]["filters"]["timeWindow"] = json!(window);
+            request_from(value);
+        }
+        let mut value = request_json();
+        value["scope"]["filters"]["eventIdSelectors"] = json!([
+            {"kind": "single", "id": 4624},
+            {"kind": "range", "low": 4625, "high": 4630}
+        ]);
+        request_from(value).validate().expect("selectors are valid");
+
+        // No field carries what the operator typed, a title or a record: an attempt to send one
+        // is refused at the type, at every level.
+        for (path, key) in [
+            ("", "searchText"),
+            ("scope", "chainTitle"),
+            ("scope.filters", "searchText"),
+            ("scope.filters", "quickFilterText"),
+            ("scope.filters", "recordScopeTitle"),
+        ] {
+            let mut value = request_json();
+            let target = path
+                .split('.')
+                .filter(|part| !part.is_empty())
+                .fold(&mut value, |node, part| &mut node[part]);
+            target[key] = json!("fixture text");
+            assert!(
+                serde_json::from_value::<EventLogAnalysisReportRequest>(value).is_err(),
+                "{path}.{key} was accepted"
+            );
+        }
+        let mut value = request_json();
+        value["scope"]["filters"]["timeWindow"] = json!("2h");
+        assert!(serde_json::from_value::<EventLogAnalysisReportRequest>(value).is_err());
+    }
+
+    #[test]
+    fn validation_refuses_what_cannot_be_true() {
+        type Change = fn(&mut serde_json::Value);
+        let cases: [(&str, Change); 9] = [
+            ("level counts exceed", |v| {
+                v["scope"]["levelMix"][0]["count"] = json!(7);
+            }),
+            ("a level is counted twice", |v| {
+                v["scope"]["levelMix"][1]["level"] = json!("Error");
+            }),
+            ("event ID counts exceed", |v| {
+                v["scope"]["topEventIds"][0]["count"] = json!(9);
+            }),
+            ("an event ID is counted twice", |v| {
+                v["scope"]["topEventIds"][1]["eventId"] = json!(100);
+            }),
+            ("distinct event ID count is impossible", |v| {
+                v["scope"]["distinctEventIdCount"] = json!(1);
+            }),
+            ("distinct event ID count is impossible", |v| {
+                v["scope"]["distinctEventIdCount"] = json!(11);
+            }),
+            ("selectors are impossible", |v| {
+                v["scope"]["filters"]["eventIdSelectors"] =
+                    json!([{"kind": "range", "low": 9, "high": 3}]);
+            }),
+            ("channel list is too large", |v| {
+                v["scope"]["filters"]["channelsSelected"] = json!(["c".repeat(513)]);
+            }),
+            ("ends before it starts", |v| {
+                v["scope"]["filters"]["timeRange"] = json!({"startMs": 9, "endMs": 3});
+            }),
+        ];
+        for (expected, change) in cases {
+            let mut value = request_json();
+            change(&mut value);
+            let error = request_from(value).validate().expect_err(expected);
+            assert!(error.contains(expected), "{expected}: {error}");
+        }
+    }
+
+    #[test]
+    fn the_events_table_lists_at_most_the_cap_and_counts_the_rest() {
+        let request = base_request();
+        // (rows the snapshot holds, events the session placed, rows printed, closing sentence)
+        let cases: [(u64, u64, usize, &str); 6] = [
+            (0, 0, 0, "No event in scope is placed on the timeline."),
+            (499, 499, 499, "All 499 placed events are listed."),
+            (500, 500, 500, "All 500 placed events are listed."),
+            (
+                500,
+                501,
+                500,
+                "Showing the first 500 of 501 placed events; 1 omitted.",
+            ),
+            (
+                501,
+                501,
+                500,
+                "Showing the first 500 of 501 placed events; 1 omitted.",
+            ),
+            (
+                600,
+                1200,
+                500,
+                "Showing the first 500 of 1200 placed events; 700 omitted.",
+            ),
+        ];
+        assert_eq!(REPORT_EVENT_ROW_CAP, 500);
+        for (held, placed, printed, sentence) in cases {
+            let rows = (0..held).map(plain_item).collect();
+            let report = render(&request, &snapshot_of(rows, placed));
+            assert_eq!(table_rows(&report), printed, "{held} held, {placed} placed");
+            assert!(report.contains(sentence), "{sentence}\n{report}");
+        }
+    }
+
+    #[test]
+    fn every_cell_of_the_events_table_is_redacted() {
+        let message = concat!(
+            "Sign-in by user_0001@example.invalid from HOST-0002 ",
+            "SID S-1-5-21-1000000001-1000000002-1000000003-1001 ",
+            "TenantId=00000000-0000-4000-8000-000000000001 ",
+            r"profile C:\Users\user_0001\AppData\Local\Temp\a.log"
+        );
+        let item = event_item(
+            FIXTURE_NOW_MS,
+            TimelineSeverity::Error,
+            1001,
+            "Microsoft-Windows-Fixture/Admin for HOST-0002",
+            r"Vendor C:\Users\user_0001\x",
+            Some("HOST-0002"),
+            1,
+            message,
+        );
+        let report = render(&base_request(), &snapshot_of(vec![item], 1));
+        for leak in [
+            "HOST-0002",
+            "user_0001",
+            "example.invalid",
+            "S-1-5-21-1000000001",
+            "00000000-0000-4000-8000-000000000001",
+        ] {
+            assert!(!report.contains(leak), "{leak} leaked:\n{report}");
+        }
+        // `TenantId=` is a sensitive label, so the export pass masks its value whole.
+        for token in [
+            "[host:",
+            "[upn:",
+            "[sid:",
+            r"\[sensitive:TenantId\]",
+            "[user:",
+        ] {
+            assert!(report.contains(token), "{token} missing:\n{report}");
+        }
+        assert_eq!(table_rows(&report), 1);
+    }
+
+    #[test]
+    fn a_report_of_five_hundred_long_rows_is_redacted_per_field_not_as_a_document() {
+        // Over 256 KiB in all: redacting the assembled document would replace it with the
+        // oversize marker, so the redaction has to be per field.
+        let message = format!("user_0001@example.invalid {}", "word ".repeat(60));
+        let rows: Vec<TimelineItem> = (0..500)
+            .map(|index| {
+                event_item(
+                    FIXTURE_NOW_MS + index,
+                    TimelineSeverity::Warning,
+                    100,
+                    &format!("Microsoft-Windows-{}/Operational", "Channel-".repeat(20)),
+                    &format!("Microsoft-Windows-{}", "Provider-".repeat(20)),
+                    Some("HOST-0001"),
+                    index as u64 + 1,
+                    &message,
+                )
+            })
+            .collect();
+        let report = render(&base_request(), &snapshot_of(rows, 500));
+        assert!(report.len() > 256 * 1024, "{}", report.len());
+        assert!(!report.contains("oversized text omitted"));
+        assert_eq!(table_rows(&report), 500);
+        assert_eq!(report.matches("[upn:").count(), 500);
+    }
+
+    #[test]
+    fn the_scope_block_counts_what_is_unplaced_and_flags_counts_that_disagree() {
+        let request = base_request();
+        let mut snapshot = snapshot_of((0..8).map(plain_item).collect(), 8);
+        snapshot.unplaced_events = 2;
+        snapshot.unplaced_text_lines = 3;
+        let report = render(&request, &snapshot);
+        assert!(report.contains(
+            "- Events in scope without a usable timestamp, not placed and not listed below: 2"
+        ));
+        assert!(report.contains("- Text lines without a usable timestamp, not placed: 3"));
+        assert!(!report.contains("The session holds"), "{report}");
+
+        snapshot.unplaced_events = 1;
+        let report = render(&request, &snapshot);
+        assert!(report.contains(
+            "The session holds 9 events and the app counted 10 in scope. The two counts are \
+             shown as each side reported them."
+        ));
+    }
+
+    #[test]
+    fn a_narrowed_scope_is_disclosed_and_an_unnarrowed_one_is_not() {
+        let mut value = request_json();
+        value["scope"]["loadedRecordCount"] = json!(100);
+        value["scope"]["textLogEntryCount"] = json!(4);
+        let report = render(&request_from(value), &snapshot_of(Vec::new(), 0));
+        assert!(report.contains("computed over the events in scope only"));
+        assert!(report.contains("- Text logs are not scoped."));
+
+        let mut value = request_json();
+        value["scope"]["loadedRecordCount"] = json!(100);
+        let report = render(&request_from(value), &snapshot_of(Vec::new(), 0));
+        assert!(report.contains("computed over the events in scope only"));
+        assert!(!report.contains("Text logs are not scoped."));
+
+        let report = render(&base_request(), &snapshot_of(Vec::new(), 0));
+        assert!(!report.contains("computed over the events in scope only"));
+    }
+
+    #[test]
+    fn machines_are_listed_as_tokens_and_their_absence_is_said_precisely() {
+        let mut rows = vec![plain_item(0)];
+        rows.push(event_item(
+            FIXTURE_NOW_MS,
+            TimelineSeverity::Info,
+            1,
+            "Application",
+            "P",
+            Some("HOST-0002"),
+            9,
+            "m",
+        ));
+        let report = render(&base_request(), &snapshot_of(rows, 2));
+        let expected = {
+            let mut tokens = [host("HOST-0001"), host("HOST-0002")];
+            tokens.sort();
+            format!("- Machines (2): {}, {}", tokens[0], tokens[1])
+        };
+        assert!(report.contains(&expected), "{report}");
+        assert!(!report.contains("HOST-000"), "{report}");
+
+        let mut anonymous = snapshot_of(vec![plain_item(0)], 1);
+        anonymous.machines.clear();
+        let report = render(&base_request(), &anonymous);
+        assert!(report.contains("- Machines: no entry in the session records a machine name"));
+
+        let empty = snapshot_of(Vec::new(), 0);
+        let report = render(&base_request(), &empty);
+        assert!(report.contains("- Machines: the session holds no entries"));
+
+        let mut short = snapshot_of(vec![plain_item(0)], 1);
+        short.machines.insert("ab".to_owned());
+        let report = render(&base_request(), &short);
+        assert!(report.contains("shorter than 3 characters, not searched for in free text: 1"));
+    }
+
+    #[test]
+    fn the_aggregates_are_the_apps_counts_and_say_what_they_do_not_cover() {
+        let report = render(&base_request(), &snapshot_of(Vec::new(), 0));
+        assert!(report.contains("Top 2 of 2 distinct event IDs."));
+        assert!(report.contains("| 100 | 6 |"));
+        assert!(report.contains("| Error | 4 |"));
+        assert!(!report.contains("The level counts cover"));
+
+        let mut value = request_json();
+        value["scope"]["distinctEventIdCount"] = json!(null);
+        value["scope"]["levelMix"][0]["count"] = json!(3);
+        let report = render(&request_from(value), &snapshot_of(Vec::new(), 0));
+        assert!(report.contains("the number of distinct IDs was not counted"));
+        assert!(report.contains("The level counts cover 9 of the 10 events in scope."));
+
+        let mut value = request_json();
+        value["scope"]["eventRecordCount"] = json!(0);
+        value["scope"]["levelMix"] = json!([]);
+        value["scope"]["topEventIds"] = json!([]);
+        value["scope"]["distinctEventIdCount"] = json!(0);
+        let report = render(&request_from(value), &snapshot_of(Vec::new(), 0));
+        assert_eq!(report.matches("No events are in scope.").count(), 2);
+    }
+
+    #[test]
+    fn filters_are_typed_and_what_the_operator_typed_is_never_printed() {
+        let mut value = request_json();
+        value["scope"]["filters"]["searchActive"] = json!(true);
+        value["scope"]["filters"]["quickFilterActive"] = json!(true);
+        value["scope"]["filters"]["recordScope"] = json!("chain");
+        value["scope"]["filters"]["levels"] = json!(["Critical", "Error"]);
+        value["scope"]["filters"]["eventIdSelectors"] = json!([
+            {"kind": "single", "id": 4624},
+            {"kind": "range", "low": 4625, "high": 4630}
+        ]);
+        value["scope"]["filters"]["timeRange"] =
+            json!({"startMs": FIXTURE_NOW_MS, "endMs": FIXTURE_NOW_MS + 60_000});
+        value["scope"]["filters"]["timeWindow"] = json!("7d");
+        let report = render(&request_from(value), &snapshot_of(Vec::new(), 0));
+        assert!(report.contains("  - Levels: Critical, Error"));
+        assert!(report.contains("  - Event IDs: 4624, 4625 to 4630"));
+        assert!(report.contains("  - Time window: last 7 days"));
+        assert!(report.contains(
+            "  - Brushed time range: 2026-10-06T10:20:47.123Z to 2026-10-06T10:21:47.123Z \
+             (start included, end excluded)"
+        ));
+        assert!(
+            report.contains("  - Text search: active (its text is not included in this report)")
+        );
+        assert!(
+            report.contains("  - Quick filter: active (its text is not included in this report)")
+        );
+        assert!(report.contains("  - Record scope: limited to the events one chain contains"));
+        assert!(report.contains("  - Channels: 1 of 1 loaded channels selected: Application"));
+    }
+
+    #[test]
+    fn times_are_utc_and_one_no_calendar_holds_is_marked_not_shown_as_1970() {
+        let item = event_item(
+            i64::MAX,
+            TimelineSeverity::Info,
+            1,
+            "Application",
+            "P",
+            None,
+            1,
+            "m",
+        );
+        let report = render(&base_request(), &snapshot_of(vec![item], 1));
+        assert!(
+            report.contains("| time unavailable | Information | 1 |"),
+            "{report}"
+        );
+        assert!(!report.contains("1970"));
+        assert!(report.contains("- Generated: 2026-10-06T10:20:47.123Z"));
+        assert!(report.contains("All times are UTC (ISO 8601)."));
+    }
+
+    #[test]
+    fn a_report_over_its_cap_is_an_error_and_never_a_shorter_file() {
+        let request = base_request();
+        let snapshot = snapshot_of((0..50).map(plain_item).collect(), 50);
+        let input = ReportInput {
+            request: &request,
+            snapshot: &snapshot,
+        };
+        let full = render_report_within(&input, MAX_REPORT_BYTES).expect("within the cap");
+        assert!(render_report_within(&input, full.len()).is_ok());
+        let error = render_report_within(&input, full.len() - 1).expect_err("one byte over");
+        assert!(error.contains("not written"), "{error}");
+    }
+
+    #[test]
+    fn the_report_is_deterministic_and_does_not_claim_to_be_free_of_identifiers() {
+        let request = base_request();
+        let snapshot = snapshot_of((0..20).map(plain_item).collect(), 20);
+        let first = render(&request, &snapshot);
+        assert_eq!(first, render(&request, &snapshot));
+        assert!(
+            first.contains("Free text can still contain identifiers that no pattern recognizes")
+        );
+        assert!(first.starts_with("# Event Logs report\n"));
+        assert!(!first.to_lowercase().contains("no sensitive"));
     }
 }
