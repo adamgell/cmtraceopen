@@ -2,6 +2,12 @@ import { tokens } from "@fluentui/react-components";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  DEFAULT_LOG_LIST_FONT_SIZE,
+  MAX_LOG_LIST_FONT_SIZE,
+  MIN_LOG_LIST_FONT_SIZE,
+} from "../../lib/log-accessibility";
+import { useUiStore } from "../../stores/ui-store";
 import { deferred } from "../../test-utils/deferred";
 import {
   EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT,
@@ -194,6 +200,30 @@ describe("UnifiedTimelineView", () => {
     expect(log.style.backgroundColor).toBe(tokens.colorNeutralBackground3);
     // Each chip is in its own row, in the column the rows reserve for it.
     expect(within(evt.closest("div[data-index]") as HTMLElement).queryByRole("img", { name: "Text log line" })).toBeNull();
+  });
+
+  it("centers the chip in the 40 px column the rows reserve, at every font size, with the chip's own size", () => {
+    const before = useUiStore.getState().logListFontSize;
+    try {
+      for (const fontSize of [MIN_LOG_LIST_FONT_SIZE, DEFAULT_LOG_LIST_FONT_SIZE, MAX_LOG_LIST_FONT_SIZE]) {
+        useUiStore.setState({ logListFontSize: fontSize });
+        const view = render(<UnifiedTimelineView {...timelineSessionProps(timeline)} />);
+        const chip = screen.getByRole("img", { name: "Windows event" });
+        // The chip is a child of its column, which is a centering flex box of fixed width that never
+        // shrinks: its own width (at most 41 px at the largest font, measured in Chromium) is split
+        // evenly on both sides.
+        const column = chip.parentElement as HTMLElement;
+        expect(column.style.width, `column at ${fontSize}`).toBe("40px");
+        expect(column.style.display).toBe("flex");
+        expect(column.style.justifyContent).toBe("center");
+        expect(column.style.flexShrink).toBe("0");
+        // The chip sizes itself: max(10, f - 4), whatever size the row's own text is.
+        expect(chip.style.fontSize, `chip at ${fontSize}`).toBe(`${Math.max(10, fontSize - 4)}px`);
+        view.unmount();
+      }
+    } finally {
+      useUiStore.setState({ logListFontSize: before });
+    }
   });
 
   it("draws no chip of its own: the kind chip is the shared component", () => {
