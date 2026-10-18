@@ -11,6 +11,7 @@
  */
 import { createContext, useContext, type ReactNode } from "react";
 import type { EventLogAnalysisSessionStatus } from "../../lib/commands";
+import type { CorrelationStage } from "./useEvtxCorrelation";
 
 export type EvtxAnalysisSession = Pick<EventLogAnalysisSessionStatus, "sessionId" | "revision">;
 
@@ -30,4 +31,25 @@ export function EvtxAnalysisSessionProvider({
 /** The published session, or null while there is none. */
 export function useEvtxAnalysisSession(): EvtxAnalysisSession | null {
   return useContext(EvtxAnalysisSessionContext);
+}
+
+/**
+ * What a surface that reads the session can say about it. "No session" is two states, and only the
+ * correlation stage tells them apart, because the workspace holds the status at null for the whole
+ * of every (re)build: one is on the way (`building`: the events are loaded and the analysis is being
+ * built or rebuilt, and a window read earlier is kept and shown as an earlier session's), and one is
+ * not coming (`none`: there is nothing to wait for, and nothing read earlier is shown).
+ */
+export type EvtxAnalysisSessionState = "available" | "building" | "none";
+
+/**
+ * The state of the analysis session, from the status the provider holds and the correlation stage.
+ * The one place this rule is written: the dock and the Details context list both call it.
+ */
+export function analysisSessionState(
+  status: EvtxAnalysisSession | null,
+  stage: CorrelationStage,
+): EvtxAnalysisSessionState {
+  if (status !== null) return "available";
+  return stage === "pending" ? "building" : "none";
 }

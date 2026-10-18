@@ -57,7 +57,7 @@ import {
   type DockReady,
   type MarkerSelectability,
 } from "./evtx-correlation-dock-model";
-import { useEvtxAnalysisSession, type EvtxAnalysisSession } from "./evtx-analysis-session";
+import { analysisSessionState, useEvtxAnalysisSession, type EvtxAnalysisSession } from "./evtx-analysis-session";
 import { itemsByOriginId } from "./evtx-correlation-origin-index";
 import { openCorrelationView } from "./evtx-correlation-store";
 import type { CorrelationWindowDeps, LoadedCorrelationWindow } from "./evtx-correlation-window";
@@ -225,7 +225,8 @@ export default function EvtxCorrelationDock({
   const openDisabled = ready !== null && "disabled" in ready.open ? ready.open.disabled : null;
   const canOpen = ready !== null && "rowId" in ready.open;
   // Waiting for a session that is on the way is busy too: the body says so, and a reader is told.
-  const waitingForSession = model !== null && model.kind === "unread" && status === null && stage === "pending";
+  const waitingForSession =
+    model !== null && model.kind === "unread" && analysisSessionState(status, stage) === "building";
   const busy = !collapsed && (reading || waitingForSession || (ready !== null && ready.updating));
   const primary = railText.primary;
   const secondary = railText.secondary;
@@ -407,8 +408,14 @@ function messageFor(
     case "ready":
       // No session is two states: one is on the way (the events are loaded and the analysis is being
       // built or rebuilt), or none is and none is coming. Only the second says there is nothing.
-      if (status !== null) return READING_WINDOW_TEXT;
-      return stage === "pending" ? ANALYSIS_BUILDING_TEXT : NO_SESSION_TEXT;
+      switch (analysisSessionState(status, stage)) {
+        case "available":
+          return READING_WINDOW_TEXT;
+        case "building":
+          return ANALYSIS_BUILDING_TEXT;
+        case "none":
+          return NO_SESSION_TEXT;
+      }
   }
 }
 

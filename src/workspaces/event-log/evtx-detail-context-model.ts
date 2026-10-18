@@ -60,6 +60,7 @@ import {
   type DockSelected,
   type WindowRead,
 } from "./evtx-correlation-dock-model";
+import type { EvtxAnalysisSessionState } from "./evtx-analysis-session";
 import { repeatedItems } from "./evtx-correlation-origin-index";
 import {
   describeLanes,
@@ -100,12 +101,13 @@ export const LINKS_MAY_BE_MISSING_TEXT =
 /** Said while the counts shown are an earlier session's, which a newer one is replacing. */
 export const TIMELINE_UPDATING_NOTE = "The timeline is being rebuilt, so links shown here may change.";
 
-/** What the section knows about the analysis session, for the states before there is a window. */
-export type DetailSessionState = "none" | "building" | "available";
-
 export interface DetailContextInput extends DockModelInput {
-  /** Used only while no window answers the selection: a window that does is listed whatever this says. */
-  session: DetailSessionState;
+  /**
+   * The state of the analysis session (`analysisSessionState`). Under `none` nothing is listed,
+   * whatever window it is given: there is no session and none is coming. A window kept while a
+   * session is being rebuilt (`building`) is still listed, as an earlier session's pair.
+   */
+  session: EvtxAnalysisSessionState;
 }
 
 /** A direct Exact or Candidate edge between an entry and the selected event. */
@@ -280,7 +282,7 @@ function captionFor(input: {
     : `${entriesText(input.read)} read`;
 }
 
-function unreadState(session: DetailSessionState): DetailContextModel {
+function unreadState(session: EvtxAnalysisSessionState): DetailContextModel {
   if (session === "none") return { kind: "noSession", text: NO_SESSION_TEXT };
   if (session === "building") return { kind: "building", text: BUILDING_TIMELINE_TEXT };
   return { kind: "reading", text: READING_WINDOW_TEXT };
@@ -448,8 +450,13 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
  */
 export function buildDetailContext(input: DetailContextInput): DetailContextModel {
   if (input.record === null) return { kind: "none" };
+  // Under no session nothing is listed; a window of another width is no read of this list's request.
   const window =
-    input.window !== null && input.window.halfWidthMs === DETAIL_CONTEXT_HALF_WIDTH_MS ? input.window : null;
+    input.session !== "none" &&
+    input.window !== null &&
+    input.window.halfWidthMs === DETAIL_CONTEXT_HALF_WIDTH_MS
+      ? input.window
+      : null;
   const facts = readWindowFacts({
     record: input.record,
     window,

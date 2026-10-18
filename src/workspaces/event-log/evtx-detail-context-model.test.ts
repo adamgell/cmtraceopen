@@ -122,9 +122,29 @@ describe("which state the list is in", () => {
     expect(buildDetailContext(input({ window: windowAround(record, entries(), {}, 75_000) })).kind).toBe("reading");
   });
 
-  it("keeps listing a window that answers the selection while the session is rebuilt", () => {
+  it("keeps listing a window that answers the selection while the session is being rebuilt", () => {
     expect(buildDetailContext(input({ session: "building" })).kind).toBe("ready");
-    expect(buildDetailContext(input({ session: "none" })).kind).toBe("ready");
+    expect(buildDetailContext(input({ session: "available" })).kind).toBe("ready");
+  });
+
+  it("lists the kept window of a session being rebuilt as an earlier session's pair, with the updating note", () => {
+    const model = ready({ session: "building", counts: countsFor([], { updating: true }) });
+    expect(model.updating).toBe(true);
+    expect(model.notices).toContain(TIMELINE_UPDATING_NOTE);
+  });
+
+  it("never lists a window under no session: none says so, whatever window it is given", () => {
+    expect(buildDetailContext(input({ session: "none" }))).toEqual({ kind: "noSession", text: NO_SESSION_TEXT });
+    // Not even the pair of an earlier session that is no longer being replaced.
+    expect(buildDetailContext(input({ session: "none", counts: countsFor([], { updating: true }) }))).toEqual({
+      kind: "noSession",
+      text: NO_SESSION_TEXT,
+    });
+  });
+
+  it("still says untimed before it says anything about the session", () => {
+    const untimed = { ...recordFor(20), timestampEpoch: 0 };
+    expect(buildDetailContext(input({ record: untimed, session: "none" }))).toEqual({ kind: "untimed", text: UNTIMED_TEXT });
   });
 
   it("fails with the error when the first reply never came, and never counts the window as empty", () => {
