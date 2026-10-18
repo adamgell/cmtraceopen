@@ -1154,19 +1154,85 @@ describe("the model is a function of its input", () => {
     expect(JSON.stringify(input.window)).toBe(before);
   });
 
-  it("builds a 6,000-entry window quickly", () => {
+  describe("what it costs grows with the window, not with its square", () => {
     const record = recordFor(1);
     const t = record.timestampEpoch;
-    const items = [
-      eventItem(1, t),
-      ...Array.from({ length: 5_999 }, (_, i) => onChannel(1_000 + i, t - 70_000 + i * 23, `Chan${i % 40}`)),
-    ];
-    const started = performance.now();
-    const model = ready({ record, window: windowAround(record, items), counts: counts([]), unreadSources: false });
-    const elapsed = performance.now() - started;
-    expect(model.plot.lanes).toHaveLength(5);
-    expect(model.plot.nearby).toHaveLength(60);
-    expect(elapsed).toBeLessThan(1_500);
+
+    /**
+     * `n` entries, the first the selected event and the rest spread over 40 channels across the
+     * window, whose `timestampMs` and `origin` count every read. The lane mix is the same for any n.
+     */
+    function countedItems(n: number, reads: { count: number }): TimelineItem[] {
+      const counted = (source: TimelineItem): TimelineItem => {
+        const copy = { severity: source.severity, message: source.message } as TimelineItem;
+        Object.defineProperty(copy, "timestampMs", {
+          enumerable: true,
+          get() {
+            reads.count += 1;
+            return source.timestampMs;
+          },
+        });
+        Object.defineProperty(copy, "origin", {
+          enumerable: true,
+          get() {
+            reads.count += 1;
+            return source.origin;
+          },
+        });
+        return copy;
+      };
+      return [
+        counted(eventItem(1, t)),
+        ...Array.from({ length: n - 1 }, (_, i) =>
+          counted(onChannel(1_000 + i, t - 70_000 + Math.floor((i * 140_000) / n), `Chan${i % 40}`)),
+        ),
+      ];
+    }
+
+    function readsFor(n: number): number {
+      const reads = { count: 0 };
+      const items = countedItems(n, reads);
+      reads.count = 0;
+      const model = ready({ record, window: windowAround(record, items), counts: counts([]), unreadSources: false });
+      expect(model.plot.lanes).toHaveLength(5);
+      expect(model.plot.nearby).toHaveLength(60);
+      return reads.count;
+    }
+
+    it("reads each entry a bounded number of times: doubling the window less than 2.6 times the reads", () => {
+      const small = readsFor(3_000);
+      const large = readsFor(6_000);
+      // The counting works: every entry is read more than once, and the figure is not trivial.
+      expect(small).toBeGreaterThan(3_000);
+      // n log n doubles to about 2.2; an O(n squared) step anywhere would quadruple it.
+      expect(large / small, `${small} reads at 3,000 entries, ${large} at 6,000`).toBeLessThan(2.6);
+    });
+
+    it("counts a pass that is quadratic, so the guard can fail", () => {
+      // A control for the guard itself: a deliberately quadratic pass over the same counted entries.
+      const grown = (n: number) => {
+        const reads = { count: 0 };
+        const items = countedItems(n, reads);
+        reads.count = 0;
+        for (const a of items) for (const b of items) if (a.timestampMs === b.timestampMs) void 0;
+        return reads.count;
+      };
+      expect(grown(600) / grown(300)).toBeGreaterThan(2.6);
+    });
+
+    it("smoke: builds a 6,000-entry window in well under ten seconds, and logs its figure", () => {
+      const items = [
+        eventItem(1, t),
+        ...Array.from({ length: 5_999 }, (_, i) => onChannel(1_000 + i, t - 70_000 + i * 23, `Chan${i % 40}`)),
+      ];
+      const started = performance.now();
+      const model = ready({ record, window: windowAround(record, items), counts: counts([]), unreadSources: false });
+      const elapsed = performance.now() - started;
+      console.info(`buildDockModel, 6,000 entries over 40 channels: ${elapsed.toFixed(1)} ms`);
+      expect(model.plot.lanes).toHaveLength(5);
+      expect(model.plot.nearby).toHaveLength(60);
+      expect(elapsed).toBeLessThan(10_000);
+    });
   });
 });
 
