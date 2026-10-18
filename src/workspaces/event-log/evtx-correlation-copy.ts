@@ -202,6 +202,16 @@ export const WAIT_FOR_ENTRIES_REASON = "Wait for the entries of this chain to be
 /** Said once above a list of entries in time order: a sequence is not a cause. */
 export const SEQUENCE_ORDER_NOTE = "Ordered by recorded time. Order is not evidence of cause.";
 
+/**
+ * The heading of the copied text's sequence: the order note's two sentences as one parenthesised clause
+ * (the first word of each lower-cased, a semicolon between), so the copied text and the list say it in
+ * the one set of words.
+ */
+export const SEQUENCE_HEADING = `Sequence (${SEQUENCE_ORDER_NOTE.replace(/\.$/, "")
+  .split(". ")
+  .map((part) => part.charAt(0).toLowerCase() + part.slice(1))
+  .join("; ")})`;
+
 /** The sentence said of an entry whose timestamp equals the entry above it: time does not order the two. */
 const SAME_TIME_SENTENCE = "same timestamp as the entry above; their order is not established";
 
@@ -233,6 +243,53 @@ export function noChainsFoundText(edgeInputComplete: boolean): string {
   return edgeInputComplete
     ? "No correlation chains were found in this session."
     : "No chains were found among the edges that were loaded.";
+}
+
+/** Said in place of a chain's entries while they are read. */
+export const CHAIN_ENTRIES_BEING_READ_TEXT = "The entries of this chain are being read.";
+
+/** Said in place of a chain's steps when the read of its entries did not reach them. */
+export const CHAIN_STEPS_NOT_READ_TEXT = "The entries of this chain were not read, so there are no steps to show.";
+
+/** Said of a chain none of whose entries has a loaded position (the entries were read). */
+export const NO_ENTRY_POSITION_TEXT = "No entry has a loaded timeline position.";
+
+/** Added to the name of the chain row that holds the selected event. */
+export const CONTAINS_SELECTED_EVENT_SUFFIX = ", contains the selected event";
+
+/** The spec's empty state (8.13). An absence of links is claimed here, so it needs `noLinkedChainsText`. */
+export const NO_LINKED_EVENTS_TEXT =
+  "No linked events. Correlation requires a shared identifier; time proximity alone is not a link.";
+
+/** Said when no chain was found and the session cannot speak for an absence: the notes say why. */
+export const NO_CHAINS_QUALIFIED_TEXT =
+  "No chains were found, but the notes above say what was not covered, so this does not show that none exist.";
+
+/**
+ * The line for a model that holds no row at all. The spec's sentence says there are no linked events,
+ * which is a claim about the whole session: it is said only when `speaks` (every edge loaded, nothing
+ * narrowed, no gap that clears completeness, no unread source, no rebuild under way). Without that it
+ * says only what was looked at.
+ */
+export function noLinkedChainsText(input: { speaks: boolean; edgeInputComplete: boolean }): string {
+  if (input.speaks) return NO_LINKED_EVENTS_TEXT;
+  return input.edgeInputComplete ? NO_CHAINS_QUALIFIED_TEXT : noChainsFoundText(false);
+}
+
+/** The line above rows that establish no link (ambiguous, coverage blocked) when there is no chain. */
+export function noLinkingChainsLine(speaks: boolean): string {
+  return speaks
+    ? "No exact or candidate chains were found."
+    : "No exact or candidate chains were found among what was loaded.";
+}
+
+/** Said when sources were not fully read: what the chains hold can be missing entries and links. */
+export const UNREAD_SOURCES_CHAINS_NOTE =
+  "Some sources were not fully read, so entries and links may be missing from these chains.";
+
+/** The heading of the nearby group: the one word its entries may carry, and how many they are. */
+export function nearbyHeading(word: string, entries: number): string {
+  return `Nearby, ${word.toLowerCase()} (${count(entries)})`;
 }
 
 /**
@@ -297,6 +354,23 @@ export function unresolvedNotice(
   return proven
     ? `${count(missing)} of ${count(chain.memberCount)} entries carry no timestamp, so they are not placed on the plot.`
     : `${count(missing)} of ${count(chain.memberCount)} entries have no loaded timeline position, so they are not drawn on the plot.`;
+}
+
+/**
+ * Why a chain has members that are not listed as steps, or null when all are. Like `unresolvedNotice`,
+ * "no timestamp" is said only when it is PROVEN for every one of them (`isProvenUnplaced`); otherwise
+ * it says only that no position was loaded. It speaks of steps, not of a plot.
+ */
+export function unresolvedStepsNotice(
+  chain: Pick<CorrelationChain, "unresolvedMemberIds" | "memberCount">,
+  evidence: UnplacedEvidence,
+): string | null {
+  const missing = chain.unresolvedMemberIds.length;
+  if (missing === 0) return null;
+  const proven = chain.unresolvedMemberIds.every((id) => isProvenUnplaced(id, evidence));
+  return proven
+    ? `${count(missing)} of ${count(chain.memberCount)} entries carry no timestamp, so they are not listed as steps.`
+    : `${count(missing)} of ${count(chain.memberCount)} entries have no loaded timeline position, so they are not listed as steps.`;
 }
 
 /** The line after the plot when a cap left entries or connectors undrawn. Null when none was. */
@@ -414,8 +488,8 @@ export function chainCopyText(input: ChainCopyInput): string {
     if (note !== null) lines.push(note);
   }
 
-  lines.push("", "Sequence (ordered by recorded time; order is not evidence of cause)");
-  if (sequence.entries.length === 0) lines.push("  No entry has a loaded timeline position.");
+  lines.push("", SEQUENCE_HEADING);
+  if (sequence.entries.length === 0) lines.push(`  ${NO_ENTRY_POSITION_TEXT}`);
   for (const entry of sequence.entries) {
     const when =
       entry.index === 0

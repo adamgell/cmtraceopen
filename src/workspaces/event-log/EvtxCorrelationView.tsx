@@ -23,7 +23,9 @@ import { correlationSizes, type CorrelationSizes } from "./evtx-correlation-size
 import { EvtxCorrelationOverview } from "./EvtxCorrelationOverview";
 import { EvtxUnplacedList } from "./EvtxUnplacedList";
 import {
+  CHAIN_ENTRIES_BEING_READ_TEXT,
   NO_ANALYSIS_TEXT,
+  NO_ENTRY_POSITION_TEXT,
   NO_POSITION_TEXT,
   READING_EDGES_TEXT,
   SAME_TIME_NOTE,
@@ -952,7 +954,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
             ) : (
               <div style={{ fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground2 }}>
                 {reading
-                  ? "The entries of this chain are being read."
+                  ? CHAIN_ENTRIES_BEING_READ_TEXT
                   : "The entries of this chain were not read, so there is no plot or evidence table."}
               </div>
             )}
@@ -1024,7 +1026,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
                 </div>
                 {sequence !== null && sequence.entries.length === 0 && (
                   <div style={{ fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground2 }}>
-                    No entry has a loaded timeline position.
+                    {NO_ENTRY_POSITION_TEXT}
                   </div>
                 )}
                 <ol style={{ margin: 0, paddingLeft: "22px", display: "grid", gap: "4px", fontSize: `${sizes.lane}px` }}>

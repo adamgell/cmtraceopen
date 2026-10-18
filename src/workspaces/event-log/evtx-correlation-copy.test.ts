@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import dockSource from "./EvtxCorrelationDock.tsx?raw";
 import viewSource from "./EvtxCorrelationView.tsx?raw";
+import copySource from "./evtx-correlation-copy.ts?raw";
 import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import {
   buildCorrelationChains,
@@ -17,7 +18,13 @@ import {
   NOT_IN_TIMELINE_NOTE,
   NOT_READ_NOTE,
   ANALYSIS_BUILDING_TEXT,
+  CHAIN_ENTRIES_BEING_READ_TEXT,
+  CHAIN_STEPS_NOT_READ_TEXT,
+  CONTAINS_SELECTED_EVENT_SUFFIX,
   NO_ANALYSIS_TEXT,
+  NO_CHAINS_QUALIFIED_TEXT,
+  NO_ENTRY_POSITION_TEXT,
+  NO_LINKED_EVENTS_TEXT,
   NO_POSITION_TEXT,
   NO_SELECTION_TEXT,
   NO_SESSION_TEXT,
@@ -25,8 +32,10 @@ import {
   READING_WINDOW_TEXT,
   SAME_TIME_NOTE,
   SCOPE_NOT_KNOWN_NOTICE,
+  SEQUENCE_HEADING,
   SEQUENCE_ORDER_NOTE,
   STRENGTH_LABELS,
+  UNREAD_SOURCES_CHAINS_NOTE,
   UNREAD_SOURCES_NOTE,
   WAIT_FOR_ENTRIES_REASON,
   UNTIMED_TEXT,
@@ -44,8 +53,11 @@ import {
   emptyWindowText,
   keyKindLabel,
   nearbyReason,
+  nearbyHeading,
   nearbyReasonOfLabel,
   noChainsFoundText,
+  noLinkedChainsText,
+  noLinkingChainsLine,
   openDisabledText,
   moreText,
   notReadNote,
@@ -61,6 +73,7 @@ import {
   timelineReadingText,
   unmatchableNote,
   unresolvedNotice,
+  unresolvedStepsNotice,
   whyHeading,
   whyStatement,
   windowFailureText,
@@ -564,7 +577,13 @@ describe("no string claims an entry is unplaced without proof", () => {
     "NOT_IN_TIMELINE_NOTE",
     "NOT_READ_NOTE",
     "ANALYSIS_BUILDING_TEXT",
+    "CHAIN_ENTRIES_BEING_READ_TEXT",
+    "CHAIN_STEPS_NOT_READ_TEXT",
+    "CONTAINS_SELECTED_EVENT_SUFFIX",
     "NO_ANALYSIS_TEXT",
+    "NO_CHAINS_QUALIFIED_TEXT",
+    "NO_ENTRY_POSITION_TEXT",
+    "NO_LINKED_EVENTS_TEXT",
     "NO_POSITION_TEXT",
     "NO_SELECTION_TEXT",
     "NO_SESSION_TEXT",
@@ -572,8 +591,10 @@ describe("no string claims an entry is unplaced without proof", () => {
     "READING_WINDOW_TEXT",
     "SAME_TIME_NOTE",
     "SCOPE_NOT_KNOWN_NOTICE",
+    "SEQUENCE_HEADING",
     "SEQUENCE_ORDER_NOTE",
     "STRENGTH_LABELS",
+    "UNREAD_SOURCES_CHAINS_NOTE",
     "UNREAD_SOURCES_NOTE",
     "UPDATING_CORRELATION_TEXT",
     "WAIT_FOR_ENTRIES_REASON",
@@ -589,8 +610,11 @@ describe("no string claims an entry is unplaced without proof", () => {
     "edgeInputNotice",
     "emptyWindowText",
     "keyKindLabel",
+    "nearbyHeading",
     "nearbyReason",
     "noChainsFoundText",
+    "noLinkedChainsText",
+    "noLinkingChainsLine",
     "openDisabledText",
     "moreText",
     "notReadNote",
@@ -606,6 +630,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "timelineReadingText",
     "unmatchableNote",
     "unresolvedNotice",
+    "unresolvedStepsNotice",
     "whyHeading",
     "whyStatement",
     "windowFailureText",
@@ -760,6 +785,24 @@ describe("no string claims an entry is unplaced without proof", () => {
       noChainsFoundText(true),
       noChainsFoundText(false),
       chainRowName(chain),
+      CHAIN_ENTRIES_BEING_READ_TEXT,
+      CHAIN_STEPS_NOT_READ_TEXT,
+      CONTAINS_SELECTED_EVENT_SUFFIX,
+      NO_CHAINS_QUALIFIED_TEXT,
+      NO_ENTRY_POSITION_TEXT,
+      NO_LINKED_EVENTS_TEXT,
+      SEQUENCE_HEADING,
+      UNREAD_SOURCES_CHAINS_NOTE,
+      noLinkedChainsText({ speaks: true, edgeInputComplete: true }),
+      noLinkedChainsText({ speaks: false, edgeInputComplete: true }),
+      noLinkedChainsText({ speaks: false, edgeInputComplete: false }),
+      noLinkingChainsLine(true),
+      noLinkingChainsLine(false),
+      nearbyHeading("Not linked", 3),
+      nearbyHeading("No loaded link", 1),
+      nearbyHeading("Not in this chain", 2),
+      unresolvedStepsNotice(chain, PROVEN) ?? "",
+      unresolvedStepsNotice(chain, { scanComplete: false, unplacedListComplete: false, unplacedIds: new Set() }) ?? "",
       ...correlationNotices({
         edgeInput: { edgeInputComplete: false, unloadedEdgeCount: 4 },
         edgeError: "edges down",
@@ -1513,6 +1556,9 @@ describe("the words the Correlation view and the Chains tab share (#841)", () =>
       "No chains were found",
       "Reading the timeline",
       "timeline items...",
+      "The entries of this chain are being read",
+      "No entry has a loaded timeline position",
+      "same timestamp as the entry above",
     ];
 
     /**
@@ -1554,8 +1600,17 @@ describe("the words the Correlation view and the Chains tab share (#841)", () =>
       }
     });
 
-    it("says the same-time sentence once, in this module, for the Sequence line and the copied text alike", () => {
-      expect(workspaceSources["evtx-correlation-copy.ts"]!.split("their order is not established")).toHaveLength(2);
+    it("says each shared sentence once inside this module too, for the list and the copied text alike", () => {
+      for (const phrase of [
+        "their order is not established",
+        "No entry has a loaded timeline position",
+        "The entries of this chain are being read",
+        "No loaded timeline position",
+        "Reading correlation edges",
+        "No event analysis is available. Load events to see correlation",
+      ]) {
+        expect(workspaceSources["evtx-correlation-copy.ts"]!.split(phrase), phrase).toHaveLength(2);
+      }
     });
   });
 });
@@ -1579,5 +1634,96 @@ describe("nearbyReasonOfLabel, the reason beside a context entry for the label t
 
   it("never reads 'No loaded link' as 'not linked'", () => {
     expect(nearbyReason(nearbyReasonOfLabel(NO_LOADED_LINK_LABEL))).not.toMatch(/not linked/);
+  });
+});
+
+describe("the words of the rail's Chains tab (#841)", () => {
+  const items = [eventItem(1, T0, "error", "first failed", 72), eventItem(2, T0 + 6_000, "info", "second ok", 76)];
+
+  it("says the spec's empty state only when the session can speak for an absence of links", () => {
+    expect(NO_LINKED_EVENTS_TEXT).toBe(
+      "No linked events. Correlation requires a shared identifier; time proximity alone is not a link.",
+    );
+    expect(noLinkedChainsText({ speaks: true, edgeInputComplete: true })).toBe(NO_LINKED_EVENTS_TEXT);
+  });
+
+  it("says only what was looked at when the session cannot speak, in the view's words for missing edges", () => {
+    expect(noLinkedChainsText({ speaks: false, edgeInputComplete: false })).toBe(noChainsFoundText(false));
+    expect(noLinkedChainsText({ speaks: false, edgeInputComplete: true })).toBe(NO_CHAINS_QUALIFIED_TEXT);
+    expect(NO_CHAINS_QUALIFIED_TEXT).toBe(
+      "No chains were found, but the notes above say what was not covered, so this does not show that none exist.",
+    );
+    for (const text of [NO_CHAINS_QUALIFIED_TEXT, noChainsFoundText(false)]) {
+      expect(text).not.toMatch(/no linked events/i);
+    }
+  });
+
+  it("qualifies the line above rows that are not links the same way", () => {
+    expect(noLinkingChainsLine(true)).toBe("No exact or candidate chains were found.");
+    expect(noLinkingChainsLine(false)).toBe("No exact or candidate chains were found among what was loaded.");
+  });
+
+  it("names the nearby group by the one word its entries may carry, with the number of entries", () => {
+    expect(nearbyHeading("Not linked", 3)).toBe("Nearby, not linked (3)");
+    expect(nearbyHeading("No loaded link", 1)).toBe("Nearby, no loaded link (1)");
+    expect(nearbyHeading("Not in this chain", 1_204)).toBe("Nearby, not in this chain (1,204)");
+  });
+
+  it("explains a chain whose entries are not listed, and says no more", () => {
+    expect(CHAIN_ENTRIES_BEING_READ_TEXT).toBe("The entries of this chain are being read.");
+    expect(CHAIN_STEPS_NOT_READ_TEXT).toBe("The entries of this chain were not read, so there are no steps to show.");
+    expect(NO_ENTRY_POSITION_TEXT).toBe("No entry has a loaded timeline position.");
+  });
+
+  it("says that sources not fully read may hide entries and links", () => {
+    expect(UNREAD_SOURCES_CHAINS_NOTE).toBe(
+      "Some sources were not fully read, so entries and links may be missing from these chains.",
+    );
+    expect(UNREAD_SOURCES_CHAINS_NOTE).not.toBe(UNREAD_SOURCES_NOTE);
+  });
+
+  it("names the selected event's chain in its accessible name", () => {
+    expect(CONTAINS_SELECTED_EVENT_SUFFIX).toBe(", contains the selected event");
+  });
+
+  describe("unresolvedStepsNotice", () => {
+    const two = chainFor("exactPair", [eventItem(1, T0)]);
+    const proof = { scanComplete: true, unplacedListComplete: true, unplacedIds: new Set([rid(2)]) };
+
+    it("says no timestamp only when the engine's complete unplaced list proves it, and then of steps", () => {
+      expect(unresolvedStepsNotice(two, proof)).toBe("1 of 2 entries carry no timestamp, so they are not listed as steps.");
+    });
+
+    it("otherwise says only that no position was loaded", () => {
+      for (const weak of [
+        { ...proof, scanComplete: false },
+        { ...proof, unplacedListComplete: false },
+        { ...proof, unplacedIds: new Set<string>() },
+      ]) {
+        expect(unresolvedStepsNotice(two, weak)).toBe(
+          "1 of 2 entries have no loaded timeline position, so they are not listed as steps.",
+        );
+      }
+    });
+
+    it("is silent for a chain whose members all have an item, and never mentions a plot", () => {
+      expect(unresolvedStepsNotice(chainFor("exactPair", items), proof)).toBeNull();
+      expect(unresolvedStepsNotice(two, proof)).not.toMatch(/plot/);
+    });
+  });
+
+  describe("the copied Sequence heading", () => {
+    it("is the order note's two sentences, joined, and says them nowhere else", () => {
+      expect(SEQUENCE_HEADING).toBe("Sequence (ordered by recorded time; order is not evidence of cause)");
+      expect(SEQUENCE_HEADING).toBe(
+        `Sequence (${SEQUENCE_ORDER_NOTE.replace(/\.$/, "").split(". ").map((part) => part[0]!.toLowerCase() + part.slice(1)).join("; ")})`,
+      );
+      expect(copySource.split("evidence of cause")).toHaveLength(2);
+    });
+
+    it("heads the copied text", () => {
+      const chain = chainFor("exactPair", items);
+      expect(chainCopyText(copyInput(chain, items))).toContain(`\n${SEQUENCE_HEADING}\n`);
+    });
   });
 });
