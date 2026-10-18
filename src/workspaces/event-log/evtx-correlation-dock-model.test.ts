@@ -30,6 +30,8 @@ import {
   type DockModelInput,
   type DockReady,
 } from "./evtx-correlation-dock-model";
+import vectorDocument from "./__fixtures__/engine-compaction-vectors.json";
+import { timelineReference } from "./evtx-engine-compaction-test-fixtures";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import {
   T0,
@@ -513,6 +515,131 @@ describe("which entry is the selected event: the statuses (#842, review A1)", ()
     it("still counts every source of the window, including the candidates' lane", () => {
       const model = ready({ record, window: windowAround(record, scene([onChannel(9, t + 3_000, "Application")])), counts: counts([]), unreadSources: false });
       expect(model.sourceCount).toBe(2);
+    });
+  });
+});
+
+describe("a record whose identity text the engine compacted is found, never 'not in the timeline' (#842, review A1 fv1)", () => {
+  const vectorText = (name: string) =>
+    (vectorDocument.timelineText.find((c) => c.name === name) as { input: string }).input;
+  const LABELS: readonly (readonly [string, string])[] = [
+    ["257 bytes", vectorText("ascii-257")],
+    ["300 bytes with backslashes", vectorText("ascii-300-backslashes")],
+    ["a collector bundle path of 276 bytes", vectorText("bundle-path-276")],
+    ["3-byte characters past 256 bytes", vectorText("cjk-273")],
+  ];
+  const COLLECTOR_SEGMENT =
+    "CMTRACE-20261017-101500-DESKTOP-7H2K9Q1-0f3c9a1b2d4e5f60718293a4b5c6d7e8.zip::CMTRACE-20261017-101500-DESKTOP-7H2K9Q1-0f3c9a1b2d4e5f60718293a4b5c6d7e8";
+
+  /** An event entry whose origin text the engine compacted, in the engine's own form. */
+  function compactedEvent(n: number, timestampMs: number, record: EvtxRecord): TimelineItem {
+    const item = eventItem(n, timestampMs);
+    if (item.origin.kind !== "event") throw new Error("an event origin");
+    return {
+      ...item,
+      origin: {
+        ...item.origin,
+        source: timelineReference(record.sourceLabel),
+        channel: timelineReference(record.channel),
+        provider: timelineReference(record.provider),
+      },
+    };
+  }
+
+  it.each(LABELS)("finds an event record whose source label is %s", (_why, label) => {
+    const record = { ...recordFor(1), sourceLabel: label };
+    const t = record.timestampEpoch;
+    const items = [compactedEvent(1, t, record), eventItem(2, t + 6_000), eventItem(9, t + 3_000)];
+    expect(items[0]!.origin.kind === "event" && items[0]!.origin.source).not.toBe(label);
+    const model = ready({ record, window: windowAround(record, items), counts: counts(fixtureEdges("exactPair")), unreadSources: false });
+    expect(model.selected).toEqual({ status: "found", originId: rid(1) });
+    expect(model.notices).not.toContain(NOT_IN_TIMELINE_NOTE);
+    expect(model.open).toEqual({ rowId: model.row?.id });
+    // The entry is the selected event, drawn as a member, and is not its own context.
+    expect(model.plot.members.map((m) => m.id)).toContain(rid(1));
+    expect(model.plot.nearby.map((m) => m.id)).not.toContain(rid(1));
+    expect(model.nearby.map((entry) => entry.id)).not.toContain(rid(1));
+  });
+
+  it.each(LABELS)("finds an event record whose channel and provider are %s", (_why, label) => {
+    const record = { ...recordFor(1), channel: label, provider: label };
+    const t = record.timestampEpoch;
+    const model = ready({ record, window: windowAround(record, [compactedEvent(1, t, record)]), counts: counts([]), unreadSources: false });
+    expect(model.selected).toEqual({ status: "found", originId: rid(1) });
+  });
+
+  it.each(LABELS)("finds an archive text row whose source label is %s", (_why, label) => {
+    const t = T0 + 5_000;
+    const row: EvtxRecord = {
+      ...recordFor(7),
+      originKind: "log",
+      eventId: 0,
+      sourceLabel: label,
+      channel: label,
+      provider: "CcmExec",
+      computer: "",
+      timestampEpoch: t,
+    };
+    const bundle = label === vectorText("bundle-path-276") ? COLLECTOR_SEGMENT : null;
+    const item: TimelineItem = {
+      timestampMs: t,
+      severity: "info",
+      message: "log line 7",
+      origin: {
+        kind: "log",
+        file: timelineReference(label),
+        component: "CcmExec",
+        line: 7,
+        source: timelineReference(label),
+        machine: null,
+        bundle,
+        recordId: 7,
+      },
+    };
+    const model = ready({ record: row, window: windowAround(row, [item, eventItem(2, t + 3_000)]), counts: counts([]), unreadSources: false });
+    expect(model.selected.status).toBe("found");
+    expect(model.notices).not.toContain(NOT_IN_TIMELINE_NOTE);
+    expect(model.plot.members.map((m) => m.kind)).toEqual(["log"]);
+    expect(model.plot.nearby.map((m) => m.id)).toEqual([rid(2)]);
+  });
+
+  it("finds a record whose machine is padded, as the engine trims it before it compacts it", () => {
+    const record = { ...recordFor(1), computer: "  DESKTOP-01  " };
+    const model = ready({ record, window: windowAround(record, [eventItem(1, record.timestampEpoch)]), counts: counts([]), unreadSources: false });
+    expect(model.selected).toEqual({ status: "found", originId: rid(1) });
+  });
+
+  it("does not take the entry of a record with another long label, which shares only its prefix", () => {
+    const label = vectorText("ascii-257");
+    const record = { ...recordFor(1), sourceLabel: `${label}z` };
+    const other = { ...recordFor(1), sourceLabel: label };
+    const model = ready({
+      record,
+      window: windowAround(record, [compactedEvent(1, record.timestampEpoch, other)]),
+      counts: counts([]),
+      unreadSources: false,
+    });
+    expect(model.selected).toEqual({ status: "notInTimeline" });
+  });
+
+  describe("an identity the engine refused (the committed vectors)", () => {
+    it("finds a record whose text conflicts with its number: the engine rewrote the origin to the number", () => {
+      const record = { ...recordFor(1), eventRecordId: 9, eventRecordIdText: "5" };
+      const item = eventItem(1, record.timestampEpoch);
+      const rewritten =
+        item.origin.kind === "event" ? { ...item, origin: { ...item.origin, recordId: 9, recordIdText: "9" } } : item;
+      const model = ready({ record, window: windowAround(record, [rewritten]), counts: counts([]), unreadSources: false });
+      expect(model.selected.status).toBe("found");
+    });
+
+    it("is unmatchable when the engine left the origin no identity, and says so rather than 'not in the timeline'", () => {
+      const record = { ...recordFor(1), eventRecordId: 0, eventRecordIdText: "5" };
+      const item = eventItem(1, record.timestampEpoch);
+      const bare =
+        item.origin.kind === "event" ? { ...item, origin: { ...item.origin, recordId: 0, recordIdText: null } } : item;
+      const model = ready({ record, window: windowAround(record, [bare]), counts: counts([]), unreadSources: false });
+      expect(model.selected).toEqual({ status: "unmatchable" });
+      expect(model.notices).not.toContain(NOT_IN_TIMELINE_NOTE);
     });
   });
 });
@@ -1247,7 +1374,12 @@ describe("the model is a function of its input", () => {
       const large = readsFor(6_000);
       // The counting works: every entry is read more than once, and the figure is not trivial.
       expect(small).toBeGreaterThan(3_000);
-      // n log n doubles to about 2.2; an O(n squared) step anywhere would quadruple it.
+      // n log n doubles to about 2.2; an O(n squared) step anywhere would quadruple it. The limit is
+      // a figure on reads of `timestampMs` and `origin` and nothing else: the counter sees only those
+      // two properties of an entry (severity and message are plain values, and a read of the lane or
+      // the window object is not an entry read). A pass that is quadratic in some other property, or
+      // in the members it builds from the entries, is not seen by it; the 6,000-entry smoke test
+      // below is the wall-clock net for that, and its limit is loose by design.
       expect(large / small, `${small} reads at 3,000 entries, ${large} at 6,000`).toBeLessThan(2.6);
     });
 
