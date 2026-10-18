@@ -141,10 +141,10 @@ export function EvtxUnplacedList({ list, updating, sizes, onReply, onFail, onEsc
         {view.rows.map((row) => {
           const chip =
             row.kind === "event"
-              ? { background: visuals.selection.background, color: visuals.selection.foreground }
+              ? { backgroundColor: visuals.selection.background, color: visuals.selection.foreground }
               : // Spec 8.13 puts LOG on bg4; Foreground2 on bg4 measures 4.36:1 in solarized-dark, so
                 // it is bg3 (at least 4.86:1 in every theme).
-                { background: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground2 };
+                { backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground2 };
           const availability =
             row.file === null || row.line === null
               ? null

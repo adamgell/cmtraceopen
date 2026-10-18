@@ -7,6 +7,10 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import type { ComponentProps } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { tokens } from "@fluentui/react-components";
+import { contrastRatio } from "../../lib/color-contrast";
+import { getAllThemes } from "../../lib/themes";
+import type { ThemeId } from "../../lib/themes/types";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import type { LogEntry } from "../../types/log";
@@ -14,6 +18,7 @@ import { EvtxUnplacedList } from "./EvtxUnplacedList";
 import { correlationSizes } from "./EvtxCorrelationLanes";
 import { EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT } from "./evtx-timeline-paging";
 import { unplacedCopyText, describeUnplaced } from "./evtx-unplaced";
+import { resolveToken } from "./evtx-visual-tokens";
 import listSource from "./EvtxUnplacedList.tsx?raw";
 import type { UnplacedItem } from "./unified-timeline";
 
@@ -349,5 +354,38 @@ describe("Open in Log Viewer: arming the target", () => {
     // A new batch of entries is read again, once.
     useLogStore.setState({ entries: [...counted, entry(FILE, 10, 1000)] });
     expect(passes).toBeGreaterThanOrEqual(first);
+  });
+});
+
+describe("the text reads at 4.5:1 in all seven themes", () => {
+  const themes = getAllThemes();
+
+  /** `rgb(r, g, b)` as `#rrggbb`; anything else as given. */
+  const toHex = (color: string) => {
+    const rgb = /^rgb\(\s*(\d+),\s*(\d+),\s*(\d+)\s*\)$/.exec(color);
+    if (!rgb) return color;
+    return `#${[rgb[1], rgb[2], rgb[3]].map((part) => Number(part).toString(16).padStart(2, "0")).join("")}`;
+  };
+
+  it.each(themes.map((theme) => [theme.id] as const))("in %s: the chips, the header, the caption and the rows", (themeId) => {
+    useUiStore.setState({ themeId: themeId as ThemeId });
+    mount();
+    const theme = themes.find((candidate) => candidate.id === themeId)!;
+    const color = (value: string) => toHex(resolveToken(value, theme));
+    const surface = color(tokens.colorNeutralBackground1);
+    const pairs: [string, string, string][] = [];
+    for (const chip of document.querySelectorAll<HTMLElement>("[data-chip]")) {
+      pairs.push([`${chip.dataset.chip} chip`, color(chip.style.color), color(chip.style.backgroundColor)]);
+    }
+    pairs.push(["header", color(screen.getByRole("heading", { level: 2 }).style.color), surface]);
+    pairs.push(["caption", color((screen.getByRole("heading", { level: 2 }).nextElementSibling as HTMLElement).style.color), surface]);
+    const row = screen.getAllByRole("listitem")[0]!;
+    for (const span of Array.from(row.querySelectorAll<HTMLElement>(":scope > span:not([data-chip])"))) {
+      pairs.push([`row text ${span.textContent}`, color(span.style.color || row.style.color), surface]);
+    }
+    expect(pairs.length).toBeGreaterThanOrEqual(6);
+    for (const [name, foreground, background] of pairs) {
+      expect(contrastRatio(foreground, background), `${themeId} ${name}`).toBeGreaterThanOrEqual(4.5);
+    }
   });
 });
