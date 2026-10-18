@@ -33,8 +33,6 @@ import { createFocusOutlineStyle, makeStyles, tokens } from "@fluentui/react-com
 import { ArrowLeft12Regular, ArrowRight12Regular } from "@fluentui/react-icons";
 import { useRailTextColors } from "./evtx-rail-text";
 import type { CorrelationSizes } from "./evtx-correlation-sizes";
-// Existing importers still take the sizes from here; the next commits move them to the module.
-export { correlationSizes, type CorrelationSizes } from "./evtx-correlation-sizes";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import { tickLabels, type ChainPlot, type PlotConnector, type PlotLane, type PlotMarker } from "./evtx-correlation-view-model";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";

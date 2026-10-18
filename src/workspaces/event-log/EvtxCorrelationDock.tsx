@@ -31,7 +31,8 @@ import { Button, Dropdown, Option, tokens } from "@fluentui/react-components";
 import { ChevronDown12Regular, ChevronUp12Regular, Dismiss12Regular } from "@fluentui/react-icons";
 import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
-import { CorrelationLegend, EvtxCorrelationLanes, correlationSizes } from "./EvtxCorrelationLanes";
+import { CorrelationLegend, EvtxCorrelationLanes } from "./EvtxCorrelationLanes";
+import { correlationSizes, type CorrelationSizes } from "./evtx-correlation-sizes";
 import { EvtxStrengthBadge } from "./EvtxStrengthBadge";
 import {
   NO_SELECTION_TEXT,
@@ -430,7 +431,7 @@ function ReadyBody({
   onEscape,
 }: {
   ready: DockReady;
-  sizes: ReturnType<typeof correlationSizes>;
+  sizes: CorrelationSizes;
   visuals: ReturnType<typeof useEvtxVisualTokens>;
   primary: string;
   secondary: string;

@@ -23,7 +23,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
-import type { CorrelationSizes } from "./EvtxCorrelationLanes";
+import type { CorrelationSizes } from "./evtx-correlation-sizes";
 import {
   OPEN_IN_LOG_VIEWER_LABEL,
   WAIT_FOR_UPDATE_REASON,

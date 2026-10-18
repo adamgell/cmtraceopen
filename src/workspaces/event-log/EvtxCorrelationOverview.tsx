@@ -28,7 +28,7 @@ import { useEffect, useMemo, useRef, type KeyboardEvent, type PointerEvent } fro
 import { makeStyles, tokens } from "@fluentui/react-components";
 import { getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
-import type { CorrelationSizes } from "./EvtxCorrelationLanes";
+import type { CorrelationSizes } from "./evtx-correlation-sizes";
 import type { CorrelationChain } from "./evtx-correlation-chains";
 import {
   OVERVIEW_BAR_HEIGHT_PX,

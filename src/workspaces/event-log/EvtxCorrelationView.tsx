@@ -18,12 +18,8 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Copy16Regular, Filter16Regular } from "@fluentui/react-icons";
 import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
-import {
-  CorrelationLegend,
-  EvtxCorrelationLanes,
-  correlationSizes,
-  type CorrelationSizes,
-} from "./EvtxCorrelationLanes";
+import { CorrelationLegend, EvtxCorrelationLanes } from "./EvtxCorrelationLanes";
+import { correlationSizes, type CorrelationSizes } from "./evtx-correlation-sizes";
 import { EvtxCorrelationOverview } from "./EvtxCorrelationOverview";
 import { EvtxUnplacedList } from "./EvtxUnplacedList";
 import {
