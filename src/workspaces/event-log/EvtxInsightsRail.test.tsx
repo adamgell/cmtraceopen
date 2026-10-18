@@ -26,7 +26,11 @@ import {
   soleQuickFilterEventId,
 } from "./EvtxInsightsRail";
 import { DEFAULT_QUICK_FILTER, type EvtxQuickFilter } from "./evtx-filter";
-import { evtxRailPanelId, sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
+import railSource from "./EvtxInsightsRail.tsx?raw";
+import { useEvtxCorrelationStore } from "./evtx-correlation-store";
+import { T0, eventItem, fixtureEdges, idsOf, makeData, numberOf, type DataOptions } from "./evtx-correlation-test-fixtures";
+import { evtxRailPanelId, evtxRailTabId, sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
+import { EvtxCorrelationProvider, UNAVAILABLE_CORRELATION, type EvtxCorrelationData } from "./useEvtxCorrelation";
 import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
 import { useMarkerStore } from "../../stores/marker-store";
@@ -96,16 +100,17 @@ describe("EvtxInsightsRail", () => {
 
   afterEach(cleanup);
 
-  it("renders the Insights and Details tabs only, Insights first and selected", () => {
+  it("renders the Insights, Chains and Details tabs, in that order, Insights first and selected", () => {
     render(<EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />);
 
     const list = screen.getByRole("tablist", { name: "Rail tabs" });
     const tabs = within(list).getAllByRole("tab");
-    expect(tabs).toHaveLength(2);
+    // Unselected tabs carry a second, hidden copy of their label (Fluent reserves the space of the
+    // selected weight), so the tabs are told apart by their accessible names, in document order.
+    expect(tabs).toEqual([tab("Insights 1"), tab("Chains"), tab("Details")]);
     expect(tab("Insights 1")).toHaveAttribute("aria-selected", "true");
+    expect(tab("Chains")).toHaveAttribute("aria-selected", "false");
     expect(tab("Details")).toHaveAttribute("aria-selected", "false");
-    // The Chains tab is built in Phase 10c.
-    expect(screen.queryByRole("tab", { name: /Chains/ })).toBeNull();
   });
 
   it("counts actionable findings from the authoritative total on the Insights tab", () => {
@@ -185,12 +190,15 @@ describe("EvtxInsightsRail", () => {
     expect(tab("Insights 1")).toHaveFocus();
   });
 
-  it("shows Insights when the persisted tab is Chains, which does not exist yet", () => {
+  it("opens on the Chains tab when that is the persisted tab, and not on Insights", async () => {
     useEvtxLayoutStore.setState({ railTab: "chains" });
     render(<EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />);
 
-    expect(tab("Insights 1")).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByLabelText("Operational diagnosis")).toBeInTheDocument();
+    expect(tab("Chains")).toHaveAttribute("aria-selected", "true");
+    expect(tab("Insights 1")).toHaveAttribute("aria-selected", "false");
+    expect(await screen.findByTestId("rail-chains")).toBeInTheDocument();
+    // The Insights panel stays mounted, hidden, as it does behind Details.
+    expect(document.getElementById(evtxRailPanelId("insights"))!.style.display).toBe("none");
   });
 
   it("shows the empty details prompt when Details is opened with no selection", () => {
@@ -756,5 +764,127 @@ describe("soleQuickFilterEventId and quickFilterAfterEventIdClick", () => {
     const applied = filter({ mode: "eventIds", query: "1", highlight: true });
     const shown = filter({ mode: "fieldQuery", query: "level:erro", highlight: false });
     expect(quickFilterAfterEventIdClick(applied, shown, 2)).toMatchObject({ query: "2", highlight: false });
+  });
+});
+
+describe("the Chains tab of the rail (#841)", () => {
+  const edges = () => [
+    ...fixtureEdges("pairAndGroupDisjoint"),
+    ...fixtureEdges("secondaryPair", 10),
+    ...fixtureEdges("gappedPair", 20),
+  ];
+  const data = (extra: Partial<DataOptions> = {}) => {
+    const all = edges();
+    return makeData({
+      items: idsOf(all).map((id) => eventItem(numberOf(id), T0 + numberOf(id) * 1_000)),
+      edges: all,
+      ...extra,
+    });
+  };
+  const inRail = (value: EvtxCorrelationData) =>
+    render(
+      <EvtxCorrelationProvider value={value}>
+        <EvtxInsightsRail summary={SUMMARY} records={[RECORD]} />
+      </EvtxCorrelationProvider>,
+    );
+
+  beforeEach(() => {
+    invoke.mockReset();
+    invoke.mockResolvedValue(null);
+    localStorage.clear();
+    useEvtxLayoutStore.setState(sanitizeLayout(undefined));
+    useEvtxStore.getState().reset();
+    useEvtxStore.setState({ records: [RECORD] });
+    useEvtxCorrelationStore.setState({ selectedChainId: null, unplacedOpen: false, openedCount: 0 });
+  });
+  afterEach(cleanup);
+
+  describe("its number", () => {
+    it("is the card's chain count, in the tab's name: three exact, candidate and ambiguous chains, a blocked row apart", () => {
+      inRail(data());
+      expect(tab("Chains 3")).toBeInTheDocument();
+      expect(screen.getByTestId("correlation-card-headline")).toHaveTextContent("3 chains");
+    });
+
+    it("is no number, and never 0, when there is no model", () => {
+      inRail(UNAVAILABLE_CORRELATION);
+      // An exact name: "Chains", with no number after it.
+      expect(tab("Chains")).toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: /Chains \d/ })).toBeNull();
+    });
+
+    it("is no number while the counts are an earlier session's, or edges were not all loaded", () => {
+      const { unmount } = inRail(data({ updating: true }));
+      expect(tab("Chains")).toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: /Chains \d/ })).toBeNull();
+      unmount();
+      inRail(data({ totalEdges: 40 }));
+      expect(tab("Chains")).toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: /Chains \d/ })).toBeNull();
+    });
+
+    it("reads the newest counts, not the model on show", () => {
+      const older = data({ builtFor: "session:1", updating: true });
+      const newest = data();
+      inRail({ ...older, counts: newest.counts });
+      // The counts are the newest session's and are current; the model on show is an earlier one.
+      expect(tab("Chains 3")).toBeInTheDocument();
+    });
+
+    it("is read by a label of its own, so a scan's progress re-renders that label and not the rail", () => {
+      expect(railSource).toMatch(/function ChainsTabLabel[\s\S]*?useEvtxCorrelationData\(\)/);
+      const outside = railSource.replace(/function ChainsTabLabel[\s\S]*?\n}\n/, "");
+      expect(outside).not.toMatch(/useEvtxCorrelationData\(\)/);
+    });
+  });
+
+  describe("its panel", () => {
+    it("is mounted on demand, behind the lazy import, in the tabpanel the tab controls", async () => {
+      inRail(data());
+      expect(screen.queryByTestId("rail-chains")).toBeNull();
+      fireEvent.click(tab("Chains 3"));
+      const body = await screen.findByTestId("rail-chains");
+      const panel = body.closest('[role="tabpanel"]') as HTMLElement;
+      expect(panel.id).toBe(evtxRailPanelId("chains"));
+      expect(panel.getAttribute("aria-labelledby")).toBe(evtxRailTabId("chains"));
+      expect(tab("Chains 3")).toHaveAttribute("aria-controls", evtxRailPanelId("chains"));
+      expect(useEvtxLayoutStore.getState().railTab).toBe("chains");
+      expect(panel.style.overflowY).toBe("auto");
+      expect(panel.style.padding).toBe("12px");
+      expect(panel.style.minHeight).toBe("0px");
+    });
+
+    it("is dropped when the rail goes to another tab", async () => {
+      useEvtxLayoutStore.setState({ railTab: "chains" });
+      inRail(data());
+      await screen.findByTestId("rail-chains");
+      fireEvent.click(tab("Details"));
+      expect(screen.queryByTestId("rail-chains")).toBeNull();
+    });
+
+    it("is not mounted while the rail is hidden, whatever tab it was left on", () => {
+      useEvtxLayoutStore.setState({ railTab: "chains", panels: { channels: true, insights: false, dock: false } });
+      inRail(data());
+      expect(screen.queryByTestId("rail-chains")).toBeNull();
+    });
+
+    it("is loaded lazily, with nothing announced meanwhile, and imported by no static import", () => {
+      expect(railSource).toMatch(/lazy\(\(\) => import\("\.\/EvtxRailChains"\)\)/);
+      expect(railSource).not.toMatch(/^import[^;]*from "\.\/EvtxRailChains"/m);
+      expect(railSource).toMatch(/<Suspense fallback=\{null\}>/);
+    });
+
+    it("decides that it is shown with the layout store's one rule", () => {
+      expect(railSource).toMatch(/\bchainsTabShown\b/);
+    });
+  });
+
+  describe("the tab list", () => {
+    it("is the layout store's list of ids, with no list and no fallback of its own", () => {
+      expect(railSource).toMatch(/\bEVTX_RAIL_TAB_IDS\.map\(/);
+      expect(railSource).not.toMatch(/\["insights",\s*"chains"/);
+      expect(railSource).not.toMatch(/RAIL_TABS\b(?!\w)/);
+      expect(railSource).not.toMatch(/\.includes\(railTab\)/);
+    });
   });
 });

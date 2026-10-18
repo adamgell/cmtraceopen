@@ -210,6 +210,20 @@ export function strongestRowOf(
   return rowsByMember.get(memberId)?.[0] ?? null;
 }
 
+/**
+ * The number the rail's Chains tab shows, or null when it has none to show. The tab states a number
+ * only when it is known, current and complete for edges: no counts yet is unknown and not 0; counts of
+ * an earlier session are not the newest session's; and with edges missing, the chains found among the
+ * edges that were loaded are neither a lower bound (a missing edge can join two of them) nor an upper
+ * bound (it can add one). Takes the newest counts-only model, never the model on show.
+ */
+export function chainsTabCount(
+  counts: { model: Pick<CorrelationChainModel, "counts" | "edgeInputComplete">; updating: boolean } | null,
+): number | null {
+  if (counts === null || counts.updating || !counts.model.edgeInputComplete) return null;
+  return correlationChainCount(counts.model.counts);
+}
+
 /** Code-unit order, so a sort does not depend on the locale. The one comparator of the correlation modules. */
 export function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;

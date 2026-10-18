@@ -20,8 +20,11 @@
  * (#838 ruling 1): the diagnosis details list error-token events only, and
  * evtx-diagnosis-correlation-source.test.ts keeps it so.
  *
- * Deferred, with the phase that owns each (that phase's change must touch this file):
- * - "{n} nearby, not linked": Phase 10c (Chains tab data).
+ * Not drawn here, with the reason:
+ * - "{n} nearby, not linked" (spec 8.13 item 6): nothing produces nearby entries in this version
+ *   (decision A on issue 838), so there is nothing to count, and the card never says "0 nearby": that
+ *   would claim an absence nobody looked for. The Chains tab keeps the typed seam and draws the group
+ *   when something feeds it.
  * - The coverage note with its Elevate action: Phase 4b.
  */
 import { memo, useMemo, useState, type CSSProperties } from "react";

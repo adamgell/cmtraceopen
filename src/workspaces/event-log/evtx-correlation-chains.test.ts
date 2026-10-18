@@ -3,6 +3,7 @@ import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import {
   CORRELATION_CHAIN_RENDER_LIMIT,
   buildCorrelationChains,
+  chainsTabCount,
   correlationChainCount,
   derivedTitle,
   strongestRowOf,
@@ -1794,5 +1795,48 @@ describe("strongestRowOf, the row a member is shown under (#841)", () => {
     const model = build({ timelineEdges: [tEdge("e1", "a", "b", "exact")] });
     expect(strongestRowOf(model.rowsByMember, "zzz")).toBeNull();
     expect(strongestRowOf(new Map([["a", []]]), "a")).toBeNull();
+  });
+});
+
+describe("chainsTabCount, the number the Chains tab shows (#841)", () => {
+  const countsOf = (model: CorrelationChainModel, updating = false) => ({ model, updating });
+  const mixed = () =>
+    build({
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact"),
+        tEdge("e2", "c", "d", "candidate"),
+        ...ambiguousGroup("g", ["x", "y", "z"]),
+        gappedExact("e3", "m", "n"),
+      ],
+    });
+
+  it("is the chain count of the card: exact, candidate and ambiguous, with a blocked row apart", () => {
+    const model = mixed();
+    expect(model.counts).toEqual({ exact: 1, candidate: 1, ambiguous: 1, coverageBlocked: 1 });
+    expect(chainsTabCount(countsOf(model))).toBe(3);
+    expect(chainsTabCount(countsOf(model))).toBe(correlationChainCount(model.counts));
+  });
+
+  it("is a known 0 for a session whose every edge was loaded and holds none, never null", () => {
+    expect(chainsTabCount(countsOf(build({})))).toBe(0);
+  });
+
+  it("is no number when there are no counts yet: unknown is not 0", () => {
+    expect(chainsTabCount(null)).toBeNull();
+  });
+
+  it("is no number while the counts are an earlier session's", () => {
+    expect(chainsTabCount(countsOf(mixed(), true))).toBeNull();
+  });
+
+  it("is no number when edges were not all loaded: the loaded count is neither a lower nor an upper bound", () => {
+    const partial = build({ timelineEdges: [tEdge("e1", "a", "b", "exact")], totalTimelineEdges: 9 });
+    expect(partial.edgeInputComplete).toBe(false);
+    expect(chainsTabCount(countsOf(partial))).toBeNull();
+  });
+
+  it.each([Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY])("is no number when the edge total is not trusted (%s)", (total) => {
+    const model = build({ timelineEdges: [tEdge("e1", "a", "b", "exact")], totalTimelineEdges: total });
+    expect(chainsTabCount(countsOf(model))).toBeNull();
   });
 });
