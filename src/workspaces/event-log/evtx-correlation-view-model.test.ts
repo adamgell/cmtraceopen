@@ -46,6 +46,7 @@ import {
   isProvenUnplaced,
   listedRows,
   partitionUnplaced,
+  sessionSpeaksForAbsence,
 } from "./evtx-correlation-view-model";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import { TIME_RANGE_SEPARATOR } from "./evtx-time";
@@ -1302,5 +1303,72 @@ describe("memberLinkSummary", () => {
     expect(summary.get("c")).toEqual({ exact: 0, candidate: 1 });
     expect(summary.has("d")).toBe(false);
     expect(summary.has("e")).toBe(false);
+  });
+});
+
+/**
+ * "The session can speak for an absent link" is one predicate (#843): the plot's "Not linked" label
+ * reads it, and so does the Details context list when it decides whether a missing link icon needs
+ * a caveat. Each of the four conditions is pinned alone.
+ */
+describe("sessionSpeaksForAbsence", () => {
+  const clear = classifyCoverageGaps([], 0);
+  const speaks = {
+    edgeInputComplete: true,
+    narrowed: false,
+    gaps: clear,
+    memberIds: [rid(1), rid(2)],
+  };
+
+  it("holds when every edge is loaded, nothing is narrowed, no gap clears completeness and none names a member", () => {
+    expect(sessionSpeaksForAbsence(speaks)).toBe(true);
+    expect(sessionSpeaksForAbsence({ ...speaks, memberIds: [] })).toBe(true);
+  });
+
+  it("does not hold when an edge was not loaded", () => {
+    expect(sessionSpeaksForAbsence({ ...speaks, edgeInputComplete: false })).toBe(false);
+  });
+
+  it("does not hold for a narrowed view", () => {
+    expect(sessionSpeaksForAbsence({ ...speaks, narrowed: true })).toBe(false);
+  });
+
+  it("does not hold when a limit or truncation gap exists", () => {
+    const limit = classifyCoverageGaps([{ source: "correlation", reason: "limit" }], 1);
+    expect(limit.global).toBe(true);
+    expect(sessionSpeaksForAbsence({ ...speaks, gaps: limit })).toBe(false);
+  });
+
+  it("does not hold when the preview does not show every gap, or the gap count is not known", () => {
+    expect(sessionSpeaksForAbsence({ ...speaks, gaps: classifyCoverageGaps([], 3) })).toBe(false);
+    expect(sessionSpeaksForAbsence({ ...speaks, gaps: classifyCoverageGaps([], null) })).toBe(false);
+  });
+
+  it("does not hold when a gap names any member, placed or not, for every member's key may be lost", () => {
+    const named = classifyCoverageGaps([{ source: rid(2), reason: "x" }], 1);
+    expect(sessionSpeaksForAbsence({ ...speaks, gaps: named })).toBe(false);
+    // A gap that names an origin that is not a member does not bear on the members.
+    const other = classifyCoverageGaps([{ source: rid(70), reason: "x" }], 1);
+    expect(sessionSpeaksForAbsence({ ...speaks, gaps: other })).toBe(true);
+  });
+
+  it("takes the members from any iterable", () => {
+    const named = classifyCoverageGaps([{ source: rid(2), reason: "x" }], 1);
+    expect(sessionSpeaksForAbsence({ ...speaks, gaps: named, memberIds: new Set([rid(2)]) })).toBe(false);
+    expect(sessionSpeaksForAbsence({ ...speaks, gaps: named, memberIds: new Set([rid(1)]) })).toBe(true);
+  });
+
+  it("is the rule the plot's 'Not linked' label follows", () => {
+    const T0 = Date.UTC(2026, 9, 6, 10, 20, 0);
+    const items = [eventItem(1, T0), eventItem(2, T0 + 6_000)];
+    const chain = chainOf(fixtureEdges("exactPair"), items);
+    const labelWith = (view: Partial<typeof VIEW>) =>
+      buildChainPlot({ ...VIEW, ...view, chain, itemsById: mapOf(items), nearby: [eventItem(9, T0 + 3_000)] })
+        .nearby[0]?.linkLabel;
+    expect(labelWith({})).toBe(NOT_LINKED_LABEL);
+    expect(labelWith({ edgeInputComplete: false })).toBe(NO_LOADED_LINK_LABEL);
+    expect(labelWith({ narrowed: true })).toBe(NO_LOADED_LINK_LABEL);
+    expect(labelWith({ gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) })).toBe(NO_LOADED_LINK_LABEL);
+    expect(labelWith({ gaps: classifyCoverageGaps([{ source: rid(2), reason: "x" }], 1) })).toBe(NO_LOADED_LINK_LABEL);
   });
 });

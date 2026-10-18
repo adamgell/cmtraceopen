@@ -457,11 +457,16 @@ export interface EmptyWindowInput {
    * could not place is in NO window, so a window cannot speak for it: the claim needs a KNOWN zero.
    */
   unplacedTotal: number | null;
+  /**
+   * What the sentence says there are none of: "sources" (the dock's, the default) or "entries" (the
+   * Details context list's). The conditions are the same; only the noun is.
+   */
+  subject?: "sources" | "entries";
 }
 
 /**
- * The dock's "no other sources" sentence. The spec's own words are an absence claim, so they are
- * said only when all of these hold: the window was read whole (the caller asks only then), nothing
+ * The dock's "no other sources" sentence, or the Details list's "no other entries". The spec's own
+ * words are an absence claim, so they are said only when all of these hold: the window was read whole (the caller asks only then), nothing
  * is narrowed, no source went unread, the pair is not an earlier session's, and the session's count
  * of entries it could not place in time is a known zero. Otherwise the sentence says what it was
  * looked for IN, and what was not looked at. (A correlation coverage gap does not bear on it: no
@@ -469,10 +474,18 @@ export interface EmptyWindowInput {
  */
 export function emptyWindowText(input: EmptyWindowInput): { text: string; absolute: boolean } {
   const width = windowWidthLabel(input.halfWidthMs);
+  const entries = input.subject === "entries";
   if (!input.narrowed && !input.unreadSources && !input.updating && input.unplacedTotal === 0) {
-    return { text: `No other sources have entries within ${width}.`, absolute: true };
+    return {
+      text: entries ? `No other entries within ${width}.` : `No other sources have entries within ${width}.`,
+      absolute: true,
+    };
   }
-  const parts = [`No other visible sources have entries within ${width}.`];
+  const parts = [
+    entries
+      ? `No other visible entries within ${width}.`
+      : `No other visible sources have entries within ${width}.`,
+  ];
   if (input.narrowed) parts.push("Events hidden by the current filters or time range are not searched.");
   if (input.unreadSources) parts.push("Some sources were not fully read, so entries may be missing.");
   if (input.updating) parts.push("The timeline is being rebuilt, so this may change.");
@@ -508,12 +521,15 @@ export const NOT_IN_TIMELINE_NOTE =
 export const NOT_READ_NOTE =
   "The read of this window stopped before this event was found, so whether it is among the entries, and what it is linked to, are not known.";
 
+/** Where the entries of a window are shown: the dock draws them, the Details list lists them. */
+export type NoteSurface = "dock" | "list";
+
 /**
  * Several entries of the window each match the selected event, so which one it is cannot be told.
  * They are named by count and left out of the context, since each of them could be the event.
  */
-export function ambiguousEventNote(candidates: number): string {
-  return `${count(candidates)} entries of this window match this event, so which one it is cannot be told. They are not drawn as context, and no link is shown.`;
+export function ambiguousEventNote(candidates: number, surface: NoteSurface = "dock"): string {
+  return `${count(candidates)} entries of this window match this event, so which one it is cannot be told. They are not ${surface === "list" ? "listed" : "drawn as context"}, and no link is shown.`;
 }
 
 /**
@@ -521,11 +537,11 @@ export function ambiguousEventNote(candidates: number): string {
  * never numbered), so which entry of the window is it cannot be told, and none is drawn: any of
  * them could be the event itself. A way out is an input ordinal on the timeline origins (#957).
  */
-export function unmatchableNote(entries: number, halfWidthMs: number): string {
+export function unmatchableNote(entries: number, halfWidthMs: number, surface: NoteSurface = "dock"): string {
   const width = windowWidthLabel(halfWidthMs);
   return entries === 0
     ? `This event has no record identity the timeline can match, so it cannot be found among the entries within ${width}. No link is shown.`
-    : `This event has no record identity the timeline can match, so which of the ${count(entries)} ${entries === 1 ? "entry" : "entries"} within ${width} it is cannot be told. They are not drawn, and no link is shown.`;
+    : `This event has no record identity the timeline can match, so which of the ${count(entries)} ${entries === 1 ? "entry" : "entries"} within ${width} it is cannot be told. They are not ${surface === "list" ? "listed" : "drawn"}, and no link is shown.`;
 }
 
 /**

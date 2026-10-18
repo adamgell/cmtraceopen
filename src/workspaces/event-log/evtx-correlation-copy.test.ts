@@ -628,6 +628,8 @@ describe("no string claims an entry is unplaced without proof", () => {
     "partitionUnplaced",
     "placeInWindow",
     "reconcileSelection",
+    // A predicate over the plot's inputs: it produces no text.
+    "sessionSpeaksForAbsence",
   ]);
 
   it("names every runtime export of both modules in one of the two sets", () => {
@@ -1190,5 +1192,73 @@ describe("the dock's words (spec 8.12, #842)", () => {
       ...(["notLinked", "noLoadedLink", "inAnotherChain", "linkUnknownToEvent", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const).map((r) => nearbyReason(r)),
     ];
     for (const text of strings) expect(text).not.toMatch(causal);
+  });
+});
+
+/**
+ * The Details context list says "entries" where the dock says "sources" and "listed" where the dock
+ * says "drawn" (#843). Same facts, same conditions, so the same functions with a different noun; the
+ * dock's own words are untouched.
+ */
+describe("the notes shared by the dock and the Details context list", () => {
+  const WIDTH = 300_000;
+  const whole = { halfWidthMs: WIDTH, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 };
+
+  describe("emptyWindowText with a subject", () => {
+    it("says 'sources' by default and when asked, exactly as before", () => {
+      expect(emptyWindowText(whole)).toEqual({ text: "No other sources have entries within \u00b15 min.", absolute: true });
+      expect(emptyWindowText({ ...whole, subject: "sources" })).toEqual(emptyWindowText(whole));
+    });
+
+    it("says 'entries' for the list, and makes the absolute claim only under the same five inputs", () => {
+      const list = { ...whole, subject: "entries" as const };
+      expect(emptyWindowText(list)).toEqual({ text: "No other entries within \u00b15 min.", absolute: true });
+      for (const [why, change] of [
+        ["a narrowed scope", { narrowed: true }],
+        ["an unread source", { unreadSources: true }],
+        ["an earlier session's pair", { updating: true }],
+        ["an unknown unplaced count", { unplacedTotal: null }],
+        ["entries that have no usable time", { unplacedTotal: 3 }],
+      ] as const) {
+        const said = emptyWindowText({ ...list, ...change });
+        expect(said.absolute, why).toBe(false);
+        expect(said.text, why).toMatch(/^No other visible entries within \u00b15 min\./);
+      }
+    });
+
+    it("keeps the qualifiers of the dock's sentence for either subject", () => {
+      const dock = emptyWindowText({ ...whole, narrowed: true, unreadSources: true, updating: true, unplacedTotal: 2 });
+      const list = emptyWindowText({ ...whole, narrowed: true, unreadSources: true, updating: true, unplacedTotal: 2, subject: "entries" });
+      const tail = (text: string) => text.slice(text.indexOf("\u00b15 min.") + "\u00b15 min.".length);
+      expect(tail(list.text)).toBe(tail(dock.text));
+      expect(list.text).not.toMatch(NO_UNPROVEN_CLAIM);
+    });
+  });
+
+  describe("the notes about the event that cannot be told from the entries", () => {
+    it("say 'not drawn' for the dock by default and for 'dock'", () => {
+      expect(ambiguousEventNote(2)).toContain("They are not drawn as context");
+      expect(ambiguousEventNote(2, "dock")).toBe(ambiguousEventNote(2));
+      expect(unmatchableNote(3, 75_000)).toContain("They are not drawn");
+      expect(unmatchableNote(3, 75_000, "dock")).toBe(unmatchableNote(3, 75_000));
+    });
+
+    it("say 'not listed' for the list, and never 'drawn'", () => {
+      expect(ambiguousEventNote(2, "list")).toBe(
+        "2 entries of this window match this event, so which one it is cannot be told. They are not listed, and no link is shown.",
+      );
+      expect(unmatchableNote(3, WIDTH, "list")).toBe(
+        "This event has no record identity the timeline can match, so which of the 3 entries within \u00b15 min it is cannot be told. They are not listed, and no link is shown.",
+      );
+      for (const text of [ambiguousEventNote(5, "list"), unmatchableNote(1, WIDTH, "list"), unmatchableNote(0, WIDTH, "list")]) {
+        expect(text).not.toMatch(/drawn/);
+      }
+    });
+
+    it("count the same entries for either surface", () => {
+      expect(unmatchableNote(0, WIDTH, "list")).toBe(unmatchableNote(0, WIDTH));
+      expect(ambiguousEventNote(7, "list")).toContain("7 entries");
+      expect(unmatchableNote(1, WIDTH, "list")).toContain("which of the 1 entry within");
+    });
   });
 });

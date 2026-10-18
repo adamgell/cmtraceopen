@@ -503,22 +503,47 @@ function isLinkingStrength(strength: CorrelationChainStrength): strength is "exa
   return strength === "exact" || strength === "candidate";
 }
 
+export interface AbsenceInput {
+  /** Every timeline edge of the session was loaded. */
+  edgeInputComplete: boolean;
+  /** The view is narrowed (see `ChainPlotInput.narrowed`). */
+  narrowed: boolean;
+  gaps: CorrelationGaps;
+  /** Every member of the row the entry is compared with, placed or not. */
+  memberIds: Iterable<string>;
+}
+
+/**
+ * Whether the session can speak for the ABSENCE of a link: "Not linked" is a claim about the whole
+ * session, so it needs every edge, every event and every origin correlated. A gap that names an
+ * entry's own origin withdraws it for that entry alone (a per-entry check the caller makes with
+ * `gaps.originIds`). A gap that names a MEMBER of the row withdraws it for every entry and the
+ * legend: some gaps are specific to one observation (an identity alias conflict, an invalid process
+ * start), and for such a member the key it would share with a context entry was never computed.
+ * Every member counts, not only the drawn ones, because the key was lost whether or not the member
+ * is drawn.
+ *
+ * The plot's labels read it, and so does the Details context list, which decides with it whether a
+ * missing link icon needs a caveat: one rule for "no link was found, and that means something".
+ */
+export function sessionSpeaksForAbsence(input: AbsenceInput): boolean {
+  if (!input.edgeInputComplete || input.narrowed || gapsClearCompleteness(input.gaps)) return false;
+  for (const id of input.memberIds) {
+    if (input.gaps.originIds.has(id)) return false;
+  }
+  return true;
+}
+
 export function buildChainPlot(input: ChainPlotInput): ChainPlot {
   const { chain, itemsById } = input;
-  // "Not linked" is a claim about the whole session; it needs every edge, every event and every
-  // origin correlated. A gap that names an entry's own origin withdraws it for that entry alone.
-  // A gap that names a CHAIN MEMBER withdraws it for every entry and the legend: some gaps are
-  // specific to one observation (an identity alias conflict, an invalid process start), and for
-  // such a member the key it would share with a context entry was never computed. Every member
-  // counts, not only the drawn ones, because the key was lost whether or not the member is drawn.
-  const memberHasGap = [...chain.memberIds, ...chain.unresolvedMemberIds].some((id) =>
-    input.gaps.originIds.has(id),
-  );
-  const chainClear =
-    input.edgeInputComplete &&
-    !input.narrowed &&
-    !gapsClearCompleteness(input.gaps) &&
-    !memberHasGap;
+  // A gap that names an entry's own origin withdraws "Not linked" for that entry alone (`labelFor`);
+  // the rest of the rule is `sessionSpeaksForAbsence`.
+  const chainClear = sessionSpeaksForAbsence({
+    edgeInputComplete: input.edgeInputComplete,
+    narrowed: input.narrowed,
+    gaps: input.gaps,
+    memberIds: [...chain.memberIds, ...chain.unresolvedMemberIds],
+  });
   const labelFor = (originId: string) => {
     // A loaded partner is a fact, whatever else is incomplete: say it first.
     if ((input.linkPartners?.get(originId) ?? 0) > 0) {
