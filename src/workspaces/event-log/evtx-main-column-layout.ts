@@ -29,19 +29,19 @@ import type { EvtxViewId } from "./evtx-layout-store";
 import { UNIFIED_TIMELINE_STRIP_HEIGHT_PX } from "./evtx-timeline-strip";
 
 /** The grid rows the Table view keeps, whatever else is open. */
-export const TABLE_GRID_FLOOR_ROWS = 5;
+const TABLE_GRID_FLOOR_ROWS = 5;
 
 /** The shortest the unified timeline strip is ever drawn, in px. */
-export const TIMELINE_STRIP_MIN_HEIGHT_PX = 240;
+const TIMELINE_STRIP_MIN_HEIGHT_PX = 240;
 
 /** The tallest the strip is drawn, as a share of the window: it never takes more than half. */
-export const TIMELINE_STRIP_MAX_WINDOW_RATIO = 0.5;
+const TIMELINE_STRIP_MAX_WINDOW_RATIO = 0.5;
 
 /**
  * One list row as the lists measure it (`getLogListMetrics(...).rowHeight + 2`, the unit the
  * unified timeline strip's own floor is counted in).
  */
-export function listRowPx(rowHeight: number): number {
+function listRowPx(rowHeight: number): number {
   return rowHeight + 2;
 }
 
@@ -75,7 +75,7 @@ export function tableGridFloorPx(gridRowPx: number): number {
 }
 
 /** The least height the Table view keeps: the strip, then the grid's floor. */
-export function tableViewMinHeightPx(gridRowPx: number, windowHeight: number): number {
+function tableViewMinHeightPx(gridRowPx: number, windowHeight: number): number {
   return timelineStripHeightPx(windowHeight) + tableGridFloorPx(gridRowPx);
 }
 
@@ -93,10 +93,10 @@ function listHeaderPx(logListFontSize: number): number {
 }
 
 /** The chain rows the Correlation view keeps in sight, whatever else is open. */
-export const CORRELATION_LIST_FLOOR_ROWS = 3;
+const CORRELATION_LIST_FLOOR_ROWS = 3;
 
 /** The rows a placeholder view keeps in sight: the generic minimum of a view. */
-export const GENERIC_VIEW_FLOOR_ROWS = 3;
+const GENERIC_VIEW_FLOOR_ROWS = 3;
 
 /**
  * The least height the Correlation view keeps, its minimum usable height: the chain list's header
@@ -105,7 +105,7 @@ export const GENERIC_VIEW_FLOOR_ROWS = 3;
  * on both sides, three lines (the badge, the title at f - 1 and the span) 3 px apart, and its 1 px
  * border.
  */
-export function correlationViewMinHeightPx(logListFontSize: number): number {
+function correlationViewMinHeightPx(logListFontSize: number): number {
   const sizes = correlationSizes(logListFontSize);
   const chainRow = 8 * 2 + 3 * 2 + 1 + 3 * lineHeightPx(sizes.f - 1);
   const list = listHeaderPx(logListFontSize) + CORRELATION_LIST_FLOOR_ROWS * chainRow;
@@ -118,7 +118,7 @@ export function correlationViewMinHeightPx(logListFontSize: number): number {
  * The generic minimum of a view that has no layout of its own to size from (the placeholder views):
  * a list header and `GENERIC_VIEW_FLOOR_ROWS` list rows.
  */
-export function genericViewMinHeightPx(logListFontSize: number): number {
+function genericViewMinHeightPx(logListFontSize: number): number {
   return (
     listHeaderPx(logListFontSize) +
     GENERIC_VIEW_FLOOR_ROWS * listRowPx(getLogListMetrics(logListFontSize).rowHeight)
@@ -165,7 +165,7 @@ export const DOCK_MIN_HEIGHT_PX =
   DOCK_AXIS_CHROME_PX +
   correlationSizes(MAX_LOG_LIST_FONT_SIZE).tick;
 
-export interface DockHandleBounds {
+interface DockHandleBounds {
   /** The rendered height, kept inside the range. */
   value: number;
   min: number;

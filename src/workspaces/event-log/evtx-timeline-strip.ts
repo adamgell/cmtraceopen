@@ -15,13 +15,13 @@
 /** The height of the strip. */
 export const UNIFIED_TIMELINE_STRIP_HEIGHT_PX = 320;
 /** The rows the list (or the unplaced container) keeps while the details above it are open. */
-export const UNIFIED_TIMELINE_FLOOR_ROWS = 3;
+const UNIFIED_TIMELINE_FLOOR_ROWS = 3;
 /** The header strip and the details' summary, in rows (29 px and 33 px at the default font: 2.5). */
 const CHROME_ROWS = 3;
 /** The least the details region is ever given, in rows. */
 const MIN_DETAILS_ROWS = 2;
 
-export interface TimelineStripLayout {
+interface TimelineStripLayout {
   /** The floor of the list and of the unplaced container, in px. */
   floorPx: number;
   /** The cap of the details region, in px. */

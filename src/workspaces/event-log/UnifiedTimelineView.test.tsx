@@ -23,11 +23,7 @@ import {
   timelineRetentionWindowForRange,
   UnifiedTimelineView,
 } from "./UnifiedTimelineView";
-import {
-  UNIFIED_TIMELINE_FLOOR_ROWS,
-  UNIFIED_TIMELINE_STRIP_HEIGHT_PX,
-  timelineStripLayout,
-} from "./evtx-timeline-strip";
+import { UNIFIED_TIMELINE_STRIP_HEIGHT_PX, timelineStripLayout } from "./evtx-timeline-strip";
 import source from "./UnifiedTimelineView.tsx?raw";
 import type { UnifiedTimeline } from "./unified-timeline";
 
@@ -932,7 +928,6 @@ describe("the strip keeps its list when the correlation details are open (Z2)", 
       floorPx: 3 * ROW_PX,
       detailsMaxPx: UNIFIED_TIMELINE_STRIP_HEIGHT_PX - 6 * ROW_PX,
     });
-    expect(UNIFIED_TIMELINE_FLOOR_ROWS).toBe(3);
     // At the default font the header (29 px), the summary (33), the capped region and the floor fit.
     const { floorPx, detailsMaxPx } = timelineStripLayout(ROW_PX);
     expect(29 + 33 + detailsMaxPx + floorPx).toBeLessThanOrEqual(UNIFIED_TIMELINE_STRIP_HEIGHT_PX);
