@@ -1,6 +1,12 @@
 import { tokens } from "@fluentui/react-components";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The card's links go through the actions module, which imports the event-log store, which subscribes to
+// Tauri events when it is first loaded.
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => undefined),
+}));
 import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes, getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
