@@ -36,7 +36,7 @@ vi.mock("./UnifiedTimelineView", () => ({
 
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
-import { getLogListMetrics } from "../../lib/log-accessibility";
+import { DEFAULT_LOG_LIST_FONT_SIZE, getLogListMetrics } from "../../lib/log-accessibility";
 import { EventLogWorkspace, EvtxViewHost, type EvtxViewEntry } from "./EventLogWorkspace";
 import { EvtxViewBar } from "./EvtxViewBar";
 import {
@@ -46,7 +46,7 @@ import {
   sanitizeLayout,
   useEvtxLayoutStore,
 } from "./evtx-layout-store";
-import { dockMinHeightPx } from "./evtx-main-column-layout";
+import { dockMinHeightPx, gridRecordRowPx } from "./evtx-main-column-layout";
 import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
 import type { EvtxRecord } from "./types";
@@ -149,7 +149,12 @@ describe("EventLogWorkspace three-column shell", () => {
   // jsdom does no layout, so these are style guards: the numbers the browser spec measures
   // (e2e/screenshots/event-logs.spec.ts, "event-logs correlation dock") come from the styles below.
   describe("the floors of the main column", () => {
-    const rowPx = () => getLogListMetrics(useUiStore.getState().logListFontSize).rowHeight + 2;
+    // One row of the grid, by the function the grid sizes its rows with: the floor counts these.
+    const gridRowPx = () =>
+      gridRecordRowPx(
+        getLogListMetrics(useUiStore.getState().logListFontSize).rowHeight,
+        useEvtxStore.getState().columnConfig.order,
+      );
     const resizeTo = (height: number) => {
       Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
       act(() => {
@@ -165,8 +170,33 @@ describe("EventLogWorkspace three-column shell", () => {
       Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
       render(<EventLogWorkspace />);
       expect(strip()).toHaveStyle({ height: "320px", flexShrink: "0" });
-      expect(gridBox()).toHaveStyle({ minHeight: `${5 * rowPx()}px` });
-      expect(panel()).toHaveStyle({ minHeight: `${320 + 5 * rowPx()}px` });
+      expect(gridBox()).toHaveStyle({ minHeight: `${5 * gridRowPx()}px` });
+      expect(panel()).toHaveStyle({ minHeight: `${320 + 5 * gridRowPx()}px` });
+    });
+
+    it("counts five of the grid's own rows, so the floor follows the Level column and the font", () => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      // 23 px of row at the default font; a grid record row is 29 px with the Level column on and
+      // 25 px without it (a list row), so the floor is 145 px and then 125 px.
+      expect(getLogListMetrics(DEFAULT_LOG_LIST_FONT_SIZE).rowHeight).toBe(23);
+      expect(gridRecordRowPx(23, ["timestamp", "level"])).toBe(29);
+      expect(gridRecordRowPx(23, ["timestamp"])).toBe(25);
+      render(<EventLogWorkspace />);
+      expect(useEvtxStore.getState().columnConfig.order).toContain("level");
+      expect(gridBox()).toHaveStyle({ minHeight: "145px" });
+      expect(panel()).toHaveStyle({ minHeight: "465px" });
+      act(() => useEvtxStore.getState().toggleColumnVisible("level"));
+      expect(gridBox()).toHaveStyle({ minHeight: "125px" });
+      expect(panel()).toHaveStyle({ minHeight: "445px" });
+      act(() => useEvtxStore.getState().toggleColumnVisible("level"));
+      expect(gridBox()).toHaveStyle({ minHeight: "145px" });
+      // A larger font makes a taller row, and the floor follows it.
+      try {
+        act(() => useUiStore.setState({ logListFontSize: 20 }));
+        expect(gridBox()).toHaveStyle({ minHeight: `${5 * (getLogListMetrics(20).rowHeight + 6)}px` });
+      } finally {
+        act(() => useUiStore.setState({ logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE }));
+      }
     });
 
     it("draws the strip at half the window when that is under 320 px, and never under 240 px", () => {
@@ -174,10 +204,10 @@ describe("EventLogWorkspace three-column shell", () => {
       render(<EventLogWorkspace />);
       resizeTo(560);
       expect(strip()).toHaveStyle({ height: "280px" });
-      expect(panel()).toHaveStyle({ minHeight: `${280 + 5 * rowPx()}px` });
+      expect(panel()).toHaveStyle({ minHeight: `${280 + 5 * gridRowPx()}px` });
       resizeTo(400);
       expect(strip()).toHaveStyle({ height: "240px" });
-      expect(panel()).toHaveStyle({ minHeight: `${240 + 5 * rowPx()}px` });
+      expect(panel()).toHaveStyle({ minHeight: `${240 + 5 * gridRowPx()}px` });
     });
 
     it("holds no floor for a view that is not the Table", () => {

@@ -707,7 +707,10 @@ test.describe("event-logs screenshots", () => {
     ).toBeLessThanOrEqual(1);
 
     // Z1 and Z2 (jsdom does no layout, so only a browser shows them), ruled in #842: the Table grid
-    // keeps a floor of five rows in every layout, with the dock open and closed. The dock is the
+    // keeps a floor of five of its own rows in every layout, with the dock open and closed. The
+    // row is read from the grid itself: a record row as it is rendered, which must also be the
+    // height the app's one row function gives (the grid sizes its rows with it, and so does the
+    // floor), so the floor is five rows of what the operator sees, with the Level column on. The dock is the
     // panel that gives way: it is drawn at the height the user chose while the window has room for
     // it and the Table's floor, then clamps down to its header and one lane, and past that the
     // main column scrolls. Nothing collapses to 0. The chosen height itself is never rewritten.
@@ -715,8 +718,13 @@ test.describe("event-logs screenshots", () => {
       page.evaluate(async () => {
         const { getLogListMetrics } = await import("/src/lib/log-accessibility.ts");
         const { useUiStore } = await import("/src/stores/ui-store.ts");
+        const { useEvtxStore } = await import("/src/workspaces/event-log/evtx-store.ts");
         const { useEvtxLayoutStore } = await import("/src/workspaces/event-log/evtx-layout-store.ts");
-        const rowPx = getLogListMetrics(useUiStore.getState().logListFontSize).rowHeight + 2;
+        const { gridRecordRowPx } = await import("/src/workspaces/event-log/evtx-main-column-layout.ts");
+        const rowByFunction = gridRecordRowPx(
+          getLogListMetrics(useUiStore.getState().logListFontSize).rowHeight,
+          useEvtxStore.getState().columnConfig.order,
+        );
         const find = (selector: string) => document.querySelector<HTMLElement>(selector);
         const need = (selector: string) => {
           const element = find(selector);
@@ -724,8 +732,11 @@ test.describe("event-logs screenshots", () => {
           return element;
         };
         const main = need('[data-evtx-region="main"]');
+        // A record row of the grid as rendered (every row of this dataset is a record row).
+        const renderedRow = need('[role="grid"] [role="row"][data-index]');
         const layout = {
-          rowPx,
+          rowPx: renderedRow.getBoundingClientRect().height,
+          rowByFunction,
           chosenDockHeight: useEvtxLayoutStore.getState().dockHeight,
           gridClient: need('[role="grid"]').clientHeight,
           gridBottom: need('[role="grid"]').getBoundingClientRect().bottom,
@@ -792,6 +803,7 @@ test.describe("event-logs screenshots", () => {
       await expect(async () => {
         layout = await measureLayout();
         // The Table keeps five grid rows and its strip, and the column scrolls instead of clipping.
+        expect(layout.rowPx).toBe(layout.rowByFunction);
         expect(layout.gridClient).toBeGreaterThanOrEqual(5 * layout.rowPx);
         // ... and is drawn whole: its view is not shorter than it, which would clip it away.
         expect(layout.gridBottom).toBeLessThanOrEqual(layout.panelBottom + 0.5);
@@ -828,7 +840,7 @@ test.describe("event-logs screenshots", () => {
       test.info().annotations.push({
         type: `${height}px, dock ${dockOpen ? "open" : "closed"}`,
         description:
-          `grid ${measured.gridClient} (five rows are ${5 * measured.rowPx}), strip ${measured.stripClient}, ` +
+          `grid ${measured.gridClient} (five rows are ${5 * measured.rowPx}, one is ${measured.rowPx}), strip ${measured.stripClient}, ` +
           `column overflow ${measured.mainOverflowPx}` +
           (measured.dock === null ? "" : `, dock ${measured.dock.slotHeight}`),
       });

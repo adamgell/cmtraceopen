@@ -24,6 +24,7 @@ import {
 } from "./evtx-filter";
 import type { EvtxRecord } from "./types";
 import { visibleColumns } from "./evtx-columns";
+import { gridRecordRowPx } from "./evtx-main-column-layout";
 import { EvtxTimelineRow } from "./EvtxTimelineRow";
 import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { sortForGrid } from "./evtx-row-order";
@@ -85,8 +86,8 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     () => getLogListMetrics(logListFontSize),
     [logListFontSize]
   );
-  const recordRowExtra = columnConfig.order.includes("level") ? 6 : 2;
-  const rowEstimate = metrics.rowHeight + recordRowExtra;
+  // The Table's floor counts five of these rows (evtx-main-column-layout.ts), so it is one function.
+  const rowEstimate = gridRecordRowPx(metrics.rowHeight, columnConfig.order);
 
 
   const filteredRecords = useMemo(

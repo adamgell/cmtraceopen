@@ -30,7 +30,7 @@ import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
 import {
   dockMinHeightPx,
-  listRowPx,
+  gridRecordRowPx,
   tableGridFloorPx,
   tableViewMinHeightPx,
   timelineStripHeightPx,
@@ -410,8 +410,8 @@ export function EventLogWorkspace() {
   // The floors of the main column (evtx-main-column-layout.ts): the Table grid keeps five rows, the
   // dock gives way down to its header and one lane, and the column scrolls when they do not fit.
   const logListFontSize = useUiStore((s) => s.logListFontSize);
-  const rowPx = listRowPx(getLogListMetrics(logListFontSize).rowHeight);
-  const tableGridFloor = tableGridFloorPx(rowPx);
+  const gridRowPx = gridRecordRowPx(getLogListMetrics(logListFontSize).rowHeight, columnOrder);
+  const tableGridFloor = tableGridFloorPx(gridRowPx);
   const dockMin = Math.min(dockMinHeightPx(logListFontSize), effectiveDockHeight);
 
   useEffect(() => {
@@ -765,7 +765,7 @@ export function EventLogWorkspace() {
               <EvtxViewHost
                 views={views}
                 activeView={activeView}
-                minHeightPx={activeView === "table" ? tableViewMinHeightPx(rowPx, viewportHeight) : 0}
+                minHeightPx={activeView === "table" ? tableViewMinHeightPx(gridRowPx, viewportHeight) : 0}
               />
 
               {/*

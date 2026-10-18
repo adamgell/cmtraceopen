@@ -19,6 +19,7 @@
  * workspace, which is over 300 lines, only reads them.
  */
 import { correlationSizes } from "./evtx-correlation-sizes";
+import type { EvtxColumnId } from "./evtx-columns";
 import { UNIFIED_TIMELINE_STRIP_HEIGHT_PX } from "./evtx-timeline-strip";
 
 /** The grid rows the Table view keeps, whatever else is open. */
@@ -38,6 +39,19 @@ export function listRowPx(rowHeight: number): number {
   return rowHeight + 2;
 }
 
+/** What a record row of the grid is taller than a list row while the Level column is shown. */
+const GRID_LEVEL_BADGE_EXTRA_PX = 4;
+
+/**
+ * One record row of the Table grid: a list row, and 4 px more while the Level column (its badge) is
+ * shown. The grid sizes its virtualized rows with this (EvtxTimeline.tsx) and the floor below counts
+ * its rows with it, so five rows of the floor are five rows of the grid, whichever columns it shows
+ * and whatever the font.
+ */
+export function gridRecordRowPx(rowHeight: number, columnOrder: readonly EvtxColumnId[]): number {
+  return listRowPx(rowHeight) + (columnOrder.includes("level") ? GRID_LEVEL_BADGE_EXTRA_PX : 0);
+}
+
 /**
  * The height the strip is drawn at: its own 320 px, no shorter than 240 px and no taller than half
  * the window (the minimum wins when the two meet).
@@ -49,14 +63,14 @@ export function timelineStripHeightPx(windowHeight: number): number {
   );
 }
 
-/** The least height the Table grid keeps. */
-export function tableGridFloorPx(rowPx: number): number {
-  return TABLE_GRID_FLOOR_ROWS * rowPx;
+/** The least height the Table grid keeps: `TABLE_GRID_FLOOR_ROWS` of its own rows (`gridRecordRowPx`). */
+export function tableGridFloorPx(gridRowPx: number): number {
+  return TABLE_GRID_FLOOR_ROWS * gridRowPx;
 }
 
 /** The least height the Table view keeps: the strip, then the grid's floor. */
-export function tableViewMinHeightPx(rowPx: number, windowHeight: number): number {
-  return timelineStripHeightPx(windowHeight) + tableGridFloorPx(rowPx);
+export function tableViewMinHeightPx(gridRowPx: number, windowHeight: number): number {
+  return timelineStripHeightPx(windowHeight) + tableGridFloorPx(gridRowPx);
 }
 
 /** The dock's header: 6 px of padding above and below a 24 px control. */
