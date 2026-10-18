@@ -19,7 +19,7 @@ const sources = Object.fromEntries(
 const HAND_WRITTEN_SUM = /\bexact\s*\+\s*[\w.]*\bcandidate\b|\bcandidate\s*\+\s*[\w.]*\bambiguous\b/;
 
 /** The surfaces that state a number of chains, and so must call the one function. */
-const COUNTING_SURFACES = ["EventDiagnosisPanel.tsx"];
+const COUNTING_SURFACES = ["EventDiagnosisPanel.tsx", "EvtxCorrelationView.tsx"];
 
 describe("the chain count has one definition", () => {
   it("sees the workspace and the module that owns the count", () => {

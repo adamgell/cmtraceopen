@@ -39,7 +39,7 @@ import {
   whyStatement,
   UPDATING_CORRELATION_TEXT,
 } from "./evtx-correlation-copy";
-import type { CorrelationChain } from "./evtx-correlation-chains";
+import { correlationChainCount, type CorrelationChain } from "./evtx-correlation-chains";
 import {
   resolveOriginRecords,
   scopeForChain,
@@ -567,8 +567,12 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
       if (data.error !== null) return "";
       return data.stage === "unavailable" ? NO_ANALYSIS_TEXT : READING_EDGES_TEXT;
     }
+    // The chain count the Insights card and the Chains tab state: a coverage blocked row is a coverage
+    // state and is said apart, never counted as a chain.
+    const chainCount = correlationChainCount(model.counts);
+    const blocked = model.counts.coverageBlocked;
     return [
-      `${model.totalCount.toLocaleString()} ${model.totalCount === 1 ? "chain" : "chains"}`,
+      `${chainCount.toLocaleString()} ${chainCount === 1 ? "chain" : "chains"}${blocked > 0 ? `, ${blocked.toLocaleString()} coverage blocked` : ""}`,
       model.edgeInputComplete ? null : "Correlation edges are partial",
       lossSentence,
       data.updating ? "Updating" : null,

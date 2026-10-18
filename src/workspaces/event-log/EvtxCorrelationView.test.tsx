@@ -1128,7 +1128,29 @@ describe("the live region (acceptance 22)", () => {
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(announcer().textContent).toMatch(/^4 chains/);
+    expect(announcer().textContent).toMatch(/^3 chains, 1 coverage blocked/);
+  });
+
+  it("counts chains as the Insights card does and says a coverage blocked row apart (#841 R1)", () => {
+    // mixedData holds an exact pair, an ambiguous group, a candidate pair and a blocked pair: four
+    // rows, three chains. The card says "3 chains" and "1 coverage blocked"; so does the announcer.
+    const data = mixedData();
+    expect(data.model!.totalCount).toBe(4);
+    show(data);
+    expect(screen.getByTestId("correlation-announcer").textContent).toBe("3 chains, 1 coverage blocked");
+  });
+
+  it("names no coverage blocked count when there is none, and never calls a blocked row a chain", () => {
+    show(pairData());
+    expect(screen.getByTestId("correlation-announcer").textContent).toBe("1 chain");
+    cleanup();
+    // Only a blocked pair: no chain, one blocked row.
+    const blockedOnly = makeData({
+      items: [eventItem(21, T0), eventItem(22, T0 + 1_000)],
+      edges: fixtureEdges("gappedPair", 20),
+    });
+    show(blockedOnly);
+    expect(screen.getByTestId("correlation-announcer").textContent).toBe("0 chains, 1 coverage blocked");
   });
 
   it("says when the edges are partial", () => {
@@ -1750,6 +1772,8 @@ describe("a lost selection is an event, said once and by what exists (the sticky
   });
 
   describe("the receipt: said by a publication made after the record, never by an earlier one", () => {
+    // mixedData holds three chains and one coverage blocked row (#841 R1).
+    const MIXED_COUNT = "3 chains, 1 coverage blocked";
     const ZERO = "The selected chain is no longer present";
     const SHOWN = `${ZERO}, showing another`;
     /** Time passes in quarter seconds; every distinct text the region holds is kept, in order. */
@@ -1786,7 +1810,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       const view = show(mixedData());
       hear();
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard[heard.length - 1]).toBe(`4 chains. ${SHOWN}`);
+      expect(heard[heard.length - 1]).toBe(`${MIXED_COUNT}. ${SHOWN}`);
       // The next tail rebuild drops the chain the operator was moved to, before the first publication is replaced.
       view.update(secondaryOnly({ builtFor: "session:2" }));
       advance(CORRELATION_ANNOUNCE_MS + 100);
@@ -1807,7 +1831,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       const view = show(mixedData());
       hear();
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard[heard.length - 1]).toBe(`4 chains. ${SHOWN}`);
+      expect(heard[heard.length - 1]).toBe(`${MIXED_COUNT}. ${SHOWN}`);
       // The operator's selection goes again, and now there is no chain at all.
       act(() => {
         useEvtxCorrelationStore.setState({ selectedChainId: "gone-2" });
@@ -1833,7 +1857,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
         view.update(mixedData({ builtFor: "session:2" }));
       });
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard).toContain(`4 chains. ${SHOWN}`);
+      expect(heard).toContain(`${MIXED_COUNT}. ${SHOWN}`);
       expect(saidCount(SHOWN)).toBe(1);
     });
 
@@ -1845,7 +1869,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       view.update(mixedData({ unplacedList: { items: [], total: 0 }, builtFor: "session:2" }));
       hear();
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard[heard.length - 1]).toBe(`4 chains. ${NOTHING}`);
+      expect(heard[heard.length - 1]).toBe(`${MIXED_COUNT}. ${NOTHING}`);
       // Items are listed again and the operator opens the pane from the rail; then they go again.
       view.update(mixedData({ unplacedList: { items: unplacedItems(2), total: 2 }, builtFor: "session:3" }));
       act(() => openUnplacedList());
@@ -1862,7 +1886,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       const view = show(mixedData());
       hear();
       advance(CORRELATION_ANNOUNCE_MS - 250);
-      expect(announcer().textContent).toBe("4 chains");
+      expect(announcer().textContent).toBe(MIXED_COUNT);
       // The timer fires and the data starts updating in one step, so the announcement composed with the
       // sentence is no longer the text that was published. The publication still said it.
       act(() => {
@@ -1870,7 +1894,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
         view.update(mixedData({ builtFor: "session:2", updating: true }));
       });
       hear();
-      expect(heard).toContain(`4 chains. ${SHOWN}`);
+      expect(heard).toContain(`${MIXED_COUNT}. ${SHOWN}`);
       advance(3 * (CORRELATION_ANNOUNCE_MS + 100));
       expect(saidCount(SHOWN)).toBe(1);
     });
@@ -1900,7 +1924,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       // A session returns with the replacement shown. No new loss is recorded: the first is still unsaid.
       view.update(mixedData({ builtFor: "session:2" }));
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard).toContain(`4 chains. ${SHOWN}`);
+      expect(heard).toContain(`${MIXED_COUNT}. ${SHOWN}`);
       expect(saidCount(SHOWN)).toBe(1);
       // Said once: nothing later says it again.
       view.update(mixedData({ builtFor: "session:3", updating: true }));
@@ -1922,7 +1946,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       expect(heard.filter((text) => text.includes(NOTHING))).toHaveLength(0);
       view.update(mixedData({ unplacedList: { items: [], total: 0 }, builtFor: "session:3" }));
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard).toContain(`4 chains. ${NOTHING}`);
+      expect(heard).toContain(`${MIXED_COUNT}. ${NOTHING}`);
       expect(heard.filter((text) => text.includes(NOTHING))).toHaveLength(1);
     });
 
@@ -1932,15 +1956,15 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       show(mixedData());
       hear();
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard[heard.length - 1]).toBe(`4 chains. ${SHOWN}`);
+      expect(heard[heard.length - 1]).toBe(`${MIXED_COUNT}. ${SHOWN}`);
       // A second loss of the same kind in the same model composes exactly the text the region holds.
       act(() => useEvtxCorrelationStore.setState({ selectedChainId: "gone-2" }));
       hear();
-      expect(announcer().textContent).toBe(`4 chains. ${SHOWN}`);
+      expect(announcer().textContent).toBe(`${MIXED_COUNT}. ${SHOWN}`);
       advance(2 * (CORRELATION_ANNOUNCE_MS + 100));
       // The region held the sentence once, then dropped it. It did not stay in every later announcement,
       // and it was not published a second time.
-      expect(heard).toEqual(["4 chains", `4 chains. ${SHOWN}`, "4 chains"]);
+      expect(heard).toEqual([MIXED_COUNT, `${MIXED_COUNT}. ${SHOWN}`, MIXED_COUNT]);
     });
   });
 
