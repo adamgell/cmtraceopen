@@ -135,7 +135,10 @@ fn mapped_property_label(property: &str) -> &str {
         })
         .unwrap_or(property)
 }
-fn redact_export_text(value: &str) -> String {
+/// The free-text redactor of every export: `redact_text`, then a pass that masks the value of a
+/// `key=value` pair whose key is a sensitive label. The Markdown report (`analysis_report`) uses
+/// the same function for every string it takes from the analysis session.
+pub(crate) fn redact_export_text(value: &str) -> String {
     let mut redacted = redact_text(value);
     let mut cursor = 0;
     while cursor < redacted.len() {
