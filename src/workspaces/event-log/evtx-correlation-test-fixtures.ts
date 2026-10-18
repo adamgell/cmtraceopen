@@ -133,6 +133,12 @@ export interface DataOptions {
   scan?: Partial<EvtxCorrelationData["scan"]>;
   nextScan?: EvtxCorrelationData["nextScan"];
   unplaced?: Partial<EvtxCorrelationData["unplaced"]>;
+  /**
+   * The unplaced list and its count; by default an empty list the session counts as empty. Null is
+   * NO RUN, as in the hook: the data's list is null and so are its counts, because there are no
+   * counts without a run. (A run whose count is unknown is `{ items: [], total: null }`.)
+   */
+  unplacedList?: EvtxCorrelationData["unplacedList"];
   edgeState?: Partial<EvtxCorrelationData["edges"]>;
   error?: string | null;
   retry?: () => void;
@@ -145,13 +151,24 @@ export interface DataOptions {
 /** Nine events loaded and nine visible, no text logs: nothing narrowed. */
 export const UNNARROWED_SCOPE = { visibleCount: 9, loadedCount: 9, textLogCount: 0 } as const;
 
+/** An unplaced list the session counts as empty: no item, and a trusted count of 0. */
+export const EMPTY_UNPLACED_LIST: NonNullable<EvtxCorrelationData["unplacedList"]> = { items: [], total: 0 };
+
 /** The edge total the hook would store: a count, or null when none can be trusted. */
 function knownEdgeTotal(total: number): number | null {
   return Number.isSafeInteger(total) && total >= 0 ? total : null;
 }
 
-/** The edges-only model of the session, as the hook keeps it beside the full one. */
-export function makeCounts(options: DataOptions): NonNullable<EvtxCorrelationData["counts"]> {
+/**
+ * The edges-only model of the session, as the hook keeps it beside the full one. There are counts
+ * only for a run, so an unplaced list of null (no run) is refused by the type: it must not become a
+ * counted zero here. `makeData` gives no counts for it.
+ */
+export function makeCounts(
+  options: Omit<DataOptions, "unplacedList"> & {
+    unplacedList?: NonNullable<DataOptions["unplacedList"]>;
+  },
+): NonNullable<EvtxCorrelationData["counts"]> {
   const total = options.totalEdges ?? options.edges.length;
   const model = buildCorrelationChains({
     items: [],
@@ -172,11 +189,29 @@ export function makeCounts(options: DataOptions): NonNullable<EvtxCorrelationDat
     linkPartners: linkPartnerCounts(model.linkedPairs),
     gaps: options.gaps ?? CLEAR_GAPS,
     scope: options.scope === undefined ? UNNARROWED_SCOPE : options.scope,
+    unplacedList: options.unplacedList === undefined ? EMPTY_UNPLACED_LIST : options.unplacedList,
     updating: options.updating ?? false,
   };
 }
 
-/** Shared data as the hook would store it: the real chain model over these items and edges. */
+/**
+ * The counts the hook would hold beside this data: none when there is no run (an unplaced list of
+ * null), because the hook has no counts without a run.
+ */
+function countsFor(options: DataOptions): EvtxCorrelationData["counts"] {
+  return options.unplacedList === null
+    ? null
+    : makeCounts({ ...options, unplacedList: options.unplacedList });
+}
+
+/**
+ * Shared data as the hook would store it: the real chain model over these items and edges.
+ *
+ * A default here is written `??` only where null is NOT a state of that field (a count, a flag, a
+ * name). Where null means something (`scope`: not known; `counts`: not in yet; `unplacedList`: no
+ * run), the default is an `=== undefined` check, so a test that asks for null gets null and not a
+ * neighbouring value such as a counted zero.
+ */
 export function makeData(options: DataOptions): EvtxCorrelationData {
   const hasItems = options.hasItems ?? true;
   const items = hasItems ? options.items : [];
@@ -211,8 +246,9 @@ export function makeData(options: DataOptions): EvtxCorrelationData {
       unplacedIds: new Set(),
       ...options.unplaced,
     },
+    unplacedList: options.unplacedList === undefined ? EMPTY_UNPLACED_LIST : options.unplacedList,
     linkPartners: linkPartnerCounts(model.linkedPairs),
-    counts: options.counts === undefined ? makeCounts(options) : options.counts,
+    counts: options.counts !== undefined ? options.counts : countsFor(options),
     updating: options.updating ?? false,
     error: options.error ?? null,
     retry: options.retry ?? (() => undefined),

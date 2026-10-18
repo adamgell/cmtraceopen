@@ -26,8 +26,8 @@ import { createFocusOutlineStyle, makeStyles, tokens } from "@fluentui/react-com
 import { ArrowLeft12Regular, ArrowRight12Regular } from "@fluentui/react-icons";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useRailTextColors } from "./evtx-rail-text";
-import { formatClock, type EvtxTimeZoneMode } from "./evtx-time";
-import type { ChainPlot, PlotConnector, PlotLane, PlotMarker } from "./evtx-correlation-view-model";
+import type { EvtxTimeZoneMode } from "./evtx-time";
+import { tickLabels, type ChainPlot, type PlotConnector, type PlotLane, type PlotMarker } from "./evtx-correlation-view-model";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 
 /** Spec 8.11: markers are 14 px; the lane label column is 184 px. */
@@ -331,6 +331,9 @@ export function EvtxCorrelationLanes({
 
   const trackHeight = Math.max(1, plot.lanes.length) * laneHeight;
   const tickLast = plot.ticks.length - 1;
+  // With seconds always: a lane window can be as narrow as 10 s. The day (and year) join the label
+  // when the window crosses midnight or is not in this year, so one clock never names two days.
+  const axisLabels = tickLabels(plot.ticks, timeZoneMode, { withSeconds: true });
 
   return (
     <figure
@@ -467,7 +470,7 @@ export function EvtxCorrelationLanes({
             data-axis=""
             style={{ position: "relative", height: `${sizes.tick + 6}px`, marginTop: "2px" }}
           >
-            {plot.ticks.map((tick, index) => (
+            {axisLabels.map((text, index) => (
               <span
                 key={index}
                 style={{
@@ -480,7 +483,7 @@ export function EvtxCorrelationLanes({
                   whiteSpace: "nowrap",
                 }}
               >
-                {formatClock(tick, timeZoneMode, true)}
+                {text}
               </span>
             ))}
           </div>

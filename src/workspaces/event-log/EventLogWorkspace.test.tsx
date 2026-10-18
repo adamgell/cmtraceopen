@@ -905,6 +905,16 @@ describe("EventLogWorkspace fixtures", () => {
   });
 
   describe("the transient time range and its Escape key", () => {
+    // The Time chip names the year of a range that is not in the current one, so the clock is pinned
+    // for the labels below. Only Date is faked: timers stay real.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.parse("2026-10-16T12:00:00.000Z"));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     const SEP = "\u2013";
     const RANGE = {
       startMs: Date.parse("2026-01-15T11:00:00.000Z"),

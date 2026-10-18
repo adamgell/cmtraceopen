@@ -31,7 +31,12 @@ import {
   type TimelineItem,
 } from "./unified-timeline";
 
-/** Same bound as `UNPLACED_PREVIEW_LIMIT` in `UnifiedTimelineView`. */
+/**
+ * The most chain rows the view and the rail draw (spec 8.11: 100). A render budget of this feature.
+ * It is not the engine's preview limit (`EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT`), which bounds the
+ * items in the first reply's previews and says nothing about how many rows are drawn; the numbers
+ * are equal and neither follows the other.
+ */
 export const CORRELATION_CHAIN_RENDER_LIMIT = 100;
 
 const TITLE_HEAD_LIMIT = 80;
@@ -42,8 +47,11 @@ export type CorrelationChainStrength =
   | "ambiguous"
   | "coverageBlocked";
 
-/** Strongest first. A higher index is a weaker label and wins a contradiction. */
-const STRENGTH_ORDER: readonly CorrelationChainStrength[] = [
+/**
+ * Strongest first. A higher index is a weaker label and wins a contradiction. The overview strip
+ * uses the same order for its rows, so the two cannot disagree about which strength is strongest.
+ */
+export const STRENGTH_ORDER: readonly CorrelationChainStrength[] = [
   "exact",
   "candidate",
   "ambiguous",

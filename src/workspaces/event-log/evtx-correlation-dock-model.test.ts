@@ -81,7 +81,12 @@ function windowAround(
   };
 }
 
-function counts(edges: TimelineCorrelationEdge[], extra: Partial<DataOptions> = {}) {
+/** What `makeCounts` accepts: counts exist only for a run, so an unplaced list is never null here. */
+type CountsOptions = Partial<Omit<DataOptions, "unplacedList">> & {
+  unplacedList?: NonNullable<DataOptions["unplacedList"]>;
+};
+
+function counts(edges: TimelineCorrelationEdge[], extra: CountsOptions = {}) {
   return makeCounts({ items: [], edges, builtFor: SESSION_KEY, ...extra });
 }
 
@@ -680,7 +685,7 @@ describe("a window that was not read whole makes no definite claim about the res
 describe("unread sources and an updating pair withdraw 'not linked' (#842, review A1)", () => {
   const record = recordFor(1);
   const t = record.timestampEpoch;
-  const scene = (extra: Partial<DockModelInput>, counted: Partial<DataOptions> = {}) =>
+  const scene = (extra: Partial<DockModelInput>, counted: CountsOptions = {}) =>
     ready({
       record,
       window: windowAround(record, [eventItem(1, t), eventItem(2, t + 6_000), eventItem(9, t + 3_000)]),
@@ -831,7 +836,7 @@ describe("context: the other entries of the window, by time and no more", () => 
     ["the engine reported a correlation limit", { gaps: classifyCoverageGaps([{ source: "correlation", reason: "limit" }], 1) }],
     ["a gap names the entry", { gaps: classifyCoverageGaps([{ source: rid(9), reason: "x" }], 1) }],
     ["a gap names a member of the chain", { gaps: classifyCoverageGaps([{ source: rid(2), reason: "x" }], 1) }],
-  ] as [string, Partial<DataOptions>][])("says 'time only, no loaded link' when %s", (_why, extra) => {
+  ] as [string, CountsOptions][])("says 'time only, no loaded link' when %s", (_why, extra) => {
     const model = build([eventItem(9, t + 3_000)], { counts: counts(exactPair(), extra) });
     expect(model.nearby[0]?.reason).toBe("noLoadedLink");
     expect(model.plot.nearby[0]?.linkLabel).toBe(NO_LOADED_LINK_LABEL);
@@ -1016,7 +1021,7 @@ describe("what the dock does not claim", () => {
     ["the view is narrowed", { scope: { visibleCount: 1, loadedCount: 9, textLogCount: 0 } }, false, /Events hidden by the current filters/],
     ["the scope is not known", { scope: null }, false, /Events hidden by the current filters/],
     ["a source was not fully read", {}, true, /Some sources were not fully read/],
-  ] as [string, Partial<DataOptions>, boolean, RegExp][])("qualifies the claim when %s", (_why, extra, unread, text) => {
+  ] as [string, CountsOptions, boolean, RegExp][])("qualifies the claim when %s", (_why, extra, unread, text) => {
     const model = ready({ record, window: windowAround(record, own()), counts: counts([], extra), unreadSources: unread });
     expect(model.empty?.absolute).toBe(false);
     expect(model.empty?.text).toMatch(text);

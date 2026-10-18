@@ -255,12 +255,59 @@ describe("the lanes and markers", () => {
     expect(CORRELATION_LANE_LABEL_PX).toBe(184);
   });
 
-  it("draws five axis ticks in the chosen time zone", () => {
-    const plot = exactPlot();
-    draw(plot);
-    const ticks = Array.from((document.querySelector("[data-axis]") as HTMLElement).children).map((n) => n.textContent);
-    expect(ticks).toEqual(plot.ticks.map((tick) => formatClock(tick, "utc", true)));
-    expect(ticks).toHaveLength(5);
+  describe("the axis labels (R9)", () => {
+    const axis = () =>
+      Array.from((document.querySelector("[data-axis]") as HTMLElement).children).map((n) => n.textContent);
+    // The year rule compares with the current year, so the clock is pinned to the fixture's year.
+    const pinNow = (iso: string) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(iso));
+    };
+    afterEach(() => vi.useRealTimers());
+
+    it("draws five axis ticks in the chosen time zone", () => {
+      pinNow("2026-10-16T12:00:00Z");
+      const plot = exactPlot();
+      draw(plot);
+      expect(axis()).toEqual(plot.ticks.map((tick) => formatClock(tick, "utc", true)));
+      expect(axis()).toHaveLength(5);
+    });
+
+    it("keeps the seconds when the ticks are a minute or more apart, where the shared default would drop them", () => {
+      // The lane plot asks for seconds explicitly: its window can be as narrow as 10 s, and a wide
+      // one is read to the second as well. At 60 s between ticks the shared default is minutes only.
+      pinNow("2026-10-16T12:00:00Z");
+      const start = Date.UTC(2026, 9, 6, 10, 20, 5);
+      draw(exactPlot({ window: { startMs: start, endMs: start + 4 * 60_000 } }));
+      expect(axis()).toEqual(["10:20:05", "10:21:05", "10:22:05", "10:23:05", "10:24:05"]);
+    });
+
+    it("names the day on every tick once the window crosses midnight, so a clock never names two days", () => {
+      pinNow("2026-10-16T12:00:00Z");
+      const start = Date.UTC(2026, 9, 6, 23, 59, 50);
+      draw(exactPlot({ window: { startMs: start, endMs: start + 20_000 } }));
+      expect(axis()).toEqual([
+        "Oct 6 23:59:50",
+        "Oct 6 23:59:55",
+        "Oct 7 00:00:00",
+        "Oct 7 00:00:05",
+        "Oct 7 00:00:10",
+      ]);
+    });
+
+    it("keeps the labels apart on a window of several days", () => {
+      pinNow("2026-10-16T12:00:00Z");
+      const start = Date.UTC(2026, 9, 6, 10, 0, 0);
+      draw(exactPlot({ window: { startMs: start, endMs: start + 48 * 3_600_000 } }));
+      expect(new Set(axis()).size).toBe(5);
+    });
+
+    it("names the year too when the window is not in the current year, as the histogram does", () => {
+      pinNow("2027-02-01T12:00:00Z");
+      const plot = exactPlot();
+      draw(plot);
+      expect(axis()[0]).toMatch(/^Oct 6 2026 10:19:\d\d$/);
+    });
   });
 });
 

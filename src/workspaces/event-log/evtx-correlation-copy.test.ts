@@ -63,6 +63,7 @@ import {
   NO_LOADED_LINK_LABEL,
   UNLOADED_ENTRY,
   UNTITLED_CHAIN,
+  axisTicks,
   buildChainPlot,
   chainAccessibleName,
   chainSequence,
@@ -75,6 +76,7 @@ import {
   middleTruncate,
   shortEntryId,
   spanText,
+  tickLabels,
   whyRows,
 } from "./evtx-correlation-view-model";
 import { buildEvtxVisualTokens } from "./evtx-visual-tokens";
@@ -597,6 +599,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "middleTruncate",
     "shortEntryId",
     "spanText",
+    "tickLabels",
     "whyRows",
   ]);
   const NOT_STRINGS = new Set([
@@ -773,6 +776,9 @@ describe("no string claims an entry is unplaced without proof", () => {
       spanText(null, null, "local") ?? "",
       ...[0, 1, 850, 3_300, 60_000, 125_000, 3_840_000, 97_200_000, -5_000].map((ms) => formatDelta(ms)),
       middleTruncate("{3b7e9c1a-5d24-4f8e-a0c6-1e2b3d4f5a6b}"),
+      // The axis labels, a clock or a day and a clock: they name a time, never a position.
+      ...tickLabels(axisTicks({ startMs: T0, endMs: T0 + 10_000 }), "utc", { nowMs: T0 }),
+      ...tickLabels(axisTicks({ startMs: T0, endMs: T0 + 48 * 3_600_000 }), "utc", { nowMs: T0 }),
       ...chainSequence(chain, itemsById).entries.flatMap((entry) => [entry.entry, entry.laneLabel]),
     ];
   }

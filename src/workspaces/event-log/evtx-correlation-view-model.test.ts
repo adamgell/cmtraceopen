@@ -3,7 +3,7 @@
  * the parser crate's own reducer) drives the shapes; synthetic edges cover what the engine cannot
  * yet produce (a log-line member, a mixed Exact and Candidate chain, an edge with no evidence).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import {
   buildCorrelationChains,
@@ -31,6 +31,7 @@ import {
   middleTruncate,
   placeInWindow,
   reconcileSelection,
+  tickLabels,
   spanText,
   whyRows,
   IN_ANOTHER_CHAIN_LABEL,
@@ -215,6 +216,78 @@ describe("axisTicks", () => {
   it("gives five evenly spaced ticks, the ends included", () => {
     expect(axisTicks({ startMs: 0, endMs: 8_000 })).toEqual([0, 2_000, 4_000, 6_000, 8_000]);
     expect(CORRELATION_AXIS_TICKS).toBe(5);
+  });
+});
+
+describe("tickLabels (R9)", () => {
+  const NOW = Date.UTC(2026, 9, 16, 12, 0, 0);
+  const at = (day: number, h: number, m: number, sec = 0, year = 2026, month = 9) =>
+    Date.UTC(year, month, day, h, m, sec);
+
+  it("is the clock alone, with seconds, when the ticks are under a minute apart", () => {
+    const labels = tickLabels(axisTicks({ startMs: at(6, 10, 20, 0), endMs: at(6, 10, 20, 10) }), "utc", { nowMs: NOW });
+    expect(labels).toEqual(["10:20:00", "10:20:02", "10:20:05", "10:20:07", "10:20:10"]);
+  });
+
+  it("drops the seconds when the ticks are a minute or more apart, unless asked to keep them", () => {
+    const ticks = axisTicks({ startMs: at(6, 10, 0), endMs: at(6, 12, 0) });
+    expect(tickLabels(ticks, "utc", { nowMs: NOW })).toEqual(["10:00", "10:30", "11:00", "11:30", "12:00"]);
+    expect(tickLabels(ticks, "utc", { nowMs: NOW, withSeconds: true })[1]).toBe("10:30:00");
+    expect(tickLabels([at(6, 10, 0, 5), at(6, 10, 0, 35)], "utc", { nowMs: NOW, withSeconds: false })).toEqual([
+      "10:00",
+      "10:00",
+    ]);
+  });
+
+  it("names the day on every tick once the ticks cross midnight", () => {
+    const ticks = axisTicks({ startMs: at(6, 23, 59, 50), endMs: at(7, 0, 0, 10) });
+    expect(tickLabels(ticks, "utc", { nowMs: NOW })).toEqual([
+      "Oct 6 23:59:50",
+      "Oct 6 23:59:55",
+      "Oct 7 00:00:00",
+      "Oct 7 00:00:05",
+      "Oct 7 00:00:10",
+    ]);
+  });
+
+  it("never gives two ticks of a multi-day window the same label", () => {
+    const ticks = axisTicks({ startMs: at(6, 10, 0), endMs: at(8, 10, 0) });
+    const labels = tickLabels(ticks, "utc", { nowMs: NOW });
+    expect(labels).toEqual(["Oct 6 10:00", "Oct 6 22:00", "Oct 7 10:00", "Oct 7 22:00", "Oct 8 10:00"]);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it("names the year when the ticks are not in the current year, even inside one day", () => {
+    const ticks = axisTicks({ startMs: at(6, 10, 20, 0), endMs: at(6, 10, 20, 10) });
+    expect(tickLabels(ticks, "utc", { nowMs: Date.UTC(2027, 1, 1) })[0]).toBe("Oct 6 2026 10:20:00");
+  });
+
+  it("names the year across a year boundary", () => {
+    const ticks = axisTicks({ startMs: at(31, 23, 59, 50, 2026, 11), endMs: at(1, 0, 0, 10, 2027, 0) });
+    expect(tickLabels(ticks, "utc", { nowMs: Date.UTC(2027, 0, 15) })).toEqual([
+      "Dec 31 2026 23:59:50",
+      "Dec 31 2026 23:59:55",
+      "Jan 1 2027 00:00:00",
+      "Jan 1 2027 00:00:05",
+      "Jan 1 2027 00:00:10",
+    ]);
+  });
+
+  it("reads the real clock for the year rule unless one is given", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.UTC(2027, 1, 1));
+      expect(tickLabels([at(6, 10, 20, 0), at(6, 10, 20, 10)], "utc")[0]).toBe("Oct 6 2026 10:20:00");
+      vi.setSystemTime(Date.UTC(2026, 9, 16));
+      expect(tickLabels([at(6, 10, 20, 0), at(6, 10, 20, 10)], "utc")[0]).toBe("10:20:00");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("has no label for no tick, and one clock for one tick", () => {
+    expect(tickLabels([], "utc", { nowMs: NOW })).toEqual([]);
+    expect(tickLabels([at(6, 10, 20, 5)], "utc", { nowMs: NOW })).toEqual(["10:20"]);
   });
 });
 
