@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_DOCK_HEIGHT,
-  DEFAULT_DOCK_WINDOW_MS,
   DEFAULT_RAIL_WIDTH,
   EVTX_DOCK_WINDOW_OPTIONS_MS,
   EVTX_PANELS_AVAILABLE,
@@ -177,7 +176,7 @@ describe("evtx-layout-store", () => {
     expect(state.railTab).toBe("insights");
     expect(state.railWidth).toBe(MAX_RAIL_WIDTH);
     expect(state.dockHeight).toBe(MIN_DOCK_HEIGHT);
-    expect(state.dockWindowMs).toBe(DEFAULT_DOCK_WINDOW_MS);
+    expect(state.dockWindowMs).toBe(75_000);
     // A collapsed dock is not something an envelope can set.
     expect(state.dockCollapsed).toBe(false);
     expect(state).not.toHaveProperty("records");
@@ -192,7 +191,6 @@ describe("evtx-layout-store", () => {
   describe("the correlation dock's window and collapse", () => {
     it("offers 30 s, 75 s, 2 min and 5 min, with 75 s the default", () => {
       expect([...EVTX_DOCK_WINDOW_OPTIONS_MS]).toEqual([30_000, 75_000, 120_000, 300_000]);
-      expect(DEFAULT_DOCK_WINDOW_MS).toBe(75_000);
     });
 
     it("takes each of the four widths and ignores any other", () => {

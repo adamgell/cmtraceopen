@@ -314,7 +314,7 @@ export function hasUnreadSources(gaps: readonly EvtxCoverageGap[]): boolean {
 }
 
 /** The four coverage inputs the workspace keeps, merged as the diagnosis merges them. */
-export interface CoverageState {
+interface CoverageState {
   coverageDetails: readonly EvtxCoverageGap[];
   manifestCoverage: readonly EventLogSourceCoverage[];
   coverageGaps: readonly string[];

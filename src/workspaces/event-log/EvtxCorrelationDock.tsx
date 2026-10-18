@@ -77,7 +77,7 @@ import { useEvtxCorrelationData } from "./useEvtxCorrelation";
 import { useEvtxCorrelationWindow } from "./useEvtxCorrelationWindow";
 import { useUnreadSources } from "./useUnreadSources";
 
-export interface EvtxCorrelationDockProps {
+interface EvtxCorrelationDockProps {
   /** Test seams: the window reader's IO and its two settle times. */
   windowDeps?: Partial<CorrelationWindowDeps>;
   selectionSettleMs?: number;

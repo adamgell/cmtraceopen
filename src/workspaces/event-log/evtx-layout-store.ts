@@ -51,8 +51,8 @@ export type EvtxPanels = Record<EvtxPanelId, boolean>;
 
 /** The correlation dock's window, as the half width around the selected event (spec 8.12). */
 export const EVTX_DOCK_WINDOW_OPTIONS_MS = [30_000, 75_000, 120_000, 300_000] as const;
-export type EvtxDockWindowMs = (typeof EVTX_DOCK_WINDOW_OPTIONS_MS)[number];
-export const DEFAULT_DOCK_WINDOW_MS: EvtxDockWindowMs = 75_000;
+type EvtxDockWindowMs = (typeof EVTX_DOCK_WINDOW_OPTIONS_MS)[number];
+const DEFAULT_DOCK_WINDOW_MS: EvtxDockWindowMs = 75_000;
 
 export const EVTX_LAYOUT_STORAGE_KEY = "cmtraceopen-evtx-layout";
 

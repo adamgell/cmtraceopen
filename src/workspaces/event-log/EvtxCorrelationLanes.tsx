@@ -71,7 +71,7 @@ const useStyles = makeStyles({
   },
 });
 
-export type CorrelationLanesVariant = "view" | "dock";
+type CorrelationLanesVariant = "view" | "dock";
 
 /** What differs between the two variants, so the drawing below reads one object. */
 interface LaneGeometry {
