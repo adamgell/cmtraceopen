@@ -16,6 +16,11 @@ import {
   timelineRetentionWindowForRange,
   UnifiedTimelineView,
 } from "./UnifiedTimelineView";
+import {
+  UNIFIED_TIMELINE_FLOOR_ROWS,
+  UNIFIED_TIMELINE_STRIP_HEIGHT_PX,
+  timelineStripLayout,
+} from "./evtx-timeline-strip";
 import type { UnifiedTimeline } from "./unified-timeline";
 
 const virtualWindow = vi.hoisted(() => ({ start: 0, size: 20 }));
@@ -820,5 +825,85 @@ describe("the header when a count is not known", () => {
       expect(screen.getByText("12 log lines")).toBeInTheDocument();
       expect(screen.getByText("1,234 events")).toBeInTheDocument();
     });
+  });
+});
+
+/**
+ * Z2. The Table view's strip is a fixed-height flex column (header, correlation details, list). A
+ * scroll container's automatic minimum size is 0, so a list that is only `flex: 1` collapses to
+ * nothing once the details fill the strip. jsdom does no layout, so these pin the styles that
+ * prevent it; e2e/screenshots/event-logs.spec.ts ("event-logs table") measures the list in a browser.
+ */
+describe("the strip keeps its list when the correlation details are open (Z2)", () => {
+  const correlated: UnifiedTimeline = {
+    ...timeline,
+    edges: [
+      {
+        id: "exact-edge",
+        fromId: "a",
+        toId: "b",
+        key: { kind: "activityId", value: "{activity}" },
+        strength: "exact",
+        confidence: "high",
+        candidateIds: [],
+        evidence: [],
+        coverage: { state: "covered" },
+      },
+    ],
+  };
+  // The default list font is 13: a row is 20 + 2 + 1 + 2 = 25 px as the virtualizer estimates it.
+  const ROW_PX = 25;
+
+  it("derives the floor and the details cap from one row, three rows and what is left of the strip", () => {
+    expect(timelineStripLayout(ROW_PX)).toEqual({
+      floorPx: 3 * ROW_PX,
+      detailsMaxPx: UNIFIED_TIMELINE_STRIP_HEIGHT_PX - 6 * ROW_PX,
+    });
+    expect(UNIFIED_TIMELINE_FLOOR_ROWS).toBe(3);
+    // At the default font the header (29 px), the summary (33), the capped region and the floor fit.
+    const { floorPx, detailsMaxPx } = timelineStripLayout(ROW_PX);
+    expect(29 + 33 + detailsMaxPx + floorPx).toBeLessThanOrEqual(UNIFIED_TIMELINE_STRIP_HEIGHT_PX);
+    // It scales with the font, and the region is never given less than two rows.
+    expect(timelineStripLayout(41)).toEqual({ floorPx: 123, detailsMaxPx: 82 });
+    expect(timelineStripLayout(60).detailsMaxPx).toBe(120);
+  });
+
+  it("gives the list a floor of three rows, or all it has, and the details region a cap below the strip", () => {
+    render(<UnifiedTimelineView {...timelineSessionProps(correlated, 500)} />);
+    const list = screen.getByTestId("unified-timeline-list");
+    expect(list.style.overflowY).toBe("auto");
+    expect(list.style.minHeight).toBe(`${3 * ROW_PX}px`);
+    expect(screen.getByRole("region", { name: "Correlation details", hidden: true }).style.maxHeight).toBe(
+      `min(${UNIFIED_TIMELINE_STRIP_HEIGHT_PX - 6 * ROW_PX}px, 40vh)`,
+    );
+  });
+
+  it("floors a list that holds fewer than three rows at its whole content", () => {
+    render(<UnifiedTimelineView {...timelineSessionProps({ ...correlated, items: timeline.items.slice(0, 1) })} />);
+    expect(screen.getByTestId("unified-timeline-list").style.minHeight).toBe(`${ROW_PX}px`);
+  });
+
+  it("gives the unplaced container, which is the strip's only content when nothing is placed, the same floor", () => {
+    render(<UnifiedTimelineView {...timelineSessionProps({ ...correlated, items: [] })} />);
+    const container = screen.getByTestId("unified-timeline-empty");
+    expect(container.style.overflowY).toBe("auto");
+    expect(container.style.minHeight).toBe(`${3 * ROW_PX}px`);
+    expect(container.style.boxSizing).toBe("border-box");
+    expect(container).toContainElement(screen.getByRole("list", { name: "Unplaced timeline entries" }));
+  });
+
+  it("gives every scroll container that is a direct child of the strip a floor above zero", () => {
+    for (const items of [timeline.items, []]) {
+      const { unmount } = render(<UnifiedTimelineView {...timelineSessionProps({ ...correlated, items })} />);
+      const strip = screen.getByTestId("unified-timeline");
+      const scrollers = Array.from(strip.children).filter(
+        (child) => !["", "visible"].includes((child as HTMLElement).style.overflowY),
+      ) as HTMLElement[];
+      expect(scrollers.length).toBeGreaterThan(0);
+      for (const scroller of scrollers) {
+        expect(parseFloat(scroller.style.minHeight), scroller.getAttribute("data-testid") ?? "").toBeGreaterThan(0);
+      }
+      unmount();
+    }
   });
 });
