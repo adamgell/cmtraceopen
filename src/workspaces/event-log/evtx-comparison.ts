@@ -530,6 +530,35 @@ export function limitGapLines(lines: readonly string[]): string[] {
  */
 const MAX_UNREPORTED_START_BAND_SHARE = 0.01;
 
+/** The start band, in milliseconds, that is a documented tolerance for a window of this length. */
+function startBandTolerance(lengthMs: number): number {
+  return lengthMs * MAX_UNREPORTED_START_BAND_SHARE;
+}
+
+/**
+ * Whether a comparison no longer describes the period a figure beside it is measured over.
+ *
+ * `snapshotEpoch` is the instant that figure's window is measured from: the Charts tiles count
+ * from the workspace's `nowEpoch`, while the comparison's current period ends at `anchorEpoch`, the
+ * earliest instant a compared channel's read was issued. The tiles and the comparison describe the
+ * same period only while those two instants are within the tolerance this module already treats as
+ * silent for the start of a channel's current period (`channelStartGap`), the same one definition
+ * of how far apart two windows over the same data may sit before the difference is worth saying.
+ * Past it the comparison is stale: its delta is about a period the tiles no longer show.
+ *
+ * Either direction counts, and an instant that is not a usable date cannot be shown to be near the
+ * anchor, so it is stale too.
+ */
+export function isComparisonStale(
+  prior: Pick<PriorWindow, "anchorEpoch" | "lengthMs">,
+  snapshotEpoch: number
+): boolean {
+  return (
+    !Number.isFinite(snapshotEpoch) ||
+    Math.abs(snapshotEpoch - prior.anchorEpoch) > startBandTolerance(prior.lengthMs)
+  );
+}
+
 /**
  * When a channel's current-period read was issued, and when its invoke resolved. The service
  * evaluates the window at an instant between the two that is not observed, so they bound it.
@@ -566,7 +595,7 @@ export function channelStartGap(
   anchorEpoch: number,
   lengthMs: number
 ): StartGap | null {
-  const tolerance = lengthMs * MAX_UNREPORTED_START_BAND_SHARE;
+  const tolerance = startBandTolerance(lengthMs);
   const least = read.issuedEpoch - anchorEpoch;
   const most = Math.max(read.repliedEpoch - anchorEpoch, least);
   if (most <= tolerance) return null;
@@ -605,6 +634,55 @@ function gapAffectsCounts(kind: EvtxCoverageGap["kind"], visibility: ComparisonV
   return kind !== "provider" || messageTextCriterionActive(visibility);
 }
 
+/**
+ * The previous period of loaded files, or why the files cannot speak for it.
+ *
+ * The first two steps of `compareLoadedFiles`, shared with whatever decides whether a comparison
+ * can be offered at all (a disabled control), so the answer to "can it be compared" and the
+ * answer the comparison then gives cannot differ. Pure, and cheap: one pass over the records, with
+ * nothing counted.
+ */
+export type FilesPriorResult =
+  | { status: "available"; prior: PriorWindow; captures: FilesCapture[] }
+  | { status: "unavailable"; reason: ComparisonUnavailableReason; detail: string };
+
+export function resolveFilesPrior(
+  records: readonly EvtxRecord[],
+  selectedChannels: ReadonlySet<string>,
+  window: EvtxTimeWindow,
+  anchorEpoch: number
+): FilesPriorResult {
+  const windowResult = computePriorWindow(window, anchorEpoch);
+  if (windowResult.status === "unavailable") return windowResult;
+  const coverage = checkFilesCoverage(records, selectedChannels, windowResult.prior);
+  if (!coverage.covered) {
+    return { status: "unavailable", reason: coverage.reason, detail: coverage.detail };
+  }
+  return { status: "available", prior: windowResult.prior, captures: coverage.captures };
+}
+
+/**
+ * The instant files are measured from: the latest usable timestamp among all the loaded records.
+ *
+ * A saved export is a snapshot, so "Last 24 h" means the last 24 hours it holds rather than the
+ * last 24 hours before this computer's clock, by which a capture older than a day would show
+ * nothing. It reads every loaded record whatever the channel selection, so choosing channels never
+ * moves the window. With no record that can be placed in time there is no capture end to measure
+ * from, and the clock is used. The one place this is defined, for the grid and the comparison alike.
+ */
+export function filesWindowAnchor(
+  records: readonly Pick<EvtxRecord, "timestampEpoch">[],
+  clockEpoch: number
+): number {
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const candidate of records) {
+    if (hasUsableTimestamp(candidate.timestampEpoch) && candidate.timestampEpoch > latest) {
+      latest = candidate.timestampEpoch;
+    }
+  }
+  return latest === Number.NEGATIVE_INFINITY ? clockEpoch : latest;
+}
+
 export interface FilesComparisonInput {
   records: readonly EvtxRecord[];
   window: EvtxTimeWindow;
@@ -631,21 +709,21 @@ export interface FilesComparisonInput {
  * publishing anything.
  */
 export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutcome {
-  const windowResult = computePriorWindow(input.window, input.anchorEpoch);
-  if (windowResult.status === "unavailable") return windowResult;
-  const { prior } = windowResult;
-
-  const coverage = checkFilesCoverage(input.records, input.visibility.selectedChannels, prior);
-  if (!coverage.covered) {
-    return { status: "unavailable", reason: coverage.reason, detail: coverage.detail };
-  }
+  const resolved = resolveFilesPrior(
+    input.records,
+    input.visibility.selectedChannels,
+    input.window,
+    input.anchorEpoch
+  );
+  if (resolved.status === "unavailable") return resolved;
+  const { prior, captures } = resolved;
 
   const aggregator = createAggregator(prior, input.visibility);
   aggregator.add(input.records);
   const tally = aggregator.finish();
 
   const gaps: string[] = [];
-  const shortCaptures = coverage.captures
+  const shortCaptures = captures
     .filter((capture) => capture.latestMs < prior.anchorEpoch)
     .sort((a, b) => a.latestMs - b.latestMs);
   gaps.push(
@@ -686,16 +764,16 @@ export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutco
   // is in a source no loaded record can place, since that source might hold any of them.
   const counted = new Map(tally.counts.channels);
   const gapSources = new Set(carried.values());
-  const captureSources = new Set(coverage.captures.map((capture) => capture.source));
+  const captureSources = new Set(captures.map((capture) => capture.source));
   const holeInAnUnplacedSource = [...gapSources].some((source) => !captureSources.has(source));
   const channelsWithAHole = new Set(
-    coverage.captures
+    captures
       .filter((capture) => gapSources.has(capture.source))
       .map((capture) => capture.channel)
   );
   const comparedChannels = [
     ...new Set(
-      coverage.captures.filter((capture) => capture.holdsEvents).map((capture) => capture.channel)
+      captures.filter((capture) => capture.holdsEvents).map((capture) => capture.channel)
     ),
   ];
   // A capture that stops before the anchor leaves the end of the current period unread too.
@@ -707,7 +785,7 @@ export function compareLoadedFiles(input: FilesComparisonInput): ComparisonOutco
       shortChannels.has(channel) ||
       tally.unplacedChannels.has(channel)
   );
-  for (const capture of coverage.captures) {
+  for (const capture of captures) {
     if (
       capture.holdsEvents &&
       !counted.has(capture.channel) &&

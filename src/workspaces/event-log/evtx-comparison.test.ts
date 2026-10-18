@@ -9,8 +9,10 @@ import {
   countCurrentPeriod,
   createAggregator,
   eventIdentityKey,
+  filesWindowAnchor,
   getComparisonState,
   isComparisonRequestId,
+  isComparisonStale,
   markTailAppended,
   comparedChannelsOfComparison,
   messageTextCriterionActive,
@@ -18,6 +20,7 @@ import {
   observeComparisonComplete,
   observeComparisonProgress,
   publishFilesComparison,
+  resolveFilesPrior,
   useComparisonStore,
   type ComparisonVisibility,
   type LiveComparisonSession,
@@ -2218,5 +2221,163 @@ describe("publishing a files comparison", () => {
       sourceCoverage: [],
     });
     expect(cancelQuery).toHaveBeenCalledWith(session?.requestId);
+  });
+});
+
+describe("resolveFilesPrior", () => {
+  const selected = new Set(["System", "Application"]);
+  const prior = priorFor();
+  const spans = [
+    record({ timestampEpoch: prior.fromMs, channel: "System" }),
+    record({ timestampEpoch: prior.toMs, channel: "System" }),
+    record({ timestampEpoch: ANCHOR, channel: "System" }),
+  ];
+
+  it("returns the previous period and the captures when the loaded files cover it", () => {
+    const resolved = resolveFilesPrior(spans, selected, "24h", ANCHOR);
+    expect(resolved).toMatchObject({ status: "available", prior });
+    expect(resolved.status === "available" && resolved.captures.map((c) => c.channel)).toEqual([
+      "System",
+    ]);
+  });
+
+  it("says why it is unavailable in the words the comparison itself uses", () => {
+    expect(resolveFilesPrior(spans, selected, "all", ANCHOR)).toEqual({
+      status: "unavailable",
+      reason: "allTime",
+      detail: "All time has no previous period.",
+    });
+    expect(resolveFilesPrior([record({ timestampEpoch: ANCHOR })], selected, "24h", ANCHOR)).toEqual({
+      status: "unavailable",
+      reason: "priorPeriodNotSpanned",
+      detail: "The loaded files do not cover the previous period.",
+    });
+    expect(resolveFilesPrior([], selected, "24h", ANCHOR)).toEqual({
+      status: "unavailable",
+      reason: "noTimedRecords",
+      detail: "No events are loaded for the selected channels.",
+    });
+  });
+
+  // A control that is disabled for a reason the comparison would not give, or enabled when the
+  // comparison would refuse, is a false statement. The two answer from one definition, and this
+  // pins it over every kind of input the comparison distinguishes.
+  it.each([
+    ["covered", spans, "24h" as const, ANCHOR],
+    ["covered but with an unplaced event", [...spans, record({ timestampEpoch: 0 })], "24h" as const, ANCHOR],
+    ["all time", spans, "all" as const, ANCHOR],
+    ["not spanned", [record({ timestampEpoch: ANCHOR })], "24h" as const, ANCHOR],
+    ["nothing loaded", [], "24h" as const, ANCHOR],
+    ["only unplaced events", [record({ timestampEpoch: 0 })], "24h" as const, ANCHOR],
+    ["an unusable anchor", spans, "24h" as const, Number.NaN],
+    ["another channel only", [record({ timestampEpoch: prior.fromMs, channel: "Setup" })], "24h" as const, ANCHOR],
+  ])("agrees with compareLoadedFiles on %s", (_name, records, window, anchorEpoch) => {
+    const resolved = resolveFilesPrior(records, selected, window, anchorEpoch);
+    const outcome = compareLoadedFiles({
+      records,
+      window,
+      anchorEpoch,
+      visibility: visibility({ selectedChannels: selected }),
+      coverageDetails: [],
+      sourceCoverage: [],
+    });
+    if (outcome.status === "unavailable") {
+      expect(resolved).toEqual({
+        status: "unavailable",
+        reason: outcome.reason,
+        detail: outcome.detail,
+      });
+    } else {
+      expect(resolved.status).toBe("available");
+    }
+  });
+});
+
+describe("isComparisonStale", () => {
+  const windows = ["1h", "24h", "7d", "30d"] as const;
+
+  it.each(windows)("is not stale at the anchor or up to 1% of a %s window either side of it", (window) => {
+    const length = EVTX_TIME_WINDOW_MS[window];
+    const p = priorFor(window);
+    expect(isComparisonStale(p, ANCHOR)).toBe(false);
+    expect(isComparisonStale(p, ANCHOR + length / 100)).toBe(false);
+    expect(isComparisonStale(p, ANCHOR - length / 100)).toBe(false);
+  });
+
+  it.each(windows)("is stale one millisecond beyond 1% of a %s window, later or earlier", (window) => {
+    const length = EVTX_TIME_WINDOW_MS[window];
+    const p = priorFor(window);
+    expect(isComparisonStale(p, ANCHOR + length / 100 + 1)).toBe(true);
+    expect(isComparisonStale(p, ANCHOR - length / 100 - 1)).toBe(true);
+  });
+
+  it("cannot be shown to be current when the instant it is compared with is not a usable date", () => {
+    const p = priorFor("24h");
+    for (const unusable of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(isComparisonStale(p, unusable)).toBe(true);
+    }
+  });
+
+  // The tolerance is the comparison's own start-band tolerance, not a second constant: the same
+  // offset that channelStartGap calls silent is the offset this calls current.
+  it.each(windows)("draws the line where channelStartGap does for a %s window", (window) => {
+    const length = EVTX_TIME_WINDOW_MS[window];
+    const p = priorFor(window);
+    for (const offset of [length / 100 - 1, length / 100, length / 100 + 1]) {
+      const silent =
+        channelStartGap(
+          "System",
+          { issuedEpoch: ANCHOR + offset, repliedEpoch: ANCHOR + offset },
+          ANCHOR,
+          length
+        ) === null;
+      expect(isComparisonStale(p, ANCHOR + offset)).toBe(!silent);
+    }
+  });
+});
+
+describe("filesWindowAnchor", () => {
+  const CLOCK = ANCHOR + 400 * DAY;
+
+  it("is the latest usable timestamp across all the loaded records", () => {
+    const records = [
+      record({ timestampEpoch: ANCHOR - 3 * HOUR, channel: "System" }),
+      record({ timestampEpoch: ANCHOR, channel: "Application" }),
+      record({ timestampEpoch: ANCHOR - HOUR, channel: "System" }),
+    ];
+    expect(filesWindowAnchor(records, CLOCK)).toBe(ANCHOR);
+  });
+
+  it("does not depend on which channels are selected, so toggling a channel never moves the window", () => {
+    // The function takes the records alone: there is no selection for it to read.
+    expect(filesWindowAnchor.length).toBe(2);
+  });
+
+  it("reads a record that has no usable timestamp as no evidence of when the capture ended", () => {
+    const records = [
+      record({ timestampEpoch: ANCHOR - HOUR }),
+      record({ timestampEpoch: 0 }),
+      record({ timestampEpoch: Number.NaN }),
+      record({ timestampEpoch: Number.POSITIVE_INFINITY }),
+      record({ timestampEpoch: -5 }),
+    ];
+    expect(filesWindowAnchor(records, CLOCK)).toBe(ANCHOR - HOUR);
+  });
+
+  it("falls back to the clock when nothing is loaded or nothing can be placed", () => {
+    expect(filesWindowAnchor([], CLOCK)).toBe(CLOCK);
+    expect(filesWindowAnchor([record({ timestampEpoch: 0 })], CLOCK)).toBe(CLOCK);
+  });
+
+  it("counts an archived text-log line, which is among the loaded records", () => {
+    const records = [
+      record({ timestampEpoch: ANCHOR - 2 * HOUR }),
+      textLogLine({ timestampEpoch: ANCHOR - HOUR }),
+    ];
+    expect(filesWindowAnchor(records, CLOCK)).toBe(ANCHOR - HOUR);
+  });
+
+  it("does not look at the clock when the records give an answer", () => {
+    expect(filesWindowAnchor([record({ timestampEpoch: ANCHOR })], 1)).toBe(ANCHOR);
   });
 });
