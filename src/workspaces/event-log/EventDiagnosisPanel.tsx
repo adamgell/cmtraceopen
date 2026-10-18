@@ -13,12 +13,14 @@
  *
  * The Correlations card reads the workspace's shared edges-only correlation model
  * (`useEvtxCorrelationData().counts`), never `summary.correlations`: it needs no timeline scan, and
- * an unknown count reads "unknown", not 0. Its link opens the Correlation view. No other part of
- * the panel shows a correlation row or count either (#838 ruling 1): the diagnosis details list
- * error-token events only, and evtx-diagnosis-correlation-source.test.ts keeps it so.
+ * an unknown count reads "unknown", not 0. Its links open the Correlation view, and the Not placed
+ * list within it ("Review unplaced lines"). The unplaced line reads `counts.unplacedList`, the newest
+ * session's, from the first reply: its count is that reply's own, so a partial list says the count
+ * and not the preview's length. No other part of the panel shows a correlation row or count either
+ * (#838 ruling 1): the diagnosis details list error-token events only, and
+ * evtx-diagnosis-correlation-source.test.ts keeps it so.
  *
  * Deferred, with the phase that owns each (that phase's change must touch this file):
- * - "Review unplaced lines": Phase 10b (unplaced list).
  * - "{n} nearby, not linked": Phase 10c (Chains tab data).
  * - The coverage note with its Elevate action: Phase 4b.
  */
@@ -35,7 +37,8 @@ import { useUiStore } from "../../stores/ui-store";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 import { useRailTextColors } from "./evtx-rail-text";
 import { edgeInputNotice } from "./evtx-correlation-copy";
-import { openCorrelationView } from "./evtx-correlation-store";
+import { openCorrelationView, openUnplacedList } from "./evtx-correlation-store";
+import { describeUnplaced, unplacedCardLine } from "./evtx-unplaced";
 import { useEvtxCorrelationData } from "./useEvtxCorrelation";
 import {
   buildEvidenceIndex,
@@ -831,10 +834,20 @@ function CorrelationSummaryCard({ sizes, stale }: { sizes: RailSizes; stale: boo
   const { counts, stage } = useEvtxCorrelationData();
   const { cardSecondary } = useRailTextColors();
   if (counts === null && stage === "unavailable") return null;
+  // Counts that are not in yet are an unplaced count that is not known, not a counted zero.
+  const unplacedList = counts === null ? { items: [], total: null } : counts.unplacedList;
+  const unplacedLine = unplacedCardLine(unplacedList);
+  const unplacedView = describeUnplaced(unplacedList);
+  const unplacedKnown = counts !== null && unplacedView.total !== null;
+  // Something to review: a counted non-zero or an unknown count over a run. Not while loading.
+  const unplacedToReview = counts !== null && unplacedView.present;
   const lineStyle = { fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground2 };
   const mutedStyle = { fontSize: `${sizes.small}px`, color: cardSecondary };
   const known = counts !== null && counts.edges.totalEdges !== null;
-  if (counts !== null && counts.edges.totalEdges === 0 && counts.model.edgeInputComplete) return null;
+  // A session known to hold no edge has nothing to summarise, unless it has unplaced items to review.
+  if (counts !== null && counts.edges.totalEdges === 0 && counts.model.edgeInputComplete && !unplacedToReview) {
+    return null;
+  }
   const rows = counts?.model.counts;
   const correlations = rows === undefined ? 0 : rows.exact + rows.candidate + rows.ambiguous;
   const shortfall =
@@ -867,6 +880,21 @@ function CorrelationSummaryCard({ sizes, stale }: { sizes: RailSizes; stale: boo
         </div>
       )}
       {shortfall !== null && <div style={mutedStyle}>{shortfall}</div>}
+      {unplacedLine !== null && (
+        <div style={unplacedKnown ? lineStyle : mutedStyle} data-testid="correlation-card-unplaced">
+          {unplacedLine}
+        </div>
+      )}
+      {unplacedToReview && (
+        <Link
+          as="button"
+          type="button"
+          onClick={() => openUnplacedList()}
+          style={{ justifySelf: "start", fontSize: `${sizes.small}px`, fontWeight: 600 }}
+        >
+          Review unplaced lines <ArrowRight12Regular aria-hidden="true" style={{ verticalAlign: "middle" }} />
+        </Link>
+      )}
       <Link
         as="button"
         type="button"
