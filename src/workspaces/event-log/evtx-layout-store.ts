@@ -2,8 +2,9 @@
  * Presentation state for the Event Logs workbench layout (spec sections 5, 8.2 and 9).
  *
  * Kept apart from `evtx-store`, which is load-bearing for queries and holds record data. Nothing
- * here carries record content: it is the active view, which regions are shown, the rail tab and
- * two pixel sizes.
+ * here carries record content: it is the active view, which regions are shown, the rail tab, two
+ * pixel sizes and the correlation dock's window width. Whether the dock is collapsed is held here
+ * too but is not persisted: a dock that reopens shows what is around the selected event.
  *
  * Persistence mirrors `ui-store` and `evtx-filter-store`: zustand `persist` over localStorage
  * under a dedicated key. Every persisted value is sanitized in `merge`, which runs on each
@@ -34,6 +35,9 @@ export const EVTX_VIEW_LABELS: Record<EvtxViewId, string> = {
 export const EVTX_VIEW_PANEL_ID = "evtx-view-panel";
 export const evtxViewTabId = (view: EvtxViewId) => `evtx-view-tab-${view}`;
 
+/** Id of a panel toggle in the view bar, so the dock can return focus to the one that opened it. */
+export const evtxPanelToggleId = (panel: EvtxPanelId) => `evtx-panel-toggle-${panel}`;
+
 /** Ids that link each rail tab to its panel. */
 export const evtxRailTabId = (tab: "insights" | "chains" | "details") => `evtx-rail-tab-${tab}`;
 export const evtxRailPanelId = (tab: "insights" | "chains" | "details") => `evtx-rail-panel-${tab}`;
@@ -44,6 +48,11 @@ export type EvtxRailTabId = (typeof EVTX_RAIL_TAB_IDS)[number];
 
 export type EvtxPanelId = "channels" | "insights" | "dock";
 export type EvtxPanels = Record<EvtxPanelId, boolean>;
+
+/** The correlation dock's window, as the half width around the selected event (spec 8.12). */
+export const EVTX_DOCK_WINDOW_OPTIONS_MS = [30_000, 75_000, 120_000, 300_000] as const;
+export type EvtxDockWindowMs = (typeof EVTX_DOCK_WINDOW_OPTIONS_MS)[number];
+export const DEFAULT_DOCK_WINDOW_MS: EvtxDockWindowMs = 75_000;
 
 export const EVTX_LAYOUT_STORAGE_KEY = "cmtraceopen-evtx-layout";
 
@@ -104,12 +113,18 @@ function isOneOf<T extends string>(list: readonly T[], value: unknown): value is
   return typeof value === "string" && (list as readonly string[]).includes(value);
 }
 
+function isDockWindowMs(value: unknown): value is EvtxDockWindowMs {
+  return (EVTX_DOCK_WINDOW_OPTIONS_MS as readonly unknown[]).includes(value);
+}
+
 export interface EvtxPersistedLayout {
   activeView: EvtxViewId;
   panels: EvtxPanels;
   railTab: EvtxRailTabId;
   railWidth: number;
   dockHeight: number;
+  /** Half the correlation dock's window: one of `EVTX_DOCK_WINDOW_OPTIONS_MS`. */
+  dockWindowMs: EvtxDockWindowMs;
 }
 
 /** Builds a valid layout from anything read back from storage. Unknown keys are dropped. */
@@ -127,10 +142,13 @@ export function sanitizeLayout(raw: unknown): EvtxPersistedLayout {
     railTab: isOneOf(EVTX_RAIL_TAB_IDS, source.railTab) ? source.railTab : "insights",
     railWidth: clampRailWidth(source.railWidth),
     dockHeight: clampDockHeight(source.dockHeight),
+    dockWindowMs: isDockWindowMs(source.dockWindowMs) ? source.dockWindowMs : DEFAULT_DOCK_WINDOW_MS,
   };
 }
 
 interface EvtxLayoutState extends EvtxPersistedLayout {
+  /** The dock shows only its header row. Not persisted. */
+  dockCollapsed: boolean;
   setActiveView: (view: EvtxViewId) => void;
   setPanel: (panel: EvtxPanelId, visible: boolean) => void;
   togglePanel: (panel: EvtxPanelId) => void;
@@ -138,12 +156,16 @@ interface EvtxLayoutState extends EvtxPersistedLayout {
   setRailWidth: (width: number) => void;
   /** Pass the viewport height to apply the 50vh ceiling in pixels. */
   setDockHeight: (height: number, viewportHeight?: number) => void;
+  /** Ignores a width that is not one of the four options. */
+  setDockWindowMs: (windowMs: number) => void;
+  setDockCollapsed: (collapsed: boolean) => void;
 }
 
 export const useEvtxLayoutStore = create<EvtxLayoutState>()(
   persist(
     (set) => ({
       ...sanitizeLayout(undefined),
+      dockCollapsed: false,
       setActiveView: (view) => {
         if (isOneOf(EVTX_VIEW_IDS, view)) set({ activeView: view });
       },
@@ -161,6 +183,10 @@ export const useEvtxLayoutStore = create<EvtxLayoutState>()(
       setRailWidth: (width) => set({ railWidth: clampRailWidth(width) }),
       setDockHeight: (height, viewportHeight) =>
         set({ dockHeight: clampDockHeight(height, viewportHeight) }),
+      setDockWindowMs: (windowMs) => {
+        if (isDockWindowMs(windowMs)) set({ dockWindowMs: windowMs });
+      },
+      setDockCollapsed: (collapsed) => set({ dockCollapsed: collapsed === true }),
     }),
     {
       name: EVTX_LAYOUT_STORAGE_KEY,
@@ -171,6 +197,7 @@ export const useEvtxLayoutStore = create<EvtxLayoutState>()(
         railTab: state.railTab,
         railWidth: state.railWidth,
         dockHeight: state.dockHeight,
+        dockWindowMs: state.dockWindowMs,
       }),
       merge: (persisted, current) => ({ ...current, ...sanitizeLayout(persisted) }),
     },
