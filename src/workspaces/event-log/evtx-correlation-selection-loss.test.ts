@@ -124,6 +124,14 @@ describe("when the region has said a loss", () => {
     expect(lossWasSaid(recorded(5), SHOWN, region(same, 5), same)).toBe(true);
   });
 
+  it("is not said by an identical announcement that does not carry the sentence (no model)", () => {
+    // With no model the announcement is the "no analysis" or "reading" text, or empty: it never
+    // carries the sentence, so a region that holds it has not said the loss.
+    for (const text of ["No event analysis is available. Load events to see correlation.", "Reading correlation edges...", ""]) {
+      expect(lossWasSaid(recorded(1), SHOWN, region(text, 2), text), JSON.stringify(text)).toBe(false);
+    }
+  });
+
   it("is never said twice, and has nothing to say with no sentence", () => {
     expect(lossWasSaid({ ...recorded(0), announced: true }, SHOWN, region(SHOWN, 9), SHOWN)).toBe(false);
     expect(lossWasSaid(recorded(0), null, region("7 chains", 9), "7 chains")).toBe(false);

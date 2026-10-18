@@ -59,9 +59,13 @@ export function newSelectionLoss(
  * Whether the region has now said the sentence of this loss. Not by looking for the text in whatever
  * the region holds: that can be a publication made before the record existed, and a prefix of
  * another sentence. It has been said when
- * - the announcement composed with it is identical to what the region already holds (the region
- *   would not publish it again, so it would otherwise sit in every later announcement); or
+ * - the announcement composed with it carries the sentence and is identical to what the region
+ *   already holds (the region would not publish it again, so it would otherwise sit in every later
+ *   announcement); or
  * - a publication made AFTER the record was created carries the sentence.
+ * An announcement that does not carry the sentence never says it: with no model the announcement is
+ * the "no analysis" or "reading" text, or empty, and the record stays unsaid for the first later
+ * publication that carries it.
  */
 export function lossWasSaid(
   loss: SelectionLoss,
@@ -70,7 +74,7 @@ export function lossWasSaid(
   composed: string,
 ): boolean {
   if (loss.announced || sentence === null) return false;
-  if (composed === region.text) return true;
+  if (composed === region.text && composed.includes(sentence)) return true;
   return region.publications > loss.since && region.text.includes(sentence);
 }
 

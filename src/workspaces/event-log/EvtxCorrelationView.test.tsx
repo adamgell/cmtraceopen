@@ -1658,6 +1658,57 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       expect(saidCount(SHOWN)).toBe(1);
     });
 
+    // Every branch of the announcement that is composed WITHOUT the sentence while a loss is true: no
+    // model, in its three texts. The region then holds text that never carries the sentence, so the
+    // loss stays unsaid until the first later publication that does.
+    it.each([
+      ["no analysis", () => UNAVAILABLE_CORRELATION, "No event analysis is available. Load events to see correlation."],
+      [
+        "the edges being read",
+        () => ({ ...UNAVAILABLE_CORRELATION, stage: "pending" as const }),
+        "Reading correlation edges...",
+      ],
+      ["a failure with no model", () => ({ ...UNAVAILABLE_CORRELATION, stage: "pending" as const, error: "boom" }), ""],
+    ])("is still spoken when the model goes away inside the window and a session returns: %s", (_name, noModel, held) => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone-1" });
+      const view = show(mixedData());
+      hear();
+      advance(1_000);
+      // The end of the data, before the sentence was published: the region publishes the no-model text.
+      view.update(noModel());
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(announcer().textContent).toBe(held);
+      expect(saidCount(SHOWN)).toBe(0);
+      // A session returns with the replacement shown. No new loss is recorded: the first is still unsaid.
+      view.update(mixedData({ builtFor: "session:2" }));
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard).toContain(`4 chains. ${SHOWN}`);
+      expect(saidCount(SHOWN)).toBe(1);
+      // Said once: nothing later says it again.
+      view.update(mixedData({ builtFor: "session:3", updating: true }));
+      advance(2 * (CORRELATION_ANNOUNCE_MS + 100));
+      expect(saidCount(SHOWN)).toBe(1);
+      expect(announcer().textContent).not.toContain(ZERO);
+    });
+
+    it("speaks a Not placed loss too when the model goes away inside the window", () => {
+      vi.useFakeTimers();
+      const NOTHING = "Nothing is listed under Not placed any more, showing a chain";
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+      view.update(mixedData({ unplacedList: { items: [], total: 0 }, builtFor: "session:2" }));
+      hear();
+      advance(1_000);
+      view.update(UNAVAILABLE_CORRELATION);
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard.filter((text) => text.includes(NOTHING))).toHaveLength(0);
+      view.update(mixedData({ unplacedList: { items: [], total: 0 }, builtFor: "session:3" }));
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard).toContain(`4 chains. ${NOTHING}`);
+      expect(heard.filter((text) => text.includes(NOTHING))).toHaveLength(1);
+    });
+
     it("counts an announcement identical to what the region holds as said, and does not publish it again", () => {
       vi.useFakeTimers();
       useEvtxCorrelationStore.setState({ selectedChainId: "gone-1" });

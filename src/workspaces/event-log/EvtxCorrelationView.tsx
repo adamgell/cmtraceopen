@@ -12,7 +12,7 @@
  * never 0; a chain built from fewer events than were loaded says so; an entry with no loaded
  * position is called "not placed" only when the session proves it.
  */
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Button, makeStyles, tokens } from "@fluentui/react-components";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Copy16Regular, Filter16Regular } from "@fluentui/react-icons";
@@ -569,7 +569,10 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
   // shared and stays as it is): the region's text changes exactly when it publishes.
   const [region, setRegion] = useState<Region>({ text: spoken, publications: 0 });
   if (region.text !== spoken) setRegion({ text: spoken, publications: region.publications + 1 });
-  publicationsRef.current = region.publications;
+  // Mirrored after the commit, before the effects that read it, so it is the count of the commit they run in.
+  useLayoutEffect(() => {
+    publicationsRef.current = region.publications;
+  }, [region.publications]);
   // The loss is given to the polite region until the region has said it once; after that a later model
   // or "updating" change composes an announcement without it.
   useEffect(() => {
