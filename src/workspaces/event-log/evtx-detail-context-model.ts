@@ -72,6 +72,8 @@ import { timelineOriginId, type TimelineItem } from "./unified-timeline";
 export const DETAIL_CONTEXT_HALF_WIDTH_MS = 300_000;
 /** Spec 8.13 item 7: the 12 nearest items. */
 export const DETAIL_CONTEXT_ROW_CAP = 12;
+/** The eyebrow: "Context ±5 min". */
+export const DETAIL_CONTEXT_TITLE = `Context ${windowWidthLabel(DETAIL_CONTEXT_HALF_WIDTH_MS)}`;
 /** The eyebrow's right side. */
 export const DETAIL_CONTEXT_KINDS_LABEL = "events + text logs";
 
@@ -374,7 +376,7 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
 
   return {
     kind: "ready",
-    title: `Context ${windowWidthLabel(window.halfWidthMs)}`,
+    title: DETAIL_CONTEXT_TITLE,
     kindsLabel: DETAIL_CONTEXT_KINDS_LABEL,
     eventId: read.record.eventId,
     centerMs: center,
