@@ -28,7 +28,6 @@ import {
   READING_EDGES_TEXT,
   SAME_TIME_NOTE,
   SEQUENCE_ORDER_NOTE,
-  WAIT_FOR_ENTRIES_REASON,
   chainCopyText,
   chainRowName,
   correlationFailureText,
@@ -46,8 +45,8 @@ import {
 import { correlationChainCount, type CorrelationChain } from "./evtx-correlation-chains";
 import {
   resolveOriginRecords,
-  scopeForChain,
 } from "./evtx-correlation-origin-index";
+import { chainActionAvailability, filterTableToChain, loadedEvidenceIndex } from "./evtx-correlation-actions";
 import { resolveMarkerClick } from "./evtx-correlation-dock-model";
 import { zoomWindowFor, type ZoomState } from "./evtx-correlation-overview";
 import {
@@ -62,7 +61,6 @@ import {
 } from "./evtx-correlation-selection-loss";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import {
-  WAIT_FOR_UPDATE_REASON,
   describeUnplaced,
   notPlacedCaption,
   notPlacedLabel,
@@ -89,9 +87,6 @@ import {
   type TimeWindow,
 } from "./evtx-correlation-view-model";
 import { useEvtxCorrelationData } from "./useEvtxCorrelation";
-import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
-import type { EvtxRecordScopeCounts } from "./evtx-filter";
-import { buildEvidenceIndex, describeScopeCounts, type EvidenceIndex } from "./evtx-insights-data";
 import { useRailTextColors } from "./evtx-rail-text";
 import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
@@ -146,31 +141,6 @@ const LOG_ENTRY_NO_SELECTION: Record<Extract<ReturnType<typeof resolveMarkerClic
   ambiguous: "More than one loaded log record matches this entry, so none is selected.",
   noIdentity: "This entry has no usable record identity, so no record is selected.",
 };
-
-/**
- * The index of the records loaded NOW, built when a click needs it and not before. Loaded records
- * change with every live-tail batch while this view is open, and nothing reads the index until a
- * marker is clicked or the table is filtered, so a memo over the records would rebuild it (tens of
- * milliseconds at 100,000 events) for nothing, on every batch.
- */
-function loadedEvidenceIndex(): EvidenceIndex {
-  return buildEvidenceIndex(useEvtxStore.getState().records);
-}
-
-/**
- * Why the table was not filtered when `setRecordScope` returned false. It never says "no loaded
- * events" while an entry could not be looked for (`unresolved`): an absence is claimed only for
- * what was found absent by looking, and the counts say which is which.
- */
-export function scopeFailureText(counts: EvtxRecordScopeCounts, eventsLoading: boolean): string {
-  if (eventsLoading) {
-    return "The table was not filtered: events are still loading. Try again when loading has finished.";
-  }
-  const reasons = describeScopeCounts(counts, "chain");
-  return reasons.length > 0
-    ? `The table was not filtered: this chain names no event it can show. ${reasons.join(" ")}`
-    : "The table was not filtered: this chain names no event it can show.";
-}
 
 interface Palette {
   sizes: CorrelationSizes;
@@ -689,24 +659,13 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
 
   const filterToChain = () => {
     if (chain === null || model === null || !hasItems) return;
-    const chainScope = scopeForChain(chain, origins, loadedEvidenceIndex(), {
-      edgeInputComplete: model.edgeInputComplete,
-    });
-    const applied = useEvtxStore.getState().setRecordScope({
-      kind: "chain",
-      title: chainTitle(chain),
-      records: new Set(chainScope.records),
-      references: chainScope.references,
-      counts: chainScope.counts,
-    });
-    if (!applied) {
-      fail(scopeFailureText(chainScope.counts, useEvtxStore.getState().isLoading));
+    // The button that was pressed unmounts with this view, so focus goes to the Table tab first.
+    const result = filterTableToChain({ chain, origins, edgeInputComplete: model.edgeInputComplete });
+    if (!result.applied) {
+      fail(result.text);
       return;
     }
     setActionMessage(null);
-    // The button that was pressed unmounts with this view, so focus goes to the Table tab first.
-    useEvtxLayoutStore.getState().setActiveView("table");
-    document.getElementById(evtxViewTabId("table"))?.focus();
   };
 
   const copyChain = async () => {
@@ -806,12 +765,11 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
   const visibleSequence = sequence === null ? [] : showAllSequence ? sequence.entries : sequence.entries.slice(0, CORRELATION_SEQUENCE_INITIAL);
   const visibleWhy = showAllWhy ? why : why.slice(0, CORRELATION_SEQUENCE_INITIAL);
   const plotNotice = plot === null ? null : plotOmissionNotice(plot);
-  const canAct = hasItems && !data.updating && chain !== null;
-  const actReason = canAct
-    ? undefined
-    : data.updating
-      ? WAIT_FOR_UPDATE_REASON
-      : WAIT_FOR_ENTRIES_REASON;
+  const { canAct, reason: actReason } = chainActionAvailability({
+    hasItems,
+    updating: data.updating,
+    hasChain: chain !== null,
+  });
 
   return (
     <div data-testid="correlation-view" aria-busy={data.updating || reading || undefined} style={rootStyle}>

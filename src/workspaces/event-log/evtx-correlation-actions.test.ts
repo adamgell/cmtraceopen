@@ -1,0 +1,247 @@
+/**
+ * The actions a chain offers outside the lazy Correlation view (#841): filter the table to it, open it
+ * in the Correlation view, and whether either may act. The view, the dock, the Details context list
+ * and the rail's Chains tab all call these, so the rules are tested here once; the view's own tests
+ * (EvtxCorrelationView.test.tsx) keep driving them through its buttons.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => undefined),
+}));
+
+import {
+  chainActionAvailability,
+  filterTableToChain,
+  loadedEvidenceIndex,
+  openChainInCorrelationView,
+  scopeFailureText,
+} from "./evtx-correlation-actions";
+import { WAIT_FOR_ENTRIES_REASON } from "./evtx-correlation-copy";
+import { useEvtxCorrelationStore } from "./evtx-correlation-store";
+import { eventItem, fixtureEdges, makeData, recordFor, T0, type DataOptions } from "./evtx-correlation-test-fixtures";
+import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
+import { useEvtxStore } from "./evtx-store";
+import { WAIT_FOR_UPDATE_REASON } from "./evtx-unplaced";
+import type { EvtxRecord } from "./types";
+
+const sources = Object.fromEntries(
+  Object.entries(
+    import.meta.glob("./**/*.{ts,tsx}", { query: "?raw", import: "default", eager: true }) as Record<string, string>,
+  )
+    .filter(([path]) => !/\.test\.tsx?$|-test-helpers\.|-test-fixtures\.|\/__fixtures__\//.test(path))
+    .map(([path, source]) => [path.replace(/^\.\//, ""), source]),
+);
+
+function seedStore(records: EvtxRecord[] = []) {
+  useEvtxStore.getState().reset();
+  useEvtxStore.setState({ records, isLoading: false, timeZoneMode: "utc" });
+}
+
+function pair(extra: Partial<DataOptions> = {}) {
+  const data = makeData({
+    items: [eventItem(1, T0, "error", "first failed"), eventItem(2, T0 + 6_000, "info", "second ok")],
+    edges: fixtureEdges("exactPair"),
+    ...extra,
+  });
+  return { data, chain: data.model!.chains[0]!, origins: data.origins, model: data.model! };
+}
+
+/** A tab the layout would render, so a call that focuses it can be seen. */
+function arm(view: "table" | "correlation") {
+  const tab = document.createElement("button");
+  tab.id = evtxViewTabId(view);
+  document.body.appendChild(tab);
+  return tab;
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  useEvtxCorrelationStore.setState({ selectedChainId: null, unplacedOpen: false, openedCount: 0 });
+  useEvtxLayoutStore.setState({ activeView: "correlation" });
+  seedStore();
+});
+afterEach(() => {
+  document.body.innerHTML = "";
+});
+
+describe("filterTableToChain", () => {
+  it("applies a chain scope with the chain's title, records, references and counts", () => {
+    seedStore([recordFor(1), recordFor(2), recordFor(3)]);
+    const { chain, origins, model } = pair();
+    const result = filterTableToChain({ chain, origins, edgeInputComplete: model.edgeInputComplete });
+    expect(result).toEqual({ applied: true });
+    const scope = useEvtxStore.getState().recordScope;
+    expect(scope?.kind).toBe("chain");
+    expect(scope?.title).toBe("101 · first failed");
+    expect([...(scope?.records ?? [])].map((record) => record.eventRecordId).sort()).toEqual([1, 2]);
+    expect(scope?.references).toHaveLength(2);
+    expect(scope?.counts).toMatchObject({ notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false });
+  });
+
+  it("switches to Table and moves focus to its tab, only when the scope was applied", () => {
+    seedStore([recordFor(1), recordFor(2)]);
+    const tab = arm("table");
+    const { chain, origins } = pair();
+    filterTableToChain({ chain, origins, edgeInputComplete: true });
+    expect(useEvtxLayoutStore.getState().activeView).toBe("table");
+    expect(tab).toHaveFocus();
+  });
+
+  it("marks the scope bounded when the edges were not all loaded", () => {
+    seedStore([recordFor(1), recordFor(2)]);
+    const { chain, origins } = pair({ totalEdges: 40 });
+    filterTableToChain({ chain, origins, edgeInputComplete: false });
+    expect(useEvtxStore.getState().recordScope?.counts.bounded).toBe(true);
+  });
+
+  it("stays where it is, moves no focus and says why, when the scope could not be applied", () => {
+    seedStore([]);
+    const tab = arm("table");
+    const { chain, origins } = pair();
+    const result = filterTableToChain({ chain, origins, edgeInputComplete: true });
+    expect(result.applied).toBe(false);
+    expect(result.applied === false && result.text).toContain("2 events of this chain are not loaded.");
+    expect(useEvtxStore.getState().recordScope).toBeNull();
+    expect(useEvtxLayoutStore.getState().activeView).toBe("correlation");
+    expect(tab).not.toHaveFocus();
+  });
+
+  it("says events are still loading, rather than that the chain has none, while they are", () => {
+    seedStore([recordFor(1), recordFor(2)]);
+    useEvtxStore.setState({ isLoading: true });
+    const { chain, origins } = pair();
+    const result = filterTableToChain({ chain, origins, edgeInputComplete: true });
+    expect(result.applied === false && result.text).toContain("events are still loading");
+    expect(useEvtxLayoutStore.getState().activeView).toBe("correlation");
+  });
+
+  it("does not say 'no loaded events' when entries could not be looked for", () => {
+    seedStore([recordFor(1), recordFor(2)]);
+    const { chain, origins } = pair({ items: [] });
+    const result = filterTableToChain({ chain, origins, edgeInputComplete: true });
+    const text = result.applied === false ? result.text : "";
+    expect(text).toContain("2 entries of this chain could not be matched to a record because their timeline items were not read.");
+    expect(text).not.toMatch(/no loaded events?|not loaded/i);
+  });
+
+  it("looks in the records loaded at the moment of the call, not in a copy made earlier", () => {
+    seedStore([]);
+    const { chain, origins } = pair();
+    seedStore([recordFor(1), recordFor(2)]);
+    expect(filterTableToChain({ chain, origins, edgeInputComplete: true })).toEqual({ applied: true });
+  });
+});
+
+describe("loadedEvidenceIndex", () => {
+  it("indexes the records the store holds now", () => {
+    seedStore([recordFor(1)]);
+    const first = loadedEvidenceIndex();
+    seedStore([recordFor(1), recordFor(2)]);
+    expect(loadedEvidenceIndex()).not.toBe(first);
+  });
+});
+
+describe("scopeFailureText", () => {
+  const counts = { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false };
+
+  it("never says 'no loaded events' for any counts", () => {
+    for (const unresolved of [0, 1, 4]) {
+      for (const notLoaded of [0, 2]) {
+        expect(scopeFailureText({ ...counts, unresolved, notLoaded }, false)).not.toMatch(/no loaded events?/i);
+      }
+    }
+  });
+
+  it("keeps unresolved apart from not loaded", () => {
+    expect(scopeFailureText({ ...counts, unresolved: 2 }, false)).not.toMatch(/not loaded/);
+    expect(scopeFailureText({ ...counts, notLoaded: 2 }, false)).toMatch(/not loaded/);
+  });
+
+  it("has a reason even when every count is 0", () => {
+    expect(scopeFailureText(counts, false)).toBe("The table was not filtered: this chain names no event it can show.");
+  });
+
+  it("says events are still loading first", () => {
+    expect(scopeFailureText({ ...counts, notLoaded: 2 }, true)).toBe(
+      "The table was not filtered: events are still loading. Try again when loading has finished.",
+    );
+  });
+});
+
+describe("openChainInCorrelationView", () => {
+  it("opens the chain through openChain, so the view drops a loss it holds, shows the view and focuses its tab", () => {
+    const tab = arm("correlation");
+    useEvtxLayoutStore.setState({ activeView: "table" });
+    openChainInCorrelationView("chain-a");
+    expect(useEvtxCorrelationStore.getState().selectedChainId).toBe("chain-a");
+    expect(useEvtxCorrelationStore.getState().openedCount).toBe(1);
+    expect(useEvtxLayoutStore.getState().activeView).toBe("correlation");
+    expect(tab).toHaveFocus();
+  });
+
+  it("counts every open, the same chain twice included", () => {
+    openChainInCorrelationView("chain-a");
+    openChainInCorrelationView("chain-a");
+    expect(useEvtxCorrelationStore.getState().openedCount).toBe(2);
+  });
+
+  it("leaves the selection alone and counts no open when it is given no chain, but still shows the view and focuses its tab", () => {
+    const tab = arm("correlation");
+    useEvtxCorrelationStore.setState({ selectedChainId: "kept" });
+    useEvtxLayoutStore.setState({ activeView: "table" });
+    openChainInCorrelationView();
+    expect(useEvtxCorrelationStore.getState().selectedChainId).toBe("kept");
+    expect(useEvtxCorrelationStore.getState().openedCount).toBe(0);
+    expect(useEvtxLayoutStore.getState().activeView).toBe("correlation");
+    expect(tab).toHaveFocus();
+  });
+});
+
+describe("chainActionAvailability", () => {
+  it("allows the actions only on a chain whose entries were read, in a model that is not being rebuilt", () => {
+    expect(chainActionAvailability({ hasItems: true, updating: false, hasChain: true })).toEqual({
+      canAct: true,
+      reason: undefined,
+    });
+  });
+
+  it("waits for the update first, then for the entries", () => {
+    expect(chainActionAvailability({ hasItems: true, updating: true, hasChain: true })).toEqual({
+      canAct: false,
+      reason: WAIT_FOR_UPDATE_REASON,
+    });
+    expect(chainActionAvailability({ hasItems: false, updating: true, hasChain: true }).reason).toBe(
+      WAIT_FOR_UPDATE_REASON,
+    );
+    expect(chainActionAvailability({ hasItems: false, updating: false, hasChain: true })).toEqual({
+      canAct: false,
+      reason: WAIT_FOR_ENTRIES_REASON,
+    });
+  });
+
+  it("cannot act on no chain, and says to wait for the entries", () => {
+    expect(chainActionAvailability({ hasItems: true, updating: false, hasChain: false })).toEqual({
+      canAct: false,
+      reason: WAIT_FOR_ENTRIES_REASON,
+    });
+  });
+});
+
+describe("one definition of opening and focusing a view tab", () => {
+  it("sees the workspace and the module", () => {
+    expect(Object.keys(sources).length).toBeGreaterThan(50);
+    expect(sources["evtx-correlation-actions.ts"]).toBeDefined();
+  });
+
+  it("is called by the Correlation view", () => {
+    expect(sources["EvtxCorrelationView.tsx"]).toMatch(/\bfilterTableToChain\(/);
+  });
+
+  it("is not imported from the lazy view by anything", () => {
+    const importers = Object.entries(sources)
+      .filter(([, source]) => /from "\.\/EvtxCorrelationView"/.test(source))
+      .map(([file]) => file);
+    expect(importers).toEqual([]);
+  });
+});

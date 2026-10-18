@@ -41,7 +41,7 @@ vi.mock("./evtx-correlation-view-model", async (importOriginal) => {
 import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
-import EvtxCorrelationView, { CORRELATION_ANNOUNCE_MS, scopeFailureText } from "./EvtxCorrelationView";
+import EvtxCorrelationView, { CORRELATION_ANNOUNCE_MS } from "./EvtxCorrelationView";
 import viewSource from "./EvtxCorrelationView.tsx?raw";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import { openCorrelationView, openUnplacedList, useEvtxCorrelationStore } from "./evtx-correlation-store";
@@ -792,25 +792,6 @@ describe("Filter table to chain (acceptance 6 to 8)", () => {
     show(pairData({ updating: true }));
     expect(screen.getByRole("button", { name: "Filter table to chain" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("button", { name: "Copy as text" })).toHaveAttribute("aria-disabled", "true");
-  });
-
-  describe("scopeFailureText", () => {
-    const counts = { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false };
-    it("never says 'no loaded events' for any counts", () => {
-      for (const unresolved of [0, 1, 4]) {
-        for (const notLoaded of [0, 2]) {
-          const text = scopeFailureText({ ...counts, unresolved, notLoaded }, false);
-          expect(text).not.toMatch(/no loaded events?/i);
-        }
-      }
-    });
-    it("keeps unresolved apart from not loaded", () => {
-      expect(scopeFailureText({ ...counts, unresolved: 2 }, false)).not.toMatch(/not loaded/);
-      expect(scopeFailureText({ ...counts, notLoaded: 2 }, false)).toMatch(/not loaded/);
-    });
-    it("has a reason even when every count is 0", () => {
-      expect(scopeFailureText(counts, false)).toBe("The table was not filtered: this chain names no event it can show.");
-    });
   });
 });
 
