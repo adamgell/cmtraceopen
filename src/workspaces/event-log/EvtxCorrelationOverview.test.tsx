@@ -100,11 +100,18 @@ const layer = (name: string) => [...document.querySelectorAll<HTMLElement>(`[dat
 const lastWindow = () => onWindowChange.mock.calls[onWindowChange.mock.calls.length - 1]?.[0] as TimeWindow | null;
 
 beforeEach(() => {
+  // The year rule compares a label's year with the real clock, so the clock is pinned to the
+  // fixture's year for every test that reads clock text. Only Date is faked: timers stay real.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-16T12:00:00Z"));
   onWindowChange = vi.fn();
   useUiStore.setState({ themeId: "light", logListFontSize: 13 });
   useEvtxStore.setState({ timeRange: null });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe("what it draws", () => {
   it("is a 48 px box of bars with the caption above it and the ticks below, and records the total", () => {
