@@ -7,6 +7,7 @@
  * Test code only: nothing outside a test file imports it.
  */
 import { eventItem, makeCounts, recordFor, type DataOptions } from "./evtx-correlation-test-fixtures";
+import type { EventLogAnalysisTimelineWindow } from "../../lib/commands";
 import type { LoadedCorrelationWindow } from "./evtx-correlation-window";
 import type { TimelineCorrelationEdge, TimelineItem } from "./unified-timeline";
 import type { EvtxRecord } from "./types";
@@ -106,5 +107,31 @@ export function logItem(line: number, timestampMs: number): TimelineItem {
       bundle: null,
       recordId: line,
     },
+  };
+}
+
+/**
+ * The engine's reply to the window call for the closed interval `[startMs, endMs]` of session
+ * `sessionId`, holding `items` whole (nothing omitted), as the loader reads it.
+ */
+export function windowReplyFor(
+  sessionId: string,
+  revision: number,
+  startMs: number,
+  endMs: number,
+  items: TimelineItem[],
+): EventLogAnalysisTimelineWindow {
+  return {
+    sessionId,
+    revision,
+    startMs,
+    endMs,
+    offset: 0,
+    nextOffset: null,
+    totalItems: items.length,
+    windowItems: items.length,
+    omittedItems: 0,
+    items,
+    serializedBytes: 1_000,
   };
 }
