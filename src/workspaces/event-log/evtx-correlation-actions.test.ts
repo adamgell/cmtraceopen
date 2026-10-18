@@ -11,19 +11,16 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import {
-  chainActionAvailability,
   filterTableToChain,
   loadedEvidenceIndex,
   openChainInCorrelationView,
   openUnplacedInCorrelationView,
   scopeFailureText,
 } from "./evtx-correlation-actions";
-import { WAIT_FOR_ENTRIES_REASON } from "./evtx-correlation-copy";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { eventItem, fixtureEdges, makeData, recordFor, T0, type DataOptions } from "./evtx-correlation-test-fixtures";
 import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
-import { WAIT_FOR_UPDATE_REASON } from "./evtx-unplaced";
 import type { EvtxRecord } from "./types";
 
 const sources = Object.fromEntries(
@@ -210,36 +207,6 @@ describe("openUnplacedInCorrelationView", () => {
     expect(useEvtxCorrelationStore.getState().openedCount).toBe(0);
     expect(useEvtxLayoutStore.getState().activeView).toBe("correlation");
     expect(tab).toHaveFocus();
-  });
-});
-
-describe("chainActionAvailability", () => {
-  it("allows the actions only on a chain whose entries were read, in a model that is not being rebuilt", () => {
-    expect(chainActionAvailability({ hasItems: true, updating: false, hasChain: true })).toEqual({
-      canAct: true,
-      reason: undefined,
-    });
-  });
-
-  it("waits for the update first, then for the entries", () => {
-    expect(chainActionAvailability({ hasItems: true, updating: true, hasChain: true })).toEqual({
-      canAct: false,
-      reason: WAIT_FOR_UPDATE_REASON,
-    });
-    expect(chainActionAvailability({ hasItems: false, updating: true, hasChain: true }).reason).toBe(
-      WAIT_FOR_UPDATE_REASON,
-    );
-    expect(chainActionAvailability({ hasItems: false, updating: false, hasChain: true })).toEqual({
-      canAct: false,
-      reason: WAIT_FOR_ENTRIES_REASON,
-    });
-  });
-
-  it("cannot act on no chain, and says to wait for the entries", () => {
-    expect(chainActionAvailability({ hasItems: true, updating: false, hasChain: false })).toEqual({
-      canAct: false,
-      reason: WAIT_FOR_ENTRIES_REASON,
-    });
   });
 });
 

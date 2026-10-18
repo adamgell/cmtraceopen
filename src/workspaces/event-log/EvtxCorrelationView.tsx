@@ -30,6 +30,7 @@ import {
   READING_EDGES_TEXT,
   SAME_TIME_NOTE,
   SEQUENCE_ORDER_NOTE,
+  chainActionAvailability,
   chainCopyText,
   chainRowName,
   correlationFailureText,
@@ -48,7 +49,7 @@ import { correlationChainCount, type CorrelationChain } from "./evtx-correlation
 import {
   resolveOriginRecords,
 } from "./evtx-correlation-origin-index";
-import { chainActionAvailability, filterTableToChain, loadedEvidenceIndex } from "./evtx-correlation-actions";
+import { filterTableToChain, loadedEvidenceIndex } from "./evtx-correlation-actions";
 import { resolveMarkerClick } from "./evtx-correlation-dock-model";
 import { zoomWindowFor, type ZoomState } from "./evtx-correlation-overview";
 import {

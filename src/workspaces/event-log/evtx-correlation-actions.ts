@@ -7,7 +7,6 @@
  * Reads the stores when called and holds no state of its own.
  */
 import type { CorrelationChain } from "./evtx-correlation-chains";
-import { WAIT_FOR_ENTRIES_REASON } from "./evtx-correlation-copy";
 import type { EvtxRecordScopeCounts } from "./evtx-filter";
 import { scopeForChain, type OriginLookup } from "./evtx-correlation-origin-index";
 import { openCorrelationView, openUnplacedList } from "./evtx-correlation-store";
@@ -15,7 +14,6 @@ import { chainTitle } from "./evtx-correlation-view-model";
 import { buildEvidenceIndex, describeScopeCounts, type EvidenceIndex } from "./evtx-insights-data";
 import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
-import { WAIT_FOR_UPDATE_REASON } from "./evtx-unplaced";
 
 /**
  * The index of the records loaded NOW, built when a click needs it and not before. Loaded records
@@ -91,21 +89,4 @@ export function openChainInCorrelationView(chainId?: string | null): void {
 export function openUnplacedInCorrelationView(): void {
   openUnplacedList();
   document.getElementById(evtxViewTabId("correlation"))?.focus();
-}
-
-/**
- * Whether an action on the model on show (filter the table, copy, open) may act. It waits for a
- * rebuild first, then for the entries to be read: the model on show can be an earlier session's,
- * and a chain whose entries were not read has no records to name.
- */
-export function chainActionAvailability(input: {
-  hasItems: boolean;
-  updating: boolean;
-  hasChain: boolean;
-}): { canAct: boolean; reason: string | undefined } {
-  const canAct = input.hasItems && !input.updating && input.hasChain;
-  return {
-    canAct,
-    reason: canAct ? undefined : input.updating ? WAIT_FOR_UPDATE_REASON : WAIT_FOR_ENTRIES_REASON,
-  };
 }

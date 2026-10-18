@@ -41,6 +41,7 @@ import {
   UNTIMED_TEXT,
   UPDATING_CORRELATION_TEXT,
   ambiguousEventNote,
+  chainActionAvailability,
   chainCopyText,
   chainRowName,
   correlationFailureText,
@@ -82,6 +83,7 @@ import {
   type ChainCopyInput,
   type UnplacedEvidence,
 } from "./evtx-correlation-copy";
+import { WAIT_FOR_UPDATE_REASON } from "./evtx-unplaced";
 import * as copyExports from "./evtx-correlation-copy";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import * as viewModelExports from "./evtx-correlation-view-model";
@@ -681,6 +683,8 @@ describe("no string claims an entry is unplaced without proof", () => {
     "levelOfSeverity",
     "listedRows",
     "memberLinkSummary",
+    // A rule that returns one of the two wait reasons, which the audit prints; it writes no text.
+    "chainActionAvailability",
     // They pick one of the label constants above, which the audit prints; they write no text.
     "nearbyLinkLabel",
     "nearbyReasonOfLabel",
@@ -1727,3 +1731,34 @@ describe("the words of the rail's Chains tab (#841)", () => {
     });
   });
 });
+
+describe("chainActionAvailability, whether an action on the model on show may act", () => {
+  it("allows the actions only on a chain whose entries were read, in a model that is not being rebuilt", () => {
+    expect(chainActionAvailability({ hasItems: true, updating: false, hasChain: true })).toEqual({
+      canAct: true,
+      reason: undefined,
+    });
+  });
+
+  it("waits for the update first, then for the entries", () => {
+    expect(chainActionAvailability({ hasItems: true, updating: true, hasChain: true })).toEqual({
+      canAct: false,
+      reason: WAIT_FOR_UPDATE_REASON,
+    });
+    expect(chainActionAvailability({ hasItems: false, updating: true, hasChain: true }).reason).toBe(
+      WAIT_FOR_UPDATE_REASON,
+    );
+    expect(chainActionAvailability({ hasItems: false, updating: false, hasChain: true })).toEqual({
+      canAct: false,
+      reason: WAIT_FOR_ENTRIES_REASON,
+    });
+  });
+
+  it("cannot act on no chain, and says to wait for the entries", () => {
+    expect(chainActionAvailability({ hasItems: true, updating: false, hasChain: false })).toEqual({
+      canAct: false,
+      reason: WAIT_FOR_ENTRIES_REASON,
+    });
+  });
+});
+

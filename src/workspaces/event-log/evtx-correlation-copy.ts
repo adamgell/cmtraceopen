@@ -31,6 +31,7 @@ import {
   type UnplacedEvidence,
 } from "./evtx-correlation-view-model";
 import { formatEventTime, timeZoneLabel, type EvtxTimeZoneMode } from "./evtx-time";
+import { WAIT_FOR_UPDATE_REASON } from "./evtx-unplaced";
 import type { TimelineItem } from "./unified-timeline";
 import type { LoadedCorrelationWindow } from "./evtx-correlation-window";
 
@@ -198,6 +199,23 @@ export const NO_POSITION_TEXT = "No loaded timeline position";
 
 /** Why an action on a chain's entries waits: the entries have not been read yet. */
 export const WAIT_FOR_ENTRIES_REASON = "Wait for the entries of this chain to be read.";
+
+/**
+ * Whether an action on the model on show (filter the table, copy, open) may act. It waits for a
+ * rebuild first, then for the entries to be read: the model on show can be an earlier session's,
+ * and a chain whose entries were not read has no records to name.
+ */
+export function chainActionAvailability(input: {
+  hasItems: boolean;
+  updating: boolean;
+  hasChain: boolean;
+}): { canAct: boolean; reason: string | undefined } {
+  const canAct = input.hasItems && !input.updating && input.hasChain;
+  return {
+    canAct,
+    reason: canAct ? undefined : input.updating ? WAIT_FOR_UPDATE_REASON : WAIT_FOR_ENTRIES_REASON,
+  };
+}
 
 /** Said once above a list of entries in time order: a sequence is not a cause. */
 export const SEQUENCE_ORDER_NOTE = "Ordered by recorded time. Order is not evidence of cause.";
