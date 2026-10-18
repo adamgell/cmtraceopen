@@ -2504,15 +2504,16 @@ describe("resolveFilesPrior", () => {
       reason: "allTime",
       detail: "All time has no previous period.",
     });
+    // The spec's sentence comes first, as written, then the capture it is about and the one action.
     expect(resolveFilesPrior([record({ timestampEpoch: ANCHOR })], selected, "24h", ANCHOR)).toEqual({
       status: "unavailable",
       reason: "priorPeriodNotSpanned",
-      detail: "The loaded files do not cover the previous period.",
+      detail: `${NOT_COVERED} System.evtx (System) does not span it. No other selected channel has entries to compare.`,
     });
     expect(resolveFilesPrior([], selected, "24h", ANCHOR)).toEqual({
       status: "unavailable",
       reason: "noTimedRecords",
-      detail: "No events are loaded for the selected channels.",
+      detail: "No entries are loaded for the selected channels.",
     });
   });
 
