@@ -132,6 +132,15 @@ describe("what it shows", () => {
     expect(rows[2]).toHaveTextContent("record 88001");
   });
 
+  it("draws each row's kind with the shared chip, named in words, and keeps no chip style of its own", () => {
+    mount();
+    const rows = within(screen.getByRole("list", { name: "Unplaced entries" })).getAllByRole("listitem");
+    expect(within(rows[0] as HTMLElement).getByRole("img", { name: "Text log line" })).toHaveAttribute("data-chip", "LOG");
+    expect(within(rows[2] as HTMLElement).getByRole("img", { name: "Windows event" })).toHaveAttribute("data-chip", "EVT");
+    expect(listSource).toContain("EvtxKindChip");
+    expect(listSource).not.toMatch(/colorNeutralBackground3|visuals\.selection\.background|data-chip=/);
+  });
+
   it("uses the spec's sentence for a complete list of log lines", () => {
     mount({ list: { items: [logItem(7), logItem(9)], total: 2 } });
     expect(

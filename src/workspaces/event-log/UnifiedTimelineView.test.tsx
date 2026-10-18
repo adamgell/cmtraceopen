@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { tokens } from "@fluentui/react-components";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { deferred } from "../../test-utils/deferred";
@@ -21,6 +22,7 @@ import {
   UNIFIED_TIMELINE_STRIP_HEIGHT_PX,
   timelineStripLayout,
 } from "./evtx-timeline-strip";
+import source from "./UnifiedTimelineView.tsx?raw";
 import type { UnifiedTimeline } from "./unified-timeline";
 
 const virtualWindow = vi.hoisted(() => ({ start: 0, size: 20 }));
@@ -159,6 +161,47 @@ describe("UnifiedTimelineView", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Enrollment failed")).toBeInTheDocument();
   });
+  it("marks each row with the shared EVT / LOG chip, LOG on bg3 where the older chip was on bg4", () => {
+    const withLog: UnifiedTimeline = {
+      ...timeline,
+      items: [
+        ...timeline.items,
+        {
+          timestampMs: 2,
+          severity: "info",
+          message: "Starting Powershell Execution",
+          origin: {
+            kind: "log",
+            file: "C:\\Logs\\AgentExecutor.log",
+            component: "AgentExecutor",
+            line: 7,
+            source: "C:\\Logs\\AgentExecutor.log",
+            machine: null,
+            bundle: null,
+            recordId: 7,
+          },
+        },
+      ],
+    };
+    render(<UnifiedTimelineView {...timelineSessionProps(withLog)} />);
+    const evt = screen.getByRole("img", { name: "Windows event" });
+    const log = screen.getByRole("img", { name: "Text log line" });
+    expect(evt).toHaveAttribute("data-chip", "EVT");
+    expect(evt).toHaveTextContent("EVT");
+    expect(evt.style.backgroundColor).toBe(tokens.colorPaletteBlueBackground2);
+    expect(log).toHaveAttribute("data-chip", "LOG");
+    expect(log).toHaveTextContent("LOG");
+    expect(log.style.backgroundColor).toBe(tokens.colorNeutralBackground3);
+    // Each chip is in its own row, in the column the rows reserve for it.
+    expect(within(evt.closest("div[data-index]") as HTMLElement).queryByRole("img", { name: "Text log line" })).toBeNull();
+  });
+
+  it("draws no chip of its own: the kind chip is the shared component", () => {
+    expect(source).toContain("EvtxKindChip");
+    expect(source).not.toMatch(/colorNeutralBackground4|colorBrandBackground2/);
+    expect(source).not.toMatch(/title=\{fromEvent/);
+  });
+
   it("renders actionable details when every entry is unplaced", () => {
     render(
       <UnifiedTimelineView

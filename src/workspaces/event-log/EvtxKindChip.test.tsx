@@ -24,6 +24,12 @@ afterEach(() => {
 
 const themes = getAllThemes();
 
+/** Every component source of the workspace, to see which of them draws a chip. */
+const componentSources = import.meta.glob("./*.tsx", { query: "?raw", import: "default", eager: true }) as Record<
+  string,
+  string
+>;
+
 /** The colors a chip was drawn with, resolved to hex in `themeId`. */
 function drawn(chip: "EVT" | "LOG", themeId: string) {
   useUiStore.setState({ themeId: themeId as ThemeId });
@@ -73,6 +79,13 @@ describe("EvtxKindChip", () => {
     expect(element.style.padding).toBe("1px 6px");
     expect(element.style.borderRadius).toBe("4px");
     expect(element.style.whiteSpace).toBe("nowrap");
+  });
+
+  it("is the only component of the workspace that draws a kind chip", () => {
+    const drawing = Object.entries(componentSources)
+      .filter(([path, source]) => !path.endsWith(".test.tsx") && /data-chip=/.test(source))
+      .map(([path]) => path);
+    expect(drawing).toEqual(["./EvtxKindChip.tsx"]);
   });
 
   describe("contrast, in every theme", () => {
