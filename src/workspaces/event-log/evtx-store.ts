@@ -2894,6 +2894,36 @@ function incompleteCurrentPeriodDetail(
 }
 
 /**
+ * The criteria a comparison counts under, other than the time window: the view's own channel
+ * selection, levels, event IDs, search and quick filter, plus the columns and clock a quick filter
+ * reads. The comparison counts its previous period with these, and whoever counts its current
+ * period from the result (`countCurrentPeriod`) must count with the very same object, so the two
+ * sides cannot be taken under different criteria. Any change to one of them cancels the comparison.
+ */
+export function comparisonVisibility(
+  state: Pick<
+    EvtxState,
+    | "selectedChannels"
+    | "filterLevels"
+    | "filterEventIds"
+    | "filterSearch"
+    | "quickFilter"
+    | "columnConfig"
+    | "timeZoneMode"
+  >
+): ComparisonVisibility {
+  return {
+    selectedChannels: state.selectedChannels,
+    filterLevels: state.filterLevels,
+    filterEventIds: state.filterEventIds,
+    filterSearch: state.filterSearch,
+    quickFilter: state.quickFilter,
+    visibleColumns: state.columnConfig.order,
+    timeZoneMode: state.timeZoneMode,
+  };
+}
+
+/**
  * Compares the current time window with the period of the same length immediately before it.
  *
  * Files are compared from the records already loaded, when they cover the previous period.
@@ -2929,15 +2959,7 @@ export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
     return;
   }
 
-  const visibility: ComparisonVisibility = {
-    selectedChannels: state.selectedChannels,
-    filterLevels: state.filterLevels,
-    filterEventIds: state.filterEventIds,
-    filterSearch: state.filterSearch,
-    quickFilter: state.quickFilter,
-    visibleColumns: state.columnConfig.order,
-    timeZoneMode: state.timeZoneMode,
-  };
+  const visibility = comparisonVisibility(state);
   if (state.sourceMode === "files") {
     publishFilesComparison({
       records: state.records,

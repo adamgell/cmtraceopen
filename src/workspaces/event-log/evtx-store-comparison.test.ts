@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   beginLiveComparison,
   cancelComparison,
+  compareLoadedFiles,
   countCurrentPeriod,
   getComparisonState,
   isComparisonRequestId,
@@ -51,7 +52,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
-const { comparePreviousPeriod, useEvtxStore } = await import("./evtx-store");
+const { comparePreviousPeriod, comparisonVisibility, useEvtxStore } = await import("./evtx-store");
 
 const ALL_LEVELS: EvtxLevel[] = ["Critical", "Error", "Warning", "Information", "Verbose"];
 const ANCHOR = Date.parse("2026-08-10T12:00:00.000Z");
@@ -1431,6 +1432,68 @@ describe("comparing loaded files with their previous period", () => {
       detail: "The loaded files do not cover the previous period.",
     });
     expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("the visibility a comparison counts under", () => {
+  it("is read from the view's own criteria, each from its own key", async () => {
+    await resetStore({
+      selectedChannels: new Set(["System"]),
+      filterLevels: new Set<EvtxLevel>(["Error"]),
+      filterEventIds: "1-10",
+      filterSearch: "needle",
+      quickFilter: { ...DEFAULT_QUICK_FILTER, query: "x", action: "hide" },
+      timeZoneMode: "utc",
+    });
+    const state = useEvtxStore.getState();
+
+    const visibility = comparisonVisibility(state);
+
+    expect(visibility).toEqual({
+      selectedChannels: state.selectedChannels,
+      filterLevels: state.filterLevels,
+      filterEventIds: "1-10",
+      filterSearch: "needle",
+      quickFilter: state.quickFilter,
+      visibleColumns: state.columnConfig.order,
+      timeZoneMode: "utc",
+    });
+    // The Sets are the store's own, so a consumer counts what the grid counts and not a copy that
+    // could drift from it.
+    expect(visibility.selectedChannels).toBe(state.selectedChannels);
+    expect(visibility.filterLevels).toBe(state.filterLevels);
+  });
+
+  it("is what a comparison counts under, so a consumer of the result recounts the same rows", async () => {
+    const records = [
+      record("System", { sourceLabel: "System.evtx", timestampEpoch: PRIOR_FROM, level: "Error" }),
+      record("System", { sourceLabel: "System.evtx", timestampEpoch: PRIOR_FROM + HOUR, level: "Warning" }),
+      record("System", { sourceLabel: "System.evtx", timestampEpoch: PRIOR_TO, level: "Error" }),
+      record("System", { sourceLabel: "System.evtx", timestampEpoch: ANCHOR, level: "Error" }),
+    ];
+    await resetStore({
+      sourceMode: "files",
+      records,
+      loadedChannels: new Set<string>(),
+      selectedChannels: new Set(["System"]),
+      filterLevels: new Set<EvtxLevel>(["Error"]),
+    });
+
+    await comparePreviousPeriod(ANCHOR);
+
+    const state = useEvtxStore.getState();
+    const direct = compareLoadedFiles({
+      records: state.records,
+      window: state.timeWindow,
+      anchorEpoch: ANCHOR,
+      visibility: comparisonVisibility(state),
+      coverageDetails: state.coverageDetails,
+      sourceCoverage: state.sourceManifest?.coverage ?? [],
+    });
+    expect(settled()).toEqual(direct);
+    const outcome = settled();
+    expect(outcome.status).not.toBe("unavailable");
+    if (outcome.status !== "unavailable") expect(outcome.result.counts.total).toBe(2);
   });
 });
 
