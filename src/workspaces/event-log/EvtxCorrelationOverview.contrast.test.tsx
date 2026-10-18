@@ -16,7 +16,7 @@ import { getAllThemes } from "../../lib/themes";
 import type { ThemeId } from "../../lib/themes/types";
 import { useUiStore } from "../../stores/ui-store";
 import { EvtxCorrelationOverview } from "./EvtxCorrelationOverview";
-import { correlationSizes } from "./EvtxCorrelationLanes";
+import { correlationSizes } from "./evtx-correlation-sizes";
 import type { CorrelationChain, CorrelationChainStrength } from "./evtx-correlation-chains";
 import { tokenPalette } from "./evtx-correlation-test-fixtures";
 import { defaultLaneWindow } from "./evtx-correlation-view-model";

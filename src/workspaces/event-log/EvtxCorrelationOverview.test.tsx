@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { useUiStore } from "../../stores/ui-store";
 import { EvtxCorrelationOverview } from "./EvtxCorrelationOverview";
-import { correlationSizes } from "./EvtxCorrelationLanes";
+import { correlationSizes } from "./evtx-correlation-sizes";
 import type { CorrelationChain, CorrelationChainStrength } from "./evtx-correlation-chains";
 import {
   OVERVIEW_BAR_HEIGHT_PX,

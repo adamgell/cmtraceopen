@@ -15,7 +15,7 @@ import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import type { LogEntry } from "../../types/log";
 import { EvtxUnplacedList } from "./EvtxUnplacedList";
-import { correlationSizes } from "./EvtxCorrelationLanes";
+import { correlationSizes } from "./evtx-correlation-sizes";
 import { EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT } from "./evtx-timeline-paging";
 import { unplacedCopyText, describeUnplaced } from "./evtx-unplaced";
 import { resolveToken } from "./evtx-visual-tokens";

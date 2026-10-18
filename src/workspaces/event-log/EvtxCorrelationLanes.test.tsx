@@ -20,8 +20,8 @@ import {
   CorrelationLegend,
   EvtxCorrelationLanes,
   PINNED_FILL_OPACITY,
-  correlationSizes,
 } from "./EvtxCorrelationLanes";
+import { correlationSizes } from "./evtx-correlation-sizes";
 import { buildCorrelationChains, type CorrelationChain } from "./evtx-correlation-chains";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import { pickRailTextColors } from "./evtx-rail-text";
