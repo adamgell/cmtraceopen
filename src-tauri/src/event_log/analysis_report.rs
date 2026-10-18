@@ -16,9 +16,6 @@
 //! The session is the scope. It is built from the visible records, so the report describes what the
 //! operator was looking at, identified by session id and revision.
 
-// The renderer is wired to the Tauri command by a later commit of the same lane.
-#![allow(dead_code)]
-
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -34,9 +31,13 @@ use cmtraceopen_parser::unified_timeline::{
 use serde::Deserialize;
 
 use self::safe::{Doc, Projected, Redactor, Safe, MIN_SUBSTITUTED_MACHINE_CHARS};
-use super::analysis_session::{EventLogAnalysisSessionStatus, TIMELINE_GAP_SOURCE_PREFIX};
+use super::analysis_session::{
+    EventLogAnalysisSessionStatus, TIMELINE_GAP_SOURCE_PREFIX, TIMELINE_TRANSPORT_PROJECTION_SOURCE,
+};
 use super::models::{EvtxCoverageGap, EvtxLevel};
-use super::timeline::MAX_TIMELINE_MESSAGE_BYTES;
+use super::timeline::{
+    MAX_TIMELINE_MESSAGE_BYTES, TIMELINE_ITEM_PROJECTION_SOURCE, TIMELINE_MESSAGE_PROJECTION_SOURCE,
+};
 
 /// The most bytes a rendered report may have. Over this the export fails.
 pub(crate) const MAX_REPORT_BYTES: usize = 2 * 1024 * 1024;
@@ -503,6 +504,70 @@ pub(crate) fn collect_chains(
     Ok((resolved, look_up_entries(timeline, &wanted)))
 }
 
+/// Gathers what one report needs from a finalized session, in one pass over its timeline. Chain
+/// references are confirmed against the session's edges first, so a report that names a relation
+/// the session does not hold fails before anything is read.
+pub(crate) fn collect(
+    timeline: &UnifiedTimeline,
+    status: EventLogAnalysisSessionStatus,
+    request: &EventLogAnalysisReportRequest,
+) -> Result<ReportSnapshot, String> {
+    let (chains, entries) = match &request.chains {
+        Some(chains) => collect_chains(timeline, chains)?,
+        None => (Vec::new(), HashMap::new()),
+    };
+    let mut machines = BTreeSet::new();
+    let mut event_rows = Vec::with_capacity(REPORT_EVENT_ROW_CAP.min(timeline.items.len()));
+    for item in &timeline.items {
+        note_machine(&mut machines, &item.origin);
+        if event_rows.len() < REPORT_EVENT_ROW_CAP
+            && matches!(item.origin, TimelineOrigin::Event { .. })
+        {
+            event_rows.push(item.clone());
+        }
+    }
+    let (mut unplaced_events, mut unplaced_text_lines) = (0u64, 0u64);
+    for unplaced in &timeline.unplaced {
+        note_machine(&mut machines, &unplaced.origin);
+        if matches!(unplaced.origin, TimelineOrigin::Event { .. }) {
+            unplaced_events += 1;
+        } else {
+            unplaced_text_lines += 1;
+        }
+    }
+    let has_gap = |source: &str| {
+        timeline
+            .coverage_gaps
+            .iter()
+            .any(|gap| gap.source == source)
+    };
+    Ok(ReportSnapshot {
+        status,
+        event_rows,
+        unplaced_events,
+        unplaced_text_lines,
+        span_ms: timeline.span_ms(),
+        machines,
+        engine_notes: EngineNotes {
+            messages_shortened: has_gap(TIMELINE_MESSAGE_PROJECTION_SOURCE),
+            items_compacted: has_gap(TIMELINE_ITEM_PROJECTION_SOURCE),
+            transport_projected: has_gap(TIMELINE_TRANSPORT_PROJECTION_SOURCE),
+        },
+        entries,
+        chains,
+    })
+}
+
+fn note_machine(machines: &mut BTreeSet<String>, origin: &TimelineOrigin) {
+    let machine = match origin {
+        TimelineOrigin::Event { machine, .. } | TimelineOrigin::Log { machine, .. } => machine,
+        _ => return,
+    };
+    if let Some(machine) = machine.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        machines.insert(machine.to_owned());
+    }
+}
+
 fn confirm_link(
     strength: ReportLinkStrength,
     edge: &TimelineCorrelationEdge,
@@ -878,18 +943,28 @@ fn render_coverage(
             .count(listed.len() as u64)
             .lit("):")
             .nl();
+        // The engine can list the same gap once per event it affects. Identical lines are
+        // written once with their count, in the order they first appear.
+        let mut lines: Vec<(Safe, u64)> = Vec::new();
         for gap in &listed {
-            doc.lit("  - ")
-                .lit(coverage_state_word(gap.state))
-                .lit(": ")
-                .safe(&redactor.projected(
-                    projected,
-                    display_source(&gap.source),
-                    REPORT_NAME_CHARS,
-                ))
-                .lit(": ")
-                .safe(&redactor.projected(projected, &gap.detail, REPORT_COVERAGE_DETAIL_CHARS))
-                .nl();
+            let line = Safe::join(&[
+                Safe::literal(coverage_state_word(gap.state)),
+                Safe::literal(": "),
+                redactor.projected(projected, display_source(&gap.source), REPORT_NAME_CHARS),
+                Safe::literal(": "),
+                redactor.projected(projected, &gap.detail, REPORT_COVERAGE_DETAIL_CHARS),
+            ]);
+            match lines.iter_mut().find(|(known, _)| *known == line) {
+                Some((_, count)) => *count += 1,
+                None => lines.push((line, 1)),
+            }
+        }
+        for (line, count) in &lines {
+            doc.lit("  - ").safe(line);
+            if *count > 1 {
+                doc.lit(" (").count(*count).lit(" gaps)");
+            }
+            doc.nl();
         }
     }
     if !timeline_gaps.is_empty() {
@@ -2080,23 +2155,13 @@ mod safe {
             let Some(character) = text[index..].chars().next() else {
                 break;
             };
+            // A `(` can only start a link target straight after a `]`, and every `]` this function
+            // writes is either escaped or the end of a token, so `(` is escaped there and only there.
             if matches!(
                 character,
-                '\\' | '`'
-                    | '*'
-                    | '_'
-                    | '['
-                    | ']'
-                    | '('
-                    | ')'
-                    | '<'
-                    | '>'
-                    | '|'
-                    | '&'
-                    | '#'
-                    | '!'
-                    | '~'
-            ) {
+                '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '|' | '&' | '#' | '!' | '~'
+            ) || (character == '(' && out.ends_with(']'))
+            {
                 out.push('\\');
             }
             out.push(character);
@@ -2109,7 +2174,7 @@ mod safe {
 #[cfg(test)]
 mod tests {
     use super::safe::{cut_chars, escape, flatten, token_len_at, Doc, Redactor, Safe};
-    use super::{collect_chains, REPORT_CHAIN_ROW_CAP};
+    use super::{collect, collect_chains, REPORT_CHAIN_ROW_CAP};
     use super::{
         render_report, render_report_within, EngineNotes, EventLogAnalysisReportRequest,
         ReportInput, ReportSnapshot, MAX_REPORT_BYTES, REPORT_EVENT_ROW_CAP,
@@ -2124,8 +2189,8 @@ mod tests {
         origin_id, TimelineCorrelationConfidence, TimelineCorrelationCoverage,
         TimelineCorrelationCoverageState, TimelineCorrelationEdge, TimelineCorrelationEvidence,
         TimelineCorrelationKey, TimelineCorrelationKeyKind, TimelineCorrelationStrength,
-        TimelineItem, TimelineOrigin, TimelineSeverity, UnifiedTimeline, UnplacedItem,
-        UnplacedReason,
+        TimelineCoverageGap, TimelineItem, TimelineOrigin, TimelineSeverity, UnifiedTimeline,
+        UnplacedItem, UnplacedReason,
     };
     use serde_json::json;
     use std::collections::{BTreeSet, HashMap};
@@ -2142,8 +2207,8 @@ mod tests {
     #[test]
     fn escape_neutralizes_markdown_and_html_syntax() {
         assert_eq!(
-            escape(r"a | b <i> [x](y) `c` *d* _e_ & #f !g ~h"),
-            r"a \| b \<i\> \[x\]\(y\) \`c\` \*d\* \_e\_ \& \#f \!g \~h"
+            escape(r"a | b <i> [x](y) `c` *d* _e_ & #f !g ~h (k)"),
+            r"a \| b \<i\> \[x\]\(y) \`c\` \*d\* \_e\_ \& \#f \!g \~h (k)"
         );
         assert_eq!(escape(r"C:\dir"), r"C:\\dir");
     }
@@ -2159,7 +2224,7 @@ mod tests {
         // A token followed by a link target must not become a link.
         assert_eq!(
             escape("[host:0123456789abcdef](http://x)"),
-            r"[host:0123456789abcdef]\(http://x\)"
+            r"[host:0123456789abcdef]\(http://x)"
         );
         assert_eq!(token_len_at("x[user:00ff00ff00ff00ff]", 1), Some(23));
         assert_eq!(token_len_at("[Host:0123456789abcdef]", 0), None);
@@ -2443,6 +2508,15 @@ mod tests {
         .expect("the report renders")
     }
 
+    /// Whether `needle` is in the report, whether or not Markdown escaping broke it up. A leak
+    /// assertion on the escaped text would pass for `user\_0001`, which is the same leak.
+    fn leaks(report: &str, needle: &str) -> bool {
+        report
+            .replace('\\', "")
+            .to_lowercase()
+            .contains(&needle.to_lowercase())
+    }
+
     fn table_rows(report: &str) -> usize {
         report
             .lines()
@@ -2572,17 +2646,17 @@ mod tests {
     #[test]
     fn every_cell_of_the_events_table_is_redacted() {
         let message = concat!(
-            "Sign-in by user_0001@example.invalid from HOST-0002 ",
+            "Sign-in by user0001@example.invalid from HOST-0002 ",
             "SID S-1-5-21-1000000001-1000000002-1000000003-1001 ",
             "TenantId=00000000-0000-4000-8000-000000000001 ",
-            r"profile C:\Users\user_0001\AppData\Local\Temp\a.log"
+            r"profile C:\Users\user0001\AppData\Local\Temp\a.log"
         );
         let item = event_item(
             FIXTURE_NOW_MS,
             TimelineSeverity::Error,
             1001,
             "Microsoft-Windows-Fixture/Admin for HOST-0002",
-            r"Vendor C:\Users\user_0001\x",
+            r"Vendor C:\Users\user0001\x",
             Some("HOST-0002"),
             1,
             message,
@@ -2590,12 +2664,12 @@ mod tests {
         let report = render(&base_request(), &snapshot_of(vec![item], 1));
         for leak in [
             "HOST-0002",
-            "user_0001",
+            "user0001",
             "example.invalid",
             "S-1-5-21-1000000001",
             "00000000-0000-4000-8000-000000000001",
         ] {
-            assert!(!report.contains(leak), "{leak} leaked:\n{report}");
+            assert!(!leaks(&report, leak), "{leak} leaked:\n{report}");
         }
         // `TenantId=` is a sensitive label, so the export pass masks its value whole.
         for token in [
@@ -3120,7 +3194,7 @@ mod tests {
             "record5",
             "identity candidates",
         ] {
-            assert!(!report.contains(leak), "{leak} leaked:\n{report}");
+            assert!(!leaks(&report, leak), "{leak} leaked:\n{report}");
         }
     }
 
@@ -3169,7 +3243,7 @@ mod tests {
             .unwrap();
         assert!(heading.contains(r"with \| pipe"), "{heading}");
         assert!(heading.contains("[upn:"));
-        assert!(!heading.contains("user_0001"));
+        assert!(!leaks(heading, "user_0001"));
         assert!(heading.ends_with("..."));
         let summary_line = report
             .lines()
@@ -3374,8 +3448,8 @@ mod tests {
         assert_eq!(table_rows(section(&report, "## Correlation chains")), 2);
         // The message names the machine; ids carry the machine and a source path.
         assert!(report.contains(&format!("Enrollment started on {}.", host("HOST-0005"))));
-        for leak in ["HOST-0005", "CASE-0002", "A.evtx", "machine9", "record1|"] {
-            assert!(!report.contains(leak), "{leak} leaked:\n{report}");
+        for leak in ["HOST-0005", "CASE-0002", "A.evtx", "machine9", "record1"] {
+            assert!(!leaks(&report, leak), "{leak} leaked:\n{report}");
         }
     }
 
@@ -3543,6 +3617,16 @@ mod tests {
                     "user_0001",
                     TimelineCorrelationStrength::Exact,
                 ),
+                // A device value no redaction pattern recognizes (it starts with a parenthesis):
+                // the projection leaves it as written, so only the report's own guard stops it.
+                edge(
+                    &a,
+                    &b,
+                    TimelineCorrelationKeyKind::DeviceId,
+                    "deviceId",
+                    "(unpatterned-device)",
+                    TimelineCorrelationStrength::Exact,
+                ),
                 edge(
                     &b,
                     &c,
@@ -3562,7 +3646,7 @@ mod tests {
             ],
         );
         let chains = chains_value(
-            5,
+            6,
             (1, 1, 0, 0),
             vec![
                 row(
@@ -3574,7 +3658,8 @@ mod tests {
                         &[
                             ("activityId", GUID_A),
                             ("deviceId", "DEVICE-0001"),
-                            ("userId", "user_0001")
+                            ("userId", "user_0001"),
+                            ("deviceId", "(unpatterned-device)")
                         ]
                     )]),
                 ),
@@ -3599,21 +3684,27 @@ mod tests {
             "CASE-0002",
             "HOST-0005",
             "pid-9",
+            "unpatterned-device",
         ] {
-            assert!(!report.contains(leak), "{leak} leaked:\n{report}");
+            assert!(!leaks(&report, leak), "{leak} leaked:\n{report}");
         }
         assert!(report.contains(&format!("ActivityId = {GUID_A}")));
-        for word in ["DeviceId", "UserId"] {
-            let line = report
+        let values = |word: &str| -> Vec<String> {
+            report
                 .lines()
-                .find(|line| line.contains(&format!(": {word} = ")))
-                .unwrap_or_else(|| panic!("no {word} line:\n{report}"));
-            let value = line.split(" = ").nth(1).unwrap();
-            assert!(
-                value.starts_with('[') && value.ends_with(']') || value == "(masked)",
-                "{line}"
-            );
-        }
+                .filter_map(|line| line.split(&format!(": {word} = ")).nth(1))
+                .map(str::to_owned)
+                .collect()
+        };
+        let is_token =
+            |value: &String| value.starts_with('[') && value.ends_with(']') && value.len() > 18;
+        // A person or device identifier is printed only as the token the projection made of it,
+        // and a value the projection could not mask is not printed at all.
+        let users = values("UserId");
+        assert!(users.len() == 2 && users.iter().all(is_token), "{users:?}");
+        let devices = values("DeviceId");
+        assert!(devices.iter().any(is_token), "{devices:?}");
+        assert!(devices.contains(&"(masked)".to_owned()), "{devices:?}");
         assert!(report.contains(": provider, channel and record (value not printed)"));
         assert!(report.contains(": secondary identifier (value not printed)"));
     }
@@ -3808,7 +3899,7 @@ mod tests {
         assert!(report.contains("| log line 12 | IntuneManagementExtension.log | Sync |"));
         assert!(report.contains("IntuneManagementExtension.log \u{b7} line 12: ActivityId ="));
         for leak in ["CASE-0002", "HOST-0005", "Logs\\"] {
-            assert!(!report.contains(leak), "{leak} leaked:\n{report}");
+            assert!(!leaks(&report, leak), "{leak} leaked:\n{report}");
         }
     }
 
@@ -3931,5 +4022,97 @@ mod tests {
                 redact_field_value("account", "jdoe-0001 was rejected")
             )
         );
+    }
+
+    #[test]
+    fn a_gap_the_engine_lists_once_per_event_is_written_once_with_its_count() {
+        let same = |detail: &str| gap("MDM enrollment", CoverageState::Absent, detail);
+        let mut gaps: Vec<CoverageGap> = (0..3)
+            .map(|index| {
+                let mut one = same("No status.");
+                one.id = format!("coverage:{index}");
+                one
+            })
+            .collect();
+        gaps.push(same("A different detail."));
+        let report = render_with(
+            &base_request(),
+            &snapshot_of(Vec::new(), 0),
+            &summary_of(Vec::new(), gaps),
+        );
+        assert!(report.contains("- Coverage gaps the engine listed (4):"));
+        assert!(report.contains("  - absent: MDM enrollment: No status. (3 gaps)\n"));
+        assert!(report.contains("  - absent: MDM enrollment: A different detail.\n"));
+    }
+
+    #[test]
+    fn collect_gathers_the_rows_machines_unplaced_split_and_the_engines_compaction_notes() {
+        let mut timeline = timeline_of(
+            (0..600)
+                .map(|index| chain_item(index + 1, 100, index as i64, "m"))
+                .collect(),
+            Vec::new(),
+        );
+        let log_origin = TimelineOrigin::Log {
+            file: "a.log".to_owned(),
+            component: None,
+            line: 1,
+            source: "a.log".to_owned(),
+            machine: Some("HOST-0006".to_owned()),
+            bundle: None,
+            record_id: 1,
+        };
+        timeline.items.push(TimelineItem {
+            timestamp_ms: FIXTURE_NOW_MS,
+            severity: TimelineSeverity::Info,
+            message: "log line".to_owned(),
+            origin: log_origin.clone(),
+        });
+        for origin in [chain_item(900, 1, 0, "m").origin, log_origin] {
+            timeline.unplaced.push(UnplacedItem {
+                origin,
+                reason: UnplacedReason::MissingTimestamp,
+            });
+        }
+        for source in [
+            "timeline-message-projection",
+            "timeline-item-projection",
+            "timeline-transport-projection",
+        ] {
+            timeline.coverage_gaps.push(TimelineCoverageGap {
+                source: source.to_owned(),
+                reason: "counts only".to_owned(),
+            });
+        }
+        let snapshot = collect(&timeline, status(600, 1), &base_request()).expect("collects");
+        assert_eq!(snapshot.event_rows.len(), REPORT_EVENT_ROW_CAP);
+        assert!(snapshot
+            .event_rows
+            .iter()
+            .all(|item| matches!(item.origin, TimelineOrigin::Event { .. })));
+        assert_eq!(snapshot.unplaced_events, 1);
+        assert_eq!(snapshot.unplaced_text_lines, 1);
+        assert_eq!(
+            snapshot
+                .machines
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["HOST-0005", "HOST-0006"]
+        );
+        assert!(snapshot.span_ms.is_some());
+        assert_eq!(
+            snapshot.engine_notes,
+            EngineNotes {
+                messages_shortened: true,
+                items_compacted: true,
+                transport_projected: true,
+            }
+        );
+
+        timeline.coverage_gaps.clear();
+        let clean = collect(&timeline, status(600, 1), &base_request()).expect("collects");
+        assert_eq!(clean.engine_notes, EngineNotes::default());
+        assert!(clean.entries.is_empty() && clean.chains.is_empty());
     }
 }

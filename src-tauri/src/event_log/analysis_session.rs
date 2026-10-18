@@ -18,6 +18,10 @@ use cmtraceopen_parser::unified_timeline::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::analysis_report::{
+    collect as collect_report, render_report, EventLogAnalysisReportRequest, ReportInput,
+    ReportSnapshot,
+};
 use super::commands::{
     append_diagnosis_cap_finding, diagnosis_event_input, diagnosis_finding_for_gap,
     diagnosis_record_identity, evtx_log_entry, timeline_coverage_state,
@@ -53,6 +57,11 @@ pub(crate) const TIMELINE_TRANSPORT_PROJECTION_SOURCE: &str = "timeline-transpor
 /// rest of the source is the gap's own: an origin id (which names a machine and a file) or one of
 /// the engine's global gap sources. The Markdown report counts these and never prints them.
 pub(crate) const TIMELINE_GAP_SOURCE_PREFIX: &str = "timeline:";
+const SESSION_NOT_FOUND: &str = "event-log analysis session was not found";
+/// Said when the session a report was asked for is gone or has moved on. A rebuild closes the old
+/// session, and under a live tail that happens every few hundred milliseconds, so the operator is
+/// told why running the report again is the answer.
+const REPORT_SESSION_CHANGED: &str = "The event-log analysis changed while the report was being made, for example because new events arrived or a filter changed. Run the report again.";
 const MAX_ANALYSIS_SESSIONS: usize = 16;
 const ANALYSIS_SESSION_IDLE_TTL: Duration = Duration::from_secs(60 * 60);
 
@@ -682,6 +691,20 @@ impl EventLogAnalysisSession {
             return Err("edge page projection exceeded its serialized byte budget".to_string());
         }
         Ok(page)
+    }
+
+    /// Everything one Markdown report reads from this session, gathered under its lock. The report
+    /// describes the revision the app was showing; any other revision is refused.
+    fn report_parts(
+        &self,
+        request: &EventLogAnalysisReportRequest,
+    ) -> Result<(ReportSnapshot, DiagnosisSnapshot), String> {
+        if self.revision != request.expected_revision {
+            return Err(REPORT_SESSION_CHANGED.to_owned());
+        }
+        let timeline = self.finalized_timeline()?;
+        let snapshot = collect_report(timeline, self.status(), request)?;
+        Ok((snapshot, self.diagnosis_snapshot()?))
     }
 
     fn diagnosis_snapshot(&self) -> Result<DiagnosisSnapshot, String> {
@@ -1459,7 +1482,7 @@ fn find_session_in(
         .lock()
         .map_err(|_| "event-log analysis session registry lock was poisoned".to_string())?;
     access_analysis_session(&mut guard, session_id, Instant::now())
-        .ok_or_else(|| "event-log analysis session was not found".to_string())
+        .ok_or_else(|| SESSION_NOT_FOUND.to_string())
 }
 
 #[tauri::command]
@@ -1593,6 +1616,49 @@ pub async fn evtx_diagnose_analysis_session(
     })
     .await
     .map_err(|error| format!("event-log analysis diagnosis task failed: {error}"))?
+}
+
+/// Renders the Markdown report of a finalized analysis session. The request names the session and
+/// the revision the app was showing and carries ids and numbers only; the backend reads every
+/// string it prints from the session. Nothing here logs the request or the report.
+#[tauri::command]
+pub async fn evtx_render_analysis_report(
+    request: EventLogAnalysisReportRequest,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    validate_session_id(&request.session_id)?;
+    request.validate()?;
+    validate_diagnosis_coverage_gaps(&request.coverage_gaps)?;
+    let sessions = Arc::clone(&state.event_log_analysis_sessions);
+    tokio::task::spawn_blocking(move || render_report_in(&sessions, &request))
+        .await
+        .map_err(|error| format!("event-log analysis report task failed: {error}"))?
+}
+
+/// The body of [`evtx_render_analysis_report`], over a registry rather than the app state.
+fn render_report_in(
+    sessions: &Mutex<EventLogAnalysisSessionRegistry>,
+    request: &EventLogAnalysisReportRequest,
+) -> Result<String, String> {
+    let session = find_session_in(sessions, &request.session_id).map_err(|error| {
+        if error == SESSION_NOT_FOUND {
+            REPORT_SESSION_CHANGED.to_string()
+        } else {
+            error
+        }
+    })?;
+    let (snapshot, diagnosis) = session
+        .lock()
+        .map_err(|_| "event-log analysis session lock was poisoned".to_string())?
+        .report_parts(request)?;
+    // The session guard was released with the statement above, so the summary and the render run
+    // without it.
+    let summary = diagnosis.summarize(request.coverage_gaps.clone());
+    render_report(&ReportInput {
+        request,
+        snapshot: &snapshot,
+        summary: &summary,
+    })
 }
 
 #[tauri::command]
@@ -2834,6 +2900,182 @@ mod tests {
             );
         }
     }
+    // ---- the Markdown report -------------------------------------------------------------------
+
+    pub(super) fn report_request_value(
+        session_id: &str,
+        revision: u64,
+        events: usize,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "sessionId": session_id,
+            "expectedRevision": revision,
+            "generatedAtMs": 1_791_282_047_123_i64,
+            "coverageGaps": [],
+            "chains": null,
+            "scope": {
+                "sourceMode": "files",
+                "loadedRecordCount": events,
+                "eventRecordCount": events,
+                "archiveTextRecordCount": 0,
+                "textLogEntryCount": 0,
+                "levelMix": [],
+                "topEventIds": [],
+                "distinctEventIdCount": null,
+                "filters": {
+                    "levels": ["Critical", "Error", "Warning", "Information", "Verbose"],
+                    "channelsSelected": [],
+                    "channelsHeld": 0,
+                    "eventIdSelectors": [],
+                    "timeWindow": "all",
+                    "timeRange": null,
+                    "searchActive": false,
+                    "quickFilterActive": false,
+                    "recordScope": null
+                }
+            }
+        })
+    }
+
+    fn report_request(
+        session_id: &str,
+        revision: u64,
+        events: usize,
+    ) -> EventLogAnalysisReportRequest {
+        serde_json::from_value(report_request_value(session_id, revision, events))
+            .expect("the report request parses")
+    }
+
+    pub(super) fn registry_with(
+        session: EventLogAnalysisSession,
+    ) -> Mutex<EventLogAnalysisSessionRegistry> {
+        let id = session.id.clone();
+        let mut sessions = EventLogAnalysisSessionRegistry::new();
+        insert_analysis_session(
+            &mut sessions,
+            id,
+            Arc::new(Mutex::new(session)),
+            Instant::now(),
+        )
+        .unwrap();
+        Mutex::new(sessions)
+    }
+
+    #[test]
+    fn a_report_describes_only_the_revision_the_app_was_showing() {
+        let session = finalized_session((1..=3).map(|id| record(id, id as i64, "m")).collect());
+        let revision = session.revision;
+        let sessions = registry_with(session);
+
+        let report = render_report_in(&sessions, &report_request("test-session", revision, 3))
+            .expect("the matching revision renders");
+        assert!(report.starts_with("# Event Logs report\n"));
+
+        for stale in [revision + 1, revision - 1, 0] {
+            let error = render_report_in(&sessions, &report_request("test-session", stale, 3))
+                .expect_err("a different revision is refused");
+            assert!(error.contains("Run the report again."), "{error}");
+            assert!(error.contains("new events arrived"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_session_that_is_gone_gets_the_run_again_message_and_never_another_session() {
+        let other = finalized_session(vec![record(1, 1, "other session")]);
+        let revision = other.revision;
+        let sessions = registry_with(other);
+        let error = render_report_in(&sessions, &report_request("closed-session", revision, 1))
+            .expect_err("no such session");
+        assert!(error.contains("Run the report again."), "{error}");
+        assert!(!error.contains("was not found"), "{error}");
+    }
+
+    #[test]
+    fn a_session_that_is_not_finalized_cannot_be_reported() {
+        let mut session = EventLogAnalysisSession::new("test-session".to_string());
+        session.append(vec![record(1, 1, "m")], Vec::new()).unwrap();
+        let revision = session.revision;
+        let sessions = registry_with(session);
+        let error = render_report_in(&sessions, &report_request("test-session", revision, 1))
+            .expect_err("not finalized");
+        assert!(error.contains("not finalized"), "{error}");
+    }
+
+    #[test]
+    fn a_larger_session_lists_five_hundred_events_and_counts_the_rest() {
+        let session = finalized_session(
+            (1..=700)
+                .map(|id| record(id, id as i64 * 1_000, "An ordinary message."))
+                .collect(),
+        );
+        let revision = session.revision;
+        let sessions = registry_with(session);
+        let report = render_report_in(&sessions, &report_request("test-session", revision, 700))
+            .expect("renders");
+        assert!(report.contains("Showing the first 500 of 700 placed events; 200 omitted."));
+        let rows = report
+            .lines()
+            .filter(|line| line.starts_with("| 1970-01-01T"))
+            .count();
+        assert_eq!(rows, 500);
+        // Oldest first: the 500th listed event is the 500th in time.
+        assert!(report.contains("| 1970-01-01T00:08:20.000Z |"));
+        assert!(!report.contains("| 1970-01-01T00:08:21.000Z |"));
+    }
+
+    #[test]
+    fn events_and_text_lines_without_a_timestamp_are_counted_apart_and_never_listed() {
+        let mut untimed_event = record(1, 0, "no time");
+        untimed_event.timestamp = String::new();
+        untimed_event.timestamp_epoch = 0;
+        let mut untimed_line = record(2, 0, "no time either");
+        untimed_line.timestamp = String::new();
+        untimed_line.timestamp_epoch = 0;
+        untimed_line.origin_kind = EvtxOriginKind::Log;
+        let timed = record(3, 5_000, "timed");
+        let session = finalized_session(vec![untimed_event, untimed_line, timed]);
+        let revision = session.revision;
+        let sessions = registry_with(session);
+        let report = render_report_in(&sessions, &report_request("test-session", revision, 2))
+            .expect("renders");
+        assert!(report.contains(
+            "- Events in scope without a usable timestamp, not placed and not listed below: 1"
+        ));
+        assert!(report.contains("- Text lines without a usable timestamp, not placed: 1"));
+        assert!(!report.contains("no time"));
+        assert!(report.contains("All 1 placed events are listed."));
+    }
+
+    #[test]
+    fn a_chain_reference_the_session_does_not_hold_fails_the_whole_report() {
+        let session = finalized_session(vec![record(1, 1, "m"), record(2, 2, "m")]);
+        let revision = session.revision;
+        let sessions = registry_with(session);
+        let mut value = report_request_value("test-session", revision, 2);
+        value["chains"] = serde_json::json!({
+            "loadedEdgeCount": 1,
+            "correlationGaps": {"global": false, "previewCut": false},
+            "counts": {"exact": 1, "candidate": 0, "ambiguous": 0, "coverageBlocked": 0},
+            "rows": [{
+                "strength": "exact",
+                "memberCount": 2,
+                "memberIds": ["a", "b"],
+                "pairs": [{"left": "a", "right": "b", "keys": [{"kind": "activityId", "value": "x"}]}]
+            }]
+        });
+        let request: EventLogAnalysisReportRequest = serde_json::from_value(value).unwrap();
+        let error = render_report_in(&sessions, &request).expect_err("refused");
+        assert!(error.contains("does not hold"), "{error}");
+    }
+
+    #[test]
+    fn the_report_command_is_registered_with_the_handler() {
+        let lib = include_str!("../lib.rs");
+        assert!(
+            lib.contains("event_log::analysis_session::evtx_render_analysis_report"),
+            "the command is not in generate_handler"
+        );
+    }
 }
 
 /// The Event Logs screenshot harness replies, and the always-on test that keeps them honest.
@@ -2844,6 +3086,9 @@ mod tests {
 /// the env-gated capture test and the regular drift test cannot diverge.
 #[cfg(test)]
 mod screenshot_replies {
+    use std::collections::BTreeSet;
+
+    use super::tests::{registry_with, report_request_value};
     use super::*;
     use sha2::Digest;
 
@@ -2989,5 +3234,280 @@ mod screenshot_replies {
                  (do not hand-edit the replies)"
             );
         }
+    }
+
+    // ---- the Markdown report over the synthetic fixture ----------------------------------------
+
+    /// Identifiers invented for these tests. None is a real name, SID or tenant.
+    const PLANTED_MACHINE: &str = "HOST-0002";
+    const PLANTED_SID: &str = "S-1-5-21-1000000001-1000000002-1000000003-1001";
+    const PLANTED_TENANT_LABELED: &str = "00000000-0000-4000-8000-0000000000e1";
+    const PLANTED_TENANT_BARE: &str = "00000000-0000-4000-8000-0000000000e2";
+    const PLANTED_UPN: &str = "user0001@example.invalid";
+    const PLANTED_ACCOUNT: &str = "user0001";
+    const PLANTED_DEVICE: &str = "DEVICE-0001";
+    const PLANTED_CASE_FOLDER: &str = "CaseFolder0001";
+    const PLANTED_ACTIVITY: &str = "00000000-0000-4000-8000-0000000000a1";
+
+    /// A copy of the fixture's records with identifiers planted into the oldest dozen. The
+    /// committed input is never edited: the replies and the capture check depend on it.
+    fn planted_records() -> (Vec<EvtxRecord>, Vec<EvtxCoverageGap>) {
+        let input = read_fixture("event-log-engine-input.json");
+        let mut records: Vec<EvtxRecord> =
+            serde_json::from_value(input["records"].clone()).unwrap();
+        let gaps: Vec<EvtxCoverageGap> =
+            serde_json::from_value(input["coverageGaps"].clone()).unwrap();
+        let mut oldest: Vec<usize> = (0..records.len()).collect();
+        oldest.sort_by_key(|index| records[*index].timestamp_epoch);
+        let planted = &oldest[..12];
+        let case_path = format!(r"C:\Cases\{PLANTED_CASE_FOLDER}\System.evtx");
+
+        // Two events on one machine that share three identifiers: three exact relations.
+        for index in &planted[..2] {
+            let record = &mut records[*index];
+            record.activity_id = Some(PLANTED_ACTIVITY.to_string());
+            record.device_id = Some(PLANTED_DEVICE.to_string());
+            record.user_id = Some(PLANTED_ACCOUNT.to_string());
+            record.user_sid = Some(PLANTED_SID.to_string());
+            record.source_label = case_path.clone();
+        }
+        // A second machine, and the identifiers a message can carry.
+        records[planted[2]].computer = PLANTED_MACHINE.to_string();
+        records[planted[3]].computer = PLANTED_MACHINE.to_string();
+        let messages = [
+            (
+                4,
+                format!("Enrollment failed. TenantId={PLANTED_TENANT_LABELED} was rejected."),
+            ),
+            (
+                5,
+                format!("Token request used tenant {PLANTED_TENANT_BARE}."),
+            ),
+            (6, format!("Sign-in by {PLANTED_UPN} failed.")),
+            (
+                7,
+                format!(r"Wrote C:\Users\{PLANTED_ACCOUNT}\AppData\Local\Temp\a.log"),
+            ),
+            (8, format!("Sync with {PLANTED_MACHINE} failed.")),
+            (9, "Sync with contoso-pc01 failed (lowercase).".to_string()),
+            (10, format!("User {PLANTED_SID} was granted access.")),
+            (
+                11,
+                "| x |\n# heading <img src=x onerror=alert(1)> [link](http://x) `tick`".to_string(),
+            ),
+        ];
+        for (offset, message) in messages {
+            records[planted[offset]].message = message;
+        }
+        (records, gaps)
+    }
+
+    fn session_of(records: Vec<EvtxRecord>) -> EventLogAnalysisSession {
+        let mut session = EventLogAnalysisSession::new("acceptance-session".to_string());
+        for chunk in records.chunks(1_000) {
+            session.append(chunk.to_vec(), Vec::new()).unwrap();
+        }
+        session.finalize().unwrap();
+        session
+    }
+
+    /// The chains the app would send for the session's linking pairs: one row per pair, the way
+    /// the app's reduction makes them (an exact edge joins exactly two entries). As in the app, a
+    /// pair that any edge calls ambiguous or coverage blocked is not a chain.
+    fn chain_rows_for(session: &EventLogAnalysisSession) -> Vec<serde_json::Value> {
+        use cmtraceopen_parser::unified_timeline::{
+            TimelineCorrelationCoverageState, TimelineCorrelationStrength,
+        };
+        let timeline = session.finalized_timeline().unwrap();
+        let mut pairs: Vec<(String, String, Vec<serde_json::Value>, bool)> = Vec::new();
+        for edge in &timeline.edges {
+            let Some(to) = edge.to_id.clone() else {
+                continue;
+            };
+            let linking = matches!(
+                edge.strength,
+                TimelineCorrelationStrength::Exact | TimelineCorrelationStrength::Candidate
+            ) && matches!(
+                edge.coverage.state,
+                TimelineCorrelationCoverageState::Covered
+            );
+            let key = serde_json::json!({"kind": edge.key.kind, "value": edge.key.value});
+            match pairs
+                .iter_mut()
+                .find(|(left, right, _, _)| *left == edge.from_id && *right == to)
+            {
+                Some((_, _, keys, all_linking)) => {
+                    keys.push(key);
+                    *all_linking &= linking;
+                }
+                None => pairs.push((edge.from_id.clone(), to, vec![key], linking)),
+            }
+        }
+        pairs
+            .into_iter()
+            .filter(|(_, _, _, all_linking)| *all_linking)
+            .map(|(left, right, keys, _)| {
+                serde_json::json!({
+                    "strength": "exact",
+                    "memberCount": 2,
+                    "memberIds": [left, right],
+                    "pairs": [{"left": left, "right": right, "keys": keys}],
+                })
+            })
+            .collect()
+    }
+
+    fn planted_report() -> (String, DiagnosisSummary) {
+        let (records, gaps) = planted_records();
+        let event_count = records.len();
+        let session = session_of(records);
+        let revision = session.revision;
+        let rows = chain_rows_for(&session);
+        let total_edges = session.finalized_timeline().unwrap().edges.len();
+        let summary = session
+            .diagnosis_snapshot()
+            .unwrap()
+            .summarize(gaps.clone());
+        let sessions = registry_with(session);
+        let mut value = report_request_value("acceptance-session", revision, event_count);
+        value["coverageGaps"] = serde_json::to_value(&gaps).unwrap();
+        value["chains"] = serde_json::json!({
+            "loadedEdgeCount": total_edges,
+            "correlationGaps": {"global": false, "previewCut": false},
+            "counts": {"exact": rows.len(), "candidate": 0, "ambiguous": 0, "coverageBlocked": 0},
+            "rows": rows,
+        });
+        let request: EventLogAnalysisReportRequest = serde_json::from_value(value).unwrap();
+        request.validate().unwrap();
+        (render_report_in(&sessions, &request).unwrap(), summary)
+    }
+
+    fn tokens_of(text: &str, kind: &str) -> BTreeSet<String> {
+        let open = format!("[{kind}:");
+        let mut found = BTreeSet::new();
+        let mut rest = text;
+        while let Some(start) = rest.find(&open) {
+            let tail = &rest[start..];
+            if tail.len() >= open.len() + 17 && tail.as_bytes()[open.len() + 16] == b']' {
+                found.insert(tail[..open.len() + 17].to_string());
+            }
+            rest = &tail[open.len()..];
+        }
+        found
+    }
+
+    /// The acceptance test of #851: a report built from the synthetic fixture contains no
+    /// unredacted machine name, user SID or tenant ID. The positive controls make it impossible
+    /// to pass with an empty or truncated report.
+    #[test]
+    fn the_fixture_report_contains_no_unredacted_machine_sid_or_tenant() {
+        let (report, _) = planted_report();
+        // Markdown escaping must not hide a leak: `user\_0001` is the same leak as `user_0001`.
+        let lower = report.replace('\\', "").to_lowercase();
+        for planted in [
+            "contoso-pc01",
+            PLANTED_MACHINE,
+            PLANTED_SID,
+            PLANTED_TENANT_LABELED,
+            PLANTED_UPN,
+            PLANTED_ACCOUNT,
+            "example.invalid",
+            PLANTED_DEVICE,
+            PLANTED_CASE_FOLDER,
+            "s-1-5-21-1000000001",
+        ] {
+            assert!(
+                !lower.contains(&planted.to_lowercase()),
+                "{planted} was printed:\n{report}"
+            );
+        }
+
+        // Positive controls: the report is complete enough that the absences above mean something.
+        assert!(report.starts_with("# Event Logs report\n"));
+        for heading in [
+            "## Scope and coverage",
+            "## Coverage and limits",
+            "## Findings",
+            "## Correlation chains",
+            "## Nearby, not linked",
+            "## Top event IDs",
+            "## Level mix",
+            "## Events",
+        ] {
+            assert!(report.contains(heading), "{heading} is missing");
+        }
+        assert!(
+            tokens_of(&report, "host").len() >= 2,
+            "both machines appear as tokens"
+        );
+        for token in ["[sid:", "[upn:", "[user:", r"\[sensitive:TenantId\]"] {
+            assert!(report.contains(token), "{token} is missing:\n{report}");
+        }
+        assert_eq!(
+            report
+                .lines()
+                .filter(|line| line.starts_with("| 2026-"))
+                .count(),
+            500 + chain_member_rows(&report)
+        );
+        assert!(report.contains("Showing the first 500 of 1331 placed events; 831 omitted."));
+        assert!(report.contains("### Chain 1: Exact, 2 entries"));
+        assert!(report.contains(&format!("ActivityId = {PLANTED_ACTIVITY}")));
+        assert!(report.contains("access denied: Security.evtx"));
+        // Hostile Markdown is inert: it is in the report, and every `<` is escaped.
+        assert!(
+            report.contains(r"\<img src=x onerror=alert(1)\>"),
+            "{report}"
+        );
+        assert!(report
+            .char_indices()
+            .filter(|(_, character)| *character == '<')
+            .all(|(index, _)| report[..index].ends_with('\\')));
+    }
+
+    fn chain_member_rows(report: &str) -> usize {
+        let start = report.find("## Correlation chains").unwrap();
+        let end = report.find("## Nearby, not linked").unwrap();
+        report[start..end]
+            .lines()
+            .filter(|line| line.starts_with("| 2026-"))
+            .count()
+    }
+
+    #[test]
+    fn a_bare_tenant_id_stays_visible_and_the_banner_says_so() {
+        // `redact_text` masks a tenant ID only after a TenantId label, on purpose: a bare GUID is
+        // often a correlation key. This pins that limit; if the redaction ever changes, this test
+        // fails and the banner has to change with it.
+        let (report, _) = planted_report();
+        assert!(report.contains(PLANTED_TENANT_BARE), "{report}");
+        assert!(report.contains("a bare tenant ID"));
+    }
+
+    #[test]
+    fn the_header_machine_tokens_are_the_tokens_the_findings_carry() {
+        let (report, summary) = planted_report();
+        let header = report
+            .lines()
+            .find(|line| line.starts_with("- Machines ("))
+            .expect("a machines line");
+        let mut seen = 0;
+        for finding in &summary.findings {
+            for evidence in &finding.evidence {
+                if let EvidenceRef::Event(event) = evidence {
+                    if let Some(machine) = event.machine.as_deref() {
+                        assert!(machine.starts_with("[host:"), "{machine}");
+                        assert!(header.contains(machine), "{machine} not in {header}");
+                        seen += 1;
+                    }
+                }
+            }
+        }
+        assert!(seen > 0, "the fixture's findings cite no machine");
+    }
+
+    #[test]
+    fn the_fixture_report_is_deterministic() {
+        assert_eq!(planted_report().0, planted_report().0);
     }
 }

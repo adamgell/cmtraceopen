@@ -495,6 +495,8 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::analysis_session::evtx_diagnose_analysis_session,
             #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_render_analysis_report,
+            #[cfg(feature = "event-log")]
             event_log::analysis_session::evtx_close_analysis_session,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_authenticate,
