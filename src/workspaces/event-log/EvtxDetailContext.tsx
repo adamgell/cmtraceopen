@@ -27,7 +27,7 @@ import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { EvtxKindChip } from "./EvtxKindChip";
 import { correlationSizes } from "./evtx-correlation-sizes";
-import { openCorrelationView } from "./evtx-correlation-store";
+import { openChainInCorrelationView } from "./evtx-correlation-actions";
 import {
   DETAIL_CONTEXT_KINDS_LABEL,
   DETAIL_CONTEXT_TITLE,
@@ -35,7 +35,6 @@ import {
   type DetailContextInput,
   type DetailContextRow,
 } from "./evtx-detail-context-model";
-import { evtxViewTabId } from "./evtx-layout-store";
 import { useRailTextColors } from "./evtx-rail-text";
 import { formatClock, type EvtxTimeZoneMode } from "./evtx-time";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
@@ -44,12 +43,6 @@ interface EvtxDetailContextProps extends DetailContextInput {
   /** The record the Details tab shows; the section is about this event. */
   record: NonNullable<DetailContextInput["record"]>;
   timeZoneMode: EvtxTimeZoneMode;
-}
-
-/** The "Open full correlation timeline" action: the Correlation view, with the chain selection left alone. */
-function openFullTimeline(): void {
-  openCorrelationView();
-  document.getElementById(evtxViewTabId("correlation"))?.focus();
 }
 
 export function EvtxDetailContext({
@@ -244,7 +237,8 @@ export function EvtxDetailContext({
             type="button"
             data-evtx-ctx="open"
             aria-description="Switches the main view to Correlation."
-            onClick={openFullTimeline}
+            // The Correlation view, with its chain selection left alone.
+            onClick={() => openChainInCorrelationView()}
             style={{
               fontSize: `${sizes.message}px`,
               fontWeight: 600,

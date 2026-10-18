@@ -229,13 +229,32 @@ describe("chainActionAvailability", () => {
 });
 
 describe("one definition of opening and focusing a view tab", () => {
+  const FOCUS_A_VIEW_TAB = /getElementById\(\s*evtxViewTabId\(\s*"(?:correlation|table)"\s*\)\s*\)/;
+
   it("sees the workspace and the module", () => {
     expect(Object.keys(sources).length).toBeGreaterThan(50);
     expect(sources["evtx-correlation-actions.ts"]).toBeDefined();
+    expect(FOCUS_A_VIEW_TAB.test(sources["evtx-correlation-actions.ts"]!)).toBe(true);
   });
 
-  it("is called by the Correlation view", () => {
-    expect(sources["EvtxCorrelationView.tsx"]).toMatch(/\bfilterTableToChain\(/);
+  it("recognises a component that focuses a view tab itself", () => {
+    expect(FOCUS_A_VIEW_TAB.test('document.getElementById(evtxViewTabId("correlation"))?.focus();')).toBe(true);
+    expect(FOCUS_A_VIEW_TAB.test('id={evtxViewTabId(view)}')).toBe(false);
+  });
+
+  it("is written by the actions module alone: no component focuses the Table or Correlation tab itself", () => {
+    const writers = Object.entries(sources)
+      .filter(([file, source]) => file !== "evtx-correlation-actions.ts" && FOCUS_A_VIEW_TAB.test(source))
+      .map(([file]) => file);
+    expect(writers).toEqual([]);
+  });
+
+  it.each([
+    ["EvtxCorrelationView.tsx", /\bfilterTableToChain\(/],
+    ["EvtxCorrelationDock.tsx", /\bopenChainInCorrelationView\(/],
+    ["EvtxDetailContext.tsx", /\bopenChainInCorrelationView\(/],
+  ])("is called by %s", (file, call) => {
+    expect(sources[file], file).toMatch(call);
   });
 
   it("is not imported from the lazy view by anything", () => {

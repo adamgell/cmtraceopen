@@ -13,7 +13,7 @@
  *   announces a selection; a failed read is an alert, and nothing else speaks.
  * - Activating a marker selects its record only when exactly one loaded record matches
  *   (`resolveMarkerClick`); otherwise it does nothing, and the marker's accessible name then says why.
- * - Open in Correlation view opens the row through `openCorrelationView`, which counts as an open
+ * - Open in Correlation view opens the row through `openChainInCorrelationView`, which counts as an open
  *   (the view drops a loss it held), and moves focus to the Correlation tab, like Phase 10's
  *   "Filter table to chain" moves it to the Table tab. It is aria-disabled, with its reason visible
  *   beside it, when there is no row to open.
@@ -59,13 +59,12 @@ import {
   type MarkerSelectability,
 } from "./evtx-correlation-dock-model";
 import { analysisSessionState, useEvtxAnalysisSession, type EvtxAnalysisSession } from "./evtx-analysis-session";
+import { openChainInCorrelationView } from "./evtx-correlation-actions";
 import { itemsByOriginId } from "./evtx-correlation-origin-index";
-import { openCorrelationView } from "./evtx-correlation-store";
 import type { CorrelationWindowDeps, LoadedCorrelationWindow } from "./evtx-correlation-window";
 import {
   EVTX_DOCK_WINDOW_OPTIONS_MS,
   evtxPanelToggleId,
-  evtxViewTabId,
   useEvtxLayoutStore,
 } from "./evtx-layout-store";
 import { findRecordById } from "./evtx-insights-data";
@@ -205,8 +204,7 @@ export default function EvtxCorrelationDock({
   const openRow = () => {
     if (ready === null || !("rowId" in ready.open)) return;
     // The view's own loss record is dropped by an open (evtx-correlation-store's `openChain`).
-    openCorrelationView(ready.open.rowId);
-    document.getElementById(evtxViewTabId("correlation"))?.focus();
+    openChainInCorrelationView(ready.open.rowId);
   };
   const close = () => {
     useEvtxLayoutStore.getState().setPanel("dock", false);
