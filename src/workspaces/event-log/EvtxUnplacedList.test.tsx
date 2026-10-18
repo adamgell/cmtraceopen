@@ -203,6 +203,33 @@ describe("Copy as text", () => {
     expect(onReply).not.toHaveBeenCalled();
   });
 
+  it("waits while the data is updating: the list on show belongs to an earlier session", () => {
+    mount({ updating: true });
+    const copy = screen.getByRole("button", { name: "Copy as text" });
+    expect(copy).toHaveAttribute("aria-disabled", "true");
+    // The same reason the chain's Copy gives, spoken and shown.
+    expect(copy).toHaveAttribute("aria-description", "Wait for the update to finish.");
+    expect(copy).toHaveAttribute("title", "Wait for the update to finish.");
+    // It stays focusable, and a click copies nothing and says nothing.
+    copy.focus();
+    expect(copy).toHaveFocus();
+    fireEvent.click(copy);
+    expect(vi.mocked(writeText)).not.toHaveBeenCalled();
+    expect(onReply).not.toHaveBeenCalled();
+    expect(onFail).not.toHaveBeenCalled();
+  });
+
+  it("copies again once the update has finished", async () => {
+    const view = mount({ updating: true });
+    view.rerenderWith({ updating: false });
+    const copy = screen.getByRole("button", { name: "Copy as text" });
+    expect(copy).not.toHaveAttribute("aria-disabled", "true");
+    expect(copy).not.toHaveAttribute("title");
+    expect(copy).not.toHaveAttribute("aria-description");
+    fireEvent.click(copy);
+    await waitFor(() => expect(onReply).toHaveBeenCalledWith("Copied the unplaced list as text."));
+  });
+
   it("adds no live region of its own, so the view keeps exactly its two", () => {
     mount();
     expect(document.querySelectorAll("[role='status'],[role='alert'],[aria-live]")).toHaveLength(0);

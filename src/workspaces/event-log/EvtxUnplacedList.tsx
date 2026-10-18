@@ -26,6 +26,7 @@ import { useUiStore } from "../../stores/ui-store";
 import type { CorrelationSizes } from "./EvtxCorrelationLanes";
 import {
   OPEN_IN_LOG_VIEWER_LABEL,
+  WAIT_FOR_UPDATE_REASON,
   describeUnplaced,
   logViewerLines,
   notPlacedCaption,
@@ -137,7 +138,12 @@ export function EvtxUnplacedList({ list, updating, sizes, onReply, onFail, onEsc
           size="small"
           icon={<Copy16Regular />}
           style={buttonFont}
-          onClick={() => void copy()}
+          // The list on show belongs to an earlier session while the data is updating, and the copy
+          // carries no mark of that, so it waits (as the chain's Copy does).
+          disabledFocusable={updating}
+          title={updating ? WAIT_FOR_UPDATE_REASON : undefined}
+          aria-description={updating ? WAIT_FOR_UPDATE_REASON : undefined}
+          onClick={updating ? undefined : () => void copy()}
         >
           Copy as text
         </Button>

@@ -1378,6 +1378,22 @@ describe("the Not placed option (spec 8.11, 8.11a)", () => {
     expect(regions()).toEqual(["correlation-action-status", "correlation-announcer"]);
   });
 
+  it("copies nothing from the pane while the data is updating, as the chain's Copy does not either", () => {
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 }, updating: true, builtFor: "old:1" }));
+    const paneCopy = screen.getByRole("button", { name: "Copy as text" });
+    expect(paneCopy).toHaveAttribute("aria-disabled", "true");
+    expect(paneCopy).toHaveAttribute("title", "Wait for the update to finish.");
+    fireEvent.click(paneCopy);
+    expect(vi.mocked(writeText)).not.toHaveBeenCalled();
+    cleanup();
+    useEvtxCorrelationStore.setState({ unplacedOpen: false });
+    show(mixedData({ updating: true, builtFor: "old:1" }));
+    const chainCopy = screen.getByRole("button", { name: "Copy as text" });
+    expect(chainCopy).toHaveAttribute("aria-disabled", "true");
+    expect(chainCopy).toHaveAttribute("title", paneCopy.getAttribute("title"));
+  });
+
   it("reports a failed copy from the pane as an alert, with no third status", async () => {
     vi.mocked(writeText).mockRejectedValue(new Error("clipboard denied"));
     useEvtxCorrelationStore.setState({ unplacedOpen: true });

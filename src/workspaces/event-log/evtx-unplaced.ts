@@ -306,6 +306,12 @@ interface OpenAtLine {
 /** The visible text of the button; the accessible name starts with it. */
 export const OPEN_IN_LOG_VIEWER_LABEL = "Open in Log Viewer";
 
+/**
+ * Why an action that reads the model on show is disabled while the data is `updating`: that model
+ * belongs to an earlier session than the one being built. The chain's actions give the same reason.
+ */
+export const WAIT_FOR_UPDATE_REASON = "Wait for the update to finish.";
+
 const NO_SINGLE_FILE = "The Log Viewer has no single file open, so this line cannot be opened there.";
 
 /** Why each mode other than "single-file" cannot open a line at its place. */

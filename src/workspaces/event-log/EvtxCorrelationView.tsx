@@ -56,7 +56,13 @@ import {
   type SelectionLoss,
 } from "./evtx-correlation-selection-loss";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
-import { describeUnplaced, notPlacedCaption, notPlacedLabel, type UnplacedView } from "./evtx-unplaced";
+import {
+  WAIT_FOR_UPDATE_REASON,
+  describeUnplaced,
+  notPlacedCaption,
+  notPlacedLabel,
+  type UnplacedView,
+} from "./evtx-unplaced";
 import {
   CORRELATION_SEQUENCE_INITIAL,
   buildChainPlot,
@@ -767,7 +773,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
   const actReason = canAct
     ? undefined
     : data.updating
-      ? "Wait for the update to finish."
+      ? WAIT_FOR_UPDATE_REASON
       : "Wait for the entries of this chain to be read.";
 
   return (
