@@ -66,6 +66,23 @@ export function itemsByOriginId(
   return byId;
 }
 
+/**
+ * The entries `itemsByOriginId` leaves out: each one whose origin id an earlier entry of `items`
+ * already has, in the order read. A surface that counts the entries read but shows each origin once
+ * uses it to say how many it left out, and where they are in time; the first of an origin is the
+ * one `itemsByOriginId` keeps, by position, so an entry that is the same object twice counts once.
+ */
+export function repeatedItems(items: readonly TimelineItem[]): TimelineItem[] {
+  const seen = new Set<string>();
+  const repeats: TimelineItem[] = [];
+  for (const item of items) {
+    const id = timelineOriginId(item.origin);
+    if (seen.has(id)) repeats.push(item);
+    else seen.add(id);
+  }
+  return repeats;
+}
+
 /** Timeline origins by the origin id the edges name them with. */
 export type OriginLookup = ReadonlyMap<string, TimelineOrigin>;
 

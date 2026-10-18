@@ -60,6 +60,7 @@ import {
   type DockSelected,
   type WindowRead,
 } from "./evtx-correlation-dock-model";
+import { repeatedItems } from "./evtx-correlation-origin-index";
 import {
   describeLanes,
   entryLabel,
@@ -241,9 +242,12 @@ function entriesText(value: number): string {
  * lines side by side; the entries the list leaves out are explained by the notes of their own (the
  * ambiguous event's, and `sharedOriginNote`).
  *
- * "N nearest" is literally true. The entries that may be an ambiguous event are set aside, so when
- * one of them is nearer to the event's instant than the farthest row (`apart`, how many may be the
- * event), the caption says the rows are the nearest APART from them.
+ * "N nearest" is literally true. The counts are of entries read, and exactly two kinds of entry that
+ * is counted has no row and is not simply ranked after the rows: the entries that may be an
+ * ambiguous event (set aside), and a later reading of an origin already read (`repeatedItems`, which
+ * `itemsByOriginId` leaves out). When one of either is nearer to the event's instant than the
+ * farthest row the caption says so: the rows are the nearest APART from the first (`apart`, how many
+ * may be the event), and COUNTING REPEATS ONCE for the second (`repeats`).
  */
 function captionFor(input: {
   shown: number;
@@ -253,19 +257,26 @@ function captionFor(input: {
   proven: boolean;
   halfWidthMs: number;
   apart: number | null;
+  repeats: boolean;
 }): string {
   const width = windowWidthLabel(input.halfWidthMs);
   const plain = `${count(input.shown)} nearest`;
-  const apart = input.apart === null ? "" : `, apart from the ${count(input.apart)} that may be this event,`;
+  // One sentence for what was set aside or counted once: "apart from the 2 that may be this event
+  // and counting repeats once".
+  const clauses = [
+    input.apart === null ? null : `apart from the ${count(input.apart)} that may be this event`,
+    input.repeats ? "counting repeats once" : null,
+  ].filter((clause): clause is string => clause !== null);
+  const qualified = clauses.length === 0 ? "" : `, ${clauses.join(" and ")},`;
   const lead = input.apart === null ? plain : input.shown === 1 ? "The nearest" : `The ${plain}`;
   if (input.complete) {
     return input.windowItems > input.shown
-      ? `${lead}${apart} of ${entriesText(input.windowItems)} within ${width}`
+      ? `${lead}${qualified} of ${entriesText(input.windowItems)} within ${width}`
       : `${entriesText(input.windowItems)} within ${width}`;
   }
-  if (input.proven) return `${lead} entries${apart} within ${width}`;
+  if (input.proven) return `${lead} entries${qualified} within ${width}`;
   return input.read > input.shown
-    ? `${lead}${apart} of the ${entriesText(input.read)} read`
+    ? `${lead}${qualified} of the ${entriesText(input.read)} read`
     : `${entriesText(input.read)} read`;
 }
 
@@ -279,6 +290,8 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
   const { window, pairedCounts, paired, updating, usable, selected, originId } = read;
   const center = window.centerMs;
   const idOf = (item: TimelineItem) => timelineOriginId(item.origin);
+  // The entries read again under an origin already read: counted in the window, with no row of their own.
+  const repeats = repeatedItems(window.items);
 
   // ---- the rows: the selected event, then the nearest of the rest, shown in time order ----
   const selectedItem = originId === null ? null : (read.byId.get(originId) ?? null);
@@ -333,6 +346,7 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
     })
       ? selected.candidates
       : null;
+  const repeatsNearer = repeats.some((item) => Math.abs(item.timestampMs - center) < farthest);
   const nearestProven =
     window.complete ||
     (chosen.length === DETAIL_CONTEXT_ROW_CAP && last !== null && farthest < last - center);
@@ -343,7 +357,7 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
     if (text !== null) notices.push(text);
   };
   push(windowNotice(window));
-  push(sharedOriginNote(window.items.length - read.items.length));
+  push(sharedOriginNote(repeats.length));
   if (pairedCounts === null) {
     push(LINKS_LOADING_TEXT);
   } else {
@@ -420,6 +434,7 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
             proven: nearestProven,
             halfWidthMs: window.halfWidthMs,
             apart: nearerSetAside,
+            repeats: repeatsNearer,
           }),
     legend: rows.some((row) => row.link !== null) ? LINK_LEGEND_TEXT : null,
     notices,

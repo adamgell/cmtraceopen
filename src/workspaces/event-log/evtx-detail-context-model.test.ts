@@ -555,7 +555,8 @@ describe("the caption counts what the card counts, never the list that left entr
     const model = ready({ window });
     expect(model.selected.status).toBe("found");
     expect(model.notices[0]).toMatch(/^Showing 26 of 500 entries/);
-    expect(model.caption).toBe("12 nearest of the 26 entries read");
+    // The copy of entry 25 is 5 s from the event, nearer than row 14 (6 s), and has no row of its own.
+    expect(model.caption).toBe("12 nearest, counting repeats once, of the 26 entries read");
     expect(model.notices).toContain(sharedOriginNote(1));
     expect(sharedOriginNote(1)).toBe("1 entry read repeats another entry's origin and is counted once.");
   });
@@ -722,6 +723,196 @@ describe("'N nearest' is literally true: the caption says when an entry set asid
     const model = ready({ window });
     expect(model.notices[0]).toMatch(/^Showing 25 of 500 entries/);
     expect(model.caption).toMatch(/of the 25 entries read$/);
+  });
+});
+
+describe("'N nearest' counts repeats once, and says so when a repeat is nearer than a row", () => {
+  const byTime = (list: TimelineItem[]) => [...list].sort((a, b) => a.timestampMs - b.timestampMs);
+  /** A second entry of the origin of entry `n`, read again at `timestampMs`. */
+  const copyOf = (n: number, timestampMs: number): TimelineItem => ({ ...eventItem(n, timestampMs) });
+
+  it("says so for the reviewer's scene: a copy of entry 25 (5 s) is nearer than row 14 (6 s)", () => {
+    const read = entries().slice(0, 25);
+    const model = ready({ window: stoppedWindow(record, byTime([...read, copyOf(25, T0 + 25_000)]), 500) });
+    expect(model.selected.status).toBe("found");
+    expect(model.nearestProven).toBe(false);
+    expect(numbers(model)).toEqual([14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
+    expect(model.notices[0]).toMatch(/^Showing 26 of 500 entries/);
+    expect(model.caption).toBe("12 nearest, counting repeats once, of the 26 entries read");
+  });
+
+  it("says so for a whole window with a nearer copy, counting the copy in N", () => {
+    const window = windowAround(record, byTime([...entries(), copyOf(24, T0 + 24_000)]));
+    expect(window.windowItems).toBe(42);
+    const model = ready({ window });
+    expect(model.caption).toBe("12 nearest, counting repeats once, of 42 entries within \u00b15 min");
+    expect(model.notices).toContain(sharedOriginNote(1));
+  });
+
+  it("keeps the plain caption when the copy is farther than every row", () => {
+    const window = windowAround(record, byTime([...entries(), copyOf(41, T0 + 41_000)]));
+    const model = ready({ window });
+    expect(model.caption).toBe("12 nearest of 42 entries within \u00b15 min");
+    expect(model.notices).toContain(sharedOriginNote(1));
+  });
+
+  it("keeps the plain caption when the copy is exactly as far as the farthest row", () => {
+    // Row 14 is 6 s before the event; a copy of entry 26 is 6 s after it: a tie, not a nearer entry.
+    const window = windowAround(record, byTime([...entries(), copyOf(26, T0 + 26_000)]));
+    expect(ready({ window }).caption).toBe("12 nearest of 42 entries within \u00b15 min");
+  });
+
+  it("judges a repeat by its own time, not the time of the entry it repeats", () => {
+    // Entry 1 is first read 19 s before the event; its second reading is 2 s after it: nearer than
+    // the farthest row, and it is the repeat, since the first reading came first.
+    const window = windowAround(record, byTime([...entries(), copyOf(1, t + 2_000)]));
+    expect(ready({ window }).caption).toBe("12 nearest, counting repeats once, of 42 entries within \u00b15 min");
+    // And the reverse: the entry is near, its second reading is far.
+    const far = windowAround(record, byTime([...entries(), copyOf(21, t + 100_000)]));
+    expect(ready({ window: far }).caption).toBe("12 nearest of 42 entries within \u00b15 min");
+  });
+
+  it("says so for a copy of the event's own entry", () => {
+    const window = windowAround(record, byTime([...entries(), copyOf(20, t)]));
+    const model = ready({ window });
+    expect(model.selected).toEqual({ status: "found", originId: rid(20) });
+    expect(model.caption).toBe("12 nearest, counting repeats once, of 42 entries within \u00b15 min");
+  });
+
+  it("makes one sentence of the ambiguous clause and the repeat clause", () => {
+    const window = windowAround(record, byTime([...entries(), twinOf(eventItem(20, t), rid(88)), copyOf(24, T0 + 24_000)]));
+    expect(window.windowItems).toBe(43);
+    const model = ready({ window });
+    expect(model.selected).toEqual({ status: "ambiguous", candidates: 2 });
+    expect(model.caption).toBe(
+      "The 12 nearest, apart from the 2 that may be this event and counting repeats once, of 43 entries within \u00b15 min",
+    );
+  });
+
+  it("keeps each clause alone when only that one applies", () => {
+    const naming = byTime([...entries(), twinOf(eventItem(20, t), rid(88)), copyOf(41, T0 + 41_000)]);
+    expect(ready({ window: windowAround(record, naming) }).caption).toBe(
+      "The 12 nearest, apart from the 2 that may be this event, of 43 entries within \u00b15 min",
+    );
+    const far = byTime([...near12(), eventItem(20, t - 200_000), { ...twinOf(eventItem(20, t), rid(88)), timestampMs: t + 200_000 }, copyOf(101, t + 250_000)]);
+    expect(ready({ window: windowAround(record, far) }).caption).toBe("12 nearest of 15 entries within \u00b15 min");
+  });
+
+  it("says so in the proven form of a read that stopped", () => {
+    const stopped = byTime([...entries(), copyOf(24, T0 + 24_000)]);
+    const model = ready({ window: stoppedWindow(record, stopped, 500) });
+    expect(model.nearestProven).toBe(true);
+    expect(model.caption).toBe("12 nearest entries, counting repeats once, within \u00b15 min");
+    const both = byTime([...entries(), twinOf(eventItem(20, t), rid(88)), copyOf(24, T0 + 24_000)]);
+    expect(ready({ window: stoppedWindow(record, both, 500) }).caption).toBe(
+      "The 12 nearest entries, apart from the 2 that may be this event and counting repeats once, within \u00b15 min",
+    );
+  });
+
+  it("says nothing of repeats when there are none, and counts the note's entries as the repeats", () => {
+    expect(ready().caption).toBe("12 nearest of 41 entries within \u00b15 min");
+    const model = ready({ window: windowAround(record, byTime([...entries(), copyOf(24, T0 + 24_000), copyOf(24, T0 + 24_000)])) });
+    expect(model.notices).toContain(sharedOriginNote(2));
+  });
+
+  function near12() {
+    return Array.from({ length: 12 }, (_, index) => eventItem(101 + index, t + (index + 1) * 1_000));
+  }
+});
+
+/**
+ * The class test for "N nearest": over many windows, every entry the caption counts that has no row
+ * is accounted for. Each is a row, the first of an origin that is ranked after the rows, an entry
+ * that may be an ambiguous event, or a repeat of an origin already read; and the caption's two
+ * clauses are said exactly when one of the last two is nearer than the farthest row. If a third way
+ * to leave an entry out existed, "a distinct entry with no row, nearer than the farthest row" would
+ * turn up here.
+ */
+describe("every entry counted in the caption is a row, ranked after the rows, a naming entry or a repeat", () => {
+  /** mulberry32, seeded: the same windows on every run, and no two nearby seeds alike. */
+  function generator(seed: number) {
+    let state = seed | 0;
+    return () => {
+      state = (state + 0x6d2b79f5) | 0;
+      let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
+      mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
+      return ((mixed ^ (mixed >>> 14)) >>> 0) / 2 ** 32;
+    };
+  }
+
+  function sceneFor(seed: number) {
+    const rand = generator(seed);
+    const jitter = (spread: number) => t + Math.round((rand() * 2 - 1) * spread);
+    const items: TimelineItem[] = [];
+    const distinct = 1 + Math.floor(rand() * 40);
+    for (let index = 0; index < distinct; index += 1) {
+      items.push(rand() < 0.3 ? { ...logItem(index + 1, jitter(40_000)) } : eventItem(100 + index, jitter(40_000)));
+    }
+    // The event's own entry is at its instant (the engine places it at the record's epoch); a second
+    // entry that names it is another record with the same fields, anywhere in the window.
+    const kind = rand() < 0.4 ? "found" : rand() < 0.5 ? "ambiguous" : "absent";
+    if (kind !== "absent") items.push(eventItem(20, t));
+    if (kind === "ambiguous") items.push({ ...twinOf(eventItem(20, t), rid(88)), timestampMs: jitter(30_000) });
+    // A repeated entry is the same record read again, so it has the same time as the one it repeats.
+    const originals = [...items];
+    for (let copies = Math.floor(rand() * 6); copies > 0; copies -= 1) {
+      items.push({ ...(originals[Math.floor(rand() * originals.length)] as TimelineItem) });
+    }
+    const sorted = [...items].sort((a, b) => a.timestampMs - b.timestampMs);
+    if (rand() < 0.5) return { kind, window: windowAround(record, sorted) };
+    const cut = 1 + Math.floor(rand() * sorted.length);
+    return { kind, window: stoppedWindow(record, sorted.slice(0, cut), sorted.length + 1 + Math.floor(rand() * 200)) };
+  }
+
+  it("holds for 400 windows, and each clause is said exactly when it is true", () => {
+    const tally = { plain: 0, apart: 0, repeats: 0, both: 0, withoutCaption: 0 };
+    for (let seed = 1; seed <= 400; seed += 1) {
+      const { window } = sceneFor(seed);
+      const model = ready({ window });
+      if (model.caption === null) {
+        tally.withoutCaption += 1;
+        continue;
+      }
+      const center = window.centerMs;
+      const distance = (item: TimelineItem) => Math.abs(item.timestampMs - center);
+      const rowIds = new Set(model.rows.map((row) => row.id));
+      const farthest = Math.max(0, ...model.rows.map((row) => Math.abs(row.offsetMs)));
+      const naming = model.selected.status === "ambiguous" ? new Set([rid(20), rid(88)]) : new Set<string>();
+      const seen = new Set<string>();
+      let nearerOther = false;
+      let nearerNaming = false;
+      let nearerRepeat = false;
+      for (const item of window.items) {
+        const id = timelineOriginId(item.origin);
+        const first = !seen.has(id);
+        seen.add(id);
+        if (!first) {
+          if (distance(item) < farthest) nearerRepeat = true;
+        } else if (rowIds.has(id)) {
+          // A row.
+        } else if (naming.has(id)) {
+          if (distance(item) < farthest) nearerNaming = true;
+        } else if (distance(item) < farthest) {
+          nearerOther = true;
+        }
+      }
+      const label = `seed ${seed}: ${model.caption}`;
+      expect(nearerOther, `no third way to leave an entry out; ${label}`).toBe(false);
+      if (model.nearestProven || model.complete || /nearest/.test(model.caption)) {
+        expect(/apart from the \d+ that may be this event/.test(model.caption), label).toBe(nearerNaming);
+        expect(/counting repeats once/.test(model.caption), label).toBe(nearerRepeat);
+      }
+      if (nearerNaming && nearerRepeat) tally.both += 1;
+      else if (nearerNaming) tally.apart += 1;
+      else if (nearerRepeat) tally.repeats += 1;
+      else tally.plain += 1;
+    }
+    console.info(`oracle tally over 400 windows: ${JSON.stringify(tally)}`);
+    // The draw reaches every case, so the checks above are not vacuous.
+    expect(tally.plain).toBeGreaterThan(20);
+    expect(tally.apart).toBeGreaterThan(5);
+    expect(tally.repeats).toBeGreaterThan(5);
+    expect(tally.both).toBeGreaterThan(0);
   });
 });
 
