@@ -112,6 +112,7 @@ jobs:
           # On a dispatch the workflow ref is a branch, so the tag has to be
           # named explicitly or the build would package the wrong commit.
           ref: refs/tags/${{ steps.resolve.outputs.tag_name }}
+          persist-credentials: false
 
       - name: Import Apple Developer Certificate
         if: runner.os == 'macOS'
