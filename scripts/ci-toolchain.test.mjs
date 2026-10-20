@@ -313,10 +313,10 @@ test("the drift policy accepts the pin and the floor, and rejects anything else"
     [],
     "the MSRV floor is accepted",
   );
-  assert.deepEqual(
-    inputOffenders("fixture.yml", step(PARSER_MSRV_INPUT)),
-    [],
-    "the parser MSRV floor is accepted",
+  assert.equal(
+    inputOffenders("fixture.yml", step(PARSER_MSRV_INPUT)).length,
+    1,
+    "the parser-only MSRV floor is rejected for a generic workflow step",
   );
   assert.equal(
     inputOffenders("fixture.yml", step("1.92.0")).length,
