@@ -6,15 +6,15 @@ import re
 import stat
 from pathlib import PurePosixPath
 
-# Main must fill and independently verify the final signed producer inventory.
-# These missing values deliberately block dispatch and direct host invocation.
-BINDING_READY = False
+# Main independently verified the final signed producer inventory.
+# Receipt: release-v163-linux-byte-verification-20261020.json.
+BINDING_READY = True
 SOURCE = "ca29c18f3a9e8c50a51cb4465588dfb39afd0f03"
-MERGE = None
+MERGE = "ca29c18f3a9e8c50a51cb4465588dfb39afd0f03"
 TREE = "389e784064d2dda627ebd08c1bf6e5cb2b55413d"
 RUN = "39487214575"
-ARTIFACT_ID = None
-ARTIFACT_SHA256 = None
+ARTIFACT_ID = 12294242179
+ARTIFACT_SHA256 = "58d50f2115036c1b46530e6b1e0eaf3b4c8cb06b3b73594bd9ce82a2f2b71a1c"
 ARTIFACT_NAME = "CMTrace Open_1.6.3_amd64.AppImage"
 CASES = ("ordinary", "catalog-renderer-subset")
 CHECKS = ("private_bus", "fuse", "open", "find", "filter", "tail", "single_instance_owner",
