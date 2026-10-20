@@ -132,6 +132,9 @@ jobs:
       - name: Single-instance D-Bus election and handoff
         run: dbus-run-session -- cargo test --locked -p tauri-plugin-single-instance
 
+      - name: Single-instance plugin clippy
+        run: cargo clippy --locked -p tauri-plugin-single-instance --all-targets --all-features -- -D warnings
+
       # Default full-feature checks/tests already cover the exporter. Also build
       # and exercise the actual CLI with the release feature selection. Include
       # library tests so Windows helpers gated by cfg(test) compile without Intune.
