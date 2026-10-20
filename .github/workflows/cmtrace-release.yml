@@ -77,6 +77,36 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag_name=$tag_name" >> "$GITHUB_OUTPUT"
 
+      - name: Wait for exact draft release
+        shell: bash
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ steps.resolve.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          # Windows preparation is the sole draft creator and may wait two
+          # minutes first. Retry only an absent tag, before setup or signing.
+          for attempt in $(seq 1 24); do
+            gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > "$RUNNER_TEMP/unix-release-pages.json"
+            jq --arg tag "$TAG_NAME" '[.[][] | select(.tag_name == $tag)]' \
+              "$RUNNER_TEMP/unix-release-pages.json" > "$RUNNER_TEMP/unix-release-preflight.json"
+            count="$(jq 'length' "$RUNNER_TEMP/unix-release-preflight.json")"
+            if [ "$count" -eq 1 ]; then
+              jq -e --arg tag "$TAG_NAME" '.[0] |
+                .tag_name == $tag and .draft == true and .prerelease == false and
+                (.id | type == "number" and . > 0 and floor == .)
+              ' "$RUNNER_TEMP/unix-release-preflight.json" > /dev/null
+              break
+            fi
+            if [ "$count" -ne 0 ] || [ "$attempt" -eq 24 ]; then
+              echo "::error::Expected one existing draft release for the exact tag; Unix will not create it."
+              exit 1
+            fi
+            sleep 10
+          done
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # On a dispatch the workflow ref is a branch, so the tag has to be

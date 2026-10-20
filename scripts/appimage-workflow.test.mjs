@@ -147,3 +147,60 @@ for (const os of ['macOS','Linux']) {
     });
   }
 }
+
+function draftPreflightFixture(mode) {
+  const text=workflow('cmtrace-release');
+  const marker='      - name: Wait for exact draft release\n';
+  assert.ok(text.includes(marker),'Draft existence must be checked before Unix setup/build');
+  const at=text.indexOf(marker);
+  assert.ok(at > text.indexOf('      - name: Resolve release tag'));
+  assert.ok(at < text.indexOf('      - uses: actions/checkout@'));
+  assert.ok(at < text.indexOf('      - name: Import Apple Developer Certificate'));
+  assert.ok(at < text.indexOf('      - name: Notarize and staple final macOS DMG'));
+  const block=text.split(marker)[1].split('\n      - uses:')[0];
+  assert.match(block,/timeout-minutes: 5/);
+  assert.match(block,/GH_REPO: \$\{\{ github.repository \}\}/);
+  assert.doesNotMatch(block,/gh release create|gh release edit|gh workflow run/);
+  const root=mkdtempSync(join(tmpdir(),'draft-preflight-'));
+  try {
+    mkdirSync(join(root,'bin'));
+    writeFileSync(join(root,'bin/gh'),`#!${process.execPath}
+import fs from 'node:fs';
+const count=fs.existsSync('calls')?Number(fs.readFileSync('calls','utf8'))+1:1;
+fs.writeFileSync('calls',String(count));
+const mode=process.env.FIXTURE_MODE;
+if(mode==='api-error') process.exit(1);
+const release={id:42,tag_name:'v1.6.3',draft:mode!=='published',prerelease:mode==='prerelease'};
+const matches=mode==='absent'||(mode==='eventual'&&count<3)?[]:mode==='duplicate'?[release,release]:[release];
+console.log(JSON.stringify([[{id:1,tag_name:'v1.0.0'}],matches]));
+`,{mode:0o755});
+    writeFileSync(join(root,'bin/sleep'),'#!/bin/sh\nprintf "%s\\n" "$1" >> sleeps\n',{mode:0o755});
+    const shell=block.split('        run: |\n')[1].split('\n').map(l=>l.slice(10)).join('\n');
+    const result=spawnSync('bash',['-c',shell],{cwd:root,encoding:'utf8',timeout:10000,
+      env:{...process.env,PATH:`${join(root,'bin')}:${process.env.PATH}`,RUNNER_TEMP:root,
+        GH_REPO:'adamgell/cmtraceopen',TAG_NAME:'v1.6.3',FIXTURE_MODE:mode}});
+    const calls=Number(readFileSync(join(root,'calls'),'utf8'));
+    const sleeps=existsSync(join(root,'sleeps'))?readFileSync(join(root,'sleeps'),'utf8').trim().split('\n').map(Number):[];
+    return {result,calls,sleeps};
+  } finally { rmSync(root,{recursive:true,force:true}); }
+}
+test('Unix preflight waits for Windows-created exact draft before any checkout or signing',()=>{
+  const {result,calls,sleeps}=draftPreflightFixture('eventual');
+  assert.equal(result.status,0,result.stderr); assert.equal(calls,3); assert.deepEqual(sleeps,[10,10]);
+});
+test('absent draft exhausts its fixed bound without creating a release',()=>{
+  const {result,calls,sleeps}=draftPreflightFixture('absent');
+  assert.notEqual(result.status,0); assert.equal(calls,24); assert.equal(sleeps.length,23);
+  assert.ok(sleeps.every(seconds=>seconds===10));
+  // Windows currently waits twelve ten-second intervals before creating a
+  // missing draft. Unix must not time out before its sole creator can act.
+  const windows=workflow('codesign').split('- name: Ensure GitHub release exists')[1].split('\n  windows-signed-release:')[0];
+  assert.match(windows,/\$attempt -le 12/); assert.match(windows,/Start-Sleep -Seconds 10/);
+  assert.ok(sleeps.reduce((sum,s)=>sum+s,0)>12*10);
+});
+for(const mode of ['published','prerelease','duplicate','api-error']) {
+  test(`Unix preflight fails immediately for ${mode}`,()=>{
+    const {result,calls,sleeps}=draftPreflightFixture(mode);
+    assert.notEqual(result.status,0); assert.equal(calls,1); assert.deepEqual(sleeps,[]);
+  });
+}
