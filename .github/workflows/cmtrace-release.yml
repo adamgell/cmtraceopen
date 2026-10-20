@@ -216,7 +216,6 @@ jobs:
       - name: Build and create release
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CMTRACE_APPIMAGE_VERIFY_ROOT: ${{ runner.os == 'Linux' && 'src-tauri/target/x86_64-unknown-linux-gnu/release/bundle' || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -228,17 +227,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: .
-          tagName: ${{ steps.resolve.outputs.tag_name }}
-          releaseName: "CMTrace Open ${{ steps.resolve.outputs.tag_name }}"
-          releaseBody: ${{ steps.notes.outputs.body }}
-          releaseDraft: ${{ steps.notes.outputs.draft }}
-          prerelease: false
           args: --target ${{ matrix.target }}
-          # Each matrix entry would otherwise publish its own latest.json from a
-          # read taken minutes earlier. That is what dropped every Linux entry
-          # from v1.5.2 when the macOS upload landed second. The manifest is now
-          # published once per workflow by publish-updater-manifest, which
-          # derives it from the release's own signature assets.
+          # Without a tagName/releaseId the pinned action only builds locally.
+          # Upload happens after trust/ABI evidence and attestations succeed.
           uploadUpdaterJson: false
 
       - name: Upload AppImage inspection evidence
@@ -256,6 +247,93 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
+
+      # Tauri CLI 2.11.5 notarizes/staples the app, but its DMG bundler
+      # only signs the enclosing disk image. Finish that distinct artifact
+      # before trust receipts, hashes, attestations or release uploads.
+      - name: Notarize and staple final macOS DMG
+        if: runner.os == 'macOS'
+        timeout-minutes: 15
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          BUNDLE_ROOT: src-tauri/target/${{ matrix.target }}/release/bundle
+          NOTARY_RECEIPTS: release-verification/notarization
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, re, subprocess, sys
+          from pathlib import Path
+
+          root = Path(os.environ['NOTARY_RECEIPTS'])
+          root.mkdir(parents=True, exist_ok=False)
+          state = {'status': 'FAIL', 'runId': os.environ['GITHUB_RUN_ID'],
+                   'runAttempt': os.environ['GITHUB_RUN_ATTEMPT']}
+          def record(name, data):
+              with (root / name).open('x') as stream:
+                  json.dump(data, stream, indent=2)
+                  stream.flush()
+                  os.fsync(stream.fileno())
+          def require(condition):
+              if not condition: raise ValueError('Notarization checkpoint failed')
+          def digest(path):
+              with path.open('rb') as stream:
+                  return hashlib.file_digest(stream, 'sha256').hexdigest()
+          def command(args, timeout):
+              # Arguments may include Apple credentials. Never print commands,
+              # raw output or subprocess exception objects into logs/receipts.
+              env = {k:v for k,v in os.environ.items() if k not in
+                     ('APPLE_ID','APPLE_PASSWORD','APPLE_TEAM_ID','GH_TOKEN','GITHUB_TOKEN')}
+              result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
+              require(result.returncode == 0)
+              return result
+          try:
+              require(os.environ['GITHUB_RUN_ATTEMPT'] == '1')
+              auth = [os.environ.get(k, '') for k in ('APPLE_ID','APPLE_PASSWORD','APPLE_TEAM_ID')]
+              require(all(auth) and auth[2] == 'CRHL85PH9Y')
+              candidates = list((Path(os.environ['BUNDLE_ROOT']) / 'dmg').glob('*.dmg'))
+              require(len(candidates) == 1 and candidates[0].is_file() and not candidates[0].is_symlink())
+              dmg = candidates[0]
+              command(['codesign','--verify','--strict',str(dmg)], 45)
+              details = command(['codesign','--display','--verbose=4',str(dmg)], 45)
+              require('TeamIdentifier=CRHL85PH9Y' in (details.stdout + details.stderr).splitlines())
+              state['submittedSha256'] = digest(dmg)
+              record('submission-intent.json', dict(state, path=str(dmg),
+                     warning='Submission may have begun; never automatically resubmit'))
+              credentials = ['--apple-id',auth[0],'--password',auth[1],'--team-id',auth[2]]
+              response = command(['xcrun','notarytool','submit',str(dmg),*credentials,
+                                  '--no-wait','--output-format','json'], 120)
+              sid = json.loads(response.stdout).get('id')
+              require(isinstance(sid,str) and re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}',sid))
+              state['submissionId'] = sid
+              record('submission.json', dict(state))
+              print('Apple DMG submission ID: ' + sid, flush=True)
+              response = command(['xcrun','notarytool','wait',sid,*credentials,
+                                  '--timeout','8m','--output-format','json'], 510)
+              result = json.loads(response.stdout)
+              require(result.get('id') == sid and result.get('status') == 'Accepted')
+              state['appleStatus'] = 'Accepted'
+              record('accepted.json', dict(state))
+              require(digest(dmg) == state['submittedSha256'])
+              command(['xcrun','stapler','staple',str(dmg)], 60)
+              command(['xcrun','stapler','validate',str(dmg)], 60)
+              state['stapledSha256'] = digest(dmg)
+              state['status'] = 'PASS'
+          except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError):
+              print('DMG notarization/stapling incomplete; inspect retained checkpoints. Do not resubmit automatically.', file=sys.stderr)
+              sys.exit(1)
+          finally:
+              record('result.json', state)
+          PY
+
+      - name: Retain macOS DMG notarization checkpoints
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-dmg-notarization-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-verification/notarization
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Verify macOS release trust and payload identity
         if: runner.os == 'macOS'
@@ -282,6 +360,66 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+
+      - name: Upload verified release bundles
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.resolve.outputs.tag_name }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          BUNDLE_ROOT: src-tauri/target/${{ matrix.target }}/release/bundle
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir release-assets
+          # Canonical release names match UPDATER_TARGETS. Stage verified bytes
+          # without modifying the bundle or its retained provenance paths.
+          stage_bundle() {
+            local destination="$1" signed="$2"
+            shift 2
+            if [ "$#" -ne 1 ] || [ ! -f "$1" ] || [ -L "$1" ]; then
+              echo "::error::Expected exactly one regular bundle for $destination"
+              exit 1
+            fi
+            cp "$1" "release-assets/$destination"
+            cmp -s "$1" "release-assets/$destination"
+            if [ "$RUNNER_OS" = macOS ]; then
+              local expected actual
+              expected="$(jq -er --arg path "$1" '
+                [.artifacts[] | select(.path == $path)] |
+                if length == 1 then .[0].sha256 else error("Missing verified artifact") end
+              ' release-verification/macos/macos-trust.json)"
+              actual="$(shasum -a 256 "release-assets/$destination" | cut -d ' ' -f 1)"
+              test "$actual" = "$expected"
+            fi
+            if [ "$signed" = yes ]; then
+              test -f "$1.sig" && test ! -L "$1.sig"
+              cp "$1.sig" "release-assets/$destination.sig"
+              cmp -s "$1.sig" "release-assets/$destination.sig"
+            fi
+          }
+          case "$RUNNER_OS" in
+            macOS)
+              jq -e --arg version "$VERSION" --arg source "$(git rev-parse HEAD)" '
+                .status == "PASS" and .version == $version and .sourceCommit == $source
+              ' release-verification/macos/macos-trust.json > /dev/null
+              stage_bundle "CMTrace.Open_${VERSION}_aarch64.dmg" no "$BUNDLE_ROOT/dmg/"*.dmg
+              stage_bundle "CMTrace.Open_${VERSION}_aarch64.app.tar.gz" yes "$BUNDLE_ROOT/macos/"*.app.tar.gz
+              cp release-verification/macos/macos-trust.json "release-assets/macos-trust-${VERSION}.json"
+              ;;
+            Linux)
+              stage_bundle "CMTrace.Open_${VERSION}_amd64.AppImage" yes "$BUNDLE_ROOT/appimage/"*.AppImage
+              stage_bundle "CMTrace.Open_${VERSION}_amd64.deb" yes "$BUNDLE_ROOT/deb/"*.deb
+              stage_bundle "CMTrace.Open-${VERSION}-1.x86_64.rpm" yes "$BUNDLE_ROOT/rpm/"*.rpm
+              cp "$BUNDLE_ROOT/provenance/appimage-abi.json" "release-assets/appimage-abi-${VERSION}.json"
+              ;;
+            *) echo "::error::Unexpected release platform"; exit 1 ;;
+          esac
+          # Windows preparation owns draft creation; never publish or recreate
+          # a release here. gh release view/upload both support existing drafts.
+          actual_tag="$(gh release view "$TAG_NAME" --json tagName --jq '.tagName')"
+          test "$actual_tag" = "$TAG_NAME"
+          gh release upload "$TAG_NAME" release-assets/* --clobber
 
       - name: Upload SBOMs to release
         env:

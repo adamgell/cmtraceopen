@@ -11,31 +11,101 @@ const UNPARSED_IME_TAG: &str = "cmtrace:unparsed-ime-record";
 const RECORD_START: &str = "<![LOG[";
 const ATTRS_START: &str = "]LOG]!><";
 
+// Keep initial parsing and incremental framing on the same allocation boundary.
+const MAX_IME_RECORD_BYTES: usize = 1024 * 1024;
+
+fn bounded_prefix(text: &str, limit: usize) -> usize {
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    // Never mistake a cap boundary for the CR half of a physical CRLF.
+    if end == MAX_IME_RECORD_BYTES && text[..end].ends_with('\r') {
+        end -= 1;
+    }
+    end
+}
+
 enum RecordBoundary {
     Complete(usize),
     Interrupted(usize),
+    Capped(usize),
     Incomplete,
 }
 
-fn record_boundary(text: &str, record_start: usize) -> RecordBoundary {
-    let message_start = record_start + RECORD_START.len();
-    let Some(relative_attrs) = text[message_start..].find(ATTRS_START) else {
-        return RecordBoundary::Incomplete;
-    };
-    let attrs_start = message_start + relative_attrs + ATTRS_START.len();
+fn attributes_end(text: &str, start: usize) -> Option<usize> {
     let mut quoted = false;
-    for (relative, byte) in text.as_bytes()[attrs_start..].iter().enumerate() {
-        let offset = attrs_start + relative;
+    for (relative, byte) in text.as_bytes()[start..].iter().enumerate() {
         match byte {
             b'"' => quoted = !quoted,
-            b'>' if !quoted => return RecordBoundary::Complete(offset + 1),
-            b'<' if !quoted && text[offset..].starts_with(RECORD_START) => {
-                return RecordBoundary::Interrupted(offset);
-            }
+            b'>' if !quoted => return Some(start + relative + 1),
             _ => {}
         }
     }
-    RecordBoundary::Incomplete
+    None
+}
+
+fn valid_attributes(attrs: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"^\s*(?:[A-Za-z0-9_]+="[^"]*"\s*)*$"#).unwrap())
+        .is_match(attrs)
+}
+
+fn valid_attributes_end(text: &str, start: usize) -> Option<usize> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"^\s*(?:[A-Za-z0-9_]+="[^"]*"\s*)*>"#).unwrap())
+        .find(&text[start..])
+        .map(|matched| start + matched.end())
+}
+
+fn record_boundary(text: &str, record_start: usize) -> RecordBoundary {
+    let limit = record_start + bounded_prefix(&text[record_start..], MAX_IME_RECORD_BYTES);
+    let bounded = &text[..limit];
+    let message_start = record_start + RECORD_START.len();
+    if message_start > limit {
+        return RecordBoundary::Incomplete;
+    }
+    if let Some(relative_attrs) = bounded[message_start..].find(ATTRS_START) {
+        let attrs_start = message_start + relative_attrs + ATTRS_START.len();
+        let outer_end = attributes_end(bounded, attrs_start);
+        // A well-formed quoted value owns literal record markers inside it.
+        if let Some(end) = outer_end {
+            if valid_attributes(&bounded[attrs_start..end - 1])
+                || !bounded[attrs_start..end].contains(RECORD_START)
+            {
+                return RecordBoundary::Complete(end);
+            }
+        }
+        // An interrupted attribute must not swallow a subsequent independently
+        // valid record. Search disjoint message ranges to keep malformed input
+        // with many openers linear rather than repeatedly scanning its suffix.
+        let mut starts = bounded[attrs_start..]
+            .match_indices(RECORD_START)
+            .peekable();
+        while let Some((relative, _)) = starts.next() {
+            let next = attrs_start + relative;
+            let message = next + RECORD_START.len();
+            let message_end = starts
+                .peek()
+                .map_or(limit, |(offset, _)| attrs_start + offset);
+            let Some(attrs) = bounded[message..message_end].find(ATTRS_START) else {
+                continue;
+            };
+            let attrs = message + attrs + ATTRS_START.len();
+            if let Some(end) = valid_attributes_end(bounded, attrs) {
+                let values = &bounded[attrs..end - 1];
+                let parsed = parse_attributes(values);
+                if parse_timestamp_fields(parsed.date, parsed.time).0.is_some() {
+                    return RecordBoundary::Interrupted(next);
+                }
+            }
+        }
+    }
+    if text.len() - record_start >= MAX_IME_RECORD_BYTES {
+        RecordBoundary::Capped(limit)
+    } else {
+        RecordBoundary::Incomplete
+    }
 }
 
 /// Complete IME prefix safe to publish during an incremental read. Interrupted
@@ -47,16 +117,28 @@ pub fn complete_ime_prefix_len(text: &str) -> usize {
     loop {
         let Some(relative_start) = text[search_cursor..].find(RECORD_START) else {
             let tail = &text[cursor..];
-            return cursor + tail.rfind('\n').map_or(0, |index| index + 1);
+            let mut consumed = tail.rfind('\n').map_or(0, |index| index + 1);
+            while tail.len() - consumed >= MAX_IME_RECORD_BYTES {
+                consumed += bounded_prefix(&tail[consumed..], MAX_IME_RECORD_BYTES);
+            }
+            return cursor + consumed;
         };
         let record_start = search_cursor + relative_start;
         match record_boundary(text, record_start) {
-            RecordBoundary::Complete(end) => {
+            RecordBoundary::Complete(end) | RecordBoundary::Capped(end) => {
                 cursor = end;
                 search_cursor = end;
             }
             RecordBoundary::Interrupted(next) => search_cursor = next,
-            RecordBoundary::Incomplete => return cursor,
+            RecordBoundary::Incomplete => {
+                // A late incomplete opener must not pin an arbitrarily large
+                // unmatched prefix in the incremental buffer.
+                return if text.len() - cursor >= MAX_IME_RECORD_BYTES {
+                    record_start
+                } else {
+                    cursor
+                };
+            }
         }
     }
 }
@@ -297,6 +379,20 @@ fn parse_ime_records(content: &str, max_entries: usize) -> ParsedImeChunk {
             RecordBoundary::Complete(end) => end,
             RecordBoundary::Interrupted(next) => {
                 search_cursor = next;
+                continue;
+            }
+            RecordBoundary::Capped(end) => {
+                push_unmatched_segment(
+                    &content[cursor..end],
+                    cursor,
+                    &line_starts,
+                    &mut entries,
+                    &mut parse_errors,
+                    max_entries,
+                );
+                cursor = end;
+                search_cursor = end;
+                matched_any = true;
                 continue;
             }
             RecordBoundary::Incomplete => break,
@@ -727,14 +823,24 @@ fn push_unmatched_segment(
             return;
         }
         let line = piece.trim_end_matches(['\r', '\n']);
-        let trimmed = line.trim();
-        if !trimmed.is_empty() {
+        if line.is_empty() {
+            local_offset += piece.len();
+            continue;
+        }
+        let mut chunk_offset = 0;
+        while chunk_offset < line.len() {
+            if entries.len() >= max_entries {
+                return;
+            }
+            let chunk_end =
+                chunk_offset + bounded_prefix(&line[chunk_offset..], MAX_IME_RECORD_BYTES);
+            let chunk = &line[chunk_offset..chunk_end];
             entries.push(ParsedImeRecord {
                 line: ImeLine {
                     line_number: line_number_for_offset(line_starts, base_offset + local_offset),
                     timestamp: None,
                     timestamp_utc: None,
-                    message: line.to_string(),
+                    message: chunk.to_string(),
                     component: None,
                     thread: None,
                     timezone_offset: None,
@@ -748,6 +854,7 @@ fn push_unmatched_segment(
                 is_fragment: true,
             });
             *parse_errors += 1;
+            chunk_offset = chunk_end;
         }
         local_offset += piece.len();
     }
@@ -761,11 +868,18 @@ fn parse_fallback_lines(content: &str, max_entries: usize) -> ParsedImeChunk {
             break;
         }
         let trimmed = line.trim();
-        if trimmed.is_empty() {
+        if trimmed.is_empty() && line.len() < MAX_IME_RECORD_BYTES {
             continue;
         }
 
-        if let Some(caps) = simple_ts_re().captures(trimmed) {
+        if line.len() >= MAX_IME_RECORD_BYTES {
+            let mut errors = 0;
+            push_unmatched_segment(line, 0, &[0], &mut entries, &mut errors, max_entries);
+            // All bounded fragments still belong to this physical source line.
+            for entry in entries.iter_mut().rev().take(errors as usize) {
+                entry.line.line_number = (index + 1) as u32;
+            }
+        } else if let Some(caps) = simple_ts_re().captures(trimmed) {
             let timestamp = caps.name("ts").map(|value| value.as_str().to_string());
             let timestamp_utc = timestamp.as_deref().and_then(parse_fallback_timestamp_utc);
             let message = caps
@@ -935,6 +1049,84 @@ mod tests {
                 Some("04-07-2026 23:42:01.257")
             );
         }
+    }
+
+    #[test]
+    fn oversized_complete_record_remains_bounded_raw_evidence() {
+        let giant = format!(
+            "<![LOG[{}]LOG]!><time=\"23:42:01.253\" date=\"4-7-2026\" component=\"AgentExecutor\">",
+            "界".repeat(MAX_IME_RECORD_BYTES)
+        );
+        let intact = r#"<![LOG[Recovered]LOG]!><time="23:42:01.257" date="4-7-2026" component="AgentExecutor">"#;
+        let content = format!("{giant}{intact}\n");
+        let (entries, errors) = parse_ime_entries(&content, "AgentExecutor.log");
+        assert_eq!(errors as usize, entries.len() - 1);
+        assert_eq!(entries.last().unwrap().message, "Recovered");
+        let raw: String = entries[..entries.len() - 1]
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(raw, giant);
+        assert!(entries[..entries.len() - 1]
+            .iter()
+            .all(|entry| entry.message.len() <= MAX_IME_RECORD_BYTES && entry.tags.is_some()));
+    }
+
+    #[test]
+    fn pending_bound_also_flushes_unmatched_prefix_before_incomplete_opener() {
+        let prefix = "x".repeat(MAX_IME_RECORD_BYTES * 2);
+        let suffix = "<![LOG[unfinished";
+        let text = format!("{prefix}{suffix}");
+        let cutoff = complete_ime_prefix_len(&text);
+        assert!(text.len() - cutoff <= MAX_IME_RECORD_BYTES);
+        assert_eq!(&text[cutoff..], suffix);
+        let (published, _) = parse_ime_entries(&text[..cutoff], "AgentExecutor.log");
+        let raw: String = published
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(raw, prefix);
+        assert_eq!(format!("{raw}{}", &text[cutoff..]), text);
+    }
+
+    #[test]
+    fn bounded_raw_chunks_preserve_whitespace_payloads_and_utf8() {
+        for payload in [
+            " ".repeat(MAX_IME_RECORD_BYTES * 2),
+            "界".repeat(MAX_IME_RECORD_BYTES),
+        ] {
+            let text = format!("<![LOG[{payload}");
+            let (entries, errors) = parse_ime_entries(&text, "AgentExecutor.log");
+            assert_eq!(errors as usize, entries.len());
+            assert!(entries
+                .iter()
+                .all(|entry| entry.message.len() <= MAX_IME_RECORD_BYTES));
+            assert_eq!(
+                entries
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect::<String>(),
+                text
+            );
+            let cutoff = complete_ime_prefix_len(&text);
+            assert!(text.len() - cutoff < MAX_IME_RECORD_BYTES);
+        }
+    }
+
+    #[test]
+    fn unterminated_quoted_attribute_recovers_the_following_record() {
+        let partial = r#"<![LOG[Interrupted]LOG]!><time="23:42:01.2534753" date="4-7-2026" component="unfinished"#;
+        let intact = r#"<![LOG[Recovered]LOG]!><time="23:42:01.2570860" date="4-7-2026" component="AgentExecutor" context="literal <![LOG[example]LOG]!><> tail" type="1" thread="7" file="">"#;
+        let content = format!("{partial}{intact}\n");
+        let (entries, errors) = parse_ime_entries(&content, "AgentExecutor.log");
+        assert_eq!(errors, 1);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].message, partial);
+        assert_eq!(entries[0].format, LogFormat::Plain);
+        assert_eq!(entries[1].message, "Recovered");
+        assert_eq!(entries[1].component.as_deref(), Some("AgentExecutor"));
+        assert_eq!(entries[1].thread, Some(7));
+        assert_eq!(complete_ime_prefix_len(&content), content.len());
     }
 
     #[test]

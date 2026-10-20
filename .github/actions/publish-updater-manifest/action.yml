@@ -32,11 +32,33 @@ runs:
       run: |
         set -euo pipefail
 
+        # The tag endpoint excludes drafts. Enumerate every page, reject an
+        # ambiguous tag, then bind all polling to that immutable release ID.
+        gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > release-pages.json
+        release_id="$(jq -er --arg tag "$TAG_NAME" '
+          [.[][] | select(.tag_name == $tag)] |
+          if length == 1 and (.[0].id | type == "number" and . > 0 and floor == .)
+          then .[0].id else error("Expected exactly one release ID for tag") end
+        ' release-pages.json)"
+        release_created_at=""
+
         # Both independent builders may still be uploading. Wait at most 40
         # minutes without publishing any partial updater manifest. API errors
         # and malformed identity fail immediately; only missing assets retry.
         for attempt in $(seq 1 40); do
-          gh api "repos/$GH_REPO/releases/tags/$TAG_NAME" --jq '.assets' > release-assets.json
+          gh api "repos/$GH_REPO/releases/$release_id" > release-state.json
+          jq -e --arg tag "$TAG_NAME" --argjson id "$release_id" '
+            .id == $id and .tag_name == $tag and .prerelease == false and
+            (.draft | type == "boolean") and (.assets | type == "array") and
+            (.created_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+          ' release-state.json > /dev/null
+          created_at="$(jq -r '.created_at' release-state.json)"
+          if [ -n "$release_created_at" ] && [ "$release_created_at" != "$created_at" ]; then
+            echo "::error::Release creation identity changed."
+            exit 1
+          fi
+          release_created_at="$created_at"
+          jq '.assets' release-state.json > release-assets.json
           ready=0
           RELEASE_ASSETS=release-assets.json node .github/scripts/updater-manifest.mjs --check-assets || ready=$?
           if [ "$ready" -eq 0 ]; then break; fi
@@ -49,8 +71,8 @@ runs:
 
         mkdir signatures
         gh release download "$TAG_NAME" --pattern '*.sig' --dir signatures
-        # Use the immutable release creation date across both publishers.
-        gh api "repos/$GH_REPO/releases/tags/$TAG_NAME" --jq '{version: .tag_name, pub_date: .created_at}' > release-date.json
+        # Use assets and creation date from the very same validated snapshot.
+        jq '{version: .tag_name, pub_date: .created_at}' release-state.json > release-date.json
         RELEASE_ASSETS=release-assets.json PUBLISHED_MANIFEST=release-date.json \
           node .github/scripts/updater-manifest.mjs
         gh release upload "$TAG_NAME" latest.json --clobber

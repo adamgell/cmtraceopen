@@ -26,6 +26,43 @@ struct ArtifactDescriptor<'a> {
     notes: &'a str,
 }
 
+#[derive(Default)]
+struct CaptureTally {
+    failed: usize,
+    changed_count: usize,
+    growth_count: usize,
+    changed_sources: Vec<String>,
+}
+
+impl CaptureTally {
+    fn record(&mut self, file_name: &std::ffi::OsStr, capture: &FileCapture) {
+        if capture.inconsistent {
+            self.failed += 1;
+            self.changed_count += 1;
+            self.growth_count += usize::from(capture.growth_observed);
+            if self.changed_sources.len() < 8 {
+                self.changed_sources
+                    .push(file_name.to_string_lossy().chars().take(128).collect());
+            }
+        }
+    }
+
+    fn failure_reason(&self, copied: usize) -> String {
+        let mut reason = format!("{copied} captured, {} copy or source-consistency failures; copy limited to initial opened length, captured files retained without repair", self.failed);
+        if self.changed_count > 0 {
+            reason.push_str(&format!(
+                "; {} changed or unverified sources (first 8 filenames): {}",
+                self.changed_count,
+                self.changed_sources.join(", ")
+            ));
+        }
+        if self.growth_count > 0 {
+            reason.push_str(&format!("; growth beyond initial opened length observed in {} sources; copy limited to initial extent, raw prefixes retained", self.growth_count));
+        }
+        reason
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Logs: glob-expand source_pattern, copy matching files
 // ---------------------------------------------------------------------------
@@ -66,10 +103,7 @@ fn collect_logs_with_copy(
         };
 
         let mut files = Vec::new();
-        let mut failed = 0usize;
-        let mut changed_sources = Vec::new();
-        let mut changed_count = 0usize;
-        let mut growth_count = 0usize;
+        let mut tally = CaptureTally::default();
         let mut any_match = false;
         for entry in entries.flatten() {
             if entry.is_file() {
@@ -78,20 +112,18 @@ fn collect_logs_with_copy(
                 let dest_path = dest_dir.join(file_name);
                 match copy_file(ctx, &entry, &dest_path) {
                     Ok(capture) => {
-                        failed += usize::from(capture.inconsistent);
-                        if capture.inconsistent {
-                            changed_count += 1;
-                            growth_count += usize::from(capture.growth_observed);
-                            if changed_sources.len() < 8 {
-                                changed_sources.push(file_name.to_string_lossy().chars().take(128).collect::<String>());
-                            }
-                        }
-                        match collected_file(ctx, Some(entry.to_string_lossy().into_owned()), &dest_path, capture.bytes_copied) {
+                        tally.record(file_name, &capture);
+                        match collected_file(
+                            ctx,
+                            Some(entry.to_string_lossy().into_owned()),
+                            &dest_path,
+                            capture.bytes_copied,
+                        ) {
                             Ok(file) => files.push(file),
-                            Err(_) => failed += 1,
+                            Err(_) => tally.failed += 1,
                         }
-                    },
-                    Err(_) => failed += 1,
+                    }
+                    Err(_) => tally.failed += 1,
                 }
             }
         }
@@ -104,7 +136,7 @@ fn collect_logs_with_copy(
                 Vec::new(),
                 Some(format!("no files matched: {pattern}")),
             );
-        } else if failed == 0 {
+        } else if tally.failed == 0 {
             let copied = files.len();
             push_result(
                 ctx,
@@ -115,13 +147,7 @@ fn collect_logs_with_copy(
             );
         } else {
             let copied = files.len();
-            let mut reason = format!("{copied} captured, {failed} copy or source-consistency failures; copy limited to initial opened length, captured files retained without repair");
-            if changed_count > 0 {
-                reason.push_str(&format!("; {changed_count} changed or unverified sources (first 8 filenames): {}", changed_sources.join(", ")));
-            }
-            if growth_count > 0 {
-                reason.push_str(&format!("; growth beyond initial opened length observed in {growth_count} sources; copy limited to initial extent, raw prefixes retained"));
-            }
+            let reason = tally.failure_reason(copied);
             push_result(ctx, artifact, ArtifactStatus::Failed, files, Some(reason));
         }
 
@@ -247,6 +273,14 @@ pub fn export_registry_keys(items: &[RegistryCollectionItem], ctx: &CollectorCon
 // ---------------------------------------------------------------------------
 
 pub fn copy_event_logs(items: &[EventLogCollectionItem], ctx: &CollectorContext) {
+    copy_event_logs_with_copy(items, ctx, secure_copy_file);
+}
+
+fn copy_event_logs_with_copy(
+    items: &[EventLogCollectionItem],
+    ctx: &CollectorContext,
+    copy_file: impl Fn(&CollectorContext, &Path, &Path) -> Result<FileCapture, String> + Sync,
+) {
     items.par_iter().for_each(|item| {
         let artifact = ArtifactDescriptor {
             id: &item.id,
@@ -274,16 +308,16 @@ pub fn copy_event_logs(items: &[EventLogCollectionItem], ctx: &CollectorContext)
         };
 
         let mut files = Vec::new();
-        let mut failed = 0usize;
+        let mut tally = CaptureTally::default();
         let mut any_match = false;
         for entry in entries.flatten() {
             if entry.is_file() {
                 any_match = true;
                 let file_name = entry.file_name().unwrap_or_default();
                 let dest_path = dest_dir.join(file_name);
-                match secure_copy_file(ctx, &entry, &dest_path) {
+                match copy_file(ctx, &entry, &dest_path) {
                     Ok(capture) => {
-                        failed += usize::from(capture.inconsistent);
+                        tally.record(file_name, &capture);
                         match collected_file(
                             ctx,
                             Some(entry.to_string_lossy().into_owned()),
@@ -291,10 +325,10 @@ pub fn copy_event_logs(items: &[EventLogCollectionItem], ctx: &CollectorContext)
                             capture.bytes_copied,
                         ) {
                             Ok(file) => files.push(file),
-                            Err(_) => failed += 1,
+                            Err(_) => tally.failed += 1,
                         }
                     }
-                    Err(_) => failed += 1,
+                    Err(_) => tally.failed += 1,
                 }
             }
         }
@@ -307,7 +341,7 @@ pub fn copy_event_logs(items: &[EventLogCollectionItem], ctx: &CollectorContext)
                 Vec::new(),
                 Some(format!("no files matched: {pattern}")),
             );
-        } else if failed == 0 {
+        } else if tally.failed == 0 {
             let copied = files.len();
             push_result(
                 ctx,
@@ -323,9 +357,7 @@ pub fn copy_event_logs(items: &[EventLogCollectionItem], ctx: &CollectorContext)
                 artifact,
                 ArtifactStatus::Failed,
                 files,
-                Some(format!(
-                    "{copied} captured, {failed} copy or source-consistency failures; copy limited to initial opened length, captured files retained without repair"
-                )),
+                Some(tally.failure_reason(copied)),
             );
         }
 
@@ -338,6 +370,14 @@ pub fn copy_event_logs(items: &[EventLogCollectionItem], ctx: &CollectorContext)
 // ---------------------------------------------------------------------------
 
 pub fn copy_exports(items: &[FileExportItem], ctx: &CollectorContext) {
+    copy_exports_with_copy(items, ctx, secure_copy_file);
+}
+
+fn copy_exports_with_copy(
+    items: &[FileExportItem],
+    ctx: &CollectorContext,
+    copy_file: impl Fn(&CollectorContext, &Path, &Path) -> Result<FileCapture, String> + Sync,
+) {
     items.par_iter().for_each(|item| {
         let artifact = ArtifactDescriptor {
             id: &item.id,
@@ -366,22 +406,27 @@ pub fn copy_exports(items: &[FileExportItem], ctx: &CollectorContext) {
                 }
             };
             let mut files = Vec::new();
-            let mut failed = 0usize;
+            let mut tally = CaptureTally::default();
             let mut any_match = false;
             for entry in entries.flatten() {
                 if entry.is_file() {
                     any_match = true;
                     let file_name = entry.file_name().unwrap_or_default();
                     let dest_path = dest_dir.join(file_name);
-                    match secure_copy_file(ctx, &entry, &dest_path) {
+                    match copy_file(ctx, &entry, &dest_path) {
                         Ok(capture) => {
-                        failed += usize::from(capture.inconsistent);
-                        match collected_file(ctx, Some(entry.to_string_lossy().into_owned()), &dest_path, capture.bytes_copied) {
-                            Ok(file) => files.push(file),
-                            Err(_) => failed += 1,
+                            tally.record(file_name, &capture);
+                            match collected_file(
+                                ctx,
+                                Some(entry.to_string_lossy().into_owned()),
+                                &dest_path,
+                                capture.bytes_copied,
+                            ) {
+                                Ok(file) => files.push(file),
+                                Err(_) => tally.failed += 1,
+                            }
                         }
-                    },
-                        Err(_) => failed += 1,
+                        Err(_) => tally.failed += 1,
                     }
                 }
             }
@@ -393,7 +438,7 @@ pub fn copy_exports(items: &[FileExportItem], ctx: &CollectorContext) {
                     Vec::new(),
                     Some(format!("no files matched: {source}")),
                 );
-            } else if failed == 0 {
+            } else if tally.failed == 0 {
                 let copied = files.len();
                 push_result(
                     ctx,
@@ -409,7 +454,7 @@ pub fn copy_exports(items: &[FileExportItem], ctx: &CollectorContext) {
                     artifact,
                     ArtifactStatus::Failed,
                     files,
-                    Some(format!("{copied} captured, {failed} copy or source-consistency failures; copy limited to initial opened length, captured files retained without repair")),
+                    Some(tally.failure_reason(copied)),
                 );
             }
         } else {
@@ -1030,6 +1075,100 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn event_and_wildcard_captures_retain_growth_details_and_raw_prefixes() {
+        for event_logs in [true, false] {
+            let root = create_temp_dir("collector-shared-tally");
+            let evidence = root.join("evidence");
+            let source = root.join("growing.evtx");
+            fs::write(&source, b"raw prefix").unwrap();
+            fs::write(root.join("failed.evtx"), b"unreadable fixture").unwrap();
+            let results = Arc::new(Mutex::new(Vec::new()));
+            let context = collector_context(evidence.clone(), Arc::clone(&results));
+            let pattern = root.join("*.evtx").to_string_lossy().into_owned();
+            let copy = |ctx: &CollectorContext, path: &Path, destination: &Path| {
+                if path.file_name().unwrap() == "failed.evtx" {
+                    return Err("synthetic copy failure".to_owned());
+                }
+                let mut appended = false;
+                super::secure_copy_file_with_observer(ctx, path, destination, |read| {
+                    if read > 0 && !appended {
+                        fs::write(path, b"raw prefix plus later bytes").unwrap();
+                        appended = true;
+                    }
+                })
+            };
+            if event_logs {
+                super::copy_event_logs_with_copy(
+                    &[super::EventLogCollectionItem {
+                        id: "event".into(),
+                        family: "synthetic".into(),
+                        parse_hints: vec![],
+                        source_pattern: pattern,
+                        destination_folder: "captured".into(),
+                        notes: String::new(),
+                    }],
+                    &context,
+                    copy,
+                );
+            } else {
+                super::copy_exports_with_copy(
+                    &[super::FileExportItem {
+                        id: "export".into(),
+                        family: "synthetic".into(),
+                        parse_hints: vec![],
+                        source_path: pattern,
+                        destination_folder: "captured".into(),
+                        file_name: None,
+                        notes: String::new(),
+                    }],
+                    &context,
+                    copy,
+                );
+            }
+            let results = results.lock().unwrap();
+            assert!(matches!(results[0].status, ArtifactStatus::Failed));
+            assert_eq!(results[0].files.len(), 1);
+            assert_eq!(results[0].files[0].bytes_copied, 10);
+            let reason = results[0].error.as_deref().unwrap();
+            assert!(reason.contains("1 captured, 2 copy or source-consistency failures"));
+            assert!(reason.contains("1 changed or unverified sources"));
+            assert!(reason.contains("growing.evtx"));
+            assert!(reason.contains("growth beyond initial opened length observed in 1 sources"));
+            assert_eq!(
+                fs::read(evidence.join("captured/growing.evtx")).unwrap(),
+                b"raw prefix"
+            );
+            assert_eq!(fs::read(&source).unwrap(), b"raw prefix plus later bytes");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn capture_tally_bounds_detail_without_losing_failure_or_growth_counts() {
+        let mut tally = super::CaptureTally::default();
+        for index in 0..12 {
+            let name = format!("{index}-{}", "界".repeat(200));
+            tally.record(
+                std::ffi::OsStr::new(&name),
+                &super::FileCapture {
+                    bytes_copied: 3,
+                    inconsistent: true,
+                    growth_observed: index % 2 == 0,
+                },
+            );
+        }
+        assert_eq!(tally.failed, 12);
+        assert_eq!(tally.changed_count, 12);
+        assert_eq!(tally.growth_count, 6);
+        assert_eq!(tally.changed_sources.len(), 8);
+        assert!(tally
+            .changed_sources
+            .iter()
+            .all(|name| name.chars().count() == 128));
+        assert!(tally.failure_reason(12).contains("observed in 6 sources"));
+    }
 
     #[test]
     fn log_collection_preserves_partial_records_encoding_and_newlines() {

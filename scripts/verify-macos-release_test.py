@@ -7,6 +7,8 @@ import shutil
 import tarfile
 import tempfile
 import unittest
+import os
+import subprocess
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).with_name('verify-macos-release.py')
@@ -82,5 +84,66 @@ class MacTrustTests(unittest.TestCase):
         with tarfile.open(self.archive, 'w:gz') as tar:
             entry = tarfile.TarInfo('../escape'); entry.size = 1; tar.addfile(entry, io.BytesIO(b'x'))
         with self.assertRaises(ValueError): self.verify()
+
+class DmgNotaryStepTests(unittest.TestCase):
+    def run_step(self, mode='accepted'):
+        workflow = (SCRIPT.parents[1] / '.github/workflows/cmtrace-release.yml').read_text()
+        marker = '      - name: Notarize and staple final macOS DMG\n'
+        self.assertIn(marker, workflow, 'Producer must notarize the DMG before strict trust verification')
+        self.assertLess(workflow.index(marker), workflow.index('      - name: Verify macOS release trust'))
+        block = workflow.split(marker)[1].split('\n      - name:')[0]
+        code = block.split("          python3 - <<'PY'\n")[1].split('\n          PY')[0]
+        code = '\n'.join(line[10:] for line in code.splitlines())
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name); dmg = root / 'bundle/dmg/test.dmg'
+        dmg.parent.mkdir(parents=True); dmg.write_bytes(b'signed unstapled DMG')
+        receipts = root / 'receipts'
+        calls = []
+        sid = '11111111-2222-3333-4444-555555555555'
+        def command(args, **kwargs):
+            self.assertFalse({'APPLE_ID','APPLE_PASSWORD','APPLE_TEAM_ID','GH_TOKEN','GITHUB_TOKEN'} & kwargs['env'].keys())
+            calls.append(args[:])
+            if args[:3] == ['xcrun','notarytool','submit']:
+                if mode == 'submit-timeout': raise subprocess.TimeoutExpired(args,120)
+                return subprocess.CompletedProcess(args,0,json.dumps({'id':sid}), '')
+            if args[:3] == ['xcrun','notarytool','wait']:
+                self.assertTrue((receipts/'submission.json').is_file(), 'Submission must be durable before wait')
+                return subprocess.CompletedProcess(args,0,json.dumps({'id':sid,'status':'Invalid' if mode=='rejected' else 'Accepted'}), '')
+            if args[:3] == ['xcrun','stapler','staple']: dmg.write_bytes(b'signed stapled DMG')
+            return subprocess.CompletedProcess(args,0,'', 'TeamIdentifier=CRHL85PH9Y\n')
+        env = {'BUNDLE_ROOT':str(root/'bundle'), 'NOTARY_RECEIPTS':str(receipts),
+               'APPLE_ID':'fixture-user','APPLE_PASSWORD':'fixture-password','APPLE_TEAM_ID':'CRHL85PH9Y',
+               'GITHUB_RUN_ATTEMPT':'2' if mode=='rerun' else '1','GITHUB_RUN_ID':'123'}
+        with patch.dict(os.environ,env,clear=True), patch.object(subprocess,'run',side_effect=command):
+            if mode == 'accepted': exec(compile(code,'<producer-notarization>','exec'),{})
+            else:
+                with self.assertRaises(SystemExit): exec(compile(code,'<producer-notarization>','exec'),{})
+        return receipts, calls
+
+    def test_producer_records_submission_before_wait_and_staples_accepted_dmg(self):
+        receipts,calls=self.run_step()
+        result=json.loads((receipts/'result.json').read_text())
+        self.assertEqual(result['status'],'PASS')
+        self.assertNotEqual(result['submittedSha256'],result['stapledSha256'])
+        self.assertEqual(len([c for c in calls if c[:3]==['xcrun','notarytool','submit']]),1)
+        self.assertTrue(any(c[:3]==['xcrun','stapler','validate'] for c in calls))
+        self.assertNotIn('fixture-password',''.join(p.read_text() for p in receipts.glob('*.json')))
+
+    def test_submission_timeout_retains_intent_and_never_retries(self):
+        receipts,calls=self.run_step('submit-timeout')
+        self.assertTrue((receipts/'submission-intent.json').is_file())
+        self.assertFalse((receipts/'submission.json').exists())
+        self.assertEqual(len([c for c in calls if c[:3]==['xcrun','notarytool','submit']]),1)
+        self.assertFalse(any(c[:2]==['xcrun','stapler'] for c in calls))
+
+    def test_rejected_submission_never_staples_or_reports_pass(self):
+        receipts,calls=self.run_step('rejected')
+        self.assertEqual(json.loads((receipts/'result.json').read_text())['status'],'FAIL')
+        self.assertFalse(any(c[:2]==['xcrun','stapler'] for c in calls))
+
+    def test_rerun_cannot_submit_a_second_time(self):
+        receipts,calls=self.run_step('rerun')
+        self.assertEqual(calls,[])
+        self.assertFalse((receipts/'submission-intent.json').exists())
 
 if __name__ == '__main__': unittest.main()

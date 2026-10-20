@@ -365,7 +365,9 @@ Describe 'Tauri bundling-time signing hook' {
         foreach ($name in $hookSettings) { [Environment]::SetEnvironmentVariable($name, 'offline-fixture') }
         $hookFile = Join-Path $TestDrive ('payload ' + [guid]::NewGuid() + '.exe')
         Set-Content -LiteralPath $hookFile -Value 'offline unsigned fixture'
-        Mock Import-Module { }
+        Mock Import-VerifiedArtifactSigning {
+            [pscustomobject]@{ ExportedCommands = @{ 'Invoke-ArtifactSigning' = (Get-Command Invoke-ArtifactSigning) } }
+        }
         Mock Invoke-ArtifactSigning { }
         Mock Get-AuthenticodeSignature { [pscustomobject]@{ Status = 'Valid' } }
     }
@@ -374,7 +376,7 @@ Describe 'Tauri bundling-time signing hook' {
     }
     It 'signs only the bundler-supplied file with the existing pinned module and environment credential' {
         Invoke-TauriWindowsSigning -LiteralPath $hookFile
-        Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter { $Name -eq 'ArtifactSigning' -and $RequiredVersion -eq '0.1.8' }
+        Should -Invoke Import-VerifiedArtifactSigning -Times 1 -Exactly
         Should -Invoke Invoke-ArtifactSigning -Times 1 -Exactly -ParameterFilter {
             $Files -eq $hookFile -and $FileDigest -eq 'SHA256' -and $TimestampDigest -eq 'SHA256' -and
             $TimestampRfc3161 -eq 'http://timestamp.acs.microsoft.com' -and $Timeout -eq 300 -and
@@ -399,8 +401,61 @@ Describe 'Tauri bundling-time signing hook' {
         Mock Get-AuthenticodeSignature { [pscustomobject]@{ Status = 'NotSigned' } }
         { Invoke-TauriWindowsSigning -LiteralPath $hookFile } | Should -Throw '*valid Authenticode*'
     }
+    It 'detaches a real hardlinked payload before signing without changing its other alias' {
+        $alias = Join-Path $TestDrive ('cargo-deps-' + [guid]::NewGuid() + '.exe')
+        New-Item -ItemType HardLink -Path $alias -Target $hookFile | Out-Null
+        (Get-Item -LiteralPath $hookFile).LinkType | Should -Be 'HardLink'
+        Mock Invoke-ArtifactSigning { param($Files) Set-Content -LiteralPath $Files -Value 'signed fixture' }
+        Invoke-TauriWindowsSigning -LiteralPath $hookFile
+        (Get-Content -LiteralPath $alias -Raw).Trim() | Should -Be 'offline unsigned fixture'
+        (Get-Content -LiteralPath $hookFile -Raw).Trim() | Should -Be 'signed fixture'
+        (Get-Item -LiteralPath $hookFile).LinkType | Should -BeNullOrEmpty
+    }
+    It 'rejects a symbolic-link payload before importing the signing provider' {
+        $link = Join-Path $TestDrive ('symlink-' + [guid]::NewGuid() + '.exe')
+        New-Item -ItemType SymbolicLink -Path $link -Target $hookFile | Out-Null
+        { Invoke-TauriWindowsSigning -LiteralPath $link } | Should -Throw '*regular EXE or DLL*'
+        Should -Invoke Import-VerifiedArtifactSigning -Times 0
+        Should -Invoke Invoke-ArtifactSigning -Times 0
+    }
     It 'rejects a directory and does not sign files recursively' {
         { Invoke-TauriWindowsSigning -LiteralPath $TestDrive } | Should -Throw '*regular EXE or DLL*'
         Should -Invoke Invoke-ArtifactSigning -Times 0
+    }
+}
+
+Describe 'ArtifactSigning package verification before import' {
+    BeforeAll { . (Join-Path $PSScriptRoot 'sign-tauri-windows.ps1') }
+    BeforeEach {
+        $previousRunnerTemp = $env:RUNNER_TEMP
+        $env:RUNNER_TEMP = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        [void][IO.Directory]::CreateDirectory($env:RUNNER_TEMP)
+        $package = Join-Path $env:RUNNER_TEMP 'cmtrace-artifact-signing-0.1.8.nupkg'
+        Mock Import-Module { throw 'unverified import reached' }
+    }
+    AfterEach { $env:RUNNER_TEMP = $previousRunnerTemp }
+    It 'rejects tampered bytes before importing any module' {
+        [IO.File]::WriteAllText($package, 'tampered package')
+        { Import-VerifiedArtifactSigning } | Should -Throw '*SHA256 verification failed*'
+        Should -Invoke Import-Module -Times 0
+    }
+    It 'rejects a missing package before importing any module' {
+        { Import-VerifiedArtifactSigning } | Should -Throw
+        Should -Invoke Import-Module -Times 0
+    }
+    It 'imports only the explicit manifest extracted from verified bytes' {
+        $source = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        [void][IO.Directory]::CreateDirectory($source)
+        Set-Content -LiteralPath (Join-Path $source 'ArtifactSigning.psd1') -Value "@{ ModuleVersion = '0.1.8' }"
+        [IO.Compression.ZipFile]::CreateFromDirectory($source, $package)
+        Mock Get-FileHash { [pscustomobject]@{ Hash = '3221344b8c627915d3870f23e80816f31a5d8c2bae1d7c0cdd6c9652f6c4e089' } }
+        Mock Import-Module { [pscustomobject]@{ ExportedCommands = @{ 'Invoke-ArtifactSigning' = 'verified-command' } } }
+        $module = Import-VerifiedArtifactSigning
+        $module.ExportedCommands['Invoke-ArtifactSigning'] | Should -Be 'verified-command'
+        Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter {
+            [IO.Path]::IsPathFullyQualified($Name) -and
+            $Name.StartsWith((Join-Path $env:RUNNER_TEMP 'cmtrace-artifact-signing-')) -and
+            $Name.EndsWith('ArtifactSigning.psd1') -and $RequiredVersion -eq '0.1.8' -and $Force -and $PassThru
+        }
     }
 }

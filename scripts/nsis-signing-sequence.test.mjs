@@ -16,6 +16,9 @@ test('NSIS payload signing occurs during bundling after credential-free compilat
   assert.match(compile, /app:build:release .* --no-bundle/);
   assert.doesNotMatch(compile, /env:|AZURE_|SIGNING_/);
   assert.match(bundle, /signCommand/);
+  assert.match(bundle, /\$powerShell = \(Get-Process -Id \$PID\)\.Path/);
+  assert.match(bundle, /cmd = \$powerShell/);
+  assert.match(bundle, /IsPathFullyQualified\(\$powerShell\)/);
   assert.match(bundle, /sign-tauri-windows\.ps1/);
   assert.match(bundle, /args = @\('-NoLogo', '-NoProfile', '-NonInteractive', '-File', \$hook, '%1'\)/);
   assert.match(bundle, /node scripts\/tauri\.mjs bundle .* --bundles nsis --config \$configPath/);
@@ -29,9 +32,22 @@ test('NSIS payload signing occurs during bundling after credential-free compilat
 });
 
 test('bundler hook uses the existing action module version and credential names', () => {
-  assert.match(step('Install existing Artifact Signing module for bundler hook'),
-    /Install-Module -Name ArtifactSigning -RequiredVersion 0\.1\.8 -Force -Repository PSGallery/);
+  const download = step('Download pinned Artifact Signing package for bundler hook');
+  const digest = '3221344b8c627915d3870f23e80816f31a5d8c2bae1d7c0cdd6c9652f6c4e089';
+  assert.match(download, /https:\/\/www\.powershellgallery\.com\/api\/v2\/package\/ArtifactSigning\/0\.1\.8/);
+  assert.ok(download.includes(digest));
+  assert.match(download, /Get-FileHash -LiteralPath \$package -Algorithm SHA256/);
+  assert.doesNotMatch(download, /secrets\.|Import-Module|Install-Module/);
+  const hook = readFileSync(new URL('sign-tauri-windows.ps1', import.meta.url), 'utf8');
+  assert.ok(hook.includes(digest));
+  assert.match(hook, /Get-FileHash -InputStream \$stream -Algorithm SHA256/);
+  assert.match(hook, /Import-Module -Name \$manifest -RequiredVersion 0\.1\.8 -Force -PassThru/);
+  assert.match(hook, /& \$module\.ExportedCommands\['Invoke-ArtifactSigning'\]/);
+  assert.doesNotMatch(hook, /Import-Module ArtifactSigning|Install-Module/);
+  assert.ok(hook.indexOf('Get-FileHash') < hook.indexOf('ExtractToDirectory'));
+  assert.ok(hook.indexOf('ExtractToDirectory') < hook.indexOf('Import-Module'));
   const bundle = step('Bundle NSIS with signed application payload');
+  assert.ok(steps.indexOf(download) < steps.indexOf(bundle));
   for (const name of ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET',
     'SIGNING_ENDPOINT', 'SIGNING_ACCOUNT_NAME', 'SIGNING_PROFILE_NAME']) {
     assert.ok(bundle.includes(`secrets.${name}`));

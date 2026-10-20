@@ -550,7 +550,18 @@ impl TailReader {
         let (mut entries, parse_errors) =
             parser::parse_lines_with_selection(&lines, &path_str, &self.parser_selection);
 
-        let physical_line_count = u32::try_from(lines.len()).unwrap_or(u32::MAX);
+        let physical_lines = if matches!(
+            self.parser_selection.specialization,
+            Some(ParserSpecialization::Ime)
+        ) {
+            full_text[..full_text.len() - self.pending_fragment.len()]
+                .bytes()
+                .filter(|byte| *byte == b'\n')
+                .count()
+        } else {
+            lines.len()
+        };
+        let physical_line_count = u32::try_from(physical_lines).unwrap_or(u32::MAX);
         self.assign_physical_entry_identity(&mut entries, physical_line_count);
         batch.append(TailBatch {
             entries,
@@ -2503,35 +2514,106 @@ mod tests {
     }
 
     #[test]
+    fn ime_unterminated_record_is_bounded_without_losing_raw_bytes_or_next_record() {
+        for completion in ["", "\">"] {
+            let root = hinted_test_root("ime-pending-bound");
+            let path = hinted_test_path(
+                &root,
+                "ProgramData/Microsoft/IntuneManagementExtension/Logs/AgentExecutor.log",
+            );
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let initial = concat!(
+                "<![LOG[Initial]LOG]!><time=\"11:16:37.309\" date=\"3-12-2026\" ",
+                "component=\"AgentExecutor\" type=\"1\" thread=\"7\">\n"
+            );
+            fs::write(&path, initial).unwrap();
+            let (opened, selection) = parser::parse_file(&path.to_string_lossy()).unwrap();
+            let mut reader = TailReader::new(
+                path.clone(),
+                opened.byte_offset,
+                selection,
+                opened.entries.len() as u64,
+                opened.total_lines + 1,
+            );
+            let interrupted = format!(
+                "<![LOG[Interrupted]LOG]!><time=\"11:16:38.000\" date=\"3-12-2026\" component=\"{}{completion}",
+                "x".repeat(MAX_PENDING_LOGICAL_RECORD_BYTES + 31),
+            );
+            append_bytes(&path, interrupted.as_bytes());
+            let first = reader.read_new_entries().unwrap();
+            assert!(reader.pending_fragment.len() <= MAX_PENDING_LOGICAL_RECORD_BYTES);
+            assert!(!first.entries.is_empty());
+            assert!(first.parse_errors > 0);
+            assert!(first
+                .entries
+                .iter()
+                .all(|entry| entry.message.len() <= MAX_PENDING_LOGICAL_RECORD_BYTES));
+            let recovered = concat!(
+                "<![LOG[Recovered]LOG]!><time=\"11:16:39.000\" date=\"3-12-2026\" ",
+                "component=\"AgentExecutor\" type=\"1\" thread=\"8\">\n"
+            );
+            append_bytes(&path, recovered.as_bytes());
+            let second = reader.read_new_entries().unwrap();
+            let mut entries = first.entries;
+            entries.extend(second.entries);
+            assert!(reader.pending_fragment.is_empty());
+            let last = entries.last().unwrap();
+            assert_eq!(last.message, "Recovered");
+            assert_eq!(last.component.as_deref(), Some("AgentExecutor"));
+            assert_eq!(last.thread, Some(8));
+            assert_eq!(last.line_number, 2);
+            let raw: String = entries[..entries.len() - 1]
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect();
+            assert_eq!(raw, interrupted);
+            assert!(entries[..entries.len() - 1]
+                .iter()
+                .all(|entry| entry.tags.as_ref().is_some_and(|tags| tags
+                    .iter()
+                    .any(|tag| tag == "cmtrace:unparsed-ime-record"))));
+            let (full, _) = parser::parse_file(&path.to_string_lossy()).unwrap();
+            assert_eq!(full.entries.len(), entries.len() + 1);
+            for (actual, expected) in entries.iter().zip(&full.entries[1..]) {
+                assert_entries_match(actual, expected);
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
     fn interrupted_ime_attributes_wait_for_following_records_metadata() {
-        let partial =
-            r#"<![LOG[Interrupted]LOG]!><time="23:42:01.2534753" date="4-7-2026" component="#;
-        let intact = r#"<![LOG[Recovered]LOG]!><time="23:42:01.2570860" date="4-7-2026" component="AgentExecutor" context="" type="1" thread="7" file="">"#;
-        let content = format!("{partial}{intact}\n");
-        let expected = parser::ccm::logical::parse_ime_entries(&content, "AgentExecutor.log");
-        assert_eq!(expected.0.len(), 2);
-        // Every possible byte boundary, including just after the next message
-        // closer, must produce the same records as opening the complete file.
-        for split in 0..=content.len() {
-            let mut pending = String::new();
-            let lines = collect_complete_ime_lines(&content[..split], &mut pending);
-            let mut actual =
-                parser::ccm::logical::parse_ime_entries(&lines.join("\n"), "AgentExecutor.log");
-            let remainder = format!("{pending}{}", &content[split..]);
-            pending.clear();
-            let lines = collect_complete_ime_lines(&remainder, &mut pending);
-            let next =
-                parser::ccm::logical::parse_ime_entries(&lines.join("\n"), "AgentExecutor.log");
-            actual.0.extend(next.0);
-            actual.1 += next.1;
-            assert!(pending.is_empty(), "split={split}");
-            assert_eq!(actual.1, expected.1, "split={split}");
-            assert_eq!(actual.0.len(), expected.0.len(), "split={split}");
-            for (actual, expected) in actual.0.iter().zip(&expected.0) {
-                assert_eq!(actual.message, expected.message, "split={split}");
-                assert_eq!(actual.component, expected.component, "split={split}");
-                assert_eq!(actual.timestamp, expected.timestamp, "split={split}");
-                assert_eq!(actual.thread, expected.thread, "split={split}");
+        for partial in [
+            r#"<![LOG[Interrupted]LOG]!><time="23:42:01.2534753" date="4-7-2026" component="#,
+            r#"<![LOG[Interrupted]LOG]!><time="23:42:01.2534753" date="4-7-2026" component="unfinished"#,
+        ] {
+            let intact = r#"<![LOG[Recovered]LOG]!><time="23:42:01.2570860" date="4-7-2026" component="AgentExecutor" context="" type="1" thread="7" file="">"#;
+            let content = format!("{partial}{intact}\n");
+            let expected = parser::ccm::logical::parse_ime_entries(&content, "AgentExecutor.log");
+            assert_eq!(expected.0.len(), 2);
+            // Every possible byte boundary, including just after the next message
+            // closer, must produce the same records as opening the complete file.
+            for split in 0..=content.len() {
+                let mut pending = String::new();
+                let lines = collect_complete_ime_lines(&content[..split], &mut pending);
+                let mut actual =
+                    parser::ccm::logical::parse_ime_entries(&lines.join("\n"), "AgentExecutor.log");
+                let remainder = format!("{pending}{}", &content[split..]);
+                pending.clear();
+                let lines = collect_complete_ime_lines(&remainder, &mut pending);
+                let next =
+                    parser::ccm::logical::parse_ime_entries(&lines.join("\n"), "AgentExecutor.log");
+                actual.0.extend(next.0);
+                actual.1 += next.1;
+                assert!(pending.is_empty(), "split={split}");
+                assert_eq!(actual.1, expected.1, "split={split}");
+                assert_eq!(actual.0.len(), expected.0.len(), "split={split}");
+                for (actual, expected) in actual.0.iter().zip(&expected.0) {
+                    assert_eq!(actual.message, expected.message, "split={split}");
+                    assert_eq!(actual.component, expected.component, "split={split}");
+                    assert_eq!(actual.timestamp, expected.timestamp, "split={split}");
+                    assert_eq!(actual.thread, expected.thread, "split={split}");
+                }
             }
         }
     }

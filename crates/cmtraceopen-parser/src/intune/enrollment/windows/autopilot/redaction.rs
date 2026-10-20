@@ -84,13 +84,11 @@ const SENSITIVE_VALUE_KEYS: [&str; 12] = [
 /// nothing and cost cross-field equality.
 const VALUE_KIND: &str = "redacted";
 
-/// Shortest masked value that is scrubbed out of free text.
+/// Shortest display label that is scrubbed out of free text.
 ///
-/// Firmware routinely reports junk serials ("0", "N/A", "None"). A value that
-/// short cannot be told apart from an ordinary word or number once it sits
-/// unlabelled in narrative, so scrubbing it would mangle readable evidence
-/// without protecting anything. The floor stays below the seven characters of
-/// a Dell service tag, so real serials are still covered.
+/// A short label can also be ordinary prose, so labels keep a higher floor than
+/// values declared to be device identities. Known firmware serial placeholders
+/// are excluded separately; real serials retain the identity floor.
 const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
 
 /// The floor for a value the field itself declares to be an identity.
@@ -307,13 +305,8 @@ impl MaskedLiterals {
             if is_token(value) {
                 continue;
             }
-            // Firmware routinely reports junk serials ("0", "N/A", "None"). A
-            // value that short cannot be told apart from an ordinary word once
-            // it sits unlabelled in narrative, so scrubbing it would mangle
-            // readable evidence without protecting anything. The floor stays
-            // below the seven characters of a Dell service tag, so real serials
-            // are still covered. A field that declares an identity holds to the
-            // lower floor instead.
+            // Display labels retain the prose floor; explicitly classified
+            // identities, including real short serials, use the lower floor.
             if value.len() < floor {
                 continue;
             }
@@ -432,7 +425,8 @@ fn redact_source_text(value: &str, literals: &MaskedLiterals, rule: usize) -> St
 ///
 /// One walk, read by both [`collect_masked_literals`] and
 /// [`redacted_export_projection`], so a value cannot be masked as a typed field
-/// without its literal also being scrubbed out of free text.
+/// without its literal also being scrubbed out of free text, except for known
+/// firmware serial placeholders that carry no device identity.
 ///
 /// Named-data and conflict values are not on this walk because which of them is
 /// masked is decided by a key rather than by the field they sit in;
@@ -441,6 +435,8 @@ fn redact_source_text(value: &str, literals: &MaskedLiterals, rule: usize) -> St
 /** What a walked value is, which decides the floor its literal holds to. */
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MaskClass {
+    /// A serial may instead contain a documented firmware placeholder.
+    Serial,
     /// A field that states an identity: device, tenant, correlation key.
     Identity,
     /// A field that labels something rather than naming it.
@@ -452,8 +448,10 @@ fn for_each_masked_value_mut(
     mut visit: impl FnMut(&mut String, MaskClass),
 ) {
     let identity = &mut snapshot.identity;
+    if let Some(serial) = &mut identity.serial_number {
+        visit(serial, MaskClass::Serial);
+    }
     let fields = [
-        &mut identity.serial_number,
         &mut identity.hardware_hash,
         &mut identity.product_key_id,
         &mut identity.ztd_registration_id,
@@ -491,17 +489,29 @@ fn display_name_value_key(name: &str) -> bool {
     name.eq_ignore_ascii_case("profileName")
 }
 
+fn is_firmware_serial_placeholder(value: &str) -> bool {
+    ["0", "N/A", "None"]
+        .iter()
+        .any(|placeholder| value.trim().eq_ignore_ascii_case(placeholder))
+}
+
 fn collect_masked_literals(snapshot: &mut AutopilotSnapshot) -> MaskedLiterals {
     let mut identifiers = BTreeSet::new();
     let mut display_names = BTreeSet::new();
     for_each_masked_value_mut(snapshot, |value, class| {
         match class {
-            MaskClass::Identity => identifiers.insert(value.clone()),
+            MaskClass::Serial if is_firmware_serial_placeholder(value) => false,
+            MaskClass::Serial | MaskClass::Identity => identifiers.insert(value.clone()),
             MaskClass::DisplayName => display_names.insert(value.clone()),
         };
     });
     for observation in &snapshot.observations {
         for named in &observation.named_data {
+            if named.name.eq_ignore_ascii_case("serialNumber")
+                && is_firmware_serial_placeholder(&named.value)
+            {
+                continue;
+            }
             if display_name_value_key(&named.name) {
                 display_names.insert(named.value.clone());
             } else if sensitive_value_key(&named.name) {
@@ -512,6 +522,18 @@ fn collect_masked_literals(snapshot: &mut AutopilotSnapshot) -> MaskedLiterals {
     // A conflict is two identifiers disagreeing about the same device.
     for conflict in &snapshot.conflicts {
         for value in &conflict.values {
+            // Named-key conflicts identify their field in the stable reducer
+            // id; report-section conflicts identify it in the value prefix.
+            // Unknown conflict values remain identities, even if they happen
+            // to share a placeholder's spelling.
+            let serial_placeholder = (conflict.conflict_id == "conflicting-serial-number"
+                && is_firmware_serial_placeholder(value))
+                || value.split_once('=').is_some_and(|(name, raw)| {
+                    name.eq_ignore_ascii_case("serialNumber") && is_firmware_serial_placeholder(raw)
+                });
+            if serial_placeholder {
+                continue;
+            }
             identifiers.insert(masked_conflict_literal(value).to_owned());
         }
     }

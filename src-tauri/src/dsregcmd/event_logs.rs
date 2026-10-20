@@ -69,13 +69,7 @@ pub fn collect_dsregcmd_event_logs() -> Option<EventLogAnalysis> {
             .count(),
     )
     .unwrap_or(0);
-    let with_results = u32::try_from(
-        channel_results
-            .iter()
-            .filter(|r| matches!(r.status, EventLogLiveQueryStatus::Success))
-            .count(),
-    )
-    .unwrap_or(0);
+    let with_results = channels_with_results_count(&channel_results);
     let failed = u32::try_from(
         channel_results
             .iter()
@@ -99,6 +93,19 @@ pub fn collect_dsregcmd_event_logs() -> Option<EventLogAnalysis> {
         EventLogAnalysisSource::Live,
         live_query,
     )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn channels_with_results_count(
+    channels: &[crate::intune::apps::windows::ime::models::EventLogLiveQueryChannelResult],
+) -> u32 {
+    u32::try_from(
+        channels
+            .iter()
+            .filter(|channel| channel.entry_count > 0)
+            .count(),
+    )
+    .unwrap_or(0)
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -193,6 +200,10 @@ mod tests {
         let mut next_id = 7;
         let result = process_channel_result(CHANNEL, &query, &mut entries, &mut next_id);
         assert_eq!(result.entry_count, retained);
+        assert_eq!(
+            channels_with_results_count(std::slice::from_ref(&result)),
+            u32::from(retained > 0)
+        );
         assert_eq!(entries.len(), retained as usize);
         assert_eq!(next_id, 7 + u64::from(retained));
         assert_eq!(result.channel_path, CHANNEL);

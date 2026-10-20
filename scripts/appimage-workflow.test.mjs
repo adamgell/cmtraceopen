@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, chmodSync, existsSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 const workflow = (name) => readFileSync(new URL(`../.github/workflows/${name}.yml`, import.meta.url), "utf8");
@@ -75,3 +79,71 @@ test("release evidence retains the uploaded AppImage and report under their bund
   // artifact has appimage/<name>.AppImage and provenance/appimage-abi.json.
   assert.deepEqual(paths, [root + "appimage/*.AppImage", root + "provenance/appimage-abi.json"]);
 });
+
+test('release builds locally and gates package upload on macOS trust and retained evidence', () => {
+  const text = workflow('cmtrace-release');
+  const build = text.split('      - name: Build and create release\n')[1].split('\n      - name:')[0];
+  assert.doesNotMatch(build, /tagName:|releaseId:|releaseName:|releaseBody:|releaseDraft:/);
+  const uploadAt = text.indexOf('- name: Upload verified release bundles');
+  assert.ok(uploadAt > text.indexOf('- name: Verify macOS release trust and payload identity'));
+  assert.ok(uploadAt > text.indexOf('- name: Retain macOS trust verification receipts'));
+  assert.ok(uploadAt > text.indexOf('- name: Attest release artifacts'));
+  const upload = text.slice(uploadAt).split('\n      - name:')[0];
+  assert.doesNotMatch(upload, /always\(\)|continue-on-error/);
+  for (const name of ['aarch64.dmg','aarch64.app.tar.gz','amd64.AppImage','amd64.deb','1.x86_64.rpm',
+    'macos-trust.json','provenance/appimage-abi.json']) assert.ok(upload.includes(name), name);
+  assert.match(upload,/cmp -s/);
+});
+
+function stageFixture(os, mode = 'complete') {
+  const root = mkdtempSync(join(tmpdir(), 'verified-upload-'));
+  try {
+    const put = (name, value='verified bytes') => {
+      const path=join(root,name); mkdirSync(join(path,'..'),{recursive:true}); writeFileSync(path,value);
+    };
+    const files = os === 'macOS' ? ['dmg/CMTrace Open_1.6.3_aarch64.dmg', 'macos/CMTrace Open.app.tar.gz']
+      : ['appimage/CMTrace Open_1.6.3_amd64.AppImage','deb/cmtrace-open_1.6.3_amd64.deb','rpm/cmtrace-open-1.6.3-1.x86_64.rpm'];
+    for (const file of files) {
+      put('bundle/'+file);
+      if (!file.endsWith('.dmg') && mode !== 'missing-signature') put('bundle/'+file+'.sig','signature bytes');
+    }
+    if (mode === 'ambiguous') put('bundle/'+files[0].replace(/[^/]+$/,'second'+(os==='macOS'?'.dmg':'.AppImage')));
+    if (mode !== 'missing-receipt') {
+      const receipt={status:mode==='failed-receipt'?'FAIL':'PASS', version:'1.6.3', sourceCommit:'a'.repeat(40),
+        artifacts:files.map(f=>({path:'bundle/'+f,sha256:createHash('sha256').update('verified bytes').digest('hex')}))};
+      put(os==='macOS'?'release-verification/macos/macos-trust.json':'bundle/provenance/appimage-abi.json',JSON.stringify(receipt));
+    }
+    if(mode==='changed-payload') put('bundle/'+files[0],'changed after verification');
+    put('bin/gh', '#!/bin/sh\nif [ "$2" = view ]; then printf "v1.6.3\\n"; else printf "uploaded\\n" > upload-called; fi\n');
+    chmodSync(join(root,'bin/gh'),0o755);
+    put('bin/git', '#!/bin/sh\nprintf "'+ 'a'.repeat(40) +'\\n"\n');
+    chmodSync(join(root,'bin/git'),0o755);
+    // Only the remote upload is substituted; real copies and comparisons run.
+    const text=workflow('cmtrace-release').split('      - name: Upload verified release bundles\n')[1];
+    const shell=text.split('        run: |\n')[1].split('\n      - name:')[0].split('\n').map(l=>l.slice(10)).join('\n');
+    const result=spawnSync('bash',['-c',shell],{cwd:root,encoding:'utf8',timeout:10000,
+      env:{...process.env,PATH:`${join(root,'bin')}:${process.env.PATH}`,RUNNER_OS:os,BUNDLE_ROOT:'bundle',VERSION:'1.6.3',TAG_NAME:'v1.6.3'}});
+    return {result, root};
+  } catch(error) { rmSync(root,{recursive:true,force:true}); throw error; }
+}
+for (const os of ['macOS','Linux']) {
+  test(`${os} uploads canonical bundle/signature names without changing source bytes`, () => {
+    const {root,result}=stageFixture(os);
+    try {
+      assert.equal(result.status,0,result.stderr);
+      assert.ok(existsSync(join(root,'upload-called')));
+      const staged=readdirSync(join(root,'release-assets'));
+      assert.equal(staged.length,os==='macOS'?4:7);
+      const packageName=os==='macOS'?'CMTrace.Open_1.6.3_aarch64.app.tar.gz':'CMTrace.Open_1.6.3_amd64.AppImage';
+      assert.equal(readFileSync(join(root,'release-assets',packageName),'utf8'),'verified bytes');
+      assert.equal(readFileSync(join(root,'release-assets',packageName+'.sig'),'utf8'),'signature bytes');
+    } finally { rmSync(root,{recursive:true,force:true}); }
+  });
+  for (const mode of ['missing-signature','ambiguous','missing-receipt',...(os==='macOS'?['changed-payload','failed-receipt']:[])]) {
+    test(`${os} ${mode} prevents remote package upload`, () => {
+      const {root,result}=stageFixture(os,mode);
+      try { assert.notEqual(result.status,0); assert.equal(existsSync(join(root,'upload-called')),false); }
+      finally { rmSync(root,{recursive:true,force:true}); }
+    });
+  }
+}

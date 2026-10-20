@@ -209,9 +209,15 @@ jobs:
       - name: Compile full edition without bundling
         run: npm run app:build:release -- --target ${{ matrix.rust_target }} --no-bundle
 
-      - name: Install existing Artifact Signing module for bundler hook
+      - name: Download pinned Artifact Signing package for bundler hook
         shell: pwsh
-        run: Install-Module -Name ArtifactSigning -RequiredVersion 0.1.8 -Force -Repository PSGallery
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $package = Join-Path $env:RUNNER_TEMP 'cmtrace-artifact-signing-0.1.8.nupkg'
+          Invoke-WebRequest -Uri 'https://www.powershellgallery.com/api/v2/package/ArtifactSigning/0.1.8' -OutFile $package
+          if ((Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash -ne '3221344b8c627915d3870f23e80816f31a5d8c2bae1d7c0cdd6c9652f6c4e089') {
+            throw 'ArtifactSigning package SHA256 verification failed.'
+          }
 
       - name: Bundle NSIS with signed application payload
         timeout-minutes: 20
@@ -228,9 +234,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $hook = Join-Path $PWD 'scripts/sign-tauri-windows.ps1'
+          $powerShell = (Get-Process -Id $PID).Path
+          if (-not [IO.Path]::IsPathFullyQualified($powerShell) -or -not (Test-Path -LiteralPath $powerShell -PathType Leaf)) {
+            throw 'Cannot resolve the current PowerShell executable.'
+          }
           $configPath = Join-Path $env:RUNNER_TEMP 'tauri-nsis-signing.json'
           @{ bundle = @{ windows = @{ signCommand = @{
-            cmd = 'pwsh'
+            cmd = $powerShell
             args = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $hook, '%1')
           } } } } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding utf8
           node scripts/tauri.mjs bundle --target ${{ matrix.rust_target }} --bundles nsis --config $configPath

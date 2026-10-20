@@ -26,8 +26,9 @@ use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::intune::enrollment::windows::autopilot::{
     redacted_export_projection, reduce_autopilot_bundle, AutopilotBundleInput,
-    AutopilotCaptureMetadata, AutopilotCaptureState, AutopilotEspLinkState, AutopilotOutcome,
-    AutopilotPhase, AutopilotSnapshot, AutopilotSourceInput,
+    AutopilotCaptureMetadata, AutopilotCaptureState, AutopilotConflict, AutopilotConflictKind,
+    AutopilotEspLinkState, AutopilotOutcome, AutopilotPhase, AutopilotSnapshot,
+    AutopilotSourceInput,
 };
 use serde_json::{json, Value};
 use support::{corpus_root, load_json, mutated, scenario_names, validate_scenario, wire, Failures};
@@ -2766,4 +2767,166 @@ fn a_classified_identity_in_a_user_path_prefix_is_scrubbed() {
         message.contains("[user:"),
         "the generated user token must survive: {message}"
     );
+}
+
+fn serial_scrub_snapshot(serial: &str, identity_field: bool) -> AutopilotSnapshot {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "serial-e1", "serial-channel", 1, 161, "available", "parsed",
+            json!([{ "name": "serialNumber", "value": serial }]),
+            "AutopilotManager retrieved settings.",
+        )]
+    });
+    let mut snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "serial-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    // Exercise the identity and named-data literal collectors independently.
+    snapshot.identity.serial_number = identity_field.then(|| serial.to_owned());
+    if identity_field {
+        snapshot.observations[0].named_data.clear();
+    }
+    snapshot
+}
+
+#[test]
+fn junk_serial_placeholders_do_not_mangle_narrative() {
+    let narrative = "None were found; nonexistent values remain N/A or 0.";
+    for serial in ["None", " NONE ", "N/A", "0"] {
+        for identity_field in [true, false] {
+            let mut snapshot = serial_scrub_snapshot(serial, identity_field);
+            snapshot.observations[0].message = Some(narrative.to_owned());
+            snapshot.next_evidence_requests = vec![narrative.to_owned()];
+            let projected = redacted_export_projection(&snapshot);
+            assert_eq!(
+                projected.observations[0].message.as_deref(),
+                Some(narrative)
+            );
+            assert_eq!(projected.next_evidence_requests, [narrative]);
+            let typed = if identity_field {
+                projected.identity.serial_number.as_deref().unwrap()
+            } else {
+                projected.observations[0].named("serialNumber").unwrap()
+            };
+            assert!(typed.starts_with("[redacted:"), "typed serial: {typed}");
+        }
+    }
+}
+
+#[test]
+fn real_short_serials_are_scrubbed_from_narrative() {
+    for serial in ["R2D2", "AB123"] {
+        for identity_field in [true, false] {
+            let mut snapshot = serial_scrub_snapshot(serial, identity_field);
+            snapshot.observations[0].message = Some(format!("Device {serial} was found."));
+            let projected = redacted_export_projection(&snapshot);
+            let typed = if identity_field {
+                projected.identity.serial_number.as_deref().unwrap()
+            } else {
+                projected.observations[0].named("serialNumber").unwrap()
+            };
+            assert!(typed.starts_with("[redacted:"));
+            assert_eq!(
+                projected.observations[0].message.as_deref(),
+                Some(format!("Device {typed} was found.").as_str()),
+            );
+            assert!(!serde_json::to_string(&projected).unwrap().contains(serial));
+        }
+    }
+}
+
+#[test]
+fn serial_placeholder_does_not_exempt_another_identity_with_the_same_value() {
+    let mut snapshot = serial_scrub_snapshot("None", true);
+    snapshot.identity.device_name = Some("None".to_owned());
+    snapshot.observations[0].message = Some("Device None was found.".to_owned());
+    let projected = redacted_export_projection(&snapshot);
+    let device = projected.identity.device_name.as_deref().unwrap();
+    assert!(device.starts_with("[redacted:"));
+    assert_eq!(
+        projected.observations[0].message.as_deref(),
+        Some(format!("Device {device} was found.").as_str()),
+    );
+}
+
+#[test]
+fn explicitly_named_serial_conflict_placeholders_do_not_mangle_narrative() {
+    let narrative = "None were found; nonexistent values remain.";
+    let mut snapshot = serial_scrub_snapshot("None", true);
+    snapshot.observations[0].message = Some(narrative.to_owned());
+    snapshot.conflicts.push(AutopilotConflict {
+        conflict_id: "synthetic-serial-conflict".to_owned(),
+        kind: AutopilotConflictKind::DeviceIdentity,
+        detail: narrative.to_owned(),
+        values: vec!["serialNumber=None".to_owned()],
+        evidence: Vec::new(),
+    });
+    let projected = redacted_export_projection(&snapshot);
+    assert_eq!(
+        projected.observations[0].message.as_deref(),
+        Some(narrative)
+    );
+    assert_eq!(projected.conflicts[0].detail, narrative);
+    assert!(projected.conflicts[0].values[0].starts_with("serialNumber=[redacted:"));
+}
+
+#[test]
+fn conflicting_serial_placeholder_does_not_mangle_narrative() {
+    let narrative = "None were found; nonexistent values remain.";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "serial-conflict-e1", "serial-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "serialNumber", "value": "None" }]), narrative,
+            ),
+            synthetic_event(
+                "serial-conflict-e2", "serial-channel", 2, 161, "available", "parsed",
+                json!([{ "name": "serialNumber", "value": "AB123" }]),
+                "Device AB123 was found.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "serial-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    assert!(snapshot.conflicts.iter().any(|conflict| {
+        conflict.conflict_id == "conflicting-serial-number"
+            && conflict.values.iter().any(|value| value == "None")
+    }));
+    let projected = redacted_export_projection(&snapshot);
+    assert_eq!(
+        projected.observations[0].message.as_deref(),
+        Some(narrative)
+    );
+    assert!(!serde_json::to_string(&projected).unwrap().contains("AB123"));
+    assert!(projected
+        .conflicts
+        .iter()
+        .flat_map(|conflict| &conflict.values)
+        .all(|value| value.starts_with("[redacted:")));
+}
+
+#[test]
+fn unknown_conflict_values_do_not_gain_the_serial_placeholder_exemption() {
+    let mut snapshot = serial_scrub_snapshot("None", true);
+    snapshot.observations[0].message = Some("Device None was found.".to_owned());
+    snapshot.conflicts.push(AutopilotConflict {
+        conflict_id: "unknown-device-identity-conflict".to_owned(),
+        kind: AutopilotConflictKind::DeviceIdentity,
+        detail: "Device None was found.".to_owned(),
+        values: vec!["None".to_owned()],
+        evidence: Vec::new(),
+    });
+    let projected = redacted_export_projection(&snapshot);
+    let message = projected.observations[0].message.as_deref().unwrap();
+    assert!(message.starts_with("Device [redacted:"), "{message}");
+    assert!(!message.contains("None"));
+    assert!(!projected.conflicts[0].detail.contains("None"));
 }
