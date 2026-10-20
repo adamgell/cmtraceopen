@@ -355,7 +355,7 @@ Describe 'Tauri bundling-time signing hook' {
             [switch]$ExcludeAzureCliCredential, [switch]$ExcludeAzurePowerShellCredential,
             [switch]$ExcludeAzureDeveloperCliCredential, [switch]$ExcludeInteractiveBrowserCredential) }
         $hookSettings = @('AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET',
-            'SIGNING_ENDPOINT', 'SIGNING_ACCOUNT_NAME', 'SIGNING_PROFILE_NAME')
+            'SIGNING_ENDPOINT', 'SIGNING_ACCOUNT_NAME', 'SIGNING_PROFILE_NAME', 'RUNNER_TEMP')
         $previousHookSettings = @{}
         foreach ($name in $hookSettings) {
             $previousHookSettings[$name] = [Environment]::GetEnvironmentVariable($name)
@@ -363,6 +363,8 @@ Describe 'Tauri bundling-time signing hook' {
     }
     BeforeEach {
         foreach ($name in $hookSettings) { [Environment]::SetEnvironmentVariable($name, 'offline-fixture') }
+        $env:RUNNER_TEMP = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        [void][IO.Directory]::CreateDirectory($env:RUNNER_TEMP)
         $hookFile = Join-Path $TestDrive ('payload ' + [guid]::NewGuid() + '.exe')
         Set-Content -LiteralPath $hookFile -Value 'offline unsigned fixture'
         Mock Import-VerifiedArtifactSigning {

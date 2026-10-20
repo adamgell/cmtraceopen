@@ -54,3 +54,11 @@ test('bundler hook uses the existing action module version and credential names'
     assert.ok(step('Sign release EXEs').includes(`secrets.${name}`));
   }
 });
+
+test('sanitized hook receipts are retained even when bundling fails', () => {
+  const diagnostics = step('Upload sanitized bundler hook diagnostics');
+  assert.match(diagnostics, /if: always\(\)/);
+  assert.ok(diagnostics.includes('path: ${{ runner.temp }}/cmtrace-signing-hooks/*.json'));
+  assert.match(diagnostics, /if-no-files-found: ignore/);
+  assert.doesNotMatch(diagnostics, /secrets\.|\*\.log|include-hidden-files/);
+});
