@@ -119,7 +119,7 @@ Six required status checks, on the `Protect` ruleset over `main`:
 Three more jobs run on every PR but are not required to merge:
 
 - **Source Quality** — `cargo fmt --all -- --check`, changed-range whitespace, and `cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown`. The wasm check is a purity constraint: the parser crate must stay wasm32-compatible.
-- **Rust MSRV (1.89)** — on Ubuntu and Windows. Anything added has to build on 1.89, not only on the pinned toolchain.
+- **Rust MSRV (1.89)** — on Ubuntu and Windows. Desktop/plugin changes must build on Rust 1.89; `cmtraceopen-parser` changes must retain its separate Rust 1.88 floor. CI checks the workspace on 1.89 and the parser alone on 1.88; neither may rely solely on the pinned toolchain.
 - **ESP Diagnostics (Windows)** — installer file-association cleanup, parser tests and Clippy, native and Graph ESP diagnostics, and the full application's all-features build, tests, manifest verification and Clippy on Windows.
 
 Native `cargo check` and `cargo test` on Linux or macOS skip `#[cfg(target_os = "windows")]` code, tests included. Contributors on those hosts need the Windows CI jobs or a separate Windows run to verify that code; contributors developing on Windows can compile and test it locally. State which checks actually ran in the pull request. Two compile errors in one pull request reached CI from a non-Windows workstation that way — one an unqualified path, one a missing import for a Windows-gated test — which is what #763 records.
