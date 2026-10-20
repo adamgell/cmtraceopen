@@ -9,7 +9,7 @@ import sys
 import time
 import uuid
 
-from . import contract
+from . import contract, private_bus
 from .session import blocked, status
 
 TOKENS = ["JAMMY_OPEN_ALPHA", "JAMMY_FIND_BETA", "JAMMY_FILTER_GAMMA"]
@@ -31,16 +31,30 @@ def type_text(text):
     command(["xdotool", "type", "--clearmodifiers", "--delay", "12", "--", text])
 
 
+def is_atspi_error(error):
+    return type(error).__module__ in ("gi.repository.GLib", "gi.repository.Gio", "gi.repository.Atspi", "gi.overrides.GLib")
+
+
 def poll(predicate, seconds=30, reason="ui-assertion", blocked=False):
     deadline = time.monotonic() + seconds
+    inaccessible = False
     while time.monotonic() < deadline:
         try:
             result = predicate()
+            inaccessible = False
             if result:
                 return result
         except (ValueError, LookupError):
-            pass
+            inaccessible = False
+        except Exception as error:
+            if not is_atspi_error(error):
+                raise
+            # Startup/tree mutation may invalidate an AT-SPI object between
+            # samples. Resample within the original deadline, never infer pass.
+            inaccessible = True
         time.sleep(0.2)
+    if inaccessible:
+        raise Blocked("accessibility-unavailable")
     raise (Blocked(reason) if blocked else ValueError(reason))
 
 
@@ -69,6 +83,7 @@ class Controller:
         self.app, self.application, self.window = None, None, None
         self.fixture = self.area / "data/runtime-fixture.log"
         self._window_sample = None
+        self.owner = None
 
     def stage(self, name):
         self.result["diagnostics"].update(stage=name, elapsed_ms=0, observations={})
@@ -99,9 +114,16 @@ class Controller:
             try:
                 pending.extend((child, parents + (node,)) for child in reversed(list(node)))
             except Exception as error:
+                if is_atspi_error(error):
+                    raise  # Resample the whole tree, never skip a missing child.
                 raise Blocked("accessibility-unavailable") from error
 
     def role(self, node):
+        # The actual Find control is a declared HTML input with editable state.
+        # Enum/name/interface guesses failed on this fixed artifact's bridge.
+        if ("tag:input" in node.getAttributes()
+                and node.getState().contains(self.atspi.STATE_EDITABLE)):
+            return "entry"
         return contract.accessible_role(node.getRoleName(), node.getAttributes())
 
     def showing(self, node):
@@ -187,8 +209,18 @@ class Controller:
 
     def find_input(self):
         # WebKit exposes HTML input[type=text] as entry, with placeholder-text.
-        candidates = [node for node in self.nodes() if self.role(node) == "entry"
-                      and "placeholder-text:Find..." in node.getAttributes() and self.showing(node)]
+        nodes = self.nodes()
+        placeholders = [node for node in nodes if "placeholder-text:Find..." in node.getAttributes()]
+        self.observe(find_placeholder_present=bool(placeholders), find_placeholder_unique=len(placeholders) == 1,
+                     find_placeholder_entry=any(self.role(node) == "entry" for node in placeholders),
+                     find_placeholder_showing=any(self.showing(node) for node in placeholders),
+                     find_name_present=any(node.name == "Find..." for node in nodes),
+                     find_entry_present=any(self.role(node) == "entry" for node in nodes),
+                     find_placeholder_tag_input=any("tag:input" in node.getAttributes() for node in placeholders),
+                     find_placeholder_text_role=any(node.getRole() == self.atspi.ROLE_TEXT for node in placeholders),
+                     find_placeholder_editable=any(node.getState().contains(self.atspi.STATE_EDITABLE) for node in placeholders),
+                     find_placeholder_focused=any(node.getState().contains(self.atspi.STATE_FOCUSED) for node in placeholders))
+        candidates = [node for node in placeholders if self.role(node) == "entry" and self.showing(node)]
         unique = len(candidates) == 1
         focused = unique and all(candidates[0].getState().contains(state)
                                  for state in (self.atspi.STATE_FOCUSED, self.atspi.STATE_EDITABLE))
@@ -230,59 +262,79 @@ class Controller:
                 entries.append(parents)
             if role in ("push button", "button") and node.name == "Close find bar":
                 closes.append(parents)
+        self.observe(scope_entries_unique=len(entries) == 1, scope_close_unique=len(closes) == 1)
         if len(entries) != 1 or len(closes) != 1:
             return []
-        common = None
-        for entry_parent, close_parent in zip(entries[0], closes[0]):
-            if entry_parent is not close_parent:
-                break
-            common = entry_parent
-        # The product's FindBar div maps to section. Refuse an application,
-        # document or broader container that happens to include both controls.
-        if common is None or self.role(common) != "section" or not self.showing(common):
+        groups = [node for node, _ in self.walk_paths(self.application)
+                  if self.role(node) == "group" and node.name == "Find bar" and self.showing(node)]
+        common = groups[0] if len(groups) == 1 else None
+        valid = common is not None and common in entries[0] and common in closes[0]
+        self.observe(scope_common_present=common is not None,
+                     scope_named_group=valid,
+                     scope_common_showing=common is not None and self.showing(common))
+        if not valid:
             return []
         scoped = list(self.walk_paths(common))
         buttons, inputs = [], 0
         expected = {"Match case": {"toggle button"}, "Use regular expression": {"toggle button"},
                     "Previous match": {"push button", "button"}, "Next match": {"push button", "button"},
                     "Close find bar": {"push button", "button"}}
-        for node, _ in scoped:
+        for node, parents in scoped:
             role = self.role(node)
-            if role not in ("section", "static", "text", "image", "separator", "entry", "push button", "button", "toggle button"):
+            if role not in ("group", "status", "page", "section", "static", "text", "image", "separator", "entry", "push button", "button", "toggle button"):
+                attrs = node.getAttributes()
+                categories = {"statusbar": "status bar", "panel": "panel", "label": "label",
+                              "filler": "filler", "unknown": "unknown", "invalid": "invalid",
+                              "notification": "notification", "paragraph": "paragraph", "canvas": "canvas",
+                              "embedded": "embedded", "grouping": "grouping", "statusbar_joined": "statusbar",
+                              "checkbox": "check box", "redundant": "redundant object", "drawing_area": "drawing area",
+                              "svg": "svg", "icon": "icon"}
+                native_role = int(node.getRole())
+                role_fact = ({"scope_unexpected_role_id_" + str(native_role): True}
+                             if 0 <= native_role <= 130 else {"scope_unexpected_role_id_outside": True})
+                self.observe(scope_roles_valid=False,
+                             scope_unexpected_named_case=node.name == "Match case",
+                             scope_unexpected_named_regex=node.name == "Use regular expression",
+                             scope_unexpected_tag_button="tag:button" in attrs,
+                             scope_unexpected_xml_button="xml-roles:button" in attrs,
+                             scope_unexpected_xml_checkbox="xml-roles:checkbox" in attrs,
+                             **role_fact,
+                             scope_unexpected_showing=self.showing(node),
+                             scope_unexpected_in_control=any(self.role(parent) in ("entry", "push button", "button", "toggle button") for parent in parents),
+                             scope_unexpected_name_count=re.fullmatch(r"1\s+of\s+1", node.name or "") is not None,
+                             scope_unexpected_tag_svg="tag:svg" in attrs,
+                             scope_unexpected_named_status=node.name == "Find results",
+                             scope_unexpected_xml_status="xml-roles:status" in attrs,
+                             scope_unexpected_tag_span="tag:span" in attrs,
+                             scope_unexpected_tag_div="tag:div" in attrs,
+                             scope_unexpected_role_other=role not in categories.values(),
+                             **{"scope_unexpected_role_" + key: role == value
+                                for key, value in categories.items()})
                 return []
             if role == "entry":
                 inputs += 1
             if role in ("push button", "button", "toggle button"):
                 if not self.showing(node) or role not in expected.get(node.name, set()):
+                    self.observe(scope_buttons_valid=False)
                     return []
                 buttons.append(node.name)
+        self.observe(scope_roles_valid=True, scope_buttons_valid=sorted(buttons) == sorted(expected),
+                     scope_inputs_valid=inputs == 1)
         return scoped if inputs == 1 and sorted(buttons) == sorted(expected) else []
 
     def match_count(self):
         selected = self.beta_selected()
         query = self.query_matches()
         scoped = self.find_scope()
-        names, texts, conflict = False, False, False
-        for node, parents in scoped:
-            if any(self.role(parent) in ("entry", "push button", "button", "toggle button") for parent in parents):
-                continue
-            # WebKit ignores ordinary spans/StaticText objects and exposes their
-            # Text on a containing section. Embedded controls use U+FFFC; only
-            # boundary markers/whitespace may be removed, never literal text.
-            if self.role(node) in ("section", "static", "text") and self.showing(node):
-                name = re.sub(r"^[\s\ufffc]+|[\s\ufffc]+$", "", node.name or "")
-                text = re.sub(r"^[\s\ufffc]+|[\s\ufffc]+$", "", self.direct_text(node))
-                name_match = re.fullmatch(r"1\s+of\s+1", name) is not None
-                text_match = re.fullmatch(r"1\s+of\s+1", text) is not None
-                conflict |= (re.fullmatch(r"\d+\s+of\s+\d+", name) is not None and not name_match
-                             or re.fullmatch(r"\d+\s+of\s+\d+", text) is not None and not text_match
-                             or name in ("No results", "Invalid regex") or text in ("No results", "Invalid regex")
-                             or name_match and bool(text) and not text_match)
-                # A name cannot override this object's nonempty Text value.
-                names |= name_match and not text
-                texts |= text_match
-        self.observe(find_scope_valid=bool(scoped), match_name=names, match_text=texts, match_conflict=conflict)
-        return selected and query and bool(scoped) and (names or texts) and not conflict
+        statuses = [node for node, parents in scoped
+                    if self.role(node) == "status" and node.name == "Find results"
+                    and self.showing(node)
+                    and not any(self.role(parent) in ("entry", "push button", "button", "toggle button")
+                                for parent in parents)]
+        texts = len(statuses) == 1 and re.fullmatch(r"1\s+of\s+1", self.direct_text(statuses[0]).strip()) is not None
+        self.observe(find_scope_valid=bool(scoped), status_unique=len(statuses) == 1,
+                     match_text=texts)
+        return selected and query and bool(scoped) and texts
 
     def focused_editable(self):
         for node in self.nodes():
@@ -291,8 +343,32 @@ class Controller:
                 return node
         return None
 
-    def click(self, name):
-        node = poll(lambda: self.find(name, {"push button", "button"}))
+    def chooser_nodes(self):
+        return [node for node, parents in self.walk_paths(self.application)
+                if any(self.role(parent) in ("file chooser", "dialog") and self.showing(parent) for parent in parents)]
+
+    def chooser_location(self):
+        candidates = [node for node in self.chooser_nodes() if self.showing(node)
+                      and all(node.getState().contains(state) for state in
+                              (self.atspi.STATE_FOCUSED, self.atspi.STATE_EDITABLE))]
+        self.observe(reopen_location_unique=len(candidates) == 1)
+        return candidates[0] if len(candidates) == 1 else None
+
+    def chooser_path_matches(self):
+        node = self.chooser_location()
+        matches = node is not None and self.direct_text(node) == str(self.fixture)
+        self.observe(reopen_path_matches=matches)
+        return matches
+
+    def click(self, name, chooser=False):
+        def intended():
+            if not chooser:
+                return self.find(name, {"push button", "button"})
+            candidates = [node for node in self.chooser_nodes() if node.name == name
+                          and self.showing(node) and self.role(node) in ("push button", "button")]
+            self.observe(reopen_open_unique=len(candidates) == 1)
+            return candidates[0] if len(candidates) == 1 else None
+        node = poll(intended)
         action = node.queryAction()
         for index in range(action.nActions):
             if action.getName(index) in ("click", "press", "activate") and action.doAction(index):
@@ -339,8 +415,16 @@ class Controller:
             found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(pid)], capture_output=True, text=True, timeout=5)
             return next((line for line in found.stdout.splitlines() if line.isdecimal()), None)
         self.window = poll(visible_window, reason="gui-unavailable", blocked=True)
-        command(["xdotool", "windowsize", self.window, "1100", "780"])
-        command(["xdotool", "windowactivate", "--sync", self.window])
+        def configure_window():
+            try:
+                command(["xdotool", "windowsize", self.window, "1100", "780"])
+                command(["xdotool", "windowactivate", "--sync", self.window])
+            except subprocess.CalledProcessError as error:
+                if error.returncode != 1:
+                    raise
+                return False  # IceWM may not have managed the new window yet.
+            return True
+        poll(configure_window, reason="gui-unavailable", blocked=True)
         # The listbox is the required accessibility baseline even before opening a file.
         poll(lambda: self.find("Log entries", {"listbox"}) if with_file else self.focused_or_window(),
              reason="accessibility-unavailable", blocked=True)
@@ -349,7 +433,21 @@ class Controller:
         return any(self.showing(node) and self.role(node) in ("frame", "window") for node in self.nodes())
 
     def screenshot(self, phase):
-        command(["import", "-window", self.window, str(self.out / f"{phase}.png")])
+        window = self.window
+        if phase == "final":
+            # A native modal can obscure the app. Capture only an active window
+            # owned by this disposable case UID; never another account's UI.
+            try:
+                active = subprocess.check_output(["xdotool", "getactivewindow"], text=True,
+                                                 timeout=5, stderr=subprocess.DEVNULL).strip()
+                pid = subprocess.check_output(["xdotool", "getwindowpid", active], text=True,
+                                              timeout=5, stderr=subprocess.DEVNULL).strip()
+                if active.isdecimal() and pid.isdecimal() and int(pid) > 0:
+                    if int(status(pid)["Uid"].split()[0]) == os.getuid():
+                        window = active
+            except (OSError, ValueError, subprocess.CalledProcessError):
+                pass
+        command(["import", "-window", window, str(self.out / f"{phase}.png")])
 
     def capture_failure(self):
         self.result["diagnostics"]["final_image"] = "absent"
@@ -376,9 +474,96 @@ class Controller:
             mount_ids = {int(line.split()[0]) for line in Path("/proc/self/mountinfo").read_text().splitlines()}
             return self.app.returncode == 0 and self.proofs[-1]["mount_id"] not in mount_ids
         poll(gone, 20)
+        self.wait("single-instance-release", lambda: not private_bus.has_owner(self.area, os.getuid()), seconds=10)
+        self.result["checks"]["single_instance_release"] = True
         self.application = None
 
+    def primary_owner(self, previous=None):
+        owner = private_bus.owner(self.area, os.getuid())
+        if owner is None or owner[1] != self.proofs[-1]["pid"] or (previous is not None and owner[0] == previous[0]):
+            return None
+        return owner
+
+    def owned_mounts(self):
+        return contract.owned_fuse_mounts(Path("/proc/self/mountinfo").read_text(), os.getuid(), self.root)
+
+    def unique_handoff_window(self):
+        windows = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(self.proofs[-1]["pid"])],
+                                 capture_output=True, text=True, timeout=5)
+        boxes = [node for node in self.nodes() if node.name == "Log entries"
+                 and self.showing(node) and self.role(node) == "listbox"]
+        return windows.returncode == 0 and windows.stdout.split() == [self.window] and len(boxes) == 1
+
+    def handoff_rows(self, mounts, expected):
+        def correct():
+            if not self.same_primary(mounts):
+                return None
+            rows = self.rows()
+            contract.validate_rows(rows, expected)
+            return rows if self.same_primary(mounts) else None
+        rows = self.wait("handoff", correct)
+        self.result["counts"].append(len(rows))
+
+    def same_primary(self, mounts):
+        live = self.live_fuse()
+        return (self.app.poll() is None and live is not None
+                and live[0] == self.proofs[-1]["pid"]
+                and live[1]["mount_id"] == self.proofs[-1]["mount_id"]
+                and private_bus.owner(self.area, os.getuid()) == self.owner
+                and self.owned_mounts() == mounts and self.window_geometry() is not None
+                and self.unique_handoff_window())
+
+    def handoff(self):
+        self.stage("handoff")
+        fixture = self.area / "data/handoff fixture.log"
+        token = "JAMMY_HANDOFF_" + uuid.uuid4().hex.upper()
+        fixture.write_text(fixture_line(token, 1))
+        mounts = self.owned_mounts()
+        # The second actual AppImage runs in the same private bus/profile. Its
+        # argv deliberately contains a relative path with a space and a new cwd.
+        # The supervisor reports success only after kernel ECHILD, including all
+        # AppImage/FUSE helper descendants of this secondary launch.
+        secondary = subprocess.Popen(["/usr/bin/python3", str(Path(__file__).with_name("processes.py")),
+                                      str(self.root / "candidate.AppImage"), fixture.name],
+                                     cwd=self.area / "data", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            code = secondary.wait(timeout=20)
+        except subprocess.TimeoutExpired as error:
+            raise ValueError("ui-assertion") from error
+        if code != 0:
+            raise ValueError("ui-assertion")
+        self.handoff_rows(mounts, [token])
+        self.result["checks"]["handoff"] = True
+
+    def chooser_visible(self):
+        in_app = any(self.role(node) in ("file chooser", "dialog") and self.showing(node) for node in self.nodes())
+        # Observation only, from this case's private accessibility bus.
+        # Never act on another app or copy arbitrary names/text to evidence.
+        on_desktop = False
+        for app in self.atspi.Registry.getDesktop(0):
+            pid = app.get_process_id()
+            try:
+                if pid <= 0 or int(status(pid)["Uid"].split()[0]) != os.getuid():
+                    continue
+            except OSError:
+                continue  # A vanished app is not an observed chooser.
+            on_desktop |= any(self.role(node) in ("file chooser", "dialog") and self.showing(node)
+                              for node in self.walk(app))
+        self.observe(reopen_chooser_in_app=in_app, reopen_chooser_on_desktop=on_desktop)
+        return in_app
+
+    def private_session(self):
+        self.stage("private-bus")
+        try:
+            private_bus.verify(self.area, os.getuid())
+            if private_bus.has_owner(self.area, os.getuid()):
+                raise ValueError("private-bus-unavailable")
+        except (OSError, ValueError) as error:
+            raise Blocked("private-bus-unavailable") from error
+        self.result["checks"]["private_bus"] = True
+
     def execute(self):
+        self.private_session()
         self.fixture.write_text("".join(fixture_line(token, i) for i, token in enumerate(TOKENS, 1)))
         self.stage("launch")
         self.launch(True)
@@ -397,6 +582,9 @@ class Controller:
         self.wait("find-selection", self.beta_selected)
         self.wait("find-count", self.match_count)
         self.result["checks"]["find"] = True
+        self.screenshot("initial")  # Preserve the accepted Find state in the fixed evidence slot.
+        self.owner = self.wait("single-instance-owner", self.primary_owner)
+        self.result["checks"]["single_instance_owner"] = True
         self.stage("filter")
         self.click("Close find bar")
         key("ctrl+shift+l")
@@ -419,17 +607,25 @@ class Controller:
         expected = TOKENS + [delta]
         self.expect_rows(expected, 15)
         self.result["checks"]["tail"] = True
+        self.handoff()
         self.exit_app()
         self.stage("relaunch")
         self.launch(False)
         self.wait("ready", lambda: self.ready(None))
+        self.owner = self.wait("single-instance-restart", lambda: self.primary_owner(previous=self.owner))
+        self.result["checks"]["single_instance_restart"] = True
         self.stage("reopen")
         key("ctrl+o")
-        poll(lambda: any(self.role(node) in ("file chooser", "dialog") and self.showing(node) for node in self.nodes()))
+        self.wait("reopen-dialog", self.chooser_visible)
         key("ctrl+l")
-        poll(self.focused_editable)
+        self.wait("reopen-location", self.chooser_location)
         type_text(str(self.fixture))
-        key("Return")
+        self.wait("reopen-path", self.chooser_path_matches)
+        # Location entry activation is not the dialog's explicit Open action,
+        # particularly for the product's multi-file picker. Activate that action.
+        self.stage("reopen-submit")
+        self.click("Open", chooser=True)
+        self.stage("reopen-count")
         self.expect_rows(expected)
         self.result["checks"]["reopen"] = True
         self.stage("final-image")
@@ -439,6 +635,27 @@ class Controller:
         self.result["checks"]["exited"] = True
         self.result.update(status="passed", reason="ok")
         self.stage("complete")
+
+
+def exception_observations(error):
+    # Fixed boolean categories only: never emit exception messages, tracebacks,
+    # arbitrary class names, subprocess commands or accessibility strings.
+    if isinstance(error, subprocess.CalledProcessError):
+        category = "command"
+    elif isinstance(error, OSError):
+        category = "os"
+    elif isinstance(error, ValueError):
+        category = "value"
+    elif isinstance(error, AttributeError):
+        category = "attribute"
+    elif isinstance(error, TypeError):
+        category = "type"
+    elif is_atspi_error(error):
+        category = "atspi"
+    else:
+        category = "other"
+    return {"error_" + name: name == category for name in
+            ("command", "os", "value", "attribute", "type", "atspi", "other")}
 
 
 def main(root, case):
@@ -461,6 +678,7 @@ def main(root, case):
                 result.update(status="failed", reason="ui-assertion")
             else:
                 result.update(status="blocked", reason="harness-error")
+            controller.observe(**exception_observations(error))
             controller.capture_failure()
     else:
         result = controller.result

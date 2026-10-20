@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       reviewed_harness_sha:
-        description: Exact reviewed harness commit; coordinator must confirm integration before dispatch
+        description: Exact reviewed harness commit after final signed artifact binding; pending bindings block dispatch
         type: string
         required: true
 
@@ -13,12 +13,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: appimage-runtime-11324800940
+  group: appimage-runtime-final-1.6.3
   cancel-in-progress: false
 
 jobs:
   runtime:
-    if: github.ref == 'refs/heads/main' && github.repository == 'adamgell/cmtraceopen'
+    if: github.ref == 'refs/heads/codex/release-native-harness-20261020' && github.repository == 'adamgell/cmtraceopen'
     name: Runtime (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -29,6 +29,9 @@ jobs:
     timeout-minutes: 20
     env:
       REVIEWED_HARNESS_SHA: ${{ inputs.reviewed_harness_sha }}
+      # Intentionally empty until Main verifies the final signed inventory.
+      FINAL_ARTIFACT_ID: ''
+      FINAL_PRODUCER_RUN: ''
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,9 +42,20 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/runtime-evidence"
-          printf '%s\n' '{"artifact_id":11324800940,"status":"blocked","reason":"harness-error","stage":"setup"}' > "$RUNNER_TEMP/runtime-evidence/summary.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.appimage_runtime import contract
+          summary = dict(artifact_id=contract.ARTIFACT_ID, status="blocked",
+                         reason="harness-error" if contract.BINDING_READY else "binding-pending", stage="setup")
+          (Path(os.environ["RUNNER_TEMP"]) / "runtime-evidence/summary.json").write_text(json.dumps(summary))
+          contract.require_ready_binding()
+          assert os.environ["FINAL_ARTIFACT_ID"] == str(contract.ARTIFACT_ID)
+          assert os.environ["FINAL_PRODUCER_RUN"] == contract.RUN
+          PY
           [[ "$GITHUB_RUN_ATTEMPT" == 1 ]]
           [[ "$REVIEWED_HARNESS_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GITHUB_SHA" == "$REVIEWED_HARNESS_SHA" ]]
           git cat-file -e "$REVIEWED_HARNESS_SHA^{commit}" || git fetch --no-tags origin "$REVIEWED_HARNESS_SHA"
           git diff --exit-code "$REVIEWED_HARNESS_SHA" HEAD -- \
             .github/workflows/cmtrace-appimage-runtime.yml scripts/appimage_runtime
@@ -49,8 +63,8 @@ jobs:
       - name: Download fixed candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          artifact-ids: '11324800940'
-          run-id: '37260205745'
+          artifact-ids: ${{ env.FINAL_ARTIFACT_ID }}
+          run-id: ${{ env.FINAL_PRODUCER_RUN }}
           repository: adamgell/cmtraceopen
           github-token: ${{ github.token }}
           merge-multiple: true
@@ -88,7 +102,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: appimage-runtime-${{ matrix.os }}-11324800940
+          name: appimage-runtime-${{ matrix.os }}-final-1.6.3
           retention-days: 7
           if-no-files-found: error
           path: |

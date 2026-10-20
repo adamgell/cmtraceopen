@@ -23,6 +23,9 @@ class Node:
     def __iter__(self):
         return iter(self.children)
 
+    def getRole(self):
+        return {"entry":79, "text":61}.get(self.role, 0)
+
     def getRoleName(self):
         return self.role
 
@@ -31,6 +34,11 @@ class Node:
 
     def getState(self):
         return SimpleNamespace(contains=lambda state: state in self.states)
+
+    def queryEditableText(self):
+        if self.role not in ("entry", "text"):
+            raise NotImplementedError
+        return SimpleNamespace()
 
     def queryText(self):
         if self.value is None:
@@ -46,7 +54,7 @@ class DiagnosticsTests(unittest.TestCase):
 
     def controller(self, *nodes):
         atspi = SimpleNamespace(STATE_SHOWING="showing", STATE_SELECTED="selected",
-                                STATE_FOCUSED="focused", STATE_EDITABLE="editable")
+                                STATE_FOCUSED="focused", STATE_EDITABLE="editable", ROLE_ENTRY=79, ROLE_TEXT=61)
         controller = ui.Controller(Path("/tmp/offline-fixture"), "ordinary", atspi)
         rows = [Node(token, "list item", states=("showing", "selected") if i == 1 else ("showing",))
                 for i, token in enumerate(ui.TOKENS)]
@@ -55,59 +63,103 @@ class DiagnosticsTests(unittest.TestCase):
         return controller
 
     def entry(self, **overrides):
-        return Node(**(dict(role="entry", attrs=("placeholder-text:Find...",),
+        return Node(**(dict(role="entry", attrs=("placeholder-text:Find...", "tag:input"),
                             states=("showing", "focused", "editable"), text=ui.TOKENS[1]) | overrides))
 
-    def bar(self, count=None, text=None):
+    def bar(self, count=None, text="1 of 1"):
         controls = [Node(name, "toggle button" if name in ("Match case", "Use regular expression") else "push button") for name in
                     ("Match case", "Use regular expression", "Previous match", "Next match", "Close find bar")]
-        return Node(role="section", text=text, children=[self.entry(), *controls] + ([count] if count else []))
+        status = count if count is not None else Node("Find results", "status", text=text)
+        return Node("Find bar", "group", children=[self.entry(), *controls, status])
 
-    def test_find_count_accepts_scoped_section_text_and_boundary_object_markers(self):
-        for bar in (self.bar(Node(role="section", text="1 of 1")),
-                    self.bar(text="\ufffc 1 of 1 \ufffc\ufffc\ufffc\ufffc\ufffc")):
-            self.assertTrue(self.controller(bar).match_count())
+    def test_find_count_requires_named_group_and_named_status_text(self):
+        self.assertTrue(self.controller(self.bar()).match_count())
+        for role in ("section", "application", "document"):
+            bar = self.bar(); bar.role = role
+            self.assertFalse(self.controller(bar).match_count())
+        for name in ("", "Other bar"):
+            bar = self.bar(); bar.name = name
+            self.assertFalse(self.controller(bar).match_count())
+        for count in (Node("1 of 1"), Node(text="1 of 1"), Node("Other results", "status", text="1 of 1"),
+                      Node("Find results", "status", text="1 of 1", states=())):
+            self.assertFalse(self.controller(self.bar(count)).match_count())
+
+    def test_unexpected_scope_role_diagnostics_remain_fixed_booleans_and_fail_closed(self):
+        for role in ("status bar", "panel", "private unsupported role"):
+            controller = self.controller(self.bar(Node("Find results", role, attrs=("tag:span",), text="1 of 1")))
+            self.assertFalse(controller.match_count())
+            facts = controller.result["diagnostics"]["observations"]
+            self.assertTrue(facts["scope_unexpected_named_status"])
+            self.assertTrue(facts["scope_unexpected_tag_span"])
+            self.assertEqual(facts["scope_unexpected_role_statusbar"], role == "status bar")
+            self.assertEqual(facts["scope_unexpected_role_other"], role == "private unsupported role")
+            contract.sanitize_diagnostics(controller.result["diagnostics"])
+            self.assertNotIn("private", json.dumps(controller.result))
+
+    def test_unexpected_control_descendant_diagnostics_do_not_accept_count_decoys(self):
+        bar = self.bar(text="0 of 1")
+        bar.children[1].children.append(Node("1 of 1", "redundant object", attrs=("tag:svg",)))
+        controller = self.controller(bar)
+        self.assertFalse(controller.match_count())
+        facts = controller.result["diagnostics"]["observations"]
+        for key in ("scope_unexpected_in_control", "scope_unexpected_name_count", "scope_unexpected_role_redundant", "scope_unexpected_tag_svg", "scope_unexpected_showing"):
+            self.assertTrue(facts[key])
+        contract.sanitize_diagnostics(controller.result["diagnostics"])
+
+    def test_rejected_native_role_category_is_bounded_and_never_copies_role_name(self):
+        for role_id in (0, 62, 130, 131, -1):
+            node = Node("Match case", "private platform role", attrs=("tag:button", "xml-roles:button"))
+            node.getRole = lambda: role_id
+            controller = self.controller(self.bar(node))
+            self.assertFalse(controller.match_count())
+            facts = controller.result["diagnostics"]["observations"]
+            expected = "scope_unexpected_role_id_" + str(role_id) if 0 <= role_id <= 130 else "scope_unexpected_role_id_outside"
+            self.assertTrue(facts[expected])
+            self.assertTrue(facts["scope_unexpected_named_case"])
+            contract.sanitize_diagnostics(controller.result["diagnostics"])
+            self.assertNotIn("private", json.dumps(controller.result))
+
+    def test_native_page_layout_is_allowed_only_inside_named_find_group(self):
+        bar = self.bar()
+        bar.children = [Node(role="page", children=bar.children)]
+        self.assertTrue(self.controller(bar).match_count())
+        page = Node("Find bar", "page", children=bar.children)
+        self.assertFalse(self.controller(page).match_count())
+        bar.children[0].children.append(Node("unrelated", "push button"))
+        self.assertFalse(self.controller(bar).match_count())
+
+    def test_page_layout_cannot_supply_a_global_or_unnamed_count(self):
+        bar = self.bar(text="0 of 1")
+        bar.children = [Node(role="page", children=bar.children)]
+        self.assertFalse(self.controller(bar, Node("Find results", "status", text="1 of 1")).match_count())
+        bar.children[0].children[-1] = Node(text="1 of 1")
+        self.assertFalse(self.controller(bar).match_count())
 
     def test_find_modes_require_actual_toggle_roles_and_navigation_requires_buttons(self):
-        bar = self.bar(text="1 of 1")
-        for control in bar.children[1:3]: control.role = "toggle button"
-        self.assertTrue(self.controller(bar).match_count())
         for index, role in ((1, "push button"), (2, "push button"), (3, "toggle button"), (4, "toggle button"), (5, "toggle button")):
-            bad = copy.deepcopy(bar); bad.children[index].role = role
-            self.assertFalse(self.controller(bad).match_count())
-
-    def test_find_count_rejects_known_failure_status_and_conflicting_nonempty_text(self):
-        for status in ("No results", "Invalid regex", "1 of 1 unexpected"):
-            self.assertFalse(self.controller(self.bar(Node(name="1 of 1", text=status))).match_count())
-        for status in ("No results", "Invalid regex"):
-            bar = self.bar(Node(name="1 of 1")); bar.children.append(Node(text=status))
+            bar = self.bar(); bar.children[index].role = role
             self.assertFalse(self.controller(bar).match_count())
 
-    def test_find_count_rejects_global_decoy_when_local_count_is_wrong(self):
-        controller = self.controller(self.bar(text="0 of 1"), Node(text="1 of 1"))
-        self.assertFalse(controller.match_count())
+    def test_find_count_rejects_wrong_status_and_global_or_control_decoys(self):
+        for text in ("0 of 1", "No results", "Invalid regex", "private 1 of 1", "1 of 1 unexpected", "1\ufffc of 1", ""):
+            bar = self.bar(text=text)
+            self.assertFalse(self.controller(bar, Node("Find results", "status", text="1 of 1")).match_count())
+            bar.children[1].children.append(Node("Find results", "status", text="1 of 1"))
+            self.assertFalse(self.controller(bar).match_count())
 
-    def test_find_count_rejects_ambiguous_or_broad_scope_and_unexpected_literal_text(self):
+    def test_find_count_rejects_ambiguous_scope_controls_and_status(self):
         for extra in (Node("Close find bar", "push button"), self.entry(), Node("unrelated", "push button"),
-                      Node("Filter", "dialog"), Node("Log entries", "list box")):
-            bar = self.bar(Node(text="1 of 1")); bar.children.append(extra)
+                      Node("Filter", "dialog"), Node("Log entries", "list box"), Node("Find results", "status", text="1 of 1")):
+            bar = self.bar(); bar.children.append(extra)
             self.assertFalse(self.controller(bar).match_count())
-        for value in ("0 of 1", "private 1 of 1", "1 of 1 .*", "1\ufffc of 1"):
-            self.assertFalse(self.controller(self.bar(text=value)).match_count())
-        bar = self.bar(Node(text="1 of 1")); bar.children[0].value = "wrong query"
+        bar = self.bar(); bar.children[0].value = "wrong query"
         self.assertFalse(self.controller(bar).match_count())
-        bar = self.bar(Node(text="1 of 1")); bar.states.clear()
+        bar = self.bar(); bar.states.clear()
         self.assertFalse(self.controller(bar).match_count())
-        bar = self.bar(Node(name="1 of 1", text="0 of 1"))
-        self.assertFalse(self.controller(bar).match_count())
-        bar = self.bar(text="0 of 1")
-        bar.children[1].children.append(Node(text="1 of 1"))
-        self.assertFalse(self.controller(bar).match_count())
-        bar = self.bar(Node(text="1 of 1"))
-        self.assertFalse(self.controller(bar, self.entry()).match_count())
-        bar = self.bar(Node(text="1 of 1"))
-        close = bar.children.pop(5)
-        self.assertFalse(self.controller(Node(role="section", children=[bar, close, Node("Log entries", "list box")])).match_count())
+        self.assertFalse(self.controller(self.bar(), self.bar()).match_count())
+        self.assertFalse(self.controller(self.bar(), self.entry()).match_count())
+        bar = self.bar(); close = bar.children.pop(5)
+        self.assertFalse(self.controller(Node(role="section", children=[bar, close])).match_count())
 
     def test_ready_waits_for_splash_removal_even_with_visible_fixture_rows(self):
         for splash in (Node(role="section", attrs=("id:splash",), states=()),
@@ -143,12 +195,163 @@ class DiagnosticsTests(unittest.TestCase):
         controller = self.controller(good, self.entry(attrs=("placeholder-text:Highlight...",)))
         find = self.api(controller, "find_input")
         self.assertIs(find(), good)
-        for bad in (self.entry(role="push button"), self.entry(attrs=()),
+        for bad in (self.entry(role="push button", attrs=("placeholder-text:Find...", "tag:button")), self.entry(attrs=()),
                     self.entry(states=("focused", "editable")), self.entry(states=("showing", "editable")),
                     self.entry(states=("showing", "focused"))):
             controller = self.controller(bad)
             self.assertIsNone(controller.find_input())
         self.assertIsNone(self.controller(good, self.entry()).find_input())
+
+    def test_find_diagnostics_distinguish_placeholder_role_visibility_without_relaxing_selector(self):
+        for node, entry, showing in ((self.entry(role="static", attrs=("placeholder-text:Find...", "tag:span")), False, True),
+                                     (self.entry(states=("focused", "editable")), True, False)):
+            controller = self.controller(node)
+            self.assertIsNone(controller.find_input())
+            facts = controller.result["diagnostics"]["observations"]
+            self.assertTrue(facts["find_placeholder_present"])
+            self.assertTrue(facts["find_placeholder_unique"])
+            self.assertEqual(facts["find_placeholder_entry"], entry)
+            self.assertEqual(facts["find_placeholder_showing"], showing)
+            contract.sanitize_diagnostics(controller.result["diagnostics"])
+        controller = self.controller(self.entry(attrs=(), name="Find..."))
+        self.assertIsNone(controller.find_input())
+        self.assertTrue(controller.result["diagnostics"]["observations"]["find_name_present"])
+        self.assertFalse(controller.result["diagnostics"]["observations"]["find_placeholder_present"])
+
+    def test_exception_diagnostics_are_fixed_boolean_categories_without_private_strings(self):
+        for error, category in ((ValueError("private value"), "value"),
+                                (TypeError("private type"), "type"),
+                                (AttributeError("private attribute"), "attribute"),
+                                (OSError("private path"), "os"),
+                                (subprocess.CalledProcessError(1, "private command"), "command"),
+                                (RuntimeError("private other"), "other")):
+            facts = ui.exception_observations(error)
+            self.assertTrue(facts["error_"+category])
+            self.assertEqual(sum(facts.values()), 1)
+            diagnostic=contract.diagnostics(); diagnostic["observations"]=facts
+            contract.sanitize_diagnostics(diagnostic)
+            self.assertNotIn("private", json.dumps(facts))
+
+    def test_bubblewrap_id_map_denial_classification_does_not_emit_raw_stderr(self):
+        from appimage_runtime import sandbox
+        for marker in (b"uid map", b"gid map", b"uid_map", b"gid_map"):
+            self.assertEqual(sandbox.classify_error(b"private: "+marker+b": Permission denied"), "id-map-denied")
+        self.assertEqual(sandbox.classify_error(b"private: uid map: unknown error"), "other")
+
+    def test_declared_input_handles_non_entry_role_name_without_accepting_static_text(self):
+        intended=self.entry(role="text")
+        intended.getRole=lambda: 79
+        controller=self.controller(intended)
+        self.assertIs(controller.find_input(), intended)
+        bar=self.bar(text="1 of 1"); bar.children[0]=intended
+        self.assertTrue(self.controller(bar).match_count())
+        static=self.entry(role="text", attrs=("placeholder-text:Find...",))
+        self.assertIsNone(self.controller(static).find_input())
+
+    def test_transient_atspi_error_resamples_but_repeated_errors_never_pass(self):
+        Error=type("Error", (Exception,), {"__module__":"gi.repository.GLib"})
+        with patch.object(ui.time, "sleep"):
+            sequence=iter((Error("private object"), True))
+            def sample():
+                value=next(sequence)
+                if isinstance(value, Exception): raise value
+                return value
+            self.assertTrue(ui.poll(sample))
+        now=[0.0]
+        def tick(seconds): now[0]+=seconds
+        def inaccessible(): raise Error("private unavailable")
+        with patch.object(ui.time, "monotonic", side_effect=lambda: now[0]), patch.object(ui.time, "sleep", side_effect=tick):
+            with self.assertRaisesRegex(ui.Blocked, "accessibility-unavailable"):
+                ui.poll(inaccessible, seconds=0.4)
+        def unrelated(): raise TypeError("implementation defect")
+        with self.assertRaises(TypeError): ui.poll(unrelated)
+
+    def test_input_requires_html_tag_and_editable_state_and_preserves_scope(self):
+        intended=self.entry(role="text")
+        self.assertIs(self.controller(intended).find_input(), intended)
+        bar=self.bar(text="1 of 1"); bar.children[0]=intended
+        self.assertTrue(self.controller(bar).match_count())
+        for bad in (self.entry(role="text", attrs=("placeholder-text:Find...", "tag:span")),
+                    self.entry(role="text", states=("showing", "focused")),
+                    self.entry(role="push button", attrs=("placeholder-text:Find...", "tag:button"))):
+            self.assertIsNone(self.controller(bad).find_input())
+
+    def test_tree_mutation_atspi_error_is_resampled_without_skipping_children(self):
+        Error=type("Error", (Exception,), {"__module__":"gi.repository.GLib"})
+        controller=self.controller()
+        original=controller.application.children[0]
+        class MutatingNode(Node):
+            def __iter__(self): raise Error("private missing child")
+        controller.application.children[0]=MutatingNode()
+        with self.assertRaises(Error): controller.nodes()
+        controller.application.children[0]=original
+        self.assertTrue(controller.nodes())
+
+    def test_count_failure_stops_acceptance_before_later_checks(self):
+        controller = self.controller()
+        def wait(stage, predicate, *args, **kwargs):
+            controller.stage(stage)
+            if stage == "find-count":
+                raise ValueError("ui-assertion")
+        with tempfile.TemporaryDirectory() as directory, patch.object(controller, "private_session"), patch.object(controller, "launch"), patch.object(controller, "wait", side_effect=wait), patch.object(controller, "expect_rows"), patch.object(controller, "screenshot"), patch.object(controller, "click") as click, patch.object(ui, "key"), patch.object(ui, "type_text"):
+            controller.fixture = Path(directory) / "fixture.log"
+            with self.assertRaisesRegex(ValueError, "ui-assertion"):
+                controller.execute()
+        self.assertNotIn("find", controller.result["checks"])
+        self.assertNotIn("filter", controller.result["checks"])
+        click.assert_not_called()
+        self.assertEqual(controller.result["diagnostics"]["stage"], "find-count")
+
+    def test_external_chooser_diagnostic_is_read_only_and_rejects_other_accounts(self):
+        controller=self.controller()
+        original=controller.application
+        external=Node(role="application",children=[Node(role="dialog")])
+        external.get_process_id=lambda: 123
+        controller.atspi.Registry=SimpleNamespace(getDesktop=lambda index:[external])
+        with patch.object(ui,"status",return_value={"Uid":str(os.getuid())}):
+            self.assertFalse(controller.chooser_visible())
+        self.assertIs(controller.application,original)
+        facts=controller.result["diagnostics"]["observations"]
+        self.assertFalse(facts["reopen_chooser_in_app"])
+        self.assertTrue(facts["reopen_chooser_on_desktop"])
+        with patch.object(ui,"status",return_value={"Uid":str(os.getuid()+1)}):
+            self.assertFalse(controller.chooser_visible())
+        self.assertFalse(facts["reopen_chooser_on_desktop"])
+        contract.sanitize_diagnostics(controller.result["diagnostics"])
+
+    def test_chooser_location_requires_unique_native_dialog_field_and_exact_path_readback(self):
+        intended=self.entry(text="/tmp/offline-fixture/ordinary/data/runtime-fixture.log")
+        unrelated=self.entry(text="private unrelated")
+        dialog=Node(role="dialog",children=[intended])
+        controller=self.controller(dialog,unrelated)
+        self.assertIs(controller.chooser_location(),intended)
+        self.assertTrue(controller.chooser_path_matches())
+        intended.value="private wrong path"
+        self.assertFalse(controller.chooser_path_matches())
+        self.assertNotIn("private",json.dumps(controller.result))
+        dialog.children.append(self.entry())
+        self.assertIsNone(controller.chooser_location())
+
+    def test_native_final_capture_requires_active_window_owner_to_match_case_uid(self):
+        controller=self.controller()
+        for uid,expected in ((os.getuid(),"84"),(os.getuid()+1,"42")):
+            with patch.object(ui.subprocess,"check_output",side_effect=["84","123"]), patch.object(ui,"status",return_value={"Uid":str(uid)}), patch.object(ui,"command") as run:
+                controller.screenshot("final")
+                self.assertEqual(run.call_args.args[0][2],expected)
+        with patch.object(ui.subprocess,"check_output") as observe,patch.object(ui,"command") as run:
+            controller.screenshot("initial")
+            observe.assert_not_called()
+            self.assertEqual(run.call_args.args[0][2],"42")
+
+    def test_native_open_action_is_scoped_to_dialog_not_a_main_window_decoy(self):
+        intended=Node("Open","push button")
+        action=SimpleNamespace(nActions=1,getName=lambda index:"click",doAction=lambda index:True)
+        intended.queryAction=lambda:action
+        decoy=Node("Open","push button")
+        decoy.queryAction=lambda:self.fail("main-window decoy activated")
+        controller=self.controller(Node(role="dialog",children=[intended]),decoy)
+        controller.click("Open",chooser=True)
+        self.assertTrue(controller.result["diagnostics"]["observations"]["reopen_open_unique"])
 
     def test_find_readback_rejects_wrong_input_value_and_never_records_text(self):
         entry = self.entry()
@@ -159,22 +362,15 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertFalse(matches())
         self.assertNotIn("private", json.dumps(controller.result))
 
-    def test_count_accepts_static_name_or_text_but_requires_beta_and_all_three_rows(self):
-        for count in (Node("1 of 1"), Node(text="1 of 1"), Node(role="text", text="1 of 1")):
-            controller = self.controller(self.bar(count))
-            count_matches = self.api(controller, "match_count")
-            self.assertTrue(count_matches())
-            rows = controller.application.children[0].children
-            rows[1].states.discard("selected")
-            rows[0].states.add("selected")
-            self.assertFalse(count_matches())
-            rows[0].states.discard("selected")
-            rows[1].states.add("selected")
-            rows.pop()
-            self.assertFalse(count_matches())
-        for count in (Node("1 of 1", "push button"), Node("1 of 1", states=()),
-                      Node(text="0 of 1"), Node(text="private 1 of 1")):
-            self.assertFalse(self.controller(self.bar(count)).match_count())
+    def test_count_requires_beta_selection_and_all_three_rows(self):
+        controller = self.controller(self.bar())
+        self.assertTrue(controller.match_count())
+        rows = controller.application.children[0].children
+        rows[1].states.discard("selected"); rows[0].states.add("selected")
+        self.assertFalse(controller.match_count())
+        rows[0].states.discard("selected"); rows[1].states.add("selected")
+        rows.pop()
+        self.assertFalse(controller.match_count())
 
     def test_wait_records_exact_stage_elapsed_and_only_boolean_observations(self):
         controller = self.controller(self.entry())
@@ -219,7 +415,7 @@ class DiagnosticsTests(unittest.TestCase):
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 contract.sanitize_case(bad)
         good = copy.deepcopy(valid)
-        good.update(status="passed", reason="ok", checks=dict.fromkeys(contract.CHECKS, True), counts=[3, 1, 3, 4, 4])
+        good.update(status="passed", reason="ok", checks=dict.fromkeys(contract.CHECKS, True), counts=[3, 1, 3, 4, 1, 4])
         with self.assertRaises(ValueError): contract.sanitize_case(good)
         good["diagnostics"].update(stage="complete", final_image="acceptance")
         contract.sanitize_case(good)
@@ -234,15 +430,21 @@ class DiagnosticsTests(unittest.TestCase):
         for preflight_failure in (True, False):
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory); (root / "proof").mkdir()
-                (root / "context.json").write_text("{}")
+                (root / "context.json").write_text(json.dumps(dict(uid=os.getuid())))
                 for case in contract.CASES: (root / case / "out").mkdir(parents=True)
                 def wait(timeout):
                     if timeout == 300: raise subprocess.TimeoutExpired("offline fixture", timeout)
                     return 0
                 process = SimpleNamespace(pid=123456, wait=wait)
-                with patch.object(session, "preflight", side_effect=ValueError("bubblewrap-unavailable") if preflight_failure else None), patch.object(session.subprocess, "Popen", return_value=process) as spawn, patch.object(session.os, "killpg"):
+                with patch.object(session.private_bus, "write_configuration", return_value=Path("/private/session.conf")) as configuration, patch.object(session, "preflight", side_effect=ValueError("bubblewrap-unavailable") if preflight_failure else None), patch.object(session.subprocess, "Popen", return_value=process) as spawn, patch.object(session.os, "killpg"):
                     session.main(root)
-                    if preflight_failure: spawn.assert_not_called()
+                    if preflight_failure:
+                        spawn.assert_not_called(); configuration.assert_not_called()
+                    else:
+                        command = spawn.call_args.args[0]
+                        self.assertIn("--config-file=/private/session.conf", command)
+                        self.assertIn("--dbus-daemon=/usr/bin/dbus-daemon", command)
+                        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", spawn.call_args.kwargs["env"])
                 for case in contract.CASES:
                     data = json.loads((root / case / "out/result.json").read_text())
                     self.assertEqual(data["diagnostics"]["stage"], "preflight" if preflight_failure else "unobserved")
@@ -256,7 +458,7 @@ class DiagnosticsTests(unittest.TestCase):
             now = [0.0]
             def tick(seconds):
                 now[0] += seconds
-            with patch.object(controller, "launch"), patch.object(controller, "window_geometry", return_value=(42, 0, 0, 1100, 780)), patch.object(ui.time, "monotonic", side_effect=lambda: now[0]), patch.object(ui.time, "sleep", side_effect=tick), patch.object(ui, "key") as key, patch.object(ui, "type_text") as typed, patch.object(controller, "screenshot") as shot:
+            with patch.object(controller, "private_session"), patch.object(controller, "launch"), patch.object(controller, "window_geometry", return_value=(42, 0, 0, 1100, 780)), patch.object(ui.time, "monotonic", side_effect=lambda: now[0]), patch.object(ui.time, "sleep", side_effect=tick), patch.object(ui, "key") as key, patch.object(ui, "type_text") as typed, patch.object(controller, "screenshot") as shot:
                 with self.assertRaisesRegex(ValueError, "ui-assertion"):
                     controller.execute()
                 key.assert_not_called(); typed.assert_not_called(); shot.assert_not_called()
@@ -276,7 +478,7 @@ class DiagnosticsTests(unittest.TestCase):
                 controller.fixture = Path(directory) / "fixture.log"
                 now = [0.0]
                 def tick(seconds): now[0] += seconds
-                with patch.object(controller, "launch"), patch.object(controller, "window_geometry", return_value=(42, 0, 0, 1100, 780)), patch.object(ui.time, "monotonic", side_effect=lambda: now[0]), patch.object(ui.time, "sleep", side_effect=tick), patch.object(ui, "key") as key, patch.object(ui, "type_text") as typed, patch.object(controller, "screenshot"):
+                with patch.object(controller, "private_session"), patch.object(controller, "launch"), patch.object(controller, "window_geometry", return_value=(42, 0, 0, 1100, 780)), patch.object(ui.time, "monotonic", side_effect=lambda: now[0]), patch.object(ui.time, "sleep", side_effect=tick), patch.object(ui, "key") as key, patch.object(ui, "type_text") as typed, patch.object(controller, "screenshot"):
                     with self.assertRaisesRegex(ValueError, "ui-assertion"):
                         controller.execute()
                     self.assertEqual(controller.result["diagnostics"]["stage"], stage)

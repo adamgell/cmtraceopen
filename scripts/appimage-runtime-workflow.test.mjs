@@ -5,11 +5,11 @@ import test from "node:test";
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const workflow = () => read(".github/workflows/cmtrace-appimage-runtime.yml");
 
-test("runtime allocation is manual, main-only, first attempt, two bounded VMs", () => {
+test("runtime allocation is manual, reviewed branch only, first attempt, two bounded VMs", () => {
   const text = workflow();
   assert.match(text, /on:\n  workflow_dispatch:/);
   assert.doesNotMatch(text, /\n  (push|pull_request|pull_request_target|schedule|workflow_run):/);
-  assert.match(text, /github.ref == 'refs\/heads\/main'/);
+  assert.match(text, /github.ref == 'refs\/heads\/codex\/release-native-harness-20261020'/);
   assert.match(text, /GITHUB_RUN_ATTEMPT.*== 1/);
   assert.match(text, /timeout-minutes: 20/);
   assert.match(text, /max-parallel: 2/);
@@ -22,8 +22,10 @@ test("runtime uses only immutable actions and the fixed artifact with read permi
   const text = workflow();
   assert.match(text, /permissions:\n  contents: read\n  actions: read/);
   assert.doesNotMatch(text, /: write/);
-  assert.match(text, /artifact-ids: '11324800940'/);
-  assert.match(text, /run-id: '37260205745'/);
+  assert.match(text, /artifact-ids: \$\{\{ env.FINAL_ARTIFACT_ID \}\}/);
+  assert.match(text, /contract.require_ready_binding\(\)/);
+  assert.match(text, /GITHUB_SHA.*==.*REVIEWED_HARNESS_SHA/);
+  assert.match(text, /run-id: \$\{\{ env.FINAL_PRODUCER_RUN \}\}/);
   assert.doesNotMatch(text, /11311507149|37222916777|11320025934|37247506529/);
   assert.match(text, /repository: adamgell\/cmtraceopen/);
   assert.match(text, /persist-credentials: false/);

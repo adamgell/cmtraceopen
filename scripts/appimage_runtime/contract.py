@@ -6,25 +6,48 @@ import re
 import stat
 from pathlib import PurePosixPath
 
-SOURCE = "c142b2294b4d686ecba3286cd42812587ca0a334"
-MERGE = "c142b2294b4d686ecba3286cd42812587ca0a334"
-TREE = "ec6daf5654332ad3c31a08b49b4a9e487338b1c4"
-RUN = "37260205745"
-ARTIFACT_ID = 11324800940
-ARTIFACT_SHA256 = "4c0a67bdd369f65fa962b8ca91204c0037a0aee058de07d999007d6749fdb9e2"
-ARTIFACT_NAME = "CMTrace Open_1.6.2_amd64.AppImage"
+# Main must fill and independently verify the final signed producer inventory.
+# These missing values deliberately block dispatch and direct host invocation.
+BINDING_READY = False
+SOURCE = "a749f4a39abecd01e4ac62cae87bdaadaaa36d5a"
+MERGE = None
+TREE = "4cdf833e7a3f79d7508c26620831a790a486a829"
+RUN = None
+ARTIFACT_ID = None
+ARTIFACT_SHA256 = None
+ARTIFACT_NAME = "CMTrace Open_1.6.3_amd64.AppImage"
 CASES = ("ordinary", "catalog-renderer-subset")
-CHECKS = ("fuse", "open", "find", "filter", "tail", "reopen", "exited")
+CHECKS = ("private_bus", "fuse", "open", "find", "filter", "tail", "single_instance_owner",
+          "handoff", "single_instance_release", "single_instance_restart", "reopen", "exited")
+COUNTS = [3, 1, 3, 4, 1, 4]
 REASONS = frozenset(("ok", "isolation-unavailable", "bubblewrap-unavailable",
                      "fuse-unavailable", "accessibility-unavailable", "gui-unavailable",
                      "application-exited", "ui-assertion", "timeout", "cancelled",
-                     "evidence-invalid", "artifact-mismatch", "harness-error"))
+                     "evidence-invalid", "artifact-mismatch", "harness-error", "binding-pending", "private-bus-unavailable"))
 STAGES = frozenset(("unobserved", "preflight", "launch", "open", "ready", "find-open-focus", "find-query",
                     "find-selection", "find-count", "filter", "clear-filter", "tail", "exit",
-                    "relaunch", "reopen", "final-image", "complete"))
+                    "relaunch", "reopen", "reopen-dialog", "reopen-location", "reopen-path", "reopen-submit", "reopen-count", "final-image", "complete",
+                    "private-bus", "single-instance-owner", "handoff", "single-instance-release", "single-instance-restart"))
 OBSERVATIONS = frozenset(("splash_absent", "window_active", "window_stable", "rows_match",
                           "find_button_visible", "find_input_unique", "find_input_focused",
-                          "find_query_matches", "beta_selected", "find_scope_valid", "match_name", "match_text", "match_conflict"))
+                          "find_query_matches", "beta_selected", "find_scope_valid", "match_name", "match_text", "match_conflict",
+                          "find_placeholder_present", "find_placeholder_unique", "find_placeholder_entry",
+                          "find_placeholder_showing", "find_name_present", "find_entry_present",
+                          "find_placeholder_tag_input", "find_placeholder_text_role",
+                          "find_placeholder_editable", "find_placeholder_focused",
+                          "error_os", "error_command", "error_value", "error_attribute", "error_type",
+                          "error_atspi", "error_other", "scope_entries_unique", "scope_close_unique",
+                          "scope_common_present", "scope_named_group", "status_unique", "scope_common_showing",
+                          "scope_unexpected_role_id_outside", "scope_unexpected_named_case", "scope_unexpected_named_regex",
+                          "scope_unexpected_tag_button", "scope_unexpected_xml_button", "scope_unexpected_xml_checkbox",
+                          "scope_unexpected_showing", "scope_unexpected_in_control", "scope_unexpected_name_count", "scope_unexpected_tag_svg",
+                          "scope_unexpected_role_notification", "scope_unexpected_role_paragraph", "scope_unexpected_role_canvas",
+                          "scope_unexpected_role_embedded", "scope_unexpected_role_grouping", "scope_unexpected_role_statusbar_joined",
+                          "scope_unexpected_role_checkbox", "scope_unexpected_role_redundant", "scope_unexpected_role_drawing_area",
+                          "scope_unexpected_role_svg", "scope_unexpected_role_icon", "scope_unexpected_named_status", "scope_unexpected_xml_status", "scope_unexpected_tag_span",
+                          "scope_unexpected_tag_div", "scope_unexpected_role_other", "scope_unexpected_role_statusbar",
+                          "scope_unexpected_role_panel", "scope_unexpected_role_label", "scope_unexpected_role_filler",
+                          "scope_unexpected_role_unknown", "scope_unexpected_role_invalid", "scope_roles_valid", "scope_buttons_valid", "scope_inputs_valid", "reopen_chooser_in_app", "reopen_chooser_on_desktop", "reopen_path_matches", "reopen_location_unique", "reopen_open_unique")) | frozenset("scope_unexpected_role_id_" + str(role) for role in range(131))
 
 
 def diagnostics():
@@ -88,7 +111,19 @@ def sanitize_png(data):
         raise ValueError("evidence-invalid") from error
 
 
+def require_ready_binding():
+    if BINDING_READY is not True:
+        raise ValueError("binding-pending")
+    if (any(not isinstance(value, str) or re.fullmatch(r"[a-f0-9]{40}", value) is None for value in (SOURCE, MERGE, TREE))
+            or not isinstance(RUN, str) or re.fullmatch(r"[1-9][0-9]*", RUN) is None
+            or type(ARTIFACT_ID) is not int or ARTIFACT_ID <= 0
+            or not isinstance(ARTIFACT_SHA256, str) or re.fullmatch(r"[a-f0-9]{64}", ARTIFACT_SHA256) is None
+            or ARTIFACT_NAME != "CMTrace Open_1.6.3_amd64.AppImage"):
+        raise ValueError("artifact-mismatch")
+
+
 def validate_binding(report, digest):
+    require_ready_binding()
     build = report["build"]
     actual = (build["source_commit"], build["built_commit"], build["built_tree"],
               build["image"]["GITHUB_RUN_ID"], build["image"]["GITHUB_RUN_ATTEMPT"],
@@ -160,9 +195,9 @@ def sanitize_case(data):
     checks, counts = data["checks"], data["counts"]
     if not isinstance(checks, dict) or not set(checks) <= set(CHECKS) or any(type(v) is not bool for v in checks.values()):
         raise ValueError("evidence-invalid")
-    if not isinstance(counts, list) or any(type(v) is not int for v in counts) or counts != [3, 1, 3, 4, 4][:len(counts)] or len(counts) > 5:
+    if not isinstance(counts, list) or any(type(v) is not int for v in counts) or counts != COUNTS[:len(counts)] or len(counts) > len(COUNTS):
         raise ValueError("evidence-invalid")
-    if data["status"] == "passed" and (data["reason"] != "ok" or checks != dict.fromkeys(CHECKS, True) or counts != [3, 1, 3, 4, 4]):
+    if data["status"] == "passed" and (data["reason"] != "ok" or checks != dict.fromkeys(CHECKS, True) or counts != COUNTS):
         raise ValueError("evidence-invalid")
     if data["status"] != "passed" and data["reason"] == "ok":
         raise ValueError("evidence-invalid")
@@ -199,7 +234,7 @@ def sanitize_fuse(proofs, passed):
 
 def accessible_role(role, attributes):
     for attribute in attributes:
-        if attribute in ("xml-roles:listbox", "xml-roles:option"):
+        if attribute in ("xml-roles:listbox", "xml-roles:option", "xml-roles:group", "xml-roles:status"):
             return attribute.split(":", 1)[1]
     return {"list box": "listbox", "list item": "option"}.get(role, role)
 

@@ -8,7 +8,7 @@ import stat
 import subprocess
 import sys
 
-from . import contract, sandbox
+from . import contract, private_bus, sandbox
 
 
 def query(args):
@@ -58,6 +58,7 @@ def main(root):
     (root / "proof/preflight.json").write_text(json.dumps({"identity": True, "offline": True, "bubblewrap": True, "fuse_device": True}))
     for case in contract.CASES:
         area = root / case
+        config = private_bus.write_configuration(area, context["uid"])
         env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1",
                "HOME": str(area / "home"), "XDG_RUNTIME_DIR": str(area / "runtime"),
                "XDG_CACHE_HOME": str(area / "cache"), "XDG_CONFIG_HOME": str(area / "config"),
@@ -66,7 +67,8 @@ def main(root):
         if case == "catalog-renderer-subset":
             env.update(WEBKIT_DISABLE_DMABUF_RENDERER="1", WEBKIT_DISABLE_COMPOSITING_MODE="1")
         command = ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1280x900x24 -nolisten tcp",
-                   "dbus-run-session", "--", "/usr/bin/python3", "-m", "appimage_runtime.ui", str(root), case]
+                   "dbus-run-session", "--config-file=" + str(config), "--dbus-daemon=/usr/bin/dbus-daemon",
+                   "--", "/usr/bin/python3", "-m", "appimage_runtime.ui", str(root), case]
         process = subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         try:
             process.wait(timeout=300)
