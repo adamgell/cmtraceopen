@@ -54,6 +54,28 @@ describe("FindBar (CHROME-007)", () => {
     expect(within(group).queryByText("1 of 1 unrelated")).not.toBeInTheDocument();
   });
 
+  it("updates the existing live region for the first query and keeps it when cleared", () => {
+    useLogStore.setState({
+      findQuery: "",
+      findMatchIds: [],
+      findCurrentIndex: -1,
+      findRegexError: null,
+      findUseRegex: false,
+    });
+    render(<FindBar onClose={() => {}} />);
+    const status = screen.getByRole("status", { name: "Find results" });
+    const input = screen.getByPlaceholderText("Find...");
+    expect(status).toBeEmptyDOMElement();
+
+    fireEvent.change(input, { target: { value: "missing" } });
+    expect(screen.getByRole("status", { name: "Find results" })).toBe(status);
+    expect(status).toHaveTextContent(/^No results$/);
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(screen.getByRole("status", { name: "Find results" })).toBe(status);
+    expect(status).toBeEmptyDOMElement();
+  });
+
   it("shows match index, no-results, and invalid regex status", () => {
     useLogStore.setState({
       findQuery: "error",
