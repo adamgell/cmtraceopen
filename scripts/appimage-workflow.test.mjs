@@ -204,3 +204,13 @@ for(const mode of ['published','prerelease','duplicate','api-error']) {
     assert.notEqual(result.status,0); assert.equal(calls,1); assert.deepEqual(sleeps,[]);
   });
 }
+
+
+test("every verified upload bundle format has build provenance", () => {
+  const text = workflow("cmtrace-release");
+  const attest = text.split("      - name: Attest release artifacts\n")[1].split("      - name: Upload verified release bundles\n")[0];
+  const upload = text.split("      - name: Upload verified release bundles\n")[1];
+  const formats = [...upload.matchAll(/\$BUNDLE_ROOT\/[^\n]*?"\*(\.[A-Za-z.]+)\s*$/gm)].map(match => match[1]);
+  assert.equal(new Set(formats).size, 5, "inspect all five actual upload bundle formats");
+  for (const format of formats) assert.ok(attest.includes(`/**/*${format}`), `missing provenance for ${format}`);
+});

@@ -48,6 +48,7 @@ function toolchainSteps(contents) {
     const lookahead = lines.slice(index + 1, index + 4).join("\n");
     const inputMatch = /^\s+toolchain:\s*"?([^"\n]+?)"?\s*$/m.exec(lookahead);
     steps.push({
+      name: /^\s*- name: (.+)$/.exec(lines[index - 1] ?? "")?.[1] ?? null,
       sha: match[1],
       comment: (match[2] ?? "").trim(),
       hasInput: inputMatch !== null,
@@ -132,7 +133,7 @@ function inputOffenders(workflow, contents) {
     if (
       step.inputVersion !== PINNED_REF.version &&
       step.inputVersion !== MSRV_INPUT &&
-      step.inputVersion !== PARSER_MSRV_INPUT
+      !(step.inputVersion === PARSER_MSRV_INPUT && workflow === "cmtrace-ci.yml" && step.name === "Setup parser Rust 1.88")
     ) {
       offenders.push(
         `${workflow}:${step.line} asks for ${step.inputVersion}, expected ${PINNED_REF.version} or the MSRV floors ${MSRV_INPUT}/${PARSER_MSRV_INPUT}`,
@@ -342,4 +343,16 @@ test("the ref guard rejects a comment that names the wrong channel", () => {
     1,
     `the comment must name the channel the ref installs: ${JSON.stringify(offenders)}`,
   );
+});
+
+test("the parser floor is rejected for desktop and unrelated workflow steps", () => {
+  const fixture = name => [
+    `      - name: ${name}`,
+    `        uses: dtolnay/rust-toolchain@${INPUT_ACCEPTING_REF.sha} # stable`,
+    "        with:",
+    `          toolchain: "${PARSER_MSRV_INPUT}"`,
+  ].join("\n");
+  assert.equal(inputOffenders("cmtrace-ci.yml", fixture("Setup Rust")).length, 1);
+  assert.equal(inputOffenders("other.yml", fixture("Setup parser Rust 1.88")).length, 1);
+  assert.deepEqual(inputOffenders("cmtrace-ci.yml", fixture("Setup parser Rust 1.88")), []);
 });

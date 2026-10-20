@@ -113,57 +113,6 @@ jobs:
           # named explicitly or the build would package the wrong commit.
           ref: refs/tags/${{ steps.resolve.outputs.tag_name }}
 
-      - name: Resolve release notes
-        id: notes
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ steps.resolve.outputs.tag_name }}
-          VERSION: ${{ steps.resolve.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          # tauri-action calls updateRelease on a published release with whatever
-          # body it is handed, so a re-run against an existing release would
-          # replace hand-written notes with the template. Read the published body
-          # back and feed it straight through instead.
-          draft=""
-          if gh release view "$TAG_NAME" --json body,isDraft > release-state.json 2>/dev/null; then
-            jq -r '.body // ""' release-state.json > release-notes.md
-            draft="$(jq -r '.isDraft' release-state.json)"
-          fi
-
-          if [ ! -s release-notes.md ]; then
-            template=".github/release-notes/template.md"
-            if [ ! -f "$template" ]; then
-              echo "::error::No release notes exist for $TAG_NAME and $template is missing from that tag."
-              exit 1
-            fi
-            sed -e "s|{{TAG}}|$TAG_NAME|g" -e "s|{{VERSION}}|$VERSION|g" "$template" > release-notes.md
-          fi
-
-          # tauri-action finds a draft by scanning the release list but a published
-          # one by tag lookup. The wrong flag sends it down the create path for a
-          # tag that already exists, which the API rejects.
-          if [ -z "$draft" ]; then
-            draft="true"
-          fi
-
-          echo "draft=$draft" >> "$GITHUB_OUTPUT"
-
-          # The closing delimiter has to start its own line, but normalizing the
-          # body itself would edit the notes on the way back to the release, so
-          # only add the newline when one is genuinely missing.
-          if [ -n "$(tail -c 1 release-notes.md)" ]; then
-            printf '\n' >> release-notes.md
-          fi
-
-          {
-            echo "body<<CMTRACE_RELEASE_BODY_EOF"
-            cat release-notes.md
-            echo "CMTRACE_RELEASE_BODY_EOF"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Import Apple Developer Certificate
         if: runner.os == 'macOS'
         env:
@@ -388,7 +337,9 @@ jobs:
         with:
           subject-path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
 
       - name: Upload verified release bundles

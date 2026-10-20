@@ -70,12 +70,13 @@ export function missingUpdaterAssets({ version, tagName, assets }) {
     throw new Error("Invalid stable updater version/tag identity");
   }
   if (!Array.isArray(assets)) throw new Error("Release assets must be an array");
-  const names = assets.map(asset => asset.name);
+  const names = assets.map(asset => asset?.name);
   if (names.some(name => typeof name !== "string") || new Set(names).size !== names.length) {
     throw new Error("Invalid or duplicate release asset names");
   }
+  const uploaded = new Set(assets.filter(asset => asset.state === "uploaded").map(asset => asset.name));
   const required = [...new Set(UPDATER_TARGETS.map(target => target.artifact(version)))];
-  return required.flatMap(name => [name, `${name}.sig`]).filter(name => !names.includes(name));
+  return required.flatMap(name => [name, `${name}.sig`]).filter(name => !uploaded.has(name));
 }
 
 export function assertCompleteUpdaterManifest({ manifest, version, tagName, repository, signatures, assets }) {

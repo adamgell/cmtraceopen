@@ -7,13 +7,21 @@ import test from 'node:test';
 import { UPDATER_TARGETS, buildUpdaterManifest, missingUpdaterAssets, assertCompleteUpdaterManifest } from './updater-manifest.mjs';
 const version = '1.6.3', tagName = 'v1.6.3', repository = 'adamgell/cmtraceopen';
 const names = [...new Set(UPDATER_TARGETS.map(t => t.artifact(version)))];
-const assets = names.flatMap(name => [{name}, {name: `${name}.sig`}]);
+const assets = names.flatMap(name => [{name, state: "uploaded"}, {name: `${name}.sig`, state: "uploaded"}]);
 const signatures = new Map(names.map(name => [`${name}.sig`, `signature-${name}`]));
 const build = (sig = signatures, publishedManifest = null) => buildUpdaterManifest({version, tagName, repository, signatures: sig, publishedManifest, pubDate: '2026-10-10T00:00:00Z'}).manifest;
 
 test('all six artifacts and six signature assets are required', () => {
   assert.deepEqual(missingUpdaterAssets({version, tagName, assets}), []);
   for (const asset of assets) assert.deepEqual(missingUpdaterAssets({version, tagName, assets: assets.filter(a => a !== asset)}), [asset.name]);
+});
+test('unfinished artifact and signature uploads remain missing', () => {
+  for (const asset of assets) {
+    for (const state of ['open', undefined]) {
+      const pending = assets.map(candidate => candidate === asset ? {...candidate, state} : candidate);
+      assert.deepEqual(missingUpdaterAssets({version, tagName, assets: pending}), [asset.name]);
+    }
+  }
 });
 test('old manifest cannot supply absent current signatures', () => {
   assert.throws(() => assertCompleteUpdaterManifest({manifest: build(new Map(), build()), version, tagName, repository, signatures: new Map(), assets}), /signature|coverage/i);

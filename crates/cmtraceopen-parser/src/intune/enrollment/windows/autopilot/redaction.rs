@@ -421,6 +421,17 @@ fn redact_source_text(value: &str, literals: &MaskedLiterals, rule: usize) -> St
     output
 }
 
+/// What a walked value is, which decides the floor its literal holds to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MaskClass {
+    /// A serial may instead contain a documented firmware placeholder.
+    Serial,
+    /// A field that states an identity: device, tenant, correlation key.
+    Identity,
+    /// A field that labels something rather than naming it.
+    DisplayName,
+}
+
 /// Visit every whole value the export masks in place.
 ///
 /// One walk, read by both [`collect_masked_literals`] and
@@ -432,17 +443,6 @@ fn redact_source_text(value: &str, literals: &MaskedLiterals, rule: usize) -> St
 /// masked is decided by a key rather than by the field they sit in;
 /// [`sensitive_value_key`] and [`masked_conflict_literal`] are the shared
 /// decisions for those two.
-/** What a walked value is, which decides the floor its literal holds to. */
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum MaskClass {
-    /// A serial may instead contain a documented firmware placeholder.
-    Serial,
-    /// A field that states an identity: device, tenant, correlation key.
-    Identity,
-    /// A field that labels something rather than naming it.
-    DisplayName,
-}
-
 fn for_each_masked_value_mut(
     snapshot: &mut AutopilotSnapshot,
     mut visit: impl FnMut(&mut String, MaskClass),
@@ -479,10 +479,6 @@ fn for_each_masked_value_mut(
     }
 }
 
-/// Read the literal value out of every field the export masks.
-///
-/// Takes `&mut` only to share one walk with the masking pass in
-/// [`for_each_masked_value_mut`]; it changes nothing.
 /// A profile name labels a configuration rather than naming the device or the
 /// tenant it belongs to, so it keeps the prose floor.
 fn display_name_value_key(name: &str) -> bool {
@@ -495,6 +491,10 @@ fn is_firmware_serial_placeholder(value: &str) -> bool {
         .any(|placeholder| value.trim().eq_ignore_ascii_case(placeholder))
 }
 
+/// Read the literal value out of every field the export masks.
+///
+/// Takes `&mut` only to share one walk with the masking pass in
+/// [`for_each_masked_value_mut`]; it changes nothing.
 fn collect_masked_literals(snapshot: &mut AutopilotSnapshot) -> MaskedLiterals {
     let mut identifiers = BTreeSet::new();
     let mut display_names = BTreeSet::new();
