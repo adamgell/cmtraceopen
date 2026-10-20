@@ -5,7 +5,7 @@ Thanks for your interest in contributing. This guide covers development setup, b
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) v18+ (v20 LTS recommended)
-- [Rust](https://www.rust-lang.org/tools/install) 1.88+ (MSVC toolchain on Windows)
+- [Rust](https://www.rust-lang.org/tools/install) 1.89+ (MSVC toolchain on Windows)
 - [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/)
 
 ### Windows-specific
@@ -119,7 +119,7 @@ Six required status checks, on the `Protect` ruleset over `main`:
 Three more jobs run on every PR but are not required to merge:
 
 - **Source Quality** — `cargo fmt --all -- --check`, changed-range whitespace, and `cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown`. The wasm check is a purity constraint: the parser crate must stay wasm32-compatible.
-- **Rust MSRV (1.88)** — on Ubuntu and Windows. Anything added has to build on 1.88, not only on the pinned toolchain.
+- **Rust MSRV (1.89)** — on Ubuntu and Windows. Anything added has to build on 1.89, not only on the pinned toolchain.
 - **ESP Diagnostics (Windows)** — installer file-association cleanup, parser tests and Clippy, native and Graph ESP diagnostics, and the full application's all-features build, tests, manifest verification and Clippy on Windows.
 
 Native `cargo check` and `cargo test` on Linux or macOS skip `#[cfg(target_os = "windows")]` code, tests included. Contributors on those hosts need the Windows CI jobs or a separate Windows run to verify that code; contributors developing on Windows can compile and test it locally. State which checks actually ran in the pull request. Two compile errors in one pull request reached CI from a non-Windows workstation that way — one an unqualified path, one a missing import for a Windows-gated test — which is what #763 records.

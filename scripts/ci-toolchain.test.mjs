@@ -23,7 +23,7 @@ const PINNED_REF = {
 
 /**
  * The ref used by steps that pass an explicit `toolchain:` input. Version refs
- * remove that input, so the MSRV job — which asks for 1.88 — has to keep using
+ * remove that input, so the MSRV job — which asks for 1.89 — has to keep using
  * an input-accepting ref.
  */
 const INPUT_ACCEPTING_REF = {
@@ -90,7 +90,7 @@ test("every workflow installs the pinned toolchain, or asks for its own", () => 
  * from 1.92.0 while every local `cargo fmt` ran the pinned 1.98.1: the ref was
  * right for a step with an input, so nothing objected to the version.
  */
-const MSRV_INPUT = "1.88";
+const MSRV_INPUT = "1.89";
 
 /**
  * The workflow filenames the guards scan.

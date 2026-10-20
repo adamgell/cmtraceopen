@@ -74,3 +74,21 @@ fn security_lockfile_has_patched_rustls_for_any_platform() {
         );
     }
 }
+
+#[test]
+fn linux_single_instance_uses_the_maintained_zbus_family() {
+    let versions = locked_versions("zbus");
+    assert!(!versions.is_empty(), "Linux single-instance requires D-Bus");
+    for version in versions {
+        assert!(
+            stable_version(version) >= (6, 0, 0),
+            "the single-instance backend must use maintained zbus, found {version}"
+        );
+    }
+    for package in ["zvariant", "zbus_names", "zvariant_derive"] {
+        assert!(
+            locked_versions(package).is_empty(),
+            "RUSTSEC-2026-0370/0371/0372: unmaintained standalone {package} remains"
+        );
+    }
+}

@@ -12,12 +12,24 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Desktop build compiler**: Raise the desktop Rust minimum from 1.88 to 1.89 for the maintained Linux D-Bus dependency. The parser crate remains at version 0.4.0 with its existing Rust 1.88 minimum. Supported desktop OS baselines are unchanged.
+
 - **Reference screenshots**: Remove outdated reference screenshots that showed identifying environment details, and replace the 0.3.0 workspace screenshot with a text caption.
 - **Parser source compatibility (#814)**: Advance `cmtraceopen-parser` to `0.4.0` for breaking source API changes from new Windows Firewall enum variants and public struct fields. Update affected exhaustive matches and struct literals; see the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
 
 - **DsRegCmd diagnostics link to event-log entries (#870)**: Diagnostics from rules that fire on a specific `0x` code now carry `related_error_codes` (public field on `DsregcmdDiagnosticInsight`; struct literals need `related_error_codes: Vec::new()`), and the analyzer links event-log entries that cite those codes on token boundaries. Only codes that appear in the rule's fields on token boundaries are recorded; a rule firing on a substring hit records none. See the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
 
 ### Fixed
+
+- **Linux single-instance handoff**: Port an owned copy of the single-instance plugin to maintained zbus 6, preserving exclusive election, file handoff and name cleanup. A failed session-bus connection or delivery now reports a setup failure instead of silently continuing or reporting successful delivery. Windows and macOS implementations are unchanged.
+
+- **Archive and TLS dependencies**: Update ZIP to 9.0.4 and Rustls to 0.23.46, retain archive symlink/special-file rejection, and remove the updater's unused legacy ZIP extraction path without suppressing the new advisories.
+
+- **IME record framing**: Recover interrupted logical records during live tailing and identify retained unparsed fragments without adding public parser fields or variants.
+
+- **Diagnostics collection bounds**: Retain bounded captures and report source changes instead of implying a complete, unchanged capture.
+
+- **Release package verification**: Require Windows embedded application signing during installer bundling, retained macOS trust evidence and complete updater platform coverage before publication.
 
 - **Find accessibility**: Give the Find bar and its live result count named accessible regions so assistive technology can identify the controls and announce search results.
 
