@@ -444,3 +444,41 @@ fn tauri_runtime_keeps_primary_alive_after_setup_returns() {
             .unwrap();
     });
 }
+
+struct StalledOwner;
+#[zbus::interface(name = "org.SingleInstance.DBus")]
+impl StalledOwner {
+    async fn execute_callback(&self, _argv: Vec<String>, _cwd: String) {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    }
+}
+
+#[test]
+fn stalled_owner_callback_times_out_as_delivery_failure() {
+    let bus = PrivateBus::new();
+    let name = bus.name();
+    run(async {
+        let owner = bus
+            .builder()
+            .name(name.as_str())
+            .serve_at(OBJECT_PATH, StalledOwner)
+            .build()
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            claim_or_forward(
+                bus.builder().method_timeout(Duration::from_millis(100)),
+                &name,
+                OBJECT_PATH,
+                no_activation(),
+                vec!["must be acknowledged".into()],
+                "/cwd".into(),
+            ),
+        )
+        .await
+        .expect("stalled callback must respect the configured handoff timeout");
+        assert!(matches!(result, Err(transport::ClaimError::Delivery(_))));
+        owner.release_name(name.as_str()).await.unwrap();
+    });
+}

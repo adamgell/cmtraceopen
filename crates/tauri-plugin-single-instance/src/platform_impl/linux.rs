@@ -38,7 +38,8 @@ pub fn init<R: Runtime>(
             let app_handle = app.clone();
             let mut callback = callback;
             let instance = tauri::async_runtime::block_on(dbus::claim_or_forward(
-                zbus::connection::Builder::session(),
+                zbus::connection::Builder::session()
+                    .method_timeout(std::time::Duration::from_secs(15)),
                 &dbus_name,
                 &dbus_path,
                 Box::new(move |argv, cwd| callback(&app_handle, argv, cwd)),

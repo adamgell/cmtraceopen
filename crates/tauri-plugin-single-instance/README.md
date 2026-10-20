@@ -8,7 +8,8 @@ and macOS backend source bytes are unchanged.
 The Linux backend uses maintained zbus 6 with Tokio on Tauri's existing async
 runtime. It registers its activation interface before requesting exclusive
 ownership, disallows replacement and queuing, and awaits the primary's reply
-before a secondary exits. If the bus, interface, or name acquisition is unavailable
+before a secondary exits. Method calls have a 15-second timeout so an
+unresponsive primary cannot leave the secondary waiting indefinitely. If the bus, interface, or name acquisition is unavailable
 before an existing owner is established, startup continues with a warning and
 without a managed single-instance lock. Once an existing owner is established,
 failed delivery propagates through plugin setup; the secondary cannot report a

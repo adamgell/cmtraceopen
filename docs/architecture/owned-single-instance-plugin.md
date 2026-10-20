@@ -24,7 +24,9 @@ The backend uses Tauri's existing Tokio runtime with explicit zbus Tokio and
 service features. It preserves the per-application bus name and object path,
 exclusive name ownership without replacement, argv/working-directory handoff
 to the primary instance, and connection/name lifetime through shutdown. A
-secondary process exits successfully only after handoff succeeds. If the session
+secondary process exits successfully only after handoff succeeds. D-Bus method
+calls have a 15-second timeout; a timed-out handoff is a delivery error, not a
+successful exit. If the session
 bus cannot be reached or name ownership cannot be established, the application
 retains the upstream startup behavior without instance enforcement and logs a
 warning. A failure delivering arguments after an existing primary is detected
