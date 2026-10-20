@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.6.3]
+
 ### Removed
 
 - **Hot Dog Stand theme**: Remove the theme. Anyone who had it selected opens in the Light theme.
@@ -16,6 +18,12 @@ All notable changes to this project will be documented in this file.
 - **DsRegCmd diagnostics link to event-log entries (#870)**: Diagnostics from rules that fire on a specific `0x` code now carry `related_error_codes` (public field on `DsregcmdDiagnosticInsight`; struct literals need `related_error_codes: Vec::new()`), and the analyzer links event-log entries that cite those codes on token boundaries. Only codes that appear in the rule's fields on token boundaries are recorded; a rule firing on a substring hit records none. See the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
 
 ### Fixed
+
+- **Find accessibility**: Give the Find bar and its live result count named accessible regions so assistive technology can identify the controls and announce search results.
+
+- **Public Autopilot parser projection**: Mask short typed identities consistently in narrative while preserving generated redaction tokens. This addresses the parser-library projection contract; the desktop has no caller of this Autopilot leaf projection.
+
+- **Development tooling dependencies (#816, #817)**: Update `source-map-js` to `1.2.2` in the application and download-metrics lockfiles, addressing indexed source-map offset validation ([GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q)).
 
 - **Windows Firewall logs (#814)**: Recognize firewall records separately from IIS, preserve all fields and Local wall-clock timestamps, report skipped NUL padding and warn about lost events, and retain encoding and source identity through live tailing and timeline queries.
 

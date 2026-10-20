@@ -2589,3 +2589,181 @@ fn write_json(path: &Path, value: &Value) {
     std::fs::rename(&temporary, path)
         .unwrap_or_else(|error| panic!("{} is replaceable: {error}", path.display()));
 }
+
+/// A value read from an identity field is short because the identity is short.
+/// Applying the prose floor there masked the typed field and left the same value
+/// in narrative, which is the shape #646 fixed for the DsRegCmd leaf.
+#[test]
+fn a_short_typed_identity_masks_in_narrative_like_its_typed_field() {
+    let name = "PC-7";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "short-e1", "short-channel", 1, 103, "available", "parsed",
+                json!([{ "name": "deviceName", "value": name }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "short-e2", "short-channel", 2, 161, "available", "parsed",
+                json!([]),
+                &format!("AutopilotManager reported {name} as the target device."),
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "short-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    let typed = redacted.observations[0]
+        .named("deviceName")
+        .expect("the fixture declares a device name")
+        .to_owned();
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+
+    assert!(
+        typed.starts_with("[redacted:"),
+        "the typed field must be masked, got {typed}"
+    );
+    assert!(
+        !text.contains(name),
+        "the export still carries {name:?} in narrative"
+    );
+}
+
+/// The other half of the same trade: a value that labels a configuration rather
+/// than naming a device keeps the prose floor, so a short profile name stays
+/// readable in the narrative it sits in.
+///
+/// Pinned deliberately. The typed field is still masked - it is a sensitive key -
+/// so this asserts the two floors disagree in the direction the module chose.
+#[test]
+fn a_short_display_name_keeps_the_prose_floor_and_stays_readable() {
+    let profile = "Guest";
+    let device = "VM-12";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "label-e1", "label-channel", 1, 103, "available", "parsed",
+                json!([
+                    { "name": "profileName", "value": profile },
+                    { "name": "deviceName", "value": device },
+                ]),
+                "AutopilotManager applied the profile.",
+            ),
+            synthetic_event(
+                "label-e2", "label-channel", 2, 161, "available", "parsed",
+                json!([]),
+                &format!("AutopilotManager applied {profile} to {device}."),
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "label-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+
+    let typed_profile = redacted.observations[0]
+        .named("profileName")
+        .expect("the fixture declares a profile name")
+        .to_owned();
+    assert!(
+        typed_profile.starts_with("[redacted:"),
+        "the typed field is still masked, got {typed_profile}"
+    );
+    assert!(
+        text.contains(profile),
+        "the profile name is a label and must stay readable in narrative"
+    );
+    assert!(
+        !text.contains(device),
+        "the device name is an identity and must not survive in narrative"
+    );
+}
+
+/// Transform the existing short-identity event exemplar with synthetic canaries.
+#[test]
+fn short_identity_does_not_corrupt_generated_upn_tokens_in_full_projection() {
+    for name in ["acted", "redacted", "7a3d"] {
+        let upn = "alice@example.invalid";
+        let events = json!({
+            "autopilotDocument": "autopilot.events",
+            "documentVersion": 1,
+            "events": [synthetic_event(
+                "short-e1", "short-channel", 1, 103, "available", "parsed",
+                json!([
+                    { "name": "deviceName", "value": name },
+                    { "name": "userPrincipalName", "value": upn }
+                ]),
+                &format!("AutopilotManager reported {upn} as the target user."),
+            )]
+        });
+        let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+            "short-channel",
+            "autopilotEvents",
+            &events,
+        )]));
+        assert!(snapshot.observations[0]
+            .message
+            .as_deref()
+            .unwrap()
+            .contains(upn));
+        let projected = redacted_export_projection(&snapshot);
+        let typed = projected.observations[0]
+            .named("userPrincipalName")
+            .unwrap();
+        assert_eq!(
+            projected.observations[0].message.as_deref(),
+            Some(format!("AutopilotManager reported {typed} as the target user.").as_str())
+        );
+        assert!(!serde_json::to_string(&projected).unwrap().contains(upn));
+    }
+}
+
+#[test]
+fn a_classified_identity_in_a_user_path_prefix_is_scrubbed() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "short-e1", "short-channel", 1, 103, "available", "parsed",
+            json!([{ "name": "deviceName", "value": "Users" }]),
+            r"AutopilotManager read C:\Users\Synthetic Person\provisioning.log.",
+        )]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "short-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    assert!(snapshot.observations[0]
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("Users"));
+    let projected = redacted_export_projection(&snapshot);
+    let message = projected.observations[0].message.as_deref().unwrap();
+    let typed = projected.observations[0].named("deviceName").unwrap();
+    assert!(
+        message.contains(typed),
+        "the path prefix must reach its typed token: {message}"
+    );
+    assert!(
+        !message.contains("Users"),
+        "a source path prefix leaked: {message}"
+    );
+    assert!(!message.contains("Synthetic Person"));
+    assert!(
+        message.contains("[user:"),
+        "the generated user token must survive: {message}"
+    );
+}
