@@ -403,16 +403,6 @@ Describe 'Tauri bundling-time signing hook' {
         Mock Get-AuthenticodeSignature { [pscustomobject]@{ Status = 'NotSigned' } }
         { Invoke-TauriWindowsSigning -LiteralPath $hookFile } | Should -Throw '*valid Authenticode*'
     }
-    It 'detaches a real hardlinked payload before signing without changing its other alias' {
-        $alias = Join-Path $TestDrive ('cargo-deps-' + [guid]::NewGuid() + '.exe')
-        New-Item -ItemType HardLink -Path $alias -Target $hookFile | Out-Null
-        (Get-Item -LiteralPath $hookFile).LinkType | Should -Be 'HardLink'
-        Mock Invoke-ArtifactSigning { param($Files) Set-Content -LiteralPath $Files -Value 'signed fixture' }
-        Invoke-TauriWindowsSigning -LiteralPath $hookFile
-        (Get-Content -LiteralPath $alias -Raw).Trim() | Should -Be 'offline unsigned fixture'
-        (Get-Content -LiteralPath $hookFile -Raw).Trim() | Should -Be 'signed fixture'
-        (Get-Item -LiteralPath $hookFile).LinkType | Should -BeNullOrEmpty
-    }
     It 'rejects a symbolic-link payload before importing the signing provider' {
         $link = Join-Path $TestDrive ('symlink-' + [guid]::NewGuid() + '.exe')
         New-Item -ItemType SymbolicLink -Path $link -Target $hookFile | Out-Null

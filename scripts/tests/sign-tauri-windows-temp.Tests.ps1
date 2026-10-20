@@ -98,4 +98,25 @@ Describe 'NSIS temporary PE signing boundary and diagnostic receipts' {
         $receipt.error | Should -Be 'provider-failed'
         $raw | Should -Not -Match 'synthetic-private-provider-detail-9182|offline-fixture|AZURE_CLIENT_SECRET'
     }
+
+    It 'signs the selected bundler-owned hardlinked build output in place' {
+        # Both names are owned synthetic build outputs, not user evidence files.
+        $alias = Join-Path $TestDrive ('deps-' + [guid]::NewGuid().ToString('N') + '.exe')
+        New-Item -ItemType HardLink -Path $alias -Target $pePath | Out-Null
+        $before = (Get-FileHash -LiteralPath $alias -Algorithm SHA256).Hash
+        # Tauri retains an original read handle while patching/signing its build
+        # output; Rust's default Windows share flags include read/write/delete.
+        $heldOriginal = [IO.File]::Open($pePath, [IO.FileMode]::Open,
+            [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        try {
+            Mock Invoke-ArtifactSigning { param($Files) [IO.File]::AppendAllText($Files, 'synthetic-signature-overlay') }
+            Invoke-TauriWindowsSigning -LiteralPath $pePath
+            Should -Invoke Invoke-ArtifactSigning -Times 1 -Exactly -ParameterFilter { $Files -eq $pePath }
+            $selectedHash = (Get-FileHash -LiteralPath $pePath -Algorithm SHA256).Hash
+            $selectedHash | Should -Not -Be $before
+            (Get-FileHash -LiteralPath $alias -Algorithm SHA256).Hash | Should -Be $selectedHash
+            (Get-Item -LiteralPath $pePath).LinkType | Should -Be 'HardLink'
+            $heldOriginal.Length | Should -Be ([IO.FileInfo]$pePath).Length
+        } finally { $heldOriginal.Dispose() }
+    }
 }

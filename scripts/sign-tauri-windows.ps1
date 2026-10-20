@@ -115,20 +115,6 @@ function Invoke-TauriWindowsSigning {
     }
     Write-SigningHookDiagnostic -LiteralPath $diagnosticPath -Receipt $receipt
     try {
-        if ($file.LinkType -eq 'HardLink') {
-            $receipt.phase = 'hardlink-detachment'
-            Write-SigningHookDiagnostic -LiteralPath $diagnosticPath -Receipt $receipt
-            # Replace only the bundler-selected directory entry, preserving aliases.
-            $copy = Join-Path $file.DirectoryName ([guid]::NewGuid().ToString() + $file.Extension)
-            try {
-                [IO.File]::Copy($file.FullName, $copy, $false)
-                [IO.File]::Move($copy, $file.FullName, $true)
-            } finally {
-                if (Test-Path -LiteralPath $copy) { Remove-Item -LiteralPath $copy -Force }
-            }
-            $file = Get-Item -LiteralPath $file.FullName -ErrorAction Stop
-            if ($file.PSIsContainer -or $file.LinkType) { throw 'Signing payload detachment failed.' }
-        }
         $receipt.phase = 'provider-import'
         Write-SigningHookDiagnostic -LiteralPath $diagnosticPath -Receipt $receipt
         $module = Import-VerifiedArtifactSigning
@@ -157,7 +143,6 @@ function Invoke-TauriWindowsSigning {
             'provider-call' { 'provider-failed' }
             'provider-import' { 'provider-import-failed' }
             'signature-check' { 'signature-verification-failed' }
-            'hardlink-detachment' { 'hardlink-detachment-failed' }
             default { 'hook-failed' }
         }
         $receipt.outcome = 'failed'
