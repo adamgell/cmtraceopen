@@ -318,26 +318,30 @@ fn cleanup_releases_ownership_before_connection_is_dropped() {
 fn invalid_names_and_paths_are_errors_not_new_instances() {
     let bus = PrivateBus::new();
     run(async {
-        assert!(claim_or_forward(
-            bus.builder(),
-            "invalid name",
-            OBJECT_PATH,
-            no_activation(),
-            vec![],
-            String::new()
-        )
-        .await
-        .is_err());
-        assert!(claim_or_forward(
-            bus.builder(),
-            &bus.name(),
-            "not/an/object/path",
-            no_activation(),
-            vec![],
-            String::new()
-        )
-        .await
-        .is_err());
+        assert!(matches!(
+            claim_or_forward(
+                bus.builder(),
+                "invalid name",
+                OBJECT_PATH,
+                no_activation(),
+                vec![],
+                String::new()
+            )
+            .await,
+            Err(transport::ClaimError::Unavailable(_))
+        ));
+        assert!(matches!(
+            claim_or_forward(
+                bus.builder(),
+                &bus.name(),
+                "not/an/object/path",
+                no_activation(),
+                vec![],
+                String::new()
+            )
+            .await,
+            Err(transport::ClaimError::Unavailable(_))
+        ));
     });
 }
 
@@ -347,16 +351,18 @@ fn failed_secondary_activation_is_not_reported_as_success() {
     let name = bus.name();
     run(async {
         let owner = bus.builder().name(name.as_str()).build().await.unwrap();
-        assert!(claim_or_forward(
-            bus.builder().method_timeout(Duration::from_millis(250)),
-            &name,
-            OBJECT_PATH,
-            no_activation(),
-            vec!["must not be lost".into()],
-            "/cwd".into()
-        )
-        .await
-        .is_err());
+        assert!(matches!(
+            claim_or_forward(
+                bus.builder().method_timeout(Duration::from_millis(250)),
+                &name,
+                OBJECT_PATH,
+                no_activation(),
+                vec!["must not be lost".into()],
+                "/cwd".into()
+            )
+            .await,
+            Err(transport::ClaimError::Delivery(_))
+        ));
         owner.release_name(name.as_str()).await.unwrap();
     });
 }
@@ -366,16 +372,18 @@ fn unavailable_bus_does_not_create_a_primary() {
     let bus = PrivateBus::new();
     let address = format!("unix:path={}/missing.socket", bus.directory.display());
     run(async {
-        assert!(claim_or_forward(
-            zbus::connection::Builder::address(address.as_str()),
-            &bus.name(),
-            OBJECT_PATH,
-            no_activation(),
-            vec![],
-            String::new()
-        )
-        .await
-        .is_err());
+        assert!(matches!(
+            claim_or_forward(
+                zbus::connection::Builder::address(address.as_str()),
+                &bus.name(),
+                OBJECT_PATH,
+                no_activation(),
+                vec![],
+                String::new()
+            )
+            .await,
+            Err(transport::ClaimError::Unavailable(_))
+        ));
     });
 }
 

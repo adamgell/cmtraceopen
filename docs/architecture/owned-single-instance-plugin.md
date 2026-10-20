@@ -24,13 +24,13 @@ The backend uses Tauri's existing Tokio runtime with explicit zbus Tokio and
 service features. It preserves the per-application bus name and object path,
 exclusive name ownership without replacement, argv/working-directory handoff
 to the primary instance, and connection/name lifetime through shutdown. A
-secondary process exits successfully only after handoff succeeds. Transport
-failures propagate rather than reporting successful delivery. Unlike the old
-plugin, an unavailable/malformed session bus or connection failure now aborts
-plugin setup instead of silently continuing without instance enforcement. A
-failed secondary delivery also aborts setup instead of exiting successfully
-without delivery. Supported Linux desktop sessions must provide a working
-session bus; the Ubuntu native harness does so explicitly. No network listeners, alternate IPC backend or security-policy changes are added.
+secondary process exits successfully only after handoff succeeds. If the session
+bus cannot be reached or name ownership cannot be established, the application
+retains the upstream startup behavior without instance enforcement and logs a
+warning. A failure delivering arguments after an existing primary is detected
+propagates as a setup error instead of reporting successful delivery. Private
+bus identity, ownership and isolation checks in the test harness remain strict.
+No network listeners, alternate IPC backend or security-policy changes are added.
 
 The desktop compiler floor rises from Rust 1.88 to 1.89 for zbus 6. The normal
 compiler remains pinned at 1.98.1; CI verifies the new floor on Linux and

@@ -91,6 +91,7 @@ test("every workflow installs the pinned toolchain, or asks for its own", () => 
  * right for a step with an input, so nothing objected to the version.
  */
 const MSRV_INPUT = "1.89";
+const PARSER_MSRV_INPUT = "1.88";
 
 /**
  * The workflow filenames the guards scan.
@@ -130,10 +131,11 @@ function inputOffenders(workflow, contents) {
     }
     if (
       step.inputVersion !== PINNED_REF.version &&
-      step.inputVersion !== MSRV_INPUT
+      step.inputVersion !== MSRV_INPUT &&
+      step.inputVersion !== PARSER_MSRV_INPUT
     ) {
       offenders.push(
-        `${workflow}:${step.line} asks for ${step.inputVersion}, expected ${PINNED_REF.version} or the MSRV floor ${MSRV_INPUT}`,
+        `${workflow}:${step.line} asks for ${step.inputVersion}, expected ${PINNED_REF.version} or the MSRV floors ${MSRV_INPUT}/${PARSER_MSRV_INPUT}`,
       );
     }
   }
@@ -309,6 +311,11 @@ test("the drift policy accepts the pin and the floor, and rejects anything else"
     inputOffenders("fixture.yml", step(MSRV_INPUT)),
     [],
     "the MSRV floor is accepted",
+  );
+  assert.deepEqual(
+    inputOffenders("fixture.yml", step(PARSER_MSRV_INPUT)),
+    [],
+    "the parser MSRV floor is accepted",
   );
   assert.equal(
     inputOffenders("fixture.yml", step("1.92.0")).length,

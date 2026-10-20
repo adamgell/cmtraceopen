@@ -233,6 +233,11 @@ jobs:
             librsvg2-dev \
             patchelf
 
+      - name: Setup parser Rust 1.88
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: "1.88"
+
       - name: Setup Rust 1.89
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
@@ -248,6 +253,9 @@ jobs:
             src-tauri/target/
           key: ${{ runner.os }}-cargo-msrv-1.89-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-msrv-1.89-
+
+      - name: Parser Rust MSRV check
+        run: cargo +1.88 check -p cmtraceopen-parser --all-features --locked
 
       - name: Rust MSRV check
         run: cargo +1.89 check --workspace --all-features --locked

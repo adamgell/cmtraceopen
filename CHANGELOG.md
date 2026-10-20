@@ -21,7 +21,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- **Linux single-instance handoff**: Port an owned copy of the single-instance plugin to maintained zbus 6, preserving exclusive election, file handoff and name cleanup. A failed session-bus connection or delivery now reports a setup failure instead of silently continuing or reporting successful delivery. Windows and macOS implementations are unchanged.
+- **Linux single-instance handoff**: Port an owned copy of the single-instance plugin to maintained zbus 6, preserving exclusive election, file handoff and name cleanup. An unavailable session bus retains startup without instance enforcement and reports a warning; a failed delivery to an existing primary reports an error instead of successful delivery. Windows and macOS implementations are unchanged.
 
 - **Archive and TLS dependencies**: Update ZIP to 9.0.4 and Rustls to 0.23.46, retain archive symlink/special-file rejection, and remove the updater's unused legacy ZIP extraction path without suppressing the new advisories.
 

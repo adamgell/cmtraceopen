@@ -8,8 +8,11 @@ and macOS backend source bytes are unchanged.
 The Linux backend uses maintained zbus 6 with Tokio on Tauri's existing async
 runtime. It registers its activation interface before requesting exclusive
 ownership, disallows replacement and queuing, and awaits the primary's reply
-before a secondary exits. Connection and delivery errors propagate through
-plugin setup. The managed connection remains alive until application cleanup.
+before a secondary exits. If the bus, interface, or name acquisition is unavailable
+before an existing owner is established, startup continues with a warning and
+without a managed single-instance lock. Once an existing owner is established,
+failed delivery propagates through plugin setup; the secondary cannot report a
+successful handoff. The managed primary connection remains alive until cleanup.
 
 See [provenance and maintenance policy](../../docs/architecture/owned-single-instance-plugin.md).
 

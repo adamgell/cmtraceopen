@@ -48,15 +48,19 @@ pub fn init<R: Runtime>(
                     .to_str()
                     .unwrap_or_default()
                     .to_owned(),
-            ))?;
+            ));
             match instance {
-                dbus::Instance::Primary(primary) => {
+                Ok(dbus::Instance::Primary(primary)) => {
                     app.manage(ConnectionHandle(primary));
                 }
-                dbus::Instance::Secondary => {
+                Ok(dbus::Instance::Secondary) => {
                     app.cleanup_before_exit();
                     std::process::exit(0);
                 }
+                Err(dbus::ClaimError::Unavailable(error)) => {
+                    tracing::warn!(%error, "Single-instance D-Bus ownership unavailable; continuing startup");
+                }
+                Err(dbus::ClaimError::Delivery(error)) => return Err(error.into()),
             }
 
             Ok(())
