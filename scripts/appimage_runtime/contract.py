@@ -9,10 +9,10 @@ from pathlib import PurePosixPath
 # Main must fill and independently verify the final signed producer inventory.
 # These missing values deliberately block dispatch and direct host invocation.
 BINDING_READY = False
-SOURCE = "a749f4a39abecd01e4ac62cae87bdaadaaa36d5a"
+SOURCE = "ca29c18f3a9e8c50a51cb4465588dfb39afd0f03"
 MERGE = None
-TREE = "4cdf833e7a3f79d7508c26620831a790a486a829"
-RUN = None
+TREE = "389e784064d2dda627ebd08c1bf6e5cb2b55413d"
+RUN = "39487214575"
 ARTIFACT_ID = None
 ARTIFACT_SHA256 = None
 ARTIFACT_NAME = "CMTrace Open_1.6.3_amd64.AppImage"

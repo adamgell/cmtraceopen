@@ -29,9 +29,10 @@ jobs:
     timeout-minutes: 20
     env:
       REVIEWED_HARNESS_SHA: ${{ inputs.reviewed_harness_sha }}
-      # Intentionally empty until Main verifies the final signed inventory.
+      # Artifact ID stays empty until Main verifies final signed inventory.
+      # Producer: workflow 245456964, attempt 1, tag v1.6.3.
       FINAL_ARTIFACT_ID: ''
-      FINAL_PRODUCER_RUN: ''
+      FINAL_PRODUCER_RUN: '39487214575'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
