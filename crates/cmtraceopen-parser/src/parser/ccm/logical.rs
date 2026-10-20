@@ -6,6 +6,59 @@ use crate::parser::ccm::{build_timestamp, format_thread_display, severity_from_t
 use crate::parser::severity::detect_severity_from_text;
 use std::sync::OnceLock;
 
+const RECORD_START: &str = "<![LOG[";
+const ATTRS_START: &str = "]LOG]!><";
+
+enum RecordBoundary {
+    Complete(usize),
+    Interrupted(usize),
+    Incomplete,
+}
+
+fn record_boundary(text: &str, record_start: usize) -> RecordBoundary {
+    let message_start = record_start + RECORD_START.len();
+    let Some(relative_attrs) = text[message_start..].find(ATTRS_START) else {
+        return RecordBoundary::Incomplete;
+    };
+    let attrs_start = message_start + relative_attrs + ATTRS_START.len();
+    let mut quoted = false;
+    for (relative, byte) in text.as_bytes()[attrs_start..].iter().enumerate() {
+        let offset = attrs_start + relative;
+        match byte {
+            b'"' => quoted = !quoted,
+            b'>' if !quoted => return RecordBoundary::Complete(offset + 1),
+            b'<' if !quoted && text[offset..].starts_with(RECORD_START) => {
+                return RecordBoundary::Interrupted(offset);
+            }
+            _ => {}
+        }
+    }
+    RecordBoundary::Incomplete
+}
+
+/// Complete IME prefix safe to publish during an incremental read. Interrupted
+/// attributes and the following record stay together until that record closes,
+/// so a read boundary cannot publish its opener as an orphaned fragment.
+pub fn complete_ime_prefix_len(text: &str) -> usize {
+    let mut cursor = 0;
+    let mut search_cursor = 0;
+    loop {
+        let Some(relative_start) = text[search_cursor..].find(RECORD_START) else {
+            let tail = &text[cursor..];
+            return cursor + tail.rfind('\n').map_or(0, |index| index + 1);
+        };
+        let record_start = search_cursor + relative_start;
+        match record_boundary(text, record_start) {
+            RecordBoundary::Complete(end) => {
+                cursor = end;
+                search_cursor = end;
+            }
+            RecordBoundary::Interrupted(next) => search_cursor = next,
+            RecordBoundary::Incomplete => return cursor,
+        }
+    }
+}
+
 /// A parsed IME log line with extracted timestamp and message.
 #[derive(Debug, Clone)]
 pub struct ImeLine {
@@ -37,7 +90,7 @@ pub struct ImeLine {
 fn ime_record_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!><(?P<attrs>[^>]*)>"#)
+        Regex::new(r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!><(?P<attrs>(?:[^">]|"[^"]*")*)>"#)
             .expect("IME record regex must compile")
     })
 }
@@ -222,18 +275,25 @@ fn parse_ime_records(content: &str, max_entries: usize) -> ParsedImeChunk {
     let mut entries = Vec::with_capacity(line_starts.len().min(max_entries));
     let mut parse_errors = 0u32;
     let mut cursor = 0usize;
+    let mut search_cursor = 0usize;
     let mut matched_any = false;
 
-    for caps in ime_record_re().captures_iter(content) {
+    while let Some(relative_start) = content[search_cursor..].find(RECORD_START) {
         if entries.len() >= max_entries {
             break;
         }
-        let Some(full_match) = caps.get(0) else {
-            continue;
+        let record_start = search_cursor + relative_start;
+        let record_end = match record_boundary(content, record_start) {
+            RecordBoundary::Complete(end) => end,
+            RecordBoundary::Interrupted(next) => {
+                search_cursor = next;
+                continue;
+            }
+            RecordBoundary::Incomplete => break,
         };
 
         push_unmatched_segment(
-            &content[cursor..full_match.start()],
+            &content[cursor..record_start],
             cursor,
             &line_starts,
             &mut entries,
@@ -241,12 +301,19 @@ fn parse_ime_records(content: &str, max_entries: usize) -> ParsedImeChunk {
             max_entries,
         );
 
-        if let Some(record) = parse_record(&caps, full_match.start(), &line_starts) {
+        if entries.len() >= max_entries {
+            break;
+        }
+        let framed = &content[record_start..record_end];
+        if let Some(record) = ime_record_re()
+            .captures(framed)
+            .and_then(|caps| parse_record(&caps, record_start, &line_starts))
+        {
             entries.push(record);
         } else {
             push_unmatched_segment(
-                full_match.as_str(),
-                full_match.start(),
+                framed,
+                record_start,
                 &line_starts,
                 &mut entries,
                 &mut parse_errors,
@@ -254,7 +321,8 @@ fn parse_ime_records(content: &str, max_entries: usize) -> ParsedImeChunk {
             );
         }
 
-        cursor = full_match.end();
+        cursor = record_end;
+        search_cursor = record_end;
         matched_any = true;
     }
 
@@ -739,6 +807,61 @@ fn parse_fallback_lines(content: &str, max_entries: usize) -> ParsedImeChunk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interrupted_attributes_do_not_consume_the_following_record() {
+        // Sanitized from local AgentExecutor.log: a complete record appears
+        // inside an unfinished attribute block in the raw source bytes.
+        for partial in [
+            r#"<![LOG[Interrupted]LOG]!><time="23:42:01.2534753" date="4-7-2026" component="#,
+            r#"<![LOG[Interrupted]LOG]!><time="23:45:24.3531572" date="4-7-2026" component="AgentExecutor" cont"#,
+        ] {
+            let intact = r#"<![LOG[Recovered]LOG]!><time="23:42:01.2570860" date="4-7-2026" component="AgentExecutor" context="" type="1" thread="7" file="">"#;
+            let content = format!("{partial}{intact}\n");
+            let (entries, errors) = parse_ime_entries(&content, "AgentExecutor.log");
+            assert_eq!(entries.len(), 2);
+            assert_eq!(errors, 1);
+            assert_eq!(entries[0].format, LogFormat::Plain);
+            assert_eq!(entries[0].message, partial);
+            assert_eq!(entries[0].timestamp, None);
+            assert_eq!(entries[1].message, "Recovered");
+            assert_eq!(entries[1].component.as_deref(), Some("AgentExecutor"));
+            assert_eq!(entries[1].thread, Some(7));
+            assert_eq!(entries[1].line_number, 1);
+            assert_eq!(
+                entries[1].timestamp_display.as_deref(),
+                Some("04-07-2026 23:42:01.257")
+            );
+        }
+    }
+
+    #[test]
+    fn quoted_delimiters_and_message_openers_remain_literal() {
+        let content = r#"<![LOG[Literal <![LOG[ in message]LOG]!><time="23:42:01.2570860" date="4-7-2026" component="AgentExecutor" context="a > b <![LOG[ literal <![LOG[example]LOG]!><> tail" type="1" thread="7" file="source>name">"#;
+        let (entries, errors) = parse_ime_entries(content, "AgentExecutor.log");
+        assert_eq!(errors, 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].message, "Literal <![LOG[ in message");
+        assert_eq!(entries[0].thread, Some(7));
+        assert_eq!(entries[0].source_file.as_deref(), Some("source>name"));
+        assert_eq!(complete_ime_prefix_len(content), content.len());
+    }
+
+    #[test]
+    fn recovered_record_counts_toward_the_bounded_parse_limit() {
+        let content = concat!(
+            "<![LOG[Interrupted]LOG]!><time=\"23:42:01.2534753\" date=\"4-7-2026\" component=",
+            "<![LOG[Recovered]LOG]!><time=\"23:42:01.2570860\" date=\"4-7-2026\" component=\"AgentExecutor\" context=\"\" type=\"1\" thread=\"7\" file=\"\">\n"
+        );
+        let (entries, truncated) = parse_ime_content_bounded(content, 1);
+        assert_eq!(entries.len(), 1);
+        assert!(truncated);
+        assert_eq!(entries[0].component, None);
+        let (entries, truncated) = parse_ime_content_bounded(content, 2);
+        assert_eq!(entries.len(), 2);
+        assert!(!truncated);
+        assert_eq!(entries[1].message, "Recovered");
+    }
 
     #[test]
     fn test_parse_ime_content_preserves_logical_record_start_lines() {
