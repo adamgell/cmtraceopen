@@ -12,6 +12,8 @@ use tauri::{
 };
 #[path = "linux/dbus.rs"]
 mod dbus;
+#[path = "linux/launch_directory.rs"]
+mod launch_directory;
 
 struct ConnectionHandle(dbus::PrimaryInstance);
 
@@ -44,8 +46,13 @@ pub fn init<R: Runtime>(
                 &dbus_path,
                 Box::new(move |argv, cwd| callback(&app_handle, argv, cwd)),
                 std::env::args().collect(),
-                std::env::current_dir()
-                    .unwrap_or_default()
+                launch_directory::select(
+                    &std::env::current_dir().unwrap_or_default(),
+                    std::env::current_exe().ok().as_deref(),
+                    std::env::var_os("APPIMAGE").as_deref(),
+                    std::env::var_os("APPDIR").as_deref(),
+                    std::env::var_os("OWD").as_deref(),
+                )
                     .to_str()
                     .unwrap_or_default()
                     .to_owned(),

@@ -108,3 +108,7 @@ features = ["rt-multi-thread", "time", "sync"]
 [[test]]
 name = "linux_dbus"
 path = "tests/linux_dbus.rs"
+
+[[test]]
+name = "linux_launch_directory"
+path = "tests/linux_launch_directory.rs"
