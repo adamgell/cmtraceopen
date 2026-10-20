@@ -356,3 +356,24 @@ test("the parser floor is rejected for desktop and unrelated workflow steps", ()
   assert.equal(inputOffenders("other.yml", fixture("Setup parser Rust 1.88")).length, 1);
   assert.deepEqual(inputOffenders("cmtrace-ci.yml", fixture("Setup parser Rust 1.88")), []);
 });
+
+test("Windows signature CI runs both fixed signing suites with exact Pester", () => {
+  const workflow = readFileSync(join(workflowDir, "cmtrace-ci.yml"), "utf8");
+  const windowsJob = workflow.slice(workflow.indexOf("  windows-esp:"));
+  assert.match(windowsJob, /- name: Test Windows release signature guard\n\s+shell: pwsh\n\s+run: pwsh -NoLogo -NoProfile -NonInteractive -File scripts\/run-windows-signing-contract-tests\.ps1/);
+  const setupStart = windowsJob.indexOf("- name: Ensure exact Pester for signing contract tests");
+  const guardStart = windowsJob.indexOf("- name: Test Windows release signature guard");
+  assert.ok(setupStart >= 0 && setupStart < guardStart);
+  const setup = windowsJob.slice(setupStart, guardStart);
+  assert.match(setup, /Install-Module -Name Pester -RequiredVersion 5\.7\.1 -Repository PSGallery -Scope CurrentUser -Force -ErrorAction Stop/);
+  assert.match(setup, /Get-Module -ListAvailable -Name Pester/);
+  assert.match(setup, /\$_.Version -eq \[version\]'5\.7\.1'/);
+  assert.match(setup, /Import-Module Pester -RequiredVersion 5\.7\.1 -ErrorAction Stop/);
+  assert.doesNotMatch(setup, /SkipPublisherCheck|Set-PSRepository|AllUsers|secrets\.|permissions:/);
+  const runner = readFileSync(join(repoRoot, "scripts/run-windows-signing-contract-tests.ps1"), "utf8");
+  assert.match(runner, /Import-Module Pester -RequiredVersion 5\.7\.1 -ErrorAction Stop/);
+  assert.ok(runner.includes("'verify-windows-release-signatures.Tests.ps1'"));
+  assert.ok(runner.includes("'tests/sign-tauri-windows-temp.Tests.ps1'"));
+  assert.ok(windowsJob.includes('"./src-tauri/installer/remove-file-associations.Tests.ps1"'));
+  assert.ok(windowsJob.includes('"./scripts/collection/tests/Invoke-CmtraceEvidenceCollection.Tests.ps1"'));
+});

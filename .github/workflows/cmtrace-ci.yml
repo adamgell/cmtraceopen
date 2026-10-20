@@ -430,17 +430,19 @@ jobs:
             throw "Evidence collector tests ended with result $($result.Result)."
           }
 
-      - name: Test Windows release signature guard
+      - name: Ensure exact Pester for signing contract tests
         shell: pwsh
         run: |
-          Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop
-          $result = Invoke-Pester `
-            -Path "./scripts/verify-windows-release-signatures.Tests.ps1" `
-            -Output Detailed `
-            -PassThru
-          if ($result.Result -ne "Passed") {
-            throw "Signature guard tests ended with result $($result.Result)."
+          $ErrorActionPreference = 'Stop'
+          $available = Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -eq [version]'5.7.1' }
+          if (-not $available) {
+            Install-Module -Name Pester -RequiredVersion 5.7.1 -Repository PSGallery -Scope CurrentUser -Force -ErrorAction Stop
           }
+          Import-Module Pester -RequiredVersion 5.7.1 -ErrorAction Stop
+
+      - name: Test Windows release signature guard
+        shell: pwsh
+        run: pwsh -NoLogo -NoProfile -NonInteractive -File scripts/run-windows-signing-contract-tests.ps1
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
