@@ -1,5 +1,5 @@
 {
-    "version": "1.6.2",
+    "version": "1.6.3",
     "description": "Free, open-source CMTrace replacement for Windows log files: ConfigMgr/SCCM, Intune IME, and Autopilot ESP diagnostics, DSRegCmd triage, .evtx viewing, real-time tailing, and Windows error-code lookup.",
     "homepage": "https://cmtraceopen.com",
     "license": "MIT",
@@ -10,12 +10,12 @@
     ],
     "architecture": {
         "64bit": {
-            "url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.6.2/CMTrace-Open_1.6.2_x64.exe#/cmtrace.exe",
-            "hash": "2a04abd8fd698e6c7463a9cd545560b913503fcbaaece66d686de3329af9915f"
+            "url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.6.3/CMTrace-Open_1.6.3_x64.exe#/cmtrace.exe",
+            "hash": "81f2241046ca65419ba11fd96d428304d559470f4d7e4beb923ef2bab759a100"
         },
         "arm64": {
-            "url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.6.2/CMTrace-Open_1.6.2_arm64.exe#/cmtrace.exe",
-            "hash": "7d6d997a32810ff2be4f68975f7d07687037b39835446e509cf84e5f5da1ad32"
+            "url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.6.3/CMTrace-Open_1.6.3_arm64.exe#/cmtrace.exe",
+            "hash": "d4278c22c84c12f288d1e61a5621c7dfee2008530bd824ad8d08a2165c74c11f"
         }
     },
     "bin": "cmtrace.exe",
