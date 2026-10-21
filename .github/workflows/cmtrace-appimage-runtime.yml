@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       reviewed_harness_sha:
-        description: Exact reviewed harness commit bound to final signed 1.6.3 artifact
+        description: Exact reviewed harness commit bound to verified final 62fe-source AppImage
         type: string
         required: true
 
@@ -22,17 +22,17 @@ jobs:
     name: Runtime (${{ matrix.os }})
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 1
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04]
+        os: [ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
       REVIEWED_HARNESS_SHA: ${{ inputs.reviewed_harness_sha }}
-      # Main verified the archive and inner AppImage against final release assets.
+      # Final bytes verified by Main; Ubuntu 24.04 is deliberately not allocated.
       # Producer: workflow 245456964, attempt 1, tag v1.6.3.
-      FINAL_ARTIFACT_ID: '12294242179'
-      FINAL_PRODUCER_RUN: '39487214575'
+      FINAL_ARTIFACT_ID: '12315734103'
+      FINAL_PRODUCER_RUN: '39531625178'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

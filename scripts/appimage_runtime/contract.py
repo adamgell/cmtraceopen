@@ -7,14 +7,14 @@ import stat
 from pathlib import PurePosixPath
 
 # Main independently verified the final signed producer inventory.
-# Receipt: release-v163-linux-byte-verification-20261020.json.
+# Receipt: release-62fe-linux-byte-verification-20261021.json.
 BINDING_READY = True
-SOURCE = "ca29c18f3a9e8c50a51cb4465588dfb39afd0f03"
-MERGE = "ca29c18f3a9e8c50a51cb4465588dfb39afd0f03"
-TREE = "389e784064d2dda627ebd08c1bf6e5cb2b55413d"
-RUN = "39487214575"
-ARTIFACT_ID = 12294242179
-ARTIFACT_SHA256 = "58d50f2115036c1b46530e6b1e0eaf3b4c8cb06b3b73594bd9ce82a2f2b71a1c"
+SOURCE = "62fe586a02c199011b7bdc0936a96527c0d335ec"
+MERGE = "62fe586a02c199011b7bdc0936a96527c0d335ec"
+TREE = "183fe1c22577cb5c2060a14e9b627a1216bf0261"
+RUN = "39531625178"
+ARTIFACT_ID = 12315734103
+ARTIFACT_SHA256 = "b0aedac1321f46dfa14bae9ca74f68b9cee4b22806988d06c60fb4e41dc38ab3"
 ARTIFACT_NAME = "CMTrace Open_1.6.3_amd64.AppImage"
 CASES = ("ordinary", "catalog-renderer-subset")
 CHECKS = ("private_bus", "fuse", "open", "find", "filter", "tail", "single_instance_owner",

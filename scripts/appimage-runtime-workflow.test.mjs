@@ -5,15 +5,15 @@ import test from "node:test";
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const workflow = () => read(".github/workflows/cmtrace-appimage-runtime.yml");
 
-test("runtime allocation is manual, reviewed branch only, first attempt, two bounded VMs", () => {
+test("runtime allocation is manual, reviewed branch only, first attempt, one bounded Ubuntu 22.04 VM", () => {
   const text = workflow();
   assert.match(text, /on:\n  workflow_dispatch:/);
   assert.doesNotMatch(text, /\n  (push|pull_request|pull_request_target|schedule|workflow_run):/);
   assert.match(text, /github.ref == 'refs\/heads\/codex\/release-native-harness-20261020'/);
   assert.match(text, /GITHUB_RUN_ATTEMPT.*== 1/);
   assert.match(text, /timeout-minutes: 20/);
-  assert.match(text, /max-parallel: 2/);
-  assert.match(text, /os: \[ubuntu-22\.04, ubuntu-24\.04\]/);
+  assert.match(text, /max-parallel: 1/);
+  assert.match(text, /os: \[ubuntu-22\.04\]/);
   assert.match(text, /cancel-in-progress: false/);
   assert.doesNotMatch(text, /continue-on-error|retry|workflow_call/);
 });
