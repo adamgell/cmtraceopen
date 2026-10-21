@@ -445,7 +445,7 @@ jobs:
           }
 
       - name: Upload signed Windows nightly artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cmtrace-open-nightly-windows-signed-${{ matrix.artifact_suffix }}-${{ env.BUILD_ID }}
           path: |
@@ -614,7 +614,7 @@ jobs:
             ${{ steps.stage_macos.outputs.updater_path }}
 
       - name: Upload signed macOS nightly artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cmtrace-open-nightly-macos-signed-arm64-${{ env.BUILD_ID }}
           path: |
