@@ -711,5 +711,6 @@ export const MOCK_DSREGCMD = {
     evidenceFilePath: null,
     rawLineCount: DSREGCMD_RAW.split("\n").length,
     rawCharCount: DSREGCMD_RAW.length,
+    capturedAt: null,
   },
 };
