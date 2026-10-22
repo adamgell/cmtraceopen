@@ -160,6 +160,8 @@ import { EventLogWorkspace } from "./EventLogWorkspace";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import { EvtxFilterBar } from "./EvtxFilterBar";
+import { EvtxViewBar } from "./EvtxViewBar";
+import { requireSelector } from "./evtx-test-dom";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { SourcePicker } from "./SourcePicker";
 import {
@@ -790,6 +792,8 @@ function seedFixtureEvents() {
   });
 }
 
+const exportStatus = () => requireSelector("[data-evtx-export-status]");
+
 describe("EventLogWorkspace fixtures", () => {
   beforeEach(() => {
     invoke.mockReset();
@@ -885,7 +889,7 @@ describe("EventLogWorkspace fixtures", () => {
       return undefined;
     });
 
-    render(<EvtxFilterBar nowEpoch={nowEpoch} />);
+    render(<EvtxViewBar nowEpoch={nowEpoch} />);
     fireEvent.click(
       screen.getByTitle(
         "Export the events currently shown, using the same filters as the list",
@@ -971,7 +975,7 @@ describe("EventLogWorkspace fixtures", () => {
       return undefined;
     });
 
-    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    render(<EvtxViewBar nowEpoch={Date.now()} />);
     fireEvent.click(
       screen.getByTitle(
         "Export the events currently shown, using the same filters as the list",
@@ -979,8 +983,11 @@ describe("EventLogWorkspace fixtures", () => {
     );
     fireEvent.click(screen.getByText("JSON"));
 
-    await screen.findByText(
-      `Exported ${expected.length.toLocaleString()} events (9,999 bytes)`,
+    // The visible status; the same text is also announced through a hidden live region.
+    await waitFor(() =>
+      expect(exportStatus()).toHaveTextContent(
+        `Exported ${expected.length.toLocaleString()} events (9,999 bytes)`,
+      ),
     );
     const appendCalls = invoke.mock.calls.filter(
       ([command]) => command === "evtx_append_export_chunk",
@@ -1137,7 +1144,7 @@ describe("EventLogWorkspace fixtures", () => {
     fireEvent.click(
       screen.getByTitle("Export the events currently shown, using the same filters as the list"),
     );
-    fireEvent.click(await screen.findByRole("option", { name: label }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: label }));
   };
 
   // The shared dialog mock is not reset between tests in this file, and these tests judge the guard
@@ -1152,7 +1159,7 @@ describe("EventLogWorkspace fixtures", () => {
     seedEventLog();
     const dialog = Promise.withResolvers<string | null>();
     dialogMock().mockImplementation(() => dialog.promise);
-    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    render(<EvtxViewBar nowEpoch={Date.now()} />);
 
     await selectExportFormat("JSON");
     await selectExportFormat("JSON");
@@ -1167,7 +1174,7 @@ describe("EventLogWorkspace fixtures", () => {
   it("allows another export after the save dialog is dismissed", async () => {
     seedEventLog();
     dialogMock().mockResolvedValue(null);
-    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    render(<EvtxViewBar nowEpoch={Date.now()} />);
 
     await selectExportFormat("JSON");
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
@@ -1182,7 +1189,7 @@ describe("EventLogWorkspace fixtures", () => {
     dialogMock()
       .mockRejectedValueOnce(new Error("dialog unavailable"))
       .mockResolvedValue(null);
-    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    render(<EvtxViewBar nowEpoch={Date.now()} />);
 
     await selectExportFormat("JSON");
     await waitFor(() =>
@@ -1225,7 +1232,7 @@ describe("EventLogWorkspace fixtures", () => {
       if (command === "load_markers") return null;
       return undefined;
     });
-    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    render(<EvtxViewBar nowEpoch={Date.now()} />);
 
     await selectExportFormat("JSON");
     await waitFor(() =>
@@ -1234,7 +1241,7 @@ describe("EventLogWorkspace fixtures", () => {
 
     await selectExportFormat("JSON");
 
-    await waitFor(() => expect(screen.getByText(/^Exported /)).toBeInTheDocument());
+    await waitFor(() => expect(exportStatus()).toHaveTextContent(/^Exported /));
   });
 
   it("keeps a running export as the only one, with the control unavailable while it runs", async () => {
@@ -1251,7 +1258,7 @@ describe("EventLogWorkspace fixtures", () => {
       if (command === "load_markers") return null;
       return undefined;
     });
-    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    render(<EvtxViewBar nowEpoch={Date.now()} />);
 
     await selectExportFormat("JSON");
     await waitFor(() => expect(sessions).toBe(1));

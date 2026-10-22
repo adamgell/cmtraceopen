@@ -15,6 +15,8 @@ import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useModalOwnership } from "../../hooks/use-modal-ownership";
 import { useUiStore } from "../../stores/ui-store";
 import { cancelActiveLoad, channelCanHoldEvents, useEvtxStore } from "./evtx-store";
+import { EvtxResizeHandle } from "./EvtxResizeHandle";
+import { effectiveResizeRange, proposeResize, useRowCappedSize } from "./use-row-capped-size";
 import type { EvtxChannelInfo } from "./types";
 
 // ── Tree data structure ─────────────────────────────────────────────────────
@@ -110,7 +112,8 @@ function getSortedChildren(node: TreeNode): TreeNode[] {
 
 const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH = 500;
-const DEFAULT_SIDEBAR_WIDTH = 300;
+const DEFAULT_SIDEBAR_WIDTH = 250;
+const CHANNEL_PANE_ID = "evtx-channel-pane";
 
 // ── Component ───────────────────────────────────────────────────────────────
 
@@ -155,7 +158,15 @@ export function ChannelPicker() {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(["Windows Logs"]));
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
-  const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  // On a narrow window the workspace caps this pane below `sidebarWidth`; the handle reports and
+  // steps from the width actually rendered, and its maximum never exceeds the cap.
+  const { ref: paneRef, ...paneMeasure } = useRowCappedSize(2, sidebarWidth);
+  const resizeRange = effectiveResizeRange(
+    sidebarWidth,
+    MIN_SIDEBAR_WIDTH,
+    MAX_SIDEBAR_WIDTH,
+    paneMeasure,
+  );
 
   useEffect(() => {
     if (clearingChannel !== null) {
@@ -221,28 +232,6 @@ export function ChannelPicker() {
     setClearError(null);
   }, [clearingChannel, loadedChannels]);
 
-  useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      if (!resizeRef.current) return;
-      setSidebarWidth(
-        Math.max(MIN_SIDEBAR_WIDTH, Math.min(resizeRef.current.startWidth + (e.clientX - resizeRef.current.startX), MAX_SIDEBAR_WIDTH))
-      );
-    };
-    const onMouseUp = () => {
-      if (resizeRef.current) {
-        resizeRef.current = null;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-      }
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, []);
-
   const { windowsLogs, serviceTree } = useMemo(() => buildTree(channels), [channels]);
 
   const filteredChannels = useMemo(() => {
@@ -266,14 +255,30 @@ export function ChannelPicker() {
   }, []);
 
   return (
-    <div style={{ display: "flex", flexShrink: 0 }}>
+    // The pane is exactly `sidebarWidth` wide including its 1 px right border (spec 5.2). The
+    // resize strip is overlaid on that border rather than adding a band beside it.
+    <div
+      id={CHANNEL_PANE_ID}
+      ref={paneRef}
+      style={{
+        display: "flex",
+        // Shrinkable only so the 40% cap on the workspace's channel wrapper (the body row's
+        // flex child) can take effect. A percentage cap here would resolve against that
+        // shrink-to-fit wrapper, i.e. against the pane's own width.
+        flexShrink: 1,
+        position: "relative",
+        boxSizing: "border-box",
+        width: `${sidebarWidth}px`,
+        minWidth: 0,
+        borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+      }}
+    >
       <div
         style={{
           display: "flex",
           flexDirection: "column",
           height: "100%",
-          width: `${sidebarWidth}px`,
-          minWidth: `${MIN_SIDEBAR_WIDTH}px`,
+          width: "100%",
           backgroundColor: tokens.colorNeutralBackground2,
           overflow: "hidden",
         }}
@@ -593,19 +598,20 @@ export function ChannelPicker() {
         </div>
       </div>
 
-      {/* Resize handle */}
-      <div
-        style={{
-          width: "4px",
-          cursor: "col-resize",
-          backgroundColor: tokens.colorNeutralStroke2,
-          flexShrink: 0,
-        }}
-        onMouseDown={(e) => {
-          e.preventDefault();
-          resizeRef.current = { startX: e.clientX, startWidth: sidebarWidth };
-          document.body.style.cursor = "col-resize";
-          document.body.style.userSelect = "none";
+      <EvtxResizeHandle
+        orientation="vertical"
+        edge="end"
+        label="Resize channel pane"
+        controls={CHANNEL_PANE_ID}
+        value={resizeRange.value}
+        min={resizeRange.min}
+        max={resizeRange.max}
+        direction={1}
+        onChange={(next) => {
+          // Only an interaction that changes the visible width may change the stored one; while
+          // the cap binds, a proposal equal to the rendered width must not overwrite the request.
+          const proposed = proposeResize(next, resizeRange);
+          if (proposed !== null) setSidebarWidth(proposed);
         }}
       />
     </div>
