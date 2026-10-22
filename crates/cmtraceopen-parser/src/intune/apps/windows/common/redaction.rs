@@ -36,6 +36,146 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+/// Text plus the occurrences emitted by this invocation. Input spelling never
+/// grants provenance, even when it is identical to a replacement token.
+#[derive(Default)]
+pub(crate) struct RedactedText {
+    text: String,
+    generated: Vec<std::ops::Range<usize>>,
+}
+
+impl RedactedText {
+    fn source(value: &str) -> Self {
+        Self {
+            text: value.to_owned(),
+            generated: Vec::new(),
+        }
+    }
+
+    fn generated(value: &str) -> Self {
+        let mut output = Self::default();
+        output.push_generated(value);
+        output
+    }
+
+    fn push_generated(&mut self, value: &str) {
+        let start = self.text.len();
+        self.text.push_str(value);
+        self.record_generated(start..self.text.len());
+    }
+
+    fn record_generated(&mut self, range: std::ops::Range<usize>) {
+        if range.is_empty() {
+            return;
+        }
+        if let Some(last) = self.generated.last_mut() {
+            if last.end == range.start {
+                last.end = range.end;
+                return;
+            }
+        }
+        self.generated.push(range);
+    }
+
+    fn copy_from(&mut self, source: &Self, range: std::ops::Range<usize>) {
+        let offset = self.text.len();
+        self.text.push_str(&source.text[range.clone()]);
+        let first = source
+            .generated
+            .partition_point(|span| span.end <= range.start);
+        for span in source.generated[first..]
+            .iter()
+            .take_while(|span| span.start < range.end)
+        {
+            self.record_generated(
+                offset + span.start.max(range.start) - range.start
+                    ..offset + span.end.min(range.end) - range.start,
+            );
+        }
+    }
+
+    fn slice(&self, range: std::ops::Range<usize>) -> Self {
+        let mut output = Self::default();
+        output.copy_from(self, range);
+        output
+    }
+
+    fn append(&mut self, value: Self) {
+        let offset = self.text.len();
+        self.text.push_str(&value.text);
+        for span in value.generated {
+            self.record_generated(offset + span.start..offset + span.end);
+        }
+    }
+
+    /// A decoded/encoded unit is generated only if all its source bytes were.
+    /// Unchanged units use copy_from, retaining even partial-span provenance.
+    fn transform_unit(&mut self, source: &Self, range: std::ops::Range<usize>, value: &str) {
+        let first = source
+            .generated
+            .partition_point(|span| span.end <= range.start);
+        if source
+            .generated
+            .get(first)
+            .is_some_and(|span| span.start <= range.start && span.end >= range.end)
+        {
+            self.push_generated(value);
+        } else {
+            self.text.push_str(value);
+        }
+    }
+
+    fn replace_all(
+        self,
+        regex: &Regex,
+        mut replacement: impl FnMut(&Self, &regex::Captures<'_>) -> Self,
+    ) -> Self {
+        let mut output = Self::default();
+        let mut cursor = 0;
+        for caps in regex.captures_iter(&self.text) {
+            let matched = caps
+                .get(0)
+                .expect("a regex capture includes its full match");
+            output.copy_from(&self, cursor..matched.start());
+            output.append(replacement(&self, &caps));
+            cursor = matched.end();
+        }
+        output.copy_from(&self, cursor..self.text.len());
+        output
+    }
+
+    /// Replace just the captured value, retaining prefixes and delimiters.
+    fn replace_value(
+        &self,
+        caps: &regex::Captures<'_>,
+        name: &str,
+        project: impl FnOnce(Self) -> Self,
+    ) -> Self {
+        let matched = caps
+            .get(0)
+            .expect("a regex capture includes its full match");
+        let value = caps
+            .name(name)
+            .expect("the rule declares its value capture");
+        let mut output = self.slice(matched.start()..value.start());
+        output.append(project(self.slice(value.range())));
+        output.copy_from(self, value.end()..matched.end());
+        output
+    }
+
+    pub(crate) fn map_source_text(self, mut scrub: impl FnMut(&str) -> String) -> String {
+        let mut output = String::with_capacity(self.text.len());
+        let mut cursor = 0;
+        for span in self.generated {
+            output.push_str(&scrub(&self.text[cursor..span.start]));
+            output.push_str(&self.text[span.clone()]);
+            cursor = span.end;
+        }
+        output.push_str(&scrub(&self.text[cursor..]));
+        output
+    }
+}
+
 /// FNV-1a. Stable across runs and platforms, which `DefaultHasher` is not.
 fn stable_token(kind: &str, value: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -282,60 +422,68 @@ fn scan_entity_encoded_value(value: &str, start: usize) -> Option<(usize, usize)
     None
 }
 
-fn decode_json_escaped_value(value: &str) -> String {
-    let mut decoded = String::with_capacity(value.len());
-    let mut chars = value.chars();
-    while let Some(character) = chars.next() {
+fn decode_json_escaped_tracked(value: &RedactedText) -> RedactedText {
+    let mut decoded = RedactedText::default();
+    let mut chars = value.text.char_indices();
+    while let Some((start, character)) = chars.next() {
         if character != '\\' {
-            decoded.push(character);
+            decoded.copy_from(value, start..start + character.len_utf8());
             continue;
         }
-        match chars.next() {
-            Some('"') => decoded.push('"'),
-            Some('\\') => decoded.push('\\'),
-            Some('/') => decoded.push('/'),
-            Some('b') => decoded.push('\u{0008}'),
-            Some('f') => decoded.push('\u{000c}'),
-            Some('n') => decoded.push('\n'),
-            Some('r') => decoded.push('\r'),
-            Some('t') => decoded.push('\t'),
-            Some(other) => {
-                decoded.push('\\');
-                decoded.push(other);
-            }
-            None => decoded.push('\\'),
+        let Some((next, character)) = chars.next() else {
+            decoded.copy_from(value, start..value.text.len());
+            break;
+        };
+        let end = next + character.len_utf8();
+        let replacement = match character {
+            '"' => Some("\""),
+            '\\' => Some("\\"),
+            '/' => Some("/"),
+            'b' => Some("\u{0008}"),
+            'f' => Some("\u{000c}"),
+            'n' => Some("\n"),
+            'r' => Some("\r"),
+            't' => Some("\t"),
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            decoded.transform_unit(value, start..end, replacement);
+        } else {
+            decoded.copy_from(value, start..end);
         }
     }
     decoded
 }
 
-fn encode_json_escaped_value(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            '"' => encoded.push_str(r#"\""#),
-            '\\' => encoded.push_str(r"\\"),
-            '\u{0008}' => encoded.push_str(r"\b"),
-            '\u{000c}' => encoded.push_str(r"\f"),
-            '\n' => encoded.push_str(r"\n"),
-            '\r' => encoded.push_str(r"\r"),
-            '\t' => encoded.push_str(r"\t"),
-            character if character.is_control() => {
-                use std::fmt::Write;
-                write!(&mut encoded, r"\u{:04x}", character as u32)
-                    .expect("writing to a String cannot fail");
-            }
-            character => encoded.push(character),
+fn encode_json_escaped_tracked(value: &RedactedText) -> RedactedText {
+    let mut encoded = RedactedText::default();
+    for (start, character) in value.text.char_indices() {
+        let replacement = match character {
+            '"' => Some(r#"\""#.to_owned()),
+            '\\' => Some(r"\\".to_owned()),
+            '\u{0008}' => Some(r"\b".to_owned()),
+            '\u{000c}' => Some(r"\f".to_owned()),
+            '\n' => Some(r"\n".to_owned()),
+            '\r' => Some(r"\r".to_owned()),
+            '\t' => Some(r"\t".to_owned()),
+            character if character.is_control() => Some(format!(r"\u{:04x}", character as u32)),
+            _ => None,
+        };
+        let range = start..start + character.len_utf8();
+        if let Some(replacement) = replacement {
+            encoded.transform_unit(value, range, &replacement);
+        } else {
+            encoded.copy_from(value, range);
         }
     }
     encoded
 }
 
-fn decode_entity_value(value: &str) -> String {
-    let mut decoded = String::with_capacity(value.len());
+fn decode_entity_tracked(value: &RedactedText) -> RedactedText {
+    let mut decoded = RedactedText::default();
     let mut cursor = 0;
-    while cursor < value.len() {
-        let remainder = &value[cursor..];
+    while cursor < value.text.len() {
+        let remainder = &value.text[cursor..];
         let replacement = [
             ("&quot;", '"'),
             ("&apos;", '\''),
@@ -345,20 +493,18 @@ fn decode_entity_value(value: &str) -> String {
         ]
         .into_iter()
         .find_map(|(entity, character)| {
-            remainder.starts_with(entity).then_some((entity, character))
-        });
-        if let Some((entity, character)) = replacement {
-            decoded.push(character);
-            cursor += entity.len();
-            continue;
-        }
-        if let Some((number, consumed)) = remainder.strip_prefix("&#").and_then(|rest| {
-            rest.as_bytes()
-                .iter()
-                .take(MAX_NUMERIC_ENTITY_BODY_BYTES + 1)
-                .position(|byte| *byte == b';')
-                .map(|end| (&rest[..end], end + 3))
-        }) {
+            remainder
+                .starts_with(entity)
+                .then_some((character, entity.len()))
+        })
+        .or_else(|| {
+            let (number, consumed) = remainder.strip_prefix("&#").and_then(|rest| {
+                rest.as_bytes()
+                    .iter()
+                    .take(MAX_NUMERIC_ENTITY_BODY_BYTES + 1)
+                    .position(|byte| *byte == b';')
+                    .map(|end| (&rest[..end], end + 3))
+            })?;
             let parsed = number
                 .strip_prefix('x')
                 .or_else(|| number.strip_prefix('X'))
@@ -366,92 +512,79 @@ fn decode_entity_value(value: &str) -> String {
                     || number.parse::<u32>().ok(),
                     |hex| u32::from_str_radix(hex, 16).ok(),
                 );
-            if let Some(character) = parsed.and_then(char::from_u32) {
-                decoded.push(character);
-                cursor += consumed;
-                continue;
-            }
+            parsed
+                .and_then(char::from_u32)
+                .map(|character| (character, consumed))
+        });
+        if let Some((character, consumed)) = replacement {
+            decoded.transform_unit(
+                value,
+                cursor..cursor + consumed,
+                character.encode_utf8(&mut [0; 4]),
+            );
+            cursor += consumed;
+        } else {
+            let character = remainder
+                .chars()
+                .next()
+                .expect("cursor is within the string");
+            let end = cursor + character.len_utf8();
+            decoded.copy_from(value, cursor..end);
+            cursor = end;
         }
-        let character = remainder
-            .chars()
-            .next()
-            .expect("cursor is always within the string");
-        decoded.push(character);
-        cursor += character.len_utf8();
     }
     decoded
 }
 
-fn encode_entity_value(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            '&' => encoded.push_str("&amp;"),
-            '"' => encoded.push_str("&quot;"),
-            '\'' => encoded.push_str("&apos;"),
-            '<' => encoded.push_str("&lt;"),
-            '>' => encoded.push_str("&gt;"),
-            character => encoded.push(character),
+#[cfg(test)]
+fn decode_entity_value(value: &str) -> String {
+    decode_entity_tracked(&RedactedText::source(value)).text
+}
+
+fn encode_entity_tracked(value: &RedactedText) -> RedactedText {
+    let mut encoded = RedactedText::default();
+    for (start, character) in value.text.char_indices() {
+        let replacement = match character {
+            '&' => Some("&amp;"),
+            '"' => Some("&quot;"),
+            '\'' => Some("&apos;"),
+            '<' => Some("&lt;"),
+            '>' => Some("&gt;"),
+            _ => None,
+        };
+        let range = start..start + character.len_utf8();
+        if let Some(replacement) = replacement {
+            encoded.transform_unit(value, range, replacement);
+        } else {
+            encoded.copy_from(value, range);
         }
     }
     encoded
 }
 
-fn redact_escaped_json_fields(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
+fn redact_encoded_fields(
+    value: &RedactedText,
+    regex: &Regex,
+    scan: fn(&str, usize) -> Option<(usize, usize)>,
+    decode: fn(&RedactedText) -> RedactedText,
+    encode: fn(&RedactedText) -> RedactedText,
+) -> RedactedText {
+    let mut output = RedactedText::default();
     let mut cursor = 0;
-    while let Some(captures) = escaped_json_field_re().captures_at(value, cursor) {
+    while let Some(captures) = regex.captures_at(&value.text, cursor) {
         let matched = captures
             .get(0)
-            .expect("escaped JSON field capture must include the prefix");
+            .expect("encoded field capture includes the prefix");
         let value_start = matched.end();
-        output.push_str(&value[cursor..value_start]);
-        let Some((value_end, delimiter_len)) = scan_escaped_json_value(value, value_start) else {
-            let decoded = decode_json_escaped_value(&value[value_start..]);
-            output.push_str(&encode_json_escaped_value(&redact_json_field_value(
-                &captures["field"],
-                &decoded,
-            )));
-            return output;
-        };
-        let decoded = decode_json_escaped_value(&value[value_start..value_end]);
-        output.push_str(&encode_json_escaped_value(&redact_json_field_value(
-            &captures["field"],
-            &decoded,
-        )));
-        output.push_str(&value[value_end..value_end + delimiter_len]);
+        output.copy_from(value, cursor..value_start);
+        let (value_end, delimiter_len) =
+            scan(&value.text, value_start).unwrap_or((value.text.len(), 0));
+        let decoded = decode(&value.slice(value_start..value_end));
+        output.append(encode(&project_quoted(&decoded, "sensitive", false)));
+        output.copy_from(value, value_end..value_end + delimiter_len);
         cursor = value_end + delimiter_len;
     }
-    output.push_str(&value[cursor..]);
-    output
-}
-
-fn redact_entity_encoded_fields(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut cursor = 0;
-    while let Some(captures) = entity_encoded_field_re().captures_at(value, cursor) {
-        let matched = captures
-            .get(0)
-            .expect("entity-encoded field capture must include the prefix");
-        let value_start = matched.end();
-        output.push_str(&value[cursor..value_start]);
-        let Some((value_end, delimiter_len)) = scan_entity_encoded_value(value, value_start) else {
-            let decoded = decode_entity_value(&value[value_start..]);
-            output.push_str(&encode_entity_value(&redact_json_field_value(
-                &captures["field"],
-                &decoded,
-            )));
-            return output;
-        };
-        let decoded = decode_entity_value(&value[value_start..value_end]);
-        output.push_str(&encode_entity_value(&redact_json_field_value(
-            &captures["field"],
-            &decoded,
-        )));
-        output.push_str(&value[value_end..value_end + delimiter_len]);
-        cursor = value_end + delimiter_len;
-    }
-    output.push_str(&value[cursor..]);
+    output.copy_from(value, cursor..value.text.len());
     output
 }
 
@@ -463,31 +596,77 @@ fn is_redaction_token(value: &str) -> bool {
         .is_some_and(is_token_body)
 }
 
-fn redact_sensitive_field(value: &str) -> String {
+/// Retain the original quote policy, including unmatched opening quotes.
+fn quoted_inner(value: &str) -> (Option<char>, std::ops::Range<usize>) {
     let quote = value
         .chars()
         .next()
         .filter(|character| *character == '"' || *character == '\'');
-    let inner = quote
-        .and_then(|quote| {
-            value
-                .strip_prefix(quote)
-                .and_then(|value| value.strip_suffix(quote))
-        })
-        .unwrap_or(value);
-    let projected = preserve_token_mask_tail(inner, "sensitive")
-        .unwrap_or_else(|| stable_token("sensitive", inner));
-    match quote {
-        Some(quote) => format!("{quote}{projected}{quote}"),
-        None => projected,
-    }
+    let inner = quote.and_then(|quote| {
+        value
+            .strip_prefix(quote)
+            .and_then(|value| value.strip_suffix(quote))
+    });
+    (
+        quote,
+        inner.map_or(0..value.len(), |inner| 1..1 + inner.len()),
+    )
 }
 
-/// Callers invoke this helper only for field names in the sensitive-field
-/// allowlist. Treat the whole value as opaque so identity values containing
-/// spaces cannot leak a tail.
-fn redact_json_field_value(_field: &str, value: &str) -> String {
-    redact_sensitive_field(value)
+fn project_quoted(value: &RedactedText, kind: &str, preserve_whole: bool) -> RedactedText {
+    let (quote, inner_range) = quoted_inner(&value.text);
+    let inner = value.slice(inner_range);
+    let projected = if preserve_whole && already_masked(&inner.text) {
+        inner
+    } else {
+        preserve_token_mask_tail_tracked(&inner, kind)
+            .unwrap_or_else(|| RedactedText::generated(&stable_token(kind, &inner.text)))
+    };
+    let mut output = RedactedText::default();
+    if quote.is_some() {
+        output.copy_from(value, 0..1);
+    }
+    output.append(projected);
+    if quote.is_some() {
+        output.copy_from(value, 0..1);
+    }
+    output
+}
+
+fn project_trimmed(
+    value: RedactedText,
+    kind: &str,
+    preserve_whole: bool,
+    keep_trailing: bool,
+) -> RedactedText {
+    let end = value.text.trim_end().len();
+    let inner = value.slice(0..end);
+    let mut output = if preserve_whole && already_masked(&inner.text) {
+        inner
+    } else {
+        preserve_token_mask_tail_tracked(&inner, kind)
+            .unwrap_or_else(|| RedactedText::generated(&stable_token(kind, &inner.text)))
+    };
+    if keep_trailing {
+        output.copy_from(&value, end..value.text.len());
+    }
+    output
+}
+
+/// A captured delimiter belongs to the field grammar, not to its value.
+fn project_delimited(
+    value: RedactedText,
+    delimiter: &str,
+    project: impl FnOnce(&RedactedText) -> RedactedText,
+) -> RedactedText {
+    let end = value
+        .text
+        .strip_suffix(delimiter)
+        .unwrap_or(&value.text)
+        .len();
+    let mut output = project(&value.slice(0..end));
+    output.copy_from(&value, end..value.text.len());
+    output
 }
 
 /// An account named in an explicit field.
@@ -641,29 +820,33 @@ fn split_leading_token(value: &str) -> Option<(&str, &str)> {
 /// The preserved-token projection of a field value: keep the leading token,
 /// mask a non-empty tail with `kind`, and leave an already-masked tail alone.
 /// Returns `None` when the value does not begin with a well-formed token.
-fn preserve_token_mask_tail(value: &str, kind: &str) -> Option<String> {
-    let (token, mut rest) = split_leading_token(value)?;
-    let mut projected = String::with_capacity(value.len());
-    projected.push_str(token);
-
+fn preserve_token_mask_tail_tracked(value: &RedactedText, kind: &str) -> Option<RedactedText> {
+    let (token, _) = split_leading_token(&value.text)?;
+    let mut projected = value.slice(0..token.len());
+    let mut cursor = token.len();
     loop {
+        let rest = &value.text[cursor..];
         let rest_trimmed = rest.trim_start();
         if rest_trimmed.is_empty() || already_masked(rest_trimmed) {
-            projected.push_str(rest);
+            projected.copy_from(value, cursor..value.text.len());
             return Some(projected);
         }
-
         let lead_len = rest.len() - rest_trimmed.len();
-        projected.push_str(&rest[..lead_len]);
-        if let Some((next_token, next_rest)) = split_leading_token(rest_trimmed) {
-            projected.push_str(next_token);
-            rest = next_rest;
+        projected.copy_from(value, cursor..cursor + lead_len);
+        cursor += lead_len;
+        if let Some((next_token, _)) = split_leading_token(rest_trimmed) {
+            projected.copy_from(value, cursor..cursor + next_token.len());
+            cursor += next_token.len();
             continue;
         }
-
-        projected.push_str(&stable_token(kind, rest_trimmed));
+        projected.push_generated(&stable_token(kind, rest_trimmed));
         return Some(projected);
     }
+}
+
+#[cfg(test)]
+fn preserve_token_mask_tail(value: &str, kind: &str) -> Option<String> {
+    preserve_token_mask_tail_tracked(&RedactedText::source(value), kind).map(|output| output.text)
 }
 
 /// Mask a value that is sensitive because of *which field it is*, not because of
@@ -877,265 +1060,156 @@ pub(crate) fn caseless_key(value: &str) -> String {
 
 /// Mask the sensitive spans inside a free-text value.
 pub fn redact_text(value: &str) -> String {
+    redact_text_with_spans(value).text
+}
+
+pub(crate) fn redact_text_with_spans(value: &str) -> RedactedText {
     if value.len() > MAX_REDACTION_INPUT_BYTES {
-        return REMOVED_OVERSIZE.to_owned();
+        return RedactedText::generated(REMOVED_OVERSIZE);
     }
-    let masked = secret_token_re().replace_all(value, |caps: &regex::Captures<'_>| {
-        let token = caps
+    let masked = RedactedText::source(value).replace_all(secret_token_re(), |source, caps| {
+        let matched = caps
             .get(0)
-            .expect("secret token lookalike capture must include the full match")
-            .as_str();
-        if is_redaction_token(token) {
-            token.to_owned()
+            .expect("secret token capture includes the full match");
+        if is_redaction_token(matched.as_str()) {
+            source.slice(matched.range())
         } else {
-            stable_token("secret", token)
+            RedactedText::generated(&stable_token("secret", matched.as_str()))
         }
     });
-    let masked = upn_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        stable_token("upn", &caps[0])
+    let masked = masked.replace_all(upn_re(), |_, caps| {
+        RedactedText::generated(&stable_token("upn", &caps[0]))
     });
-    let masked = user_path_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        // Trailing whitespace is not part of the profile name; keeping it out
-        // of the hashed value means `C:\Users\John Doe ` and `C:\Users\John Doe`
-        // still resolve to the same user.
-        let user = caps["user"].trim_end();
-        if already_masked(user) {
-            return caps[0].to_owned();
-        }
-        let trailing = &caps["user"][user.len()..];
-        format!(
-            "{}{}{}",
-            &caps["prefix"],
-            stable_token("user", user),
-            trailing
-        )
-    });
-
-    let masked = tenant_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        let delimiter = caps
-            .name("delimiter")
-            .map_or("", |matched| matched.as_str());
-        let captured_value = &caps["value"];
-        let value = captured_value
-            .strip_suffix(delimiter)
-            .unwrap_or(captured_value);
-        let quote = value
-            .chars()
-            .next()
-            .filter(|character| *character == '"' || *character == '\'');
-        let inner = quote
-            .and_then(|quote| {
-                value
-                    .strip_prefix(quote)
-                    .and_then(|value| value.strip_suffix(quote))
-            })
-            .unwrap_or(value);
-        if already_masked(inner) {
-            let projected = quote.map_or_else(
-                || inner.to_owned(),
-                |quote| format!("{quote}{inner}{quote}"),
-            );
-            return format!("{}{}{}", &caps["field"], projected, delimiter);
-        }
-        let projected = preserve_token_mask_tail(inner, "tenant")
-            .unwrap_or_else(|| stable_token("tenant", inner));
-        let projected = match quote {
-            Some(quote) => format!("{quote}{projected}{quote}"),
-            None => projected,
-        };
-        format!("{}{}{}", &caps["field"], projected, delimiter)
-    });
-
-    let masked = credential_data_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        format!(
-            "{}{}",
-            &caps["field"],
-            redact_sensitive_field(&caps["value"])
-        )
-    });
-
-    let masked = sensitive_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        let delimiter = caps
-            .name("delimiter")
-            .map_or("", |matched| matched.as_str());
-        let captured_value = &caps["value"];
-        let value = captured_value
-            .strip_suffix(delimiter)
-            .unwrap_or(captured_value);
-        format!(
-            "{}{}{}",
-            &caps["field"],
-            redact_sensitive_field(value),
-            delimiter
-        )
-    });
-
-    let masked = host_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        let delimiter = caps
-            .name("delimiter")
-            .map_or("", |matched| matched.as_str());
-        let captured_value = &caps["value"];
-        let value = captured_value
-            .strip_suffix(delimiter)
-            .unwrap_or(captured_value);
-        let quote = value
-            .chars()
-            .next()
-            .filter(|character| *character == '"' || *character == '\'');
-        let inner = quote
-            .and_then(|quote| {
-                value
-                    .strip_prefix(quote)
-                    .and_then(|value| value.strip_suffix(quote))
-            })
-            .unwrap_or(value);
-        if already_masked(inner) {
-            return format!("{}{}{}", &caps["field"], value, delimiter);
-        }
-        let projected =
-            preserve_token_mask_tail(inner, "host").unwrap_or_else(|| stable_token("host", inner));
-        let projected = match quote {
-            Some(quote) => format!("{quote}{projected}{quote}"),
-            None => projected,
-        };
-        format!("{}{}{}", &caps["field"], projected, delimiter)
-    });
-    let masked = nested_account_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        let value = caps["value"].trim_end();
-        let trailing = &caps["value"][value.len()..];
-        let projected = preserve_token_mask_tail(value, "account")
-            .unwrap_or_else(|| stable_token("account", value));
-        format!(
-            "{}{}{}{}",
-            &caps["pre"], &caps["field"], projected, trailing
-        )
-    });
-
-    let masked = unc_host_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        format!("{}{}", &caps["prefix"], stable_token("host", &caps["host"]))
-    });
-
-    let masked = account_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        let matched = caps
-            .get(0)
-            .expect("account field capture must include the full match")
-            .as_str();
-        if is_redaction_token(matched) {
-            return matched.to_owned();
-        }
-        // Trailing whitespace is prose spacing, not part of the account name.
-        let value = caps["value"].trim_end();
-        let trailing = &caps["value"][value.len()..];
-        if already_masked(value) {
-            return format!("{}{}{}{}", &caps["pre"], &caps["field"], value, trailing);
-        }
-        if let Some(projected) = preserve_token_mask_tail(value, "account") {
-            return format!(
-                "{}{}{}{}",
-                &caps["pre"], &caps["field"], projected, trailing
-            );
-        }
-        format!(
-            "{}{}{}{}",
-            &caps["pre"],
-            &caps["field"],
-            stable_token("account", value),
-            trailing
-        )
-    });
-    let masked = nested_msi_property_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        let value = caps["value"].trim_end();
-        let trailing = &caps["value"][value.len()..];
-        let projected = preserve_token_mask_tail(value, "secret")
-            .unwrap_or_else(|| stable_token("secret", value));
-        format!(
-            "{}{}{}{}",
-            &caps["pre"], &caps["property"], projected, trailing
-        )
-    });
-    let masked = bracketed_msi_property_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        let matched = caps
-            .get(0)
-            .expect("bracketed MSI property capture must include the full match")
-            .as_str();
-        if is_redaction_token(matched) {
-            return matched.to_owned();
-        }
-        if caps["property"].eq_ignore_ascii_case("[secret:")
-            && is_token_body(&format!("secret:{}", caps["value"].trim()))
-        {
-            return matched.to_owned();
-        }
-        let captured_value = &caps["value"];
-        let value = captured_value.trim_end();
-        let trailing = &captured_value[value.len()..];
-        let quote = value
-            .chars()
-            .next()
-            .filter(|character| *character == '"' || *character == '\'');
-        let inner = quote
-            .and_then(|quote| {
-                value
-                    .strip_prefix(quote)
-                    .and_then(|value| value.strip_suffix(quote))
-            })
-            .unwrap_or(value);
-        let projected = preserve_token_mask_tail(inner, "secret")
-            .unwrap_or_else(|| stable_token("secret", inner));
-        let projected = match quote {
-            Some(quote) => format!("{quote}{projected}{quote}"),
-            None => projected,
-        };
-        format!(
-            "{}{}{}{}]",
-            &caps["pre"], &caps["property"], projected, trailing
-        )
-    });
-    let source: &str = &masked;
-    let masked = msi_property_re().replace_all(source, |caps: &regex::Captures<'_>| {
-        let matched = caps
-            .get(0)
-            .expect("MSI property capture must include the full match")
-            .as_str();
-        if is_redaction_token(matched) {
-            return matched.to_owned();
-        }
-        let delimiter = caps
-            .name("delimiter")
-            .map_or("", |matched| matched.as_str());
-        let captured_value = &caps["value"];
-        let value = captured_value
-            .strip_suffix(delimiter)
-            .unwrap_or(captured_value);
-        let prefix = format!("{}{}", &caps["pre"], &caps["property"]);
-        if let Some(projected) = preserve_token_mask_tail(value, "secret") {
-            return format!("{prefix}{projected}{delimiter}");
-        }
-        if already_masked(value) {
-            return format!("{prefix}{value}{delimiter}");
-        }
-        format!("{prefix}{}{delimiter}", stable_token("secret", value))
-    });
-
-    let masked = command_line_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        let value = caps["value"].trim_end();
-        if let Some(projected) = preserve_token_mask_tail(value, "command") {
-            return format!("{}{}", &caps["flag"], projected);
-        }
-        format!("{}{}", &caps["flag"], stable_token("command", value))
-    });
-
-    let masked = sid_re()
-        .replace_all(&masked, |caps: &regex::Captures<'_>| {
-            // Hashed from the uppercase form. A SID is case-insensitive, so the
-            // two spellings name one identity and must reach one token; hashing
-            // the text as written would hand an analyst two tokens for the same
-            // account and break the correlation these tokens exist to provide.
-            stable_token("sid", &caps[0].to_ascii_uppercase())
+    let masked = masked.replace_all(user_path_re(), |source, caps| {
+        source.replace_value(caps, "user", |value| {
+            // Keep the existing profile whitespace and whole-token policy.
+            let end = value.text.trim_end().len();
+            if already_masked(&value.text[..end]) {
+                return value;
+            }
+            let mut output = RedactedText::generated(&stable_token("user", &value.text[..end]));
+            output.copy_from(&value, end..value.text.len());
+            output
         })
-        .into_owned();
-    let masked = redact_escaped_json_fields(&masked);
-    redact_entity_encoded_fields(&masked)
+    });
+    let masked = masked.replace_all(tenant_field_re(), |source, caps| {
+        source.replace_value(caps, "value", |value| {
+            project_delimited(
+                value,
+                caps.name("delimiter").map_or("", |m| m.as_str()),
+                |value| project_quoted(value, "tenant", true),
+            )
+        })
+    });
+    let masked = masked.replace_all(credential_data_field_re(), |source, caps| {
+        source.replace_value(caps, "value", |value| {
+            project_quoted(&value, "sensitive", false)
+        })
+    });
+    let masked = masked.replace_all(sensitive_field_re(), |source, caps| {
+        source.replace_value(caps, "value", |value| {
+            project_delimited(
+                value,
+                caps.name("delimiter").map_or("", |m| m.as_str()),
+                |value| project_quoted(value, "sensitive", false),
+            )
+        })
+    });
+    let masked = masked.replace_all(host_field_re(), |source, caps| {
+        source.replace_value(caps, "value", |value| {
+            project_delimited(
+                value,
+                caps.name("delimiter").map_or("", |m| m.as_str()),
+                |value| {
+                    let (_, inner) = quoted_inner(&value.text);
+                    if already_masked(&value.text[inner]) {
+                        value.slice(0..value.text.len())
+                    } else {
+                        project_quoted(value, "host", false)
+                    }
+                },
+            )
+        })
+    });
+    let masked = masked.replace_all(nested_account_field_re(), |source, caps| {
+        source.replace_value(caps, "value", |value| {
+            project_trimmed(value, "account", false, true)
+        })
+    });
+    let masked = masked.replace_all(unc_host_re(), |source, caps| {
+        source.replace_value(caps, "host", |value| {
+            RedactedText::generated(&stable_token("host", &value.text))
+        })
+    });
+    let masked = masked.replace_all(account_field_re(), |source, caps| {
+        if is_redaction_token(&caps[0]) {
+            return source.slice(caps.get(0).unwrap().range());
+        }
+        source.replace_value(caps, "value", |value| {
+            project_trimmed(value, "account", true, true)
+        })
+    });
+    let masked = masked.replace_all(nested_msi_property_re(), |source, caps| {
+        source.replace_value(caps, "value", |value| {
+            project_trimmed(value, "secret", false, true)
+        })
+    });
+    let masked = masked.replace_all(bracketed_msi_property_re(), |source, caps| {
+        if is_redaction_token(&caps[0])
+            || (caps["property"].eq_ignore_ascii_case("[secret:")
+                && is_token_body(&format!("secret:{}", caps["value"].trim())))
+        {
+            return source.slice(caps.get(0).unwrap().range());
+        }
+        source.replace_value(caps, "value", |value| {
+            let end = value.text.trim_end().len();
+            let mut output = project_quoted(&value.slice(0..end), "secret", false);
+            output.copy_from(&value, end..value.text.len());
+            output
+        })
+    });
+    let masked = masked.replace_all(msi_property_re(), |source, caps| {
+        if is_redaction_token(&caps[0]) {
+            return source.slice(caps.get(0).unwrap().range());
+        }
+        source.replace_value(caps, "value", |value| {
+            project_delimited(
+                value,
+                caps.name("delimiter").map_or("", |m| m.as_str()),
+                |value| {
+                    if let Some(projected) = preserve_token_mask_tail_tracked(value, "secret") {
+                        projected
+                    } else if already_masked(&value.text) {
+                        value.slice(0..value.text.len())
+                    } else {
+                        RedactedText::generated(&stable_token("secret", &value.text))
+                    }
+                },
+            )
+        })
+    });
+    let masked = masked.replace_all(command_line_re(), |source, caps| {
+        source.replace_value(caps, "value", |value| {
+            project_trimmed(value, "command", false, false)
+        })
+    });
+    let masked = masked.replace_all(sid_re(), |_, caps| {
+        RedactedText::generated(&stable_token("sid", &caps[0].to_ascii_uppercase()))
+    });
+    let masked = redact_encoded_fields(
+        &masked,
+        escaped_json_field_re(),
+        scan_escaped_json_value,
+        decode_json_escaped_tracked,
+        encode_json_escaped_tracked,
+    );
+    redact_encoded_fields(
+        &masked,
+        entity_encoded_field_re(),
+        scan_entity_encoded_value,
+        decode_entity_tracked,
+        encode_entity_tracked,
+    )
 }
 #[cfg(test)]
 mod tests {
@@ -1143,6 +1217,222 @@ mod tests {
         caseless_equal, caseless_key, decode_entity_value, find_ignore_case, fold_with_offsets,
         preserve_token_mask_tail, redact_field_value, redact_text, sid_occurrences,
     };
+
+    /// Expected bytes are frozen from the original public grammar. Checking
+    /// only the text would miss incorrectly protected labels or copied tokens.
+    #[test]
+    fn every_emission_stage_protects_only_its_replacement() {
+        for (input, expected, protected) in [
+            (
+                r###"[secret:bad]"###,
+                r###"[secret:b1c41cd9086a8e7a]"###,
+                r###"[secret:b1c41cd9086a8e7a]"###,
+            ),
+            (
+                r###"é alice@contoso.example τέλος"###,
+                r###"é [upn:71502daf0141f764] τέλος"###,
+                r###"[upn:71502daf0141f764]"###,
+            ),
+            (
+                r###"C:\Users\Alice\file"###,
+                r###"C:\Users\[user:123909cb9f15d167]\file"###,
+                r###"[user:123909cb9f15d167]"###,
+            ),
+            (
+                r###"TenantId=12345678-1234-1234-1234-123456789abc"###,
+                r###"TenantId=[tenant:0e1e983e8bf87390]"###,
+                r###"[tenant:0e1e983e8bf87390]"###,
+            ),
+            (
+                r###"CredentialData=Alice Smith"###,
+                r###"CredentialData=[sensitive:36878a8811449af0]"###,
+                r###"[sensitive:36878a8811449af0]"###,
+            ),
+            (
+                r###"DeviceId=Alice"###,
+                r###"DeviceId=[sensitive:123909cb9f15d167]"###,
+                r###"[sensitive:123909cb9f15d167]"###,
+            ),
+            (
+                r###"ComputerName=Alice"###,
+                r###"ComputerName=[host:123909cb9f15d167]"###,
+                r###"[host:123909cb9f15d167]"###,
+            ),
+            (
+                r###"[[RunAsUser=CONTOSO\John Doe]]"###,
+                r###"[[RunAsUser=[account:fef9409d3601d86b]"###,
+                r###"[account:fef9409d3601d86b]"###,
+            ),
+            (
+                r###"\\server\share"###,
+                r###"\\[host:7294d77db181ded2]\share"###,
+                r###"[host:7294d77db181ded2]"###,
+            ),
+            (
+                r###"RunAsUser=CONTOSO\John Doe"###,
+                r###"RunAsUser=[account:15e34cec04c912a1]"###,
+                r###"[account:15e34cec04c912a1]"###,
+            ),
+            (
+                r###"[[PASSWORD=Alice Smith]]"###,
+                r###"[[PASSWORD=[secret:26439aa3ce7da9de]"###,
+                r###"[secret:26439aa3ce7da9de]"###,
+            ),
+            (
+                r###"[PASSWORD=Alice Smith]"###,
+                r###"[PASSWORD=[secret:36878a8811449af0]]"###,
+                r###"[secret:36878a8811449af0]"###,
+            ),
+            (
+                r###"PASSWORD=Alice"###,
+                r###"PASSWORD=[secret:123909cb9f15d167]"###,
+                r###"[secret:123909cb9f15d167]"###,
+            ),
+            (
+                r###"-Command Alice  "###,
+                r###"-Command [command:123909cb9f15d167]"###,
+                r###"[command:123909cb9f15d167]"###,
+            ),
+            (
+                r###"S-1-5-21-123-456-789-500"###,
+                r###"[sid:292eafd3a77d55a6]"###,
+                r###"[sid:292eafd3a77d55a6]"###,
+            ),
+            (
+                r###"{\"UserName\":\"Alice\"}"###,
+                r###"{\"UserName\":\"[sensitive:123909cb9f15d167]\"}"###,
+                r###"[sensitive:123909cb9f15d167]"###,
+            ),
+            (
+                r###"{&quot;UserName&quot;:&quot;Alice&quot;}"###,
+                r###"{&quot;UserName&quot;:&quot;[sensitive:123909cb9f15d167]&quot;}"###,
+                r###"[sensitive:123909cb9f15d167]"###,
+            ),
+            (
+                r###"C:\Users\display alice@contoso.example\file"###,
+                r###"C:\Users\[user:1ede829e51746e9f]\file"###,
+                r###"[user:1ede829e51746e9f]"###,
+            ),
+        ] {
+            let output = super::redact_text_with_spans(input);
+            assert_eq!(output.text, expected, "{input}");
+            assert_eq!(
+                output.map_source_text(|_| String::new()),
+                protected,
+                "{input}"
+            );
+            // The same bytes supplied as input have no generated provenance.
+            let copied = super::redact_text_with_spans(expected);
+            assert_eq!(copied.text, expected);
+            assert_eq!(copied.map_source_text(|_| String::new()), "", "{expected}");
+        }
+    }
+
+    #[test]
+    fn encoded_values_preserve_occurrence_origin_across_decoding() {
+        const TOKEN: &str = "[upn:71502daf0141f764]";
+        for (input, expected) in [
+            (
+                r#"{\"UserName\":\"[upn:71502daf0141f764]\",\"Account\":\"alice@contoso.example\"}"#,
+                r#"{\"UserName\":\"[RAW:71502daf0141f764]\",\"Account\":\"[upn:71502daf0141f764]\"}"#,
+            ),
+            (
+                r#"{&quot;UserName&quot;:&quot;[&#117;pn:71502daf0141f764]&quot;,&quot;Account&quot;:&quot;alice@contoso.example&quot;}"#,
+                r#"{&quot;UserName&quot;:&quot;[RAW:71502daf0141f764]&quot;,&quot;Account&quot;:&quot;[upn:71502daf0141f764]&quot;}"#,
+            ),
+            // No closing delimiter; existing scanner termination is retained.
+            (
+                r#"{\"UserName\":\"[upn:71502daf0141f764] alice@contoso.example"#,
+                r#"{\"UserName\":\"[RAW:71502daf0141f764] [upn:71502daf0141f764]"#,
+            ),
+        ] {
+            let tracked = super::redact_text_with_spans(input);
+            assert_eq!(
+                tracked.map_source_text(|raw| raw.replace("upn", "RAW")),
+                expected
+            );
+            assert_eq!(
+                super::redact_text_with_spans(input).map_source_text(|_| String::new()),
+                TOKEN
+            );
+        }
+    }
+
+    #[test]
+    fn raw_token_chains_stay_source_when_only_the_tail_is_generated() {
+        let input =
+            "RunAsUser=[account:0123456789abcdef] [account:fedcba9876543210] private tail; end";
+        let tracked = super::redact_text_with_spans(input);
+        let expected = tracked
+            .text
+            .replace("[account:0123456789abcdef]", "[RAW:0123456789abcdef]")
+            .replace("[account:fedcba9876543210]", "[RAW:fedcba9876543210]");
+        assert_eq!(
+            tracked.map_source_text(|raw| raw.replace("account", "RAW")),
+            expected
+        );
+        let protected = super::redact_text_with_spans(input).map_source_text(|_| String::new());
+        assert!(protected.starts_with("[account:"));
+        assert_eq!(protected.matches('[').count(), 1);
+        assert!(!protected.contains("0123456789abcdef"));
+        assert!(!protected.contains("fedcba9876543210"));
+    }
+
+    #[test]
+    fn source_matches_cannot_cross_generated_boundaries() {
+        let input = "é alice@contoso.example τέλος";
+        let tracked = super::redact_text_with_spans(input);
+        let expected = "é [upn:71502daf0141f764] τέλος";
+        assert_eq!(
+            tracked.map_source_text(|raw| raw.replace("é [upn", "BAD").replace("764] τέ", "BAD")),
+            expected
+        );
+    }
+
+    #[test]
+    fn bracket_and_token_rich_fields_keep_ordered_utf8_spans() {
+        let input = "[[é [upn:71502daf0141f764] alice@contoso.example τέλος ".repeat(2048);
+        let tracked = super::redact_text_with_spans(&input);
+        let mut end = 0;
+        for span in &tracked.generated {
+            assert!(end <= span.start && span.start < span.end && span.end <= tracked.text.len());
+            assert!(
+                tracked.text.is_char_boundary(span.start)
+                    && tracked.text.is_char_boundary(span.end)
+            );
+            end = span.end;
+        }
+        assert_eq!(tracked.generated.len(), 2048);
+        let mut calls = 0;
+        let output = tracked.map_source_text(|raw| {
+            calls += 1;
+            raw.replace("upn", "RAW")
+        });
+        assert_eq!(calls, 2049);
+        assert_eq!(output.matches("[RAW:71502daf0141f764]").count(), 2048);
+        assert_eq!(output.matches("[upn:71502daf0141f764]").count(), 2048);
+    }
+
+    #[test]
+    fn only_oversize_input_protects_the_omission_marker() {
+        let cap = super::MAX_REDACTION_INPUT_BYTES;
+        let exact = "é".repeat(cap / 2);
+        let below = format!("{}x", "é".repeat((cap - 2) / 2));
+        for input in [below, exact.clone()] {
+            let tracked = super::redact_text_with_spans(&input);
+            assert_eq!(tracked.text, input);
+            assert_eq!(tracked.map_source_text(|_| String::new()), "");
+        }
+        assert_eq!(
+            super::redact_text_with_spans(&(exact + "x")).map_source_text(|_| String::new()),
+            "[redacted: oversized text omitted]"
+        );
+        assert_eq!(
+            super::redact_text_with_spans("[redacted: oversized text omitted]")
+                .map_source_text(|_| String::new()),
+            ""
+        );
+    }
 
     /// The key agrees with the comparison it stands in for.
     ///
@@ -1258,7 +1548,7 @@ mod tests {
     #[test]
     fn json_escape_preserves_literal_backslashes() {
         assert_eq!(
-            super::encode_json_escaped_value(r"C:\Users\John"),
+            super::encode_json_escaped_tracked(&super::RedactedText::source(r"C:\Users\John")).text,
             r#"C:\\Users\\John"#
         );
     }
