@@ -263,6 +263,9 @@ export const LogRow = memo(function LogRow({
   markerCategories,
 }: LogRowProps) {
   const style = getRowStyle(entry, isSelected, isFindMatch, severityPalette);
+  const isUnparsedImeRecord =
+    entry.format === "Plain" &&
+    entry.tags?.includes("cmtrace:unparsed-ime-record");
 
   // ── Marker gutter context menu ────────────────────────────────────
   const [gutterMenu, setGutterMenu] = useState<{ x: number; y: number } | null>(null);
@@ -480,7 +483,7 @@ export const LogRow = memo(function LogRow({
           return (
             <div
               key="severity"
-              aria-label={entry.severity}
+              aria-label={isUnparsedImeRecord ? "Unparsed" : entry.severity}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -538,6 +541,14 @@ export const LogRow = memo(function LogRow({
                 ...(entry.whatif ? { fontStyle: "italic" } : {}),
               }}
             >
+              {isUnparsedImeRecord && (
+                <span
+                  title="Incomplete IME record. Raw text and source line are retained; metadata has not been inferred."
+                  style={{ fontWeight: 600, marginRight: 8 }}
+                >
+                  [Unparsed record]
+                </span>
+              )}
               {renderMessageWithSpans(
                 entry.message,
                 entry.errorCodeSpans,
