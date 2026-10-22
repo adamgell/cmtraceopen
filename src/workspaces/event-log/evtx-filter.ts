@@ -33,6 +33,66 @@ const LEVEL_ORDER: Record<EvtxLevel, number> = {
   Verbose: 4,
 };
 
+/** Every level, most severe first: the order the level toggles and the counts use. */
+export const EVTX_LEVELS: readonly EvtxLevel[] = [
+  "Critical",
+  "Error",
+  "Warning",
+  "Information",
+  "Verbose",
+];
+
+/**
+ * How many of `records` sit at each level, in one pass.
+ *
+ * The level toggles show these as the loaded totals, so callers pass the loaded records and not the
+ * visible ones: a toggle's count is what turning it on can show, not what the other filters leave.
+ * A level with no loaded records is zero here. Whether that zero means "none exist" or "none were
+ * requested" is the caller's to decide: see `levelsFilteredAtSource`.
+ */
+export function countByLevel(records: readonly EvtxRecord[]): Record<EvtxLevel, number> {
+  const counts: Record<EvtxLevel, number> = {
+    Critical: 0,
+    Error: 0,
+    Warning: 0,
+    Information: 0,
+    Verbose: 0,
+  };
+  for (const record of records) counts[record.level] += 1;
+  return counts;
+}
+
+/**
+ * True when a live query sends a level predicate to the event service, so records at a deselected
+ * level are never loaded.
+ *
+ * Information is a raw-level domain with no upper bound (6..254), and the XPath compiler caps its OR
+ * expressions, so any selection that includes Information is evaluated locally instead. Only a
+ * strict subset without Information is pushed down.
+ *
+ * `evtx-store.ts` keeps its own copy of this predicate in `buildServerFilter`; it does not call this
+ * function. The filter row's unknown counts depend on this one, so `evtx-store-server-filter.test.ts`
+ * pins the two together for every level subset. Merging them is a store change that belongs to
+ * Phase 6a (#834).
+ */
+export function levelsFilteredAtSource(levels: ReadonlySet<EvtxLevel>): boolean {
+  return levels.size > 0 && levels.size < EVTX_LEVELS.length && !levels.has("Information");
+}
+
+/**
+ * The level selection after one toggle: the level flips, and emptying the selection selects every
+ * level again, since "no level" is never a view the operator wants.
+ */
+export function levelsAfterToggle(
+  levels: ReadonlySet<EvtxLevel>,
+  level: EvtxLevel,
+): Set<EvtxLevel> {
+  const next = new Set(levels);
+  if (next.has(level)) next.delete(level);
+  else next.add(level);
+  return next.size === 0 ? new Set(EVTX_LEVELS) : next;
+}
+
 export function sortRecords(
   records: readonly EvtxRecord[],
   field: EvtxSortField,

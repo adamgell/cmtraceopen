@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  countByLevel,
+  EVTX_LEVELS,
   isWithinTimeWindow,
+  levelsAfterToggle,
+  levelsFilteredAtSource,
   parseEventIdSelectors,
   selectVisibleRecords,
   sortRecords,
   type EvtxQuickFilter,
 } from "./evtx-filter";
 import * as evtxColumns from "./evtx-columns";
-import type { EvtxRecord } from "./types";
+import type { EvtxLevel, EvtxRecord } from "./types";
 
 const record = (overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
   id: 1,
@@ -43,7 +47,7 @@ const visible = (
   selectVisibleRecords({
     records,
     selectedChannels: new Set(["Application"]),
-    filterLevels: new Set(["Critical", "Error", "Warning", "Information", "Verbose"]),
+    filterLevels: new Set(EVTX_LEVELS),
     filterEventIds: "",
     filterSearch: "",
     quickFilter,
@@ -274,5 +278,89 @@ describe("sortRecords", () => {
     ];
     expect(sortRecords(records, "time", "asc").map((record) => record.eventId)).toEqual([1, 2]);
     expect(sortRecords(records, "time", "desc").map((record) => record.eventId)).toEqual([2, 1]);
+  });
+});
+
+describe("countByLevel", () => {
+  it("counts every level in one pass and reports a level with no records as zero", () => {
+    const records = [
+      record({ level: "Error" }),
+      record({ level: "Error" }),
+      record({ level: "Warning" }),
+      record({ level: "Information" }),
+      record({ level: "Information" }),
+      record({ level: "Information" }),
+    ];
+
+    expect(countByLevel(records)).toEqual({
+      Critical: 0,
+      Error: 2,
+      Warning: 1,
+      Information: 3,
+      Verbose: 0,
+    });
+  });
+
+  it("counts the records it is given and nothing else: channel and level filters do not apply", () => {
+    // The level toggles show what is loaded, so a record in a deselected channel still counts.
+    const records = [
+      record({ level: "Critical", channel: "Security" }),
+      record({ level: "Critical", channel: "Application" }),
+    ];
+
+    expect(countByLevel(records).Critical).toBe(2);
+  });
+
+  it("returns all zeros for no records", () => {
+    expect(countByLevel([])).toEqual({
+      Critical: 0,
+      Error: 0,
+      Warning: 0,
+      Information: 0,
+      Verbose: 0,
+    });
+  });
+
+  it("has a key for every level the filter bar lists, in severity order", () => {
+    expect(EVTX_LEVELS).toEqual(["Critical", "Error", "Warning", "Information", "Verbose"]);
+    expect(Object.keys(countByLevel([]))).toEqual([...EVTX_LEVELS]);
+  });
+});
+
+describe("levelsFilteredAtSource", () => {
+  const set = (...levels: EvtxLevel[]) => new Set<EvtxLevel>(levels);
+
+  it("is false when every level is selected, because no level predicate is sent", () => {
+    expect(levelsFilteredAtSource(set(...EVTX_LEVELS))).toBe(false);
+  });
+
+  it("is false while Information is selected, because Information is an unbounded raw-level domain kept local", () => {
+    expect(levelsFilteredAtSource(set("Critical", "Information"))).toBe(false);
+    expect(levelsFilteredAtSource(set("Information"))).toBe(false);
+  });
+
+  it("is true for a strict subset without Information", () => {
+    expect(levelsFilteredAtSource(set("Critical", "Error"))).toBe(true);
+    expect(levelsFilteredAtSource(set("Verbose"))).toBe(true);
+  });
+
+  it("is false for an empty selection, which the store never sends", () => {
+    expect(levelsFilteredAtSource(set())).toBe(false);
+  });
+});
+
+describe("levelsAfterToggle", () => {
+  const set = (...levels: EvtxLevel[]) => new Set<EvtxLevel>(levels);
+
+  it("flips one level without touching the others or the input", () => {
+    const before = set(...EVTX_LEVELS);
+    const after = levelsAfterToggle(before, "Verbose");
+    expect([...after]).toEqual(["Critical", "Error", "Warning", "Information"]);
+    expect(before.has("Verbose")).toBe(true);
+    expect(levelsAfterToggle(after, "Verbose").has("Verbose")).toBe(true);
+  });
+
+  it("selects every level again when the last one is toggled off", () => {
+    expect([...levelsAfterToggle(set("Error"), "Error")].sort()).toEqual([...EVTX_LEVELS].sort());
   });
 });
