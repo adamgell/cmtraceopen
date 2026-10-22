@@ -1,4 +1,12 @@
-import { Suspense, useMemo, type ReactNode } from "react";
+import {
+  Fragment,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Badge, tokens } from "@fluentui/react-components";
 import {
   ArrowSync12Regular,
@@ -29,7 +37,28 @@ import { useIntuneStore } from "../../workspaces/intune/intune-store";
 import { useDsregcmdStore } from "../../workspaces/dsregcmd/dsregcmd-store";
 import { useDeploymentStore } from "../../workspaces/deployment/deployment-store";
 import { useSysmonStore } from "../../workspaces/sysmon/sysmon-store";
-import { useEvtxStore } from "../../workspaces/event-log/evtx-store";
+import {
+  EVTX_VIEW_LABELS,
+  useEvtxLayoutStore,
+} from "../../workspaces/event-log/evtx-layout-store";
+import {
+  useEvtxStore,
+  type EvtxSourceMode,
+} from "../../workspaces/event-log/evtx-store";
+import {
+  formatEventTime,
+  timeZoneLabel,
+  type EvtxTimeZoneMode,
+} from "../../workspaces/event-log/evtx-time";
+import {
+  currentCorrelationStatus,
+  readStateFor,
+  useEvtxCorrelationStatusStore,
+  useEvtxVisibleSummaryStore,
+  valueForGeneration,
+  type EvtxCorrelationStatus,
+  type EvtxVisibleSummary,
+} from "../../workspaces/event-log/evtx-status-summary";
 import { useSecureBootStore } from "../../workspaces/secureboot/secureboot-store";
 import { getWorkspace } from "../../workspaces/registry";
 import type { WorkspaceDefinition } from "../../workspaces/types";
@@ -99,6 +128,157 @@ function formatSeverityCounts(counts: SeverityCounts): string {
   if (counts.info > 0) parts.push(`${counts.info} info`);
   if (counts.success > 0) parts.push(`${counts.success} success`);
   return parts.join(", ");
+}
+
+/**
+ * Event Logs status text (spec 8.14). Counts render in the numeric font, so the text is built
+ * from runs rather than one string. A segment is one run group; segments join with " · ".
+ */
+export interface EvtxStatusRun {
+  text: string;
+  /** Counts and times: `tokens.fontFamilyNumeric` with tabular figures (spec D4). */
+  numeric?: boolean;
+}
+export type EvtxStatusSegment = readonly EvtxStatusRun[];
+
+const EVTX_STATUS_SEPARATOR = " · ";
+
+export function evtxStatusText(segments: readonly EvtxStatusSegment[]): string {
+  return segments
+    .map((segment) => segment.map((run) => run.text).join(""))
+    .join(EVTX_STATUS_SEPARATOR);
+}
+
+function countRuns(count: number, singular: string, plural = `${singular}s`) {
+  return [
+    { text: count.toLocaleString(), numeric: true },
+    { text: ` ${count === 1 ? singular : plural}` },
+  ] satisfies EvtxStatusSegment;
+}
+
+export interface EvtxStatusCounts {
+  sourceMode: Exclude<EvtxSourceMode, null>;
+  /**
+   * The workspace's summary of the source on screen, or null while it is not published for it:
+   * the workspace is still mounting, a query has just finished, or the read produced nothing.
+   * Every count is then left out rather than shown as zero or recounted here. When a summary
+   * carries no event counts (files whose records are all text logs, so no event record was
+   * read), the channel, event, error and warning counts are left out the same way and only the
+   * text-log count, which is known, is kept.
+   */
+  rows: Pick<EvtxVisibleSummary, "textLogs" | "events"> | null;
+}
+
+/**
+ * "{Live|Files} · {c} channels · {l} text logs · {n} events · {e} errors · {w} warnings", with
+ * every count that is not known left out, never shown as zero.
+ */
+export function buildEvtxCountsSegments(
+  counts: EvtxStatusCounts,
+): EvtxStatusSegment[] {
+  const { rows } = counts;
+  const mode: EvtxStatusSegment = [
+    { text: counts.sourceMode === "live" ? "Live" : "Files" },
+  ];
+  if (rows === null) return [mode];
+  if (rows.events === null) {
+    return rows.textLogs > 0 ? [mode, countRuns(rows.textLogs, "text log")] : [mode];
+  }
+  return [
+    mode,
+    countRuns(rows.events.channels, "channel"),
+    countRuns(rows.textLogs, "text log"),
+    countRuns(rows.events.visible, "event"),
+    countRuns(rows.events.errors, "error"),
+    countRuns(rows.events.warnings, "warning"),
+  ];
+}
+
+/** "Correlation · {n} chains · {e} exact, {c} candidate, {a} ambiguous · {u} not placed". */
+export function buildEvtxCorrelationSegments(
+  status: EvtxCorrelationStatus,
+): EvtxStatusSegment[] {
+  const { exact, candidate, ambiguous, unplaced } = status;
+  return [
+    [{ text: "Correlation" }],
+    countRuns(exact + candidate, "chain"),
+    [
+      { text: exact.toLocaleString(), numeric: true },
+      { text: " exact, " },
+      { text: candidate.toLocaleString(), numeric: true },
+      { text: " candidate, " },
+      { text: ambiguous.toLocaleString(), numeric: true },
+      { text: " ambiguous" },
+    ],
+    [
+      { text: unplaced.toLocaleString(), numeric: true },
+      { text: " not placed" },
+    ],
+  ];
+}
+
+/** What an Event Logs load had loaded at one moment: how many records, and which channels. */
+interface LoadedSnapshot {
+  recordCount: number;
+  channels: ReadonlySet<string>;
+}
+
+/**
+ * Whether what is loaded now differs from `start`. The channels are compared by membership, not by
+ * reference: a load writes its channel set back as a new Set whether or not it changed anything.
+ */
+function loadedStateDiffers(
+  start: LoadedSnapshot,
+  recordCount: number,
+  channels: ReadonlySet<string>,
+): boolean {
+  if (recordCount !== start.recordCount || channels.size !== start.channels.size) return true;
+  for (const channel of channels) {
+    if (!start.channels.has(channel)) return true;
+  }
+  return false;
+}
+
+/** `HH:MM:SS` plus the zone label, in the clock the grid shows event times in. */
+export function formatEvtxUpdatedTime(
+  epochMs: number,
+  mode: EvtxTimeZoneMode,
+): EvtxStatusSegment {
+  // formatEventTime prints `YYYY-MM-DD HH:MM:SS.mmm`; the time of day is columns 11 to 19.
+  return [
+    { text: formatEventTime(epochMs, mode).slice(11, 19), numeric: true },
+    { text: ` ${timeZoneLabel(mode, epochMs)}` },
+  ];
+}
+
+const numericRunStyle = {
+  fontFamily: tokens.fontFamilyNumeric,
+  fontVariantNumeric: "tabular-nums",
+} as const;
+
+function EvtxStatusRuns({
+  segments,
+}: {
+  segments: readonly EvtxStatusSegment[];
+}) {
+  return (
+    <>
+      {segments.map((segment, segmentIndex) => (
+        <Fragment key={segmentIndex}>
+          {segmentIndex > 0 ? EVTX_STATUS_SEPARATOR : null}
+          {segment.map((run, runIndex) =>
+            run.numeric ? (
+              <span key={runIndex} style={numericRunStyle}>
+                {run.text}
+              </span>
+            ) : (
+              <Fragment key={runIndex}>{run.text}</Fragment>
+            ),
+          )}
+        </Fragment>
+      ))}
+    </>
+  );
 }
 
 export function WorkspaceStatusBarContent({
@@ -173,11 +353,20 @@ export function StatusBar() {
   const sysmonError = useSysmonStore((s) => s.analysisError);
   const sysmonSourcePath = useSysmonStore((s) => s.sourcePath);
 
-  const evtxRecordCount = useEvtxStore((s) => s.records.length);
+  // The raw store references are only dereferenced inside the event-log branch below, so a test
+  // that stubs `useEvtxStore` with a partial state keeps working for the other workspaces.
+  const evtxRecords = useEvtxStore((s) => s.records);
   const evtxSourceMode = useEvtxStore((s) => s.sourceMode);
   const evtxIsLoading = useEvtxStore((s) => s.isLoading);
-  const evtxLoadedChannelCount = useEvtxStore((s) => s.loadedChannels.size);
-  const evtxLoadElapsedMs = useEvtxStore((s) => s.loadElapsedMs);
+  const evtxLoadedChannels = useEvtxStore((s) => s.loadedChannels);
+  const evtxTimeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  const evtxLoadGeneration = useEvtxStore((s) => s.loadGeneration);
+  const evtxLayoutView = useEvtxLayoutStore((s) => s.activeView);
+  // Published by EventLogWorkspace from the rows it already computed. Each carries the load
+  // generation it was computed under and is used only while that is still the current one.
+  const evtxVisibleSummary = useEvtxVisibleSummaryStore((s) => s.summary);
+  const evtxCorrelationStatus = useEvtxCorrelationStatusStore((s) => s.status);
+  const evtxAnalysis = useEvtxCorrelationStatusStore((s) => s.analysis);
 
   const securebootAnalysisState = useSecureBootStore((s) => s.analysisState);
   const securebootResult = useSecureBootStore((s) => s.result);
@@ -238,6 +427,52 @@ export function StatusBar() {
     return null;
   }, [entries, filteredIds, selectedId]);
 
+  // "Updated" is the last load or tail append the status bar observed. The store keeps no
+  // wall-clock stamp. AppShell renders the bar unconditionally, so it stays mounted across
+  // workspace switches and sees every settled change to the loaded records. A load counts when it
+  // left something different loaded than it found: the bar notes the record count and the loaded
+  // channels when the load starts, and stamps only if the load's end differs from that. A retry
+  // whose channels were all refused or cancelled before anything came in changes neither, so it is
+  // not an update, even while other channels' events are on screen. A reload clears both in the
+  // write that starts it, so the same events read back again still count. A shrinking record set
+  // (clearing a channel) is not a load, and a tail append counts when the records grew. Records
+  // that were already loaded when the bar mounted get no stamp: that time was not observed, so it
+  // is left out rather than guessed. (A remount would restart the stamp the same way.)
+  const [evtxUpdatedAt, setEvtxUpdatedAt] = useState<number | null>(null);
+  const observedRecordCountRef = useRef(evtxRecords.length);
+  const wasLoadingRef = useRef(evtxIsLoading);
+  const loadStartRef = useRef<LoadedSnapshot>({
+    recordCount: evtxRecords.length,
+    channels: evtxLoadedChannels,
+  });
+  useEffect(() => {
+    const grew = evtxRecords.length > observedRecordCountRef.current;
+    const loadStarted = !wasLoadingRef.current && evtxIsLoading;
+    const loadFinished = wasLoadingRef.current && !evtxIsLoading;
+    observedRecordCountRef.current = evtxRecords.length;
+    wasLoadingRef.current = evtxIsLoading;
+    if (loadStarted) {
+      loadStartRef.current = { recordCount: evtxRecords.length, channels: evtxLoadedChannels };
+    }
+    if (evtxIsLoading) return;
+    const loadChangedWhatIsLoaded =
+      loadFinished &&
+      loadedStateDiffers(loadStartRef.current, evtxRecords.length, evtxLoadedChannels);
+    if (!grew && !loadChangedWhatIsLoaded) return;
+    // Files whose records are all text logs did read something: the load finished and produced
+    // them, even though no event record was read. Only a read of nothing is not an update.
+    if (
+      readStateFor({
+        sourceMode: evtxSourceMode,
+        loadedChannelCount: evtxLoadedChannels.size,
+        records: evtxRecords,
+      }) === "nothing"
+    ) {
+      return;
+    }
+    setEvtxUpdatedAt(Date.now());
+  }, [evtxRecords, evtxIsLoading, evtxSourceMode, evtxLoadedChannels]);
+
   let elapsedText = "";
   if (activeView === "log" && selectedId !== null && entries.length > 0) {
     const firstEntry = entries[0];
@@ -288,6 +523,11 @@ export function StatusBar() {
   let leftParts: string[] = [];
   let rightStatusText = "";
   let rightTone: StatusTone | undefined;
+  // Set by the Event Logs branch, whose counts render in the numeric font. When present they
+  // replace `leftParts` and `rightStatusText`.
+  let leftSegments: readonly EvtxStatusSegment[] | null = null;
+  let rightSegments: readonly EvtxStatusSegment[] | null = null;
+  let leftTitleNote = "";
 
   if (activeView === "log") {
     leftParts = [
@@ -497,29 +737,50 @@ export function StatusBar() {
         .join(" | ");
     }
   } else if (activeView === "event-log") {
-    leftParts = [
-      uiChromeStatus.viewLabel,
-      evtxIsLoading
-        ? "Loading..."
-        : evtxSourceMode === "live"
-          ? `${evtxLoadedChannelCount} channel${evtxLoadedChannelCount !== 1 ? "s" : ""} loaded`
-          : evtxSourceMode === "files"
-            ? "File mode"
-            : "Ready",
-    ];
-
     if (evtxIsLoading) {
+      leftSegments = [[{ text: "Loading..." }]];
       rightStatusText =
-        evtxRecordCount > 0
-          ? `${evtxRecordCount.toLocaleString()} events loaded...`
+        evtxRecords.length > 0
+          ? `${evtxRecords.length.toLocaleString()} events loaded...`
           : "Querying event logs...";
       rightTone = "progress";
-    } else if (evtxRecordCount > 0) {
-      const timeStr =
-        evtxLoadElapsedMs != null
-          ? ` in ${(evtxLoadElapsedMs / 1000).toFixed(1)}s`
-          : "";
-      rightStatusText = `${evtxRecordCount.toLocaleString()} events${timeStr}`;
+    } else if (evtxSourceMode === null) {
+      // Nothing is loaded, so there is nothing to count. Zeros here would read as a result.
+      leftSegments = [[{ text: "Ready" }]];
+    } else {
+      // The event counts are the grid's rows (spec 8.14 and the acceptance "match the chip row
+      // and the grid"). The bar does not recount: it reads what the workspace computed, and only
+      // while that was computed for the source on screen.
+      const rows = valueForGeneration(evtxVisibleSummary, evtxLoadGeneration);
+      // The chain counts belong to the analysis session the workspace has on screen. They are
+      // compared with that session, not with the load generation: a load that is refused or
+      // fails bumps the generation and leaves the session, and its counts, on screen.
+      const correlation = currentCorrelationStatus({
+        analysis: evtxAnalysis,
+        status: evtxCorrelationStatus,
+      });
+      if (rows !== null && evtxLayoutView === "correlation" && correlation !== null) {
+        leftSegments = buildEvtxCorrelationSegments(correlation);
+      } else {
+        leftSegments = buildEvtxCountsSegments({ sourceMode: evtxSourceMode, rows });
+        if (rows?.events != null && rows.events.visible !== rows.events.loaded) {
+          // The chip row's "of {loaded}", for a filter that narrows the grid. It belongs to the
+          // event count, so the Correlation variant, whose numbers are chains, does not carry it.
+          leftTitleNote = ` (${rows.events.loaded.toLocaleString()} loaded)`;
+        }
+      }
+      // A read that produced nothing publishes no rows, and no update time is claimed for it.
+      rightSegments = [
+        [{ text: `${EVTX_VIEW_LABELS[evtxLayoutView]} view` }],
+        ...(evtxUpdatedAt === null || rows === null
+          ? []
+          : [
+              [
+                { text: "Updated " },
+                ...formatEvtxUpdatedTime(evtxUpdatedAt, evtxTimeZoneMode),
+              ] satisfies EvtxStatusSegment,
+            ]),
+      ];
     }
   } else if (activeView === "secureboot") {
     const sbDiagnostics = securebootResult?.diagnostics ?? [];
@@ -612,7 +873,12 @@ export function StatusBar() {
     leftParts = [uiChromeStatus.viewLabel];
   }
 
-  const leftStatusText = leftParts.join(" • ");
+  const leftStatusText = leftSegments
+    ? evtxStatusText(leftSegments)
+    : leftParts.join(" • ");
+  const rightDisplayText = rightSegments
+    ? evtxStatusText(rightSegments)
+    : rightStatusText;
   const toneIcon = rightTone ? STATUS_TONE_ICONS[rightTone] : null;
 
   const activeViewLabel =
@@ -676,7 +942,8 @@ export function StatusBar() {
               {activeViewLabel}
             </Badge>
             <span
-              title={leftStatusText}
+              data-testid="status-bar-left"
+              title={`${leftStatusText}${leftTitleNote}`}
               style={{
                 minWidth: 0,
                 overflow: "hidden",
@@ -684,7 +951,11 @@ export function StatusBar() {
                 whiteSpace: "nowrap",
               }}
             >
-              {leftStatusText}
+              {leftSegments ? (
+                <EvtxStatusRuns segments={leftSegments} />
+              ) : (
+                leftStatusText
+              )}
             </span>
           </div>
           <div
@@ -725,7 +996,8 @@ export function StatusBar() {
               />
             )}
             <span
-              title={rightStatusText}
+              data-testid="status-bar-right"
+              title={rightDisplayText}
               style={{
                 minWidth: 0,
                 overflow: "hidden",
@@ -735,7 +1007,11 @@ export function StatusBar() {
                 fontVariantNumeric: "tabular-nums",
               }}
             >
-              {rightStatusText}
+              {rightSegments ? (
+                <EvtxStatusRuns segments={rightSegments} />
+              ) : (
+                rightStatusText
+              )}
             </span>
           </div>
         </>

@@ -45,6 +45,14 @@ import {
 import { selectVisibleRecords } from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
+import {
+  countTextLogSources,
+  loadedChannelCountFor,
+  readStateFor,
+  summarizeVisibleRecords,
+  useEvtxCorrelationStatusStore,
+  useEvtxVisibleSummaryStore,
+} from "./evtx-status-summary";
 import type {
   DiagnosisSummary,
   EvtxCoverageGap,
@@ -165,6 +173,8 @@ export function EvtxViewHost({
 
 interface EventLogAnalysisSnapshot {
   revision: number;
+  /** The load generation this input was snapshotted under, not the one current when it resolves. */
+  generation: number;
   readyAt: number;
   records: EvtxRecord[];
   entries: LogEntry[];
@@ -277,6 +287,63 @@ export function EventLogWorkspace() {
     ],
   );
   const analysisRecords = useStableRecordMembership(visibleRecords);
+
+  // The global status bar shows the grid's own counts (spec 8.14), so the workspace publishes a
+  // summary of `visibleRecords` above instead of the bar running a second pass. The summary is
+  // keyed by the store's load generation, which every new load, refresh, source change and reset
+  // bumps, so the bar never shows it against another source. Nothing is published while a query
+  // runs (`visibleRecords` is empty then) or when the read produced nothing (a refused or failed
+  // load): "0 events, 0 errors" would read as a clean result, and those counts are unknown. The
+  // summary is cleared on unmount.
+  const loadGeneration = useEvtxStore((s) => s.loadGeneration);
+  const loadedChannels = useEvtxStore((s) => s.loadedChannels);
+  const loadedChannelCount = useMemo(
+    () => loadedChannelCountFor({ sourceMode, loadedChannels, records }),
+    [sourceMode, loadedChannels, records],
+  );
+  const textLogSourceCount = useMemo(
+    () => countTextLogSources(scopedLogEntries, records),
+    [scopedLogEntries, records],
+  );
+  const readState = useMemo(
+    () => readStateFor({ sourceMode, loadedChannelCount: loadedChannels.size, records }),
+    [sourceMode, loadedChannels, records],
+  );
+  useEffect(() => {
+    useEvtxVisibleSummaryStore
+      .getState()
+      .publish(
+        isLoading || readState === "nothing"
+          ? null
+          : summarizeVisibleRecords(
+              visibleRecords,
+              {
+                records: records.length,
+                channels: loadedChannelCount,
+                textLogs: textLogSourceCount,
+                // Files whose records are all text logs read no event: the event counts are
+                // left out of the summary (unknown), and only the text-log count is kept.
+                eventsRead: readState === "events",
+              },
+              loadGeneration,
+            ),
+      );
+  }, [
+    isLoading,
+    readState,
+    visibleRecords,
+    records.length,
+    loadedChannelCount,
+    textLogSourceCount,
+    loadGeneration,
+  ]);
+  useEffect(
+    () => () => {
+      useEvtxVisibleSummaryStore.getState().publish(null);
+      useEvtxCorrelationStatusStore.getState().setAnalysis(null);
+    },
+    [],
+  );
   const channels = useEvtxStore((s) => s.channels);
   const coverageGaps = useEvtxStore((s) => s.coverageGaps);
   const coverageDetails = useEvtxStore((s) => s.coverageDetails);
@@ -408,6 +475,10 @@ export function EventLogWorkspace() {
     setAnalysisStatus(null);
     setInitialTimelinePage(null);
     setTimelineError(null);
+    // Chain counts come from the analysis session just discarded. Phase 10 publishes the next
+    // ones through evtx-status-summary once it has built the chain model; until the new session
+    // is named below, the store holds none.
+    useEvtxCorrelationStatusStore.getState().setAnalysis(null);
 
     if (isLoading) {
       setTimelinePending(true);
@@ -426,6 +497,7 @@ export function EventLogWorkspace() {
     setTimelinePending(true);
     pump.pending = {
       revision,
+      generation: useEvtxStore.getState().loadGeneration,
       readyAt: Date.now() + DIAGNOSIS_DEBOUNCE_MS,
       records: analysisRecords,
       entries: scopedLogEntries,
@@ -466,6 +538,11 @@ export function EventLogWorkspace() {
             return;
           }
           pump.publishedSessionId = result.status.sessionId;
+          useEvtxCorrelationStatusStore.getState().setAnalysis({
+            generation: snapshot.generation,
+            sessionId: result.status.sessionId,
+            revision: result.status.revision,
+          });
           setAnalysisStatus(result.status);
           setInitialTimelinePage(result.initialPage);
           setDiagnosis(result.diagnosis);

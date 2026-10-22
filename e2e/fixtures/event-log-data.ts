@@ -50,6 +50,13 @@ const COMPUTER = "CONTOSO-PC01";
 const BASE_EPOCH_MS = Date.UTC(2026, 9, 6, 10, 20, 0);
 const END = 86400;
 
+/**
+ * The instant a capture is taken at: the end of the mockup day, just after its last event. The
+ * status bar prints when the events were last updated from the wall clock, so a capture pins the
+ * page clock to this instead of letting the PNG carry the time it was taken.
+ */
+export const EVENT_LOG_FIXTURE_NOW_EPOCH_MS = BASE_EPOCH_MS + END * 1000;
+
 type ChannelKey = "sys" | "app" | "aad" | "dm";
 
 const CHANNELS: Record<ChannelKey, { name: string; file: string }> = {

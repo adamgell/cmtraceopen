@@ -16,6 +16,11 @@ export const eventLogWorkspace: WorkspaceDefinition = {
       (m) => ({ default: m.EventLogWorkspace })
     )
   ),
+  toolbarAction: lazy(() =>
+    import("./EvtxToolbarAction").then(
+      (m) => ({ default: m.EvtxToolbarAction })
+    )
+  ),
   fileFilters: [
     { name: "EVTX Files", extensions: ["evtx"] },
     { name: "All Files", extensions: ["*"] },
