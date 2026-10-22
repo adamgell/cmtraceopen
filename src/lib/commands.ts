@@ -466,6 +466,8 @@ function isEvtxRecordResponse(value: unknown): value is EvtxRecord {
     (value.processId === undefined ||
       value.processId === null ||
       isFiniteCommandNumber(value.processId)) &&
+    (value.eventChannel === undefined ||
+      isNullableCommandString(value.eventChannel)) &&
     (value.activityId === undefined ||
       value.activityId === null ||
       typeof value.activityId === "string") &&

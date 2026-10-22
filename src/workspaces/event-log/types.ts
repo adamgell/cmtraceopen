@@ -6,7 +6,13 @@ export interface EvtxRecord {
   timestamp: string;
   timestampEpoch: number;
   provider: string;
+  /**
+   * The log the record was read from: the queried channel, or for an `.evtx` file the event's own
+   * channel. For a collector log such as ForwardedEvents this is the collector.
+   */
   channel: string;
+  /** The event's own `System/Channel`; absent or null when the XML names none. */
+  eventChannel?: string | null;
   eventId: number;
   level: EvtxLevel;
   computer: string;

@@ -1453,6 +1453,47 @@ describe("event-log manifest commands", () => {
   );
 
   it.each([
+    ["absent", {}],
+    ["null", { eventChannel: null }],
+    ["string", { eventChannel: "Security" }],
+  ] as const)(
+    "accepts %s eventChannel values",
+    async (_label, identity) => {
+      const result = {
+        records: [{ ...validEventRecord, ...identity }],
+        channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+        totalRecords: 1,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+      vi.mocked(invoke).mockResolvedValueOnce(result);
+
+      await expect(
+        parseEventLogManifest({ entries: [], coverage: [] }),
+      ).resolves.toEqual(result);
+    },
+  );
+
+  it.each([[42], [true], [[]], [{ value: "Security" }]])(
+    "rejects malformed eventChannel type %s",
+    async (eventChannel) => {
+      vi.mocked(invoke).mockResolvedValueOnce({
+        records: [{ ...validEventRecord, eventChannel }],
+        channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+        totalRecords: 1,
+        parseErrors: 0,
+        errorMessages: [],
+      });
+
+      await expect(
+        parseEventLogManifest({ entries: [], coverage: [] }),
+      ).rejects.toThrow(
+        "Command 'evtx_parse_manifest' returned an invalid response.",
+      );
+    },
+  );
+
+  it.each([
     [null, "the event log reader returned an invalid source manifest"],
     [
       {
