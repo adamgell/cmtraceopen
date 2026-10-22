@@ -1,4 +1,5 @@
 import {
+  lazy,
   useCallback,
   useMemo,
   useRef,
@@ -45,6 +46,14 @@ import {
 import { selectVisibleRecords } from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
+import { buildCorrelationChains } from "./evtx-correlation-chains";
+import {
+  chartWindowLabel,
+  countTextLogSources,
+  loadedChannelCountFor,
+} from "./evtx-chart-data";
+import { orderChannelNames } from "./evtx-channel-order";
+import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 import type {
   DiagnosisSummary,
   EvtxCoverageGap,
@@ -54,6 +63,9 @@ import {
   buildEventLogAnalysisSession,
   EventLogAnalysisCancelled,
 } from "./event-analysis-session";
+
+// The chart library stays out of the initial bundle (spec 8.10).
+const EvtxChartsView = lazy(() => import("./EvtxChartsView"));
 
 const DEFAULT_DETAIL_HEIGHT = 300;
 const MIN_DETAIL_HEIGHT = 100;
@@ -592,11 +604,64 @@ export function EventLogWorkspace() {
     </>
   );
 
+  const visualTokens = useEvtxVisualTokens();
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const chartMetrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
+  const chartChannelOrder = useMemo(
+    () => orderChannelNames(channels.map((c) => c.name)),
+    [channels],
+  );
+  const loadedChannels = useEvtxStore((s) => s.loadedChannels);
+  // Counted only while Charts is active, as `chartsViewChains` is, so a live tail does not rescan
+  // the records on every append in the other views.
+  const chartLoadedChannelCount = useMemo(
+    () =>
+      activeView === "charts"
+        ? loadedChannelCountFor({ sourceMode, loadedChannels, records })
+        : 0,
+    [activeView, sourceMode, loadedChannels, records],
+  );
+  const chartTextLogCount = useMemo(
+    () => (activeView === "charts" ? countTextLogSources(scopedLogEntries, records) : 0),
+    [activeView, scopedLogEntries, records],
+  );
+  const chartHideRules = useMemo(() => [quickFilter], [quickFilter]);
+  // Phase 10c replaces this with the shared chain model. Until then the Charts chains KPI builds
+  // its own from the first timeline page and its bounded edge preview, only while Charts is
+  // active, so `edgeInputComplete` tells the tile when the count is a loaded subset.
+  const chartsViewChains = useMemo(
+    () =>
+      activeView === "charts" && initialTimelinePage
+        ? buildCorrelationChains({
+            items: initialTimelinePage.items,
+            timelineEdges: initialTimelinePage.edgesPreview,
+            totalTimelineEdges: initialTimelinePage.totalEdges,
+            findings: [],
+          })
+        : null,
+    [activeView, initialTimelinePage],
+  );
+  const renderChartsView = () => (
+    <EvtxChartsView
+      records={visibleRecords}
+      chains={chartsViewChains}
+      hideRules={chartHideRules}
+      channelOrder={chartChannelOrder}
+      timeZoneMode={timeZoneMode}
+      loadedChannelCount={chartLoadedChannelCount}
+      textLogCount={chartTextLogCount}
+      loading={isLoading}
+      windowLabel={chartWindowLabel(timeWindow)}
+      metrics={chartMetrics}
+      visualTokens={visualTokens}
+    />
+  );
+
   const views: Record<EvtxViewId, EvtxViewEntry> = {
     table: { keepAlive: true, render: renderTableView },
     grouped: { keepAlive: false, render: () => <ViewPlaceholder view="grouped" /> },
     timeline: { keepAlive: false, render: () => <ViewPlaceholder view="timeline" /> },
-    charts: { keepAlive: false, render: () => <ViewPlaceholder view="charts" /> },
+    charts: { keepAlive: false, render: renderChartsView },
     correlation: { keepAlive: false, render: () => <ViewPlaceholder view="correlation" /> },
   };
 

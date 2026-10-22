@@ -31,6 +31,7 @@ vi.mock("./UnifiedTimelineView", () => ({
 
 import { useLogStore } from "../../stores/log-store";
 import { EventLogWorkspace, EvtxViewHost, type EvtxViewEntry } from "./EventLogWorkspace";
+import { CHART_DATA_THROTTLE_MS } from "./EvtxChartsView";
 import { EvtxViewBar } from "./EvtxViewBar";
 import { requireElement, stubLayout } from "./evtx-test-dom";
 import {
@@ -40,6 +41,7 @@ import {
 } from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
 import type { EvtxRecord } from "./types";
+import type { LogEntry } from "../../types/log";
 
 const RECORD: EvtxRecord = {
   id: 1,
@@ -281,7 +283,7 @@ describe("EventLogWorkspace three-column shell", () => {
     await useEvtxLayoutStore.persist.rehydrate();
     render(<EventLogWorkspace />);
     expect(screen.getByRole("tab", { name: "Charts" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("Charts view")).toBeVisible();
+    expect(await screen.findByTestId("evtx-charts-view", {}, { timeout: 10_000 })).toBeVisible();
     expect(region("channels")).not.toBeVisible();
     expect(region("rail")).toHaveStyle({ width: "400px" });
     expect(region("dock")).toHaveStyle({ height: "250px" });
@@ -303,7 +305,7 @@ describe("EventLogWorkspace three-column shell", () => {
 
   it("shows a placeholder for views that are not built yet, behind the same tablist", () => {
     render(<EventLogWorkspace />);
-    for (const name of ["Grouped", "Timeline", "Charts", "Correlation"]) {
+    for (const name of ["Grouped", "Timeline", "Correlation"]) {
       fireEvent.click(screen.getByRole("tab", { name }));
       expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
       expect(screen.getByRole("tab", { name })).toHaveAttribute("aria-selected", "true");
@@ -311,6 +313,15 @@ describe("EventLogWorkspace three-column shell", () => {
       expect(screen.getAllByText(/Not implemented in this phase/).length).toBeGreaterThan(0);
       expect(screen.getByTestId("records-table")).not.toBeVisible();
     }
+  });
+
+  it("loads the Charts view lazily behind the same tablist", async () => {
+    render(<EventLogWorkspace />);
+    fireEvent.click(screen.getByRole("tab", { name: "Charts" }));
+    expect(screen.getByRole("tab", { name: "Charts" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByTestId("evtx-charts-view", {}, { timeout: 10_000 })).toBeVisible();
+    expect(screen.getAllByRole("figure")).toHaveLength(4);
+    expect(screen.getByTestId("records-table")).not.toBeVisible();
   });
 
   it("keeps selection and filters when switching views and returning to the table", () => {
@@ -358,5 +369,124 @@ describe("EventLogWorkspace three-column shell", () => {
     expect(panel).toHaveTextContent("Charts loaded");
     expect(panel).not.toHaveTextContent("Loading view");
     expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
+  });
+});
+
+describe("EventLogWorkspace Charts view wiring", () => {
+  const fresh = { ...RECORD, timestampEpoch: Date.now(), timestamp: new Date().toISOString() };
+
+  beforeEach(() => {
+    localStorage.clear();
+    useEvtxLayoutStore.setState({ ...sanitizeLayout(undefined), activeView: "charts" });
+    useEvtxStore.getState().reset();
+    useEvtxStore.setState({
+      records: [fresh],
+      channels: [
+        { name: "Application", eventCount: 1, sourceType: "live" },
+        { name: "System", eventCount: 0, sourceType: "live" },
+        { name: "Setup", eventCount: 0, sourceType: "live" },
+      ],
+      selectedChannels: new Set(["Application"]),
+      loadedChannels: new Set(["Application"]),
+      isLoading: false,
+      sourceMode: "files",
+      timeWindow: "all",
+    });
+    useLogStore.setState({ entries: [], activeSource: null, sourceOpenMode: "merged" });
+  });
+
+  afterEach(cleanup);
+
+  const eventsTile = async () => {
+    render(<EventLogWorkspace />);
+    await screen.findByTestId("evtx-charts-view", {}, { timeout: 10_000 });
+    return document.querySelector<HTMLElement>('[data-kpi="events"]')!;
+  };
+
+  const logLine = (filePath: string) => ({ filePath }) as unknown as LogEntry;
+
+  it("counts distinct event-record channels in files mode, and the window as all loaded", async () => {
+    const system = (id: number, sourceLabel: string): EvtxRecord => ({
+      ...fresh,
+      id,
+      eventRecordId: 100 + id,
+      channel: "System",
+      sourceLabel,
+    });
+    const archivedLog: EvtxRecord = {
+      ...fresh,
+      id: 9,
+      originKind: "log",
+      channel: "bundle.zip::logs/agent.log",
+      sourceLabel: "bundle.zip::logs/agent.log",
+    };
+    useEvtxStore.setState({
+      // Two files share the channel name "System"; an archived text log's channel is its label;
+      // the parse result also lists channels of files that contributed no records.
+      records: [fresh, system(2, "System.evtx"), system(3, "Archive-System-2026.evtx"), archivedLog],
+    });
+    const tile = await eventsTile();
+    expect(tile).toHaveTextContent("Events (all loaded)");
+    expect(tile).toHaveTextContent("2 channels · 1 text log");
+  });
+
+  it("counts completed loads (not enumerated channels) in live mode", async () => {
+    useEvtxStore.setState({ sourceMode: "live", timeWindow: "7d" });
+    const tile = await eventsTile();
+    expect(tile).toHaveTextContent("Events (7 d)");
+    expect(tile).toHaveTextContent("1 channel · 0 text logs");
+  });
+
+  it("counts text-log sources, not lines", async () => {
+    useLogStore.setState({
+      entries: [logLine("C:/logs/a.log"), logLine("C:/logs/a.log"), logLine("C:/logs/a.log")],
+    });
+    expect(await eventsTile()).toHaveTextContent("1 channel · 1 text log");
+  });
+
+  it("counts two text-log sources as text logs", async () => {
+    useLogStore.setState({ entries: [logLine("C:/logs/a.log"), logLine("C:/logs/b.log")] });
+    expect(await eventsTile()).toHaveTextContent("1 channel · 2 text logs");
+  });
+
+  it("shows a loading state, not 'no events', while a load runs with records present", async () => {
+    useEvtxStore.setState({ isLoading: true });
+    render(<EventLogWorkspace />);
+    await screen.findByText("Loading events...", {}, { timeout: 10_000 });
+    expect(screen.queryByText(/No events to chart/)).toBeNull();
+  });
+
+  it("does not say 'No events' between a load ending and its records being drawn", async () => {
+    useEvtxStore.setState({ isLoading: true });
+    render(<EventLogWorkspace />);
+    // Real timers until the lazy chunk has loaded; fake timers only for the flip.
+    await screen.findByText("Loading events...", {}, { timeout: 10_000 });
+    vi.useFakeTimers();
+    try {
+      // The visible rows come back in the same store update that ends the load.
+      act(() => {
+        useEvtxStore.setState({ isLoading: false });
+      });
+      expect(screen.queryByText(/No events to chart/)).toBeNull();
+      expect(screen.getByText("Loading events...")).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(CHART_DATA_THROTTLE_MS - 1);
+      });
+      expect(screen.queryByText(/No events to chart/)).toBeNull();
+      expect(screen.getByText("Loading events...")).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(screen.queryByText(/No events to chart/)).toBeNull();
+      expect(screen.queryByText("Loading events...")).toBeNull();
+      expect(screen.getByTestId("kpi-value-events")).toHaveTextContent("1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows n/a for the chains tile until a timeline page exists", async () => {
+    await eventsTile();
+    expect(screen.getByTestId("kpi-value-chains").textContent).toBe("n/a");
   });
 });

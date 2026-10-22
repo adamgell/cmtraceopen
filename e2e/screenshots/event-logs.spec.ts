@@ -262,4 +262,35 @@ test.describe("event-logs screenshots", () => {
       animations: "disabled",
     });
   });
+
+  test("event-logs charts view", async ({ page }) => {
+    await page.getByRole("tab", { name: "Charts" }).click();
+    await expect(page.getByRole("figure", { name: /^Events by channel/ })).toBeVisible({
+      timeout: 15_000,
+    });
+    // Chart data is throttled; wait for the settled KPI grid and all four figures.
+    await expect(page.getByRole("figure")).toHaveCount(4);
+    await expect(page.getByTestId("kpi-value-events")).not.toHaveText("0");
+    await assertNoHostPaths(page);
+    // The page capture stays at the harness's 1440x900; the view element is captured on its own
+    // (it scrolls inside the shell) so all four figures can be reviewed.
+    await page.screenshot({
+      path: outPath("event-logs-charts.png"),
+      animations: "disabled",
+    });
+    const view = page.getByTestId("evtx-charts-view");
+    // The element scrolls inside the shell; grow it to its content so one capture shows everything.
+    await view.evaluate((el) => {
+      el.style.overflow = "visible";
+      for (let parent = el.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+        parent.style.overflow = "visible";
+        parent.style.height = "auto";
+        parent.style.maxHeight = "none";
+      }
+    });
+    await view.screenshot({
+      path: outPath("event-logs-charts-view.png"),
+      animations: "disabled",
+    });
+  });
 });
