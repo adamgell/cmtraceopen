@@ -357,10 +357,12 @@ describe("EvtxChartsView", () => {
     it("says it is loading, not that there are no events, while a load runs", () => {
       vi.useFakeTimers();
       try {
-        const { rerender } = render(<EvtxChartsView {...props({ records: [], loading: true })} />);
+        // Every other prop is the same object after the flip, so only `loading` changes.
+        const base = props({ records: [] });
+        const { rerender } = render(<EvtxChartsView {...base} loading />);
         expect(screen.getByRole("status")).toHaveTextContent("Loading events...");
         // A load that ends with zero rows keeps the loading copy until the data settles (accepted cost).
-        rerender(<EvtxChartsView {...props({ records: [], loading: false })} />);
+        rerender(<EvtxChartsView {...base} loading={false} />);
         advance(CHART_DATA_THROTTLE_MS - 1);
         expect(screen.getByRole("status")).toHaveTextContent("Loading events...");
         advance(1);
@@ -424,15 +426,32 @@ describe("EvtxChartsView", () => {
       }
     });
 
+    it("applies a window label that changes alone after the throttle", () => {
+      vi.useFakeTimers();
+      try {
+        const base = props({ windowLabel: "24 h" });
+        const { rerender } = render(<EvtxChartsView {...base} />);
+        rerender(<EvtxChartsView {...base} windowLabel="7 d" />);
+        advance(CHART_DATA_THROTTLE_MS - 1);
+        expect(screen.getByText("Events (24 h)")).toBeInTheDocument();
+        advance(1);
+        expect(screen.getByText("Events (7 d)")).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("keeps the previous clock in both qualifiers until the hour buckets change with it", () => {
       vi.useFakeTimers();
       try {
-        const { rerender } = render(<EvtxChartsView {...props({ timeZoneMode: "utc" })} />);
+        // Every other prop is the same object after the flip, so only the clock changes.
+        const base = props({ timeZoneMode: "utc" });
+        const { rerender } = render(<EvtxChartsView {...base} />);
         const heat = () => screen.getByRole("figure", { name: /heat map/ });
         const hourly = () => screen.getByRole("figure", { name: /^Errors and warnings per hour/ });
         expect(heat()).toHaveTextContent(utcQualifier);
         expect(hourly()).toHaveTextContent(utcQualifier);
-        rerender(<EvtxChartsView {...props({ timeZoneMode: "local" })} />);
+        rerender(<EvtxChartsView {...base} timeZoneMode="local" />);
         expect(heat()).toHaveTextContent(utcQualifier);
         expect(hourly()).toHaveTextContent(utcQualifier);
         advance(CHART_DATA_THROTTLE_MS - 1);
