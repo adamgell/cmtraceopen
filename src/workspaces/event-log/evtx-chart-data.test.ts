@@ -689,6 +689,34 @@ describe("timestamp fields are range-checked before Date.parse sees the text", (
   });
 });
 
+describe("a fraction of a second reaches Date.parse with exactly three digits", () => {
+  // The ES date-time format has exactly three fraction digits; chrono accepts any number of them
+  // and truncates to milliseconds, so the text is normalized rather than left to the engine.
+  const zero = (timestamp: string) => ({ timestamp, timestampEpoch: 0 });
+  const ES_FORMAT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/;
+  let parse: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    parse = vi.spyOn(Date, "parse");
+  });
+  afterEach(() => {
+    parse.mockRestore();
+  });
+
+  it.each([
+    ["one digit", "2026-11-01T01:30:00.5Z", Date.UTC(2026, 10, 1, 1, 30, 0, 500)],
+    ["two digits, zone-less", "2026-11-01T01:30:00.25", Date.UTC(2026, 10, 1, 1, 30, 0, 250)],
+    ["six digits, offset", "2026-11-01 01:30:00.123456+02:00", Date.UTC(2026, 9, 31, 23, 30, 0, 123)],
+    ["nine digits, truncated not rounded", "2026-11-01T01:30:00.999999999Z", Date.UTC(2026, 10, 1, 1, 30, 0, 999)],
+    ["twelve digits, zone-less", "2026-11-01T01:30:00.000999999999", Date.UTC(2026, 10, 1, 1, 30, 0, 0)],
+    ["three digits", "2026-11-01t01:30:00.250z", Date.UTC(2026, 10, 1, 1, 30, 0, 250)],
+    ["none", "2026-11-01T01:30:00Z", Date.UTC(2026, 10, 1, 1, 30, 0, 0)],
+  ])("%s", (_name, text, expected) => {
+    expect(placedEpochMs(zero(text))).toBe(expected);
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(String(parse.mock.calls[0][0])).toMatch(ES_FORMAT);
+  });
+});
+
 describe("the largest valid minute, second and offset still place", () => {
   const zero = (timestamp: string) => ({ timestamp, timestampEpoch: 0 });
 

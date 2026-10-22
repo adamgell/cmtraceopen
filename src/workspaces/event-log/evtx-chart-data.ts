@@ -248,6 +248,14 @@ function trimLikeRust(text: string): string {
   return text.slice(start, end);
 }
 
+/**
+ * The ES date-time format has exactly three fraction digits; chrono accepts any number and
+ * truncates to milliseconds. Give `Date.parse` the three it is specified for.
+ */
+function withMillisecondFraction(text: string): string {
+  return text.replace(/\.(\d+)/, (_fraction, digits: string) => `.${digits.slice(0, 3).padEnd(3, "0")}`);
+}
+
 /** False when the date part names a day its month does not have (leap years included). */
 function dayExists(text: string): boolean {
   const year = Number(text.slice(0, 4));
@@ -267,8 +275,8 @@ function dayExists(text: string): boolean {
  * zone-less `T` ISO form read as UTC, after the edge whitespace Rust's `trim`
  * strips (`trimLikeRust`; U+FEFF is not among it). Hour, minute, second and offset are
  * range-checked by the patterns and the day by `dayExists`, all before parsing,
- * as chrono does; second 60 stays unplaced (see the module header). Never
- * `Date.parse` on a display string.
+ * as chrono does; second 60 stays unplaced (see the module header). The fraction
+ * is cut or padded to three digits first. Never `Date.parse` on a display string.
  */
 export function placedEpochMs(
   record: Pick<EvtxChartRecord, "timestamp" | "timestampEpoch">,
@@ -279,11 +287,13 @@ export function placedEpochMs(
   // U+2212 is read as "-" only as the offset sign, never between date parts.
   const text = trimLikeRust(record.timestamp ?? "").replace(/\u2212(?=\d{2}:\d{2}$)/, "-");
   if (RFC3339.test(text) && dayExists(text)) {
-    const parsed = Date.parse(text.replace(/^(\d{4}-\d{2}-\d{2})[Tt ]/, "$1T").toUpperCase());
+    const parsed = Date.parse(
+      withMillisecondFraction(text.replace(/^(\d{4}-\d{2}-\d{2})[Tt ]/, "$1T").toUpperCase()),
+    );
     return Number.isNaN(parsed) ? null : parsed;
   }
   if (NAIVE_ISO.test(text) && dayExists(text)) {
-    const parsed = Date.parse(`${text}Z`);
+    const parsed = Date.parse(`${withMillisecondFraction(text)}Z`);
     return Number.isNaN(parsed) ? null : parsed;
   }
   return null;
