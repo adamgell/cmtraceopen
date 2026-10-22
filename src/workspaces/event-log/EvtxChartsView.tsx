@@ -28,16 +28,23 @@
  *   "00" to "09"), worked around with "HH:00" labels.
  * - Figures 1 and 2 are token-styled rows, as the spec recommends.
  */
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { tokens } from "@fluentui/react-components";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Button, Tooltip, tokens } from "@fluentui/react-components";
+import { Dismiss12Regular } from "@fluentui/react-icons";
 import {
   LOG_UI_FONT_FAMILY,
   type LogListMetrics,
 } from "../../lib/log-accessibility";
 import {
+  buildComparisonPresentation,
+  type ComparisonPresentation,
+  type ComparisonPresentationInput,
+} from "./evtx-chart-comparison";
+import {
   buildEvtxChartData,
   HOURS_PER_DAY,
   TOP_EVENT_ID_LIMIT,
+  TREND_GLYPH,
   type EvtxChartData,
   type EvtxChartInput,
   type EvtxChartKpi,
@@ -59,8 +66,24 @@ export interface EvtxChartsViewProps {
   loading?: boolean;
   /** The loaded window, for the Events KPI label, for example "24 h". */
   windowLabel?: string;
+  /**
+   * The previous-period comparison (spec 8.16): what its state is and the three actions. Absent,
+   * the view offers no comparison. The figures it needs come in as plain data, so the view reads
+   * no store.
+   */
+  comparison?: EvtxChartsComparisonProps | null;
   metrics: LogListMetrics;
   visualTokens: EvtxVisualTokens;
+}
+
+export interface EvtxChartsComparisonProps {
+  input: ComparisonPresentationInput;
+  /** Start a comparison with the previous period. */
+  onCompare: () => void;
+  /** Replace a comparison that is out of date. */
+  onRecompare: () => void;
+  /** End the comparison on show, or the one in flight. */
+  onClear: () => void;
 }
 
 /**
@@ -179,11 +202,156 @@ function KpiCard({
         {kpi.value === null ? "n/a" : kpi.value.toLocaleString()}
       </div>
       {kpi.sublabel ? (
-        <div style={{ fontSize: Math.max(10, f - 3), color: tokens.colorNeutralForeground3 }}>
-          {kpi.sublabel}
+        <div
+          data-testid={`kpi-sublabel-${kpi.id}`}
+          style={{
+            fontSize: Math.max(10, f - 3),
+            // A comparison delta is evidence, and the third foreground measures under 4.5:1 in two
+            // themes, so it takes the second. The other sublabels are Phase 14's and keep theirs.
+            color: kpi.comparative ? tokens.colorNeutralForeground2 : tokens.colorNeutralForeground3,
+          }}
+        >
+          {kpi.trend ? (
+            <>
+              {/* The glyph and its space are hidden from a screen reader, which says the direction. */}
+              <span aria-hidden="true">{TREND_GLYPH[kpi.trend]} </span>
+              <span data-testid="kpi-trend-direction" style={visuallyHidden}>
+                {kpi.trend === "up" ? "Up " : "Down "}
+              </span>
+              {kpi.sublabel.slice(TREND_GLYPH[kpi.trend].length + 1)}
+            </>
+          ) : (
+            kpi.sublabel
+          )}
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** Text that wraps at any width: a refusal can be several sentences, and none of it is clipped. */
+const wrapping: CSSProperties = {
+  minWidth: 0,
+  maxWidth: "100%",
+  overflowWrap: "anywhere",
+  whiteSpace: "normal",
+};
+
+function ComparisonBar({
+  presentation,
+  callbacks,
+  metrics,
+}: {
+  presentation: ComparisonPresentation;
+  callbacks: Pick<EvtxChartsComparisonProps, "onCompare" | "onRecompare" | "onClear">;
+  metrics: LogListMetrics;
+}) {
+  const reasonId = useId();
+  const f = metrics.fontSize;
+  const text = Math.max(11, f - 1);
+  const small = Math.max(10, f - 2);
+  const { action, label, status, clearedNotice, reasons, notes, canClear } = presentation;
+  const disabled = action?.disabled ?? false;
+
+  const actionButton = action ? (
+    <Button
+      appearance="secondary"
+      size="small"
+      disabledFocusable={disabled}
+      aria-describedby={disabled && action.reason ? reasonId : undefined}
+      style={{ fontSize: text }}
+      // A disabled-focusable button does not fire its click, so a refused comparison never starts.
+      onClick={() => {
+        if (action.kind === "compare") callbacks.onCompare();
+        else callbacks.onRecompare();
+      }}
+    >
+      {action.label}
+    </Button>
+  ) : null;
+
+  return (
+    <section
+      aria-label="Comparison with the previous period"
+      data-testid="comparison-bar"
+      style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, minWidth: 0 }}
+    >
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          justifyContent: "flex-end",
+          alignItems: "center",
+          gap: 8,
+          maxWidth: "100%",
+        }}
+      >
+        {label ? (
+          <span
+            data-testid="comparison-label"
+            style={{ ...wrapping, fontSize: text, color: tokens.colorNeutralForeground2, textAlign: "right" }}
+          >
+            {label}
+          </span>
+        ) : null}
+        {disabled && action?.reason ? (
+          <span
+            id={reasonId}
+            data-testid="comparison-disabled-reason"
+            style={{ ...wrapping, fontSize: small, color: tokens.colorNeutralForeground2, textAlign: "right" }}
+          >
+            {action.reason}
+          </span>
+        ) : null}
+        {actionButton && disabled && action?.reason ? (
+          // The visible reason is the accessible description; the tooltip is for the pointer only.
+          <Tooltip content={action.reason} relationship="inaccessible">
+            {actionButton}
+          </Tooltip>
+        ) : (
+          actionButton
+        )}
+        {canClear ? (
+          <Button
+            appearance="subtle"
+            size="small"
+            icon={<Dismiss12Regular />}
+            style={{ fontSize: text }}
+            onClick={callbacks.onClear}
+          >
+            Clear comparison
+          </Button>
+        ) : null}
+      </div>
+      {/* Always present, so a change of state is announced when it happens. */}
+      <div
+        role="status"
+        data-testid="comparison-status"
+        style={{ ...wrapping, fontSize: text, color: tokens.colorNeutralForeground1, textAlign: "right" }}
+      >
+        {[status, clearedNotice].filter(Boolean).join(" ")}
+      </div>
+      {reasons.length > 0 ? (
+        <ul
+          data-testid="comparison-reasons"
+          style={{ ...wrapping, margin: 0, paddingLeft: 18, fontSize: small, color: tokens.colorNeutralForeground2 }}
+        >
+          {reasons.map((reason) => (
+            <li key={reason}>{reason}</li>
+          ))}
+        </ul>
+      ) : null}
+      {notes.length > 0 ? (
+        <ul
+          data-testid="comparison-notes"
+          style={{ ...wrapping, margin: 0, paddingLeft: 18, fontSize: small, color: tokens.colorNeutralForeground2 }}
+        >
+          {notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
   );
 }
 
@@ -611,9 +779,9 @@ function useThrottledValue<T>(value: T, ms: number): T {
   return settled;
 }
 
-/** What the figures show, throttled as one value. */
+/** What the figures and the comparison bar show, throttled as one value. */
 interface ChartSnapshot {
-  input: EvtxChartInput;
+  input: { chart: EvtxChartInput; comparison: ComparisonPresentationInput | null };
   loading: boolean;
   windowLabel: string | undefined;
 }
@@ -628,23 +796,36 @@ export function EvtxChartsView({
   textLogCount,
   loading = false,
   windowLabel,
+  comparison = null,
   metrics,
   visualTokens,
 }: EvtxChartsViewProps) {
-  const input = useMemo<EvtxChartInput>(
-    () => ({ records, chains, hideRules, channelOrder, timeZoneMode, loadedChannelCount, textLogCount }),
-    [records, chains, hideRules, channelOrder, timeZoneMode, loadedChannelCount, textLogCount],
+  // The comparison's state travels in the same throttled input as the tiles, so a delta, its status
+  // and the figures beside them are always from one snapshot and never from two moments.
+  const input = useMemo(
+    () => ({
+      chart: { records, chains, hideRules, channelOrder, timeZoneMode, loadedChannelCount, textLogCount },
+      comparison: comparison?.input ?? null,
+    }),
+    [records, chains, hideRules, channelOrder, timeZoneMode, loadedChannelCount, textLogCount, comparison?.input],
   );
-  // Everything that describes the data settles together: the load state, the window label and the
-  // clock must change in the same render as the data they describe. Metrics and tokens are
-  // presentation and apply at once.
+  // Everything that describes the data settles together: the load state, the window label, the
+  // clock and the comparison must change in the same render as the data they describe. Metrics and
+  // tokens are presentation and apply at once.
   const snapshot = useMemo<ChartSnapshot>(
     () => ({ input, loading, windowLabel }),
     [input, loading, windowLabel],
   );
   const settled = useThrottledValue(snapshot, CHART_DATA_THROTTLE_MS);
-  const data = useMemo(() => buildEvtxChartData(settled.input), [settled.input]);
-  const settledTimeZone = settled.input.timeZoneMode;
+  const presentation = useMemo(
+    () => (settled.input.comparison ? buildComparisonPresentation(settled.input.comparison) : null),
+    [settled.input],
+  );
+  const data = useMemo(
+    () => buildEvtxChartData({ ...settled.input.chart, comparison: presentation?.deltas ?? null }),
+    [settled.input, presentation],
+  );
+  const settledTimeZone = settled.input.chart.timeZoneMode;
 
   if (data.totalEvents === 0) {
     return (
@@ -662,6 +843,9 @@ export function EvtxChartsView({
       data-testid="evtx-charts-view"
       style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12, fontFamily: LOG_UI_FONT_FAMILY, overflow: "auto", minHeight: 0 }}
     >
+      {presentation && comparison ? (
+        <ComparisonBar presentation={presentation} callbacks={comparison} metrics={metrics} />
+      ) : null}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 10 }}>
         {data.kpis.map((kpi) => (
           <KpiCard key={kpi.id} kpi={kpi} windowLabel={settled.windowLabel} metrics={metrics} />

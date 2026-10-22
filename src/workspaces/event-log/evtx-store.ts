@@ -48,6 +48,25 @@ import {
   type EvtxColumnConfig,
   type EvtxColumnId,
 } from "./evtx-columns";
+import {
+  beginLiveComparison,
+  cancelComparison,
+  channelStartGap,
+  comparedChannelsOfComparison,
+  getComparisonState,
+  computePriorWindow,
+  isComparisonRequestId,
+  isTailAppended,
+  markTailAppended,
+  messageTextCriterionActive,
+  observeComparisonBatch,
+  observeComparisonComplete,
+  observeComparisonProgress,
+  publishComparisonUnavailable,
+  publishFilesComparison,
+  type ChannelRead,
+  type ComparisonVisibility,
+} from "./evtx-comparison";
 
 type ServerFilter = EventQueryFilterSubset & {
   eventIds?: EvtxEventIdSelector[];
@@ -414,6 +433,16 @@ function isLatestTailStop(outcome: TailStopOutcome): boolean {
 
 let requestGeneration = 0;
 let activeRequestId = "initial";
+
+/**
+ * When each loaded channel's current-period read was issued (taken immediately before its query is
+ * invoked) and when it replied (taken as the invoke resolves). The service evaluates the window
+ * after the invoke, at a time this side does not observe, so the reply bounds it from above and the
+ * issue time from below. A stamp is written only when a current request merges the channel's
+ * result, so a superseded load, which is never merged, cannot rewrite it, and comparison reads,
+ * which never reach a merge, leave it alone.
+ */
+const channelReadEpochs = new Map<string, ChannelRead>();
 let tailGeneration = 0;
 let activeTailRequestId: string | null = null;
 let activeTailSourceRequestId: string | null = null;
@@ -1141,7 +1170,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         });
         // Live query records arrive through the batch event. This path invokes the backend directly
         // rather than through queryChannels, so it must drain the same stream before merging.
-        const mergeResult = (ch: string, reconciliation: StreamReconciliation) => {
+        const mergeResult = (
+          ch: string,
+          reconciliation: StreamReconciliation,
+          read: ChannelRead
+        ) => {
           if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
           const state = get();
           const { checked, result, records, gaps } = reconciliation;
@@ -1164,8 +1197,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall,
             checked.coverageGaps.some((gap) => gap.kind === "cancelled")
           );
-          if (channelHasUsableData) newLoaded.add(ch);
-          else newLoaded.delete(ch);
+          if (channelHasUsableData) {
+            newLoaded.add(ch);
+            channelReadEpochs.set(ch, read);
+          } else {
+            newLoaded.delete(ch);
+          }
 
           set({
             ...merged,
@@ -1192,6 +1229,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
             resetStreamedRecords([ch], requestId);
             try {
+              const issuedEpoch = Date.now();
               const result = await invokeEventQuery<EvtxParseResult>(
                 requestId,
                 remoteMachine,
@@ -1203,6 +1241,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
                   filterSnapshot.filterLevels
                 )
               );
+              const read: ChannelRead = { issuedEpoch, repliedEpoch: Date.now() };
               observeStreamReply(ch, requestId, { kind: "success" });
               if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
               await waitForStreamReconciliation(ch, requestId);
@@ -1215,7 +1254,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
                 AUTO_LOAD_MAX_EVENTS
               );
               if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-              mergeResult(ch, reconciliation);
+              mergeResult(ch, reconciliation, read);
               acknowledgeStreamedRecords(ch, requestId);
             } catch (e) {
               if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
@@ -1381,6 +1420,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       MAX_CONCURRENT_CHANNEL_QUERIES,
       async (ch) => {
         try {
+          const issuedEpoch = Date.now();
           const result = await invokeEventQuery<EvtxParseResult>(
             requestId,
             remoteMachine,
@@ -1392,15 +1432,16 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
               filterSnapshot.filterLevels
             )
           );
+          const read: ChannelRead = { issuedEpoch, repliedEpoch: Date.now() };
           observeStreamReply(ch, requestId, { kind: "success" });
-          return { channel: ch, result, error: null as string | null };
+          return { channel: ch, result, error: null as string | null, read };
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           observeStreamReply(ch, requestId, { kind: "error", message });
           const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
           console.warn(`[evtx] Failed to query ${context}: ${message}`);
           if (!loadError) loadError = `${context}: ${message}`;
-          return { channel: ch, result: null, error: message };
+          return { channel: ch, result: null, error: message, read: null };
         }
       }
     );
@@ -1409,9 +1450,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     const eventCounts = new Map<string, number>();
     const processedChannels = new Set<string>();
     const channelUsability = new Map<string, boolean>();
+    const channelReads = new Map<string, ChannelRead>();
     const reportedGaps: string[] = [];
     const reportedDetails: EvtxCoverageGap[] = [];
-    for (const { channel, result, error } of results) {
+    for (const { channel, result, error, read } of results) {
       if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
       const context = remoteMachine ? `${remoteMachine}/${channel}` : channel;
       try {
@@ -1443,6 +1485,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           checked.coverageGaps.some((gap) => gap.kind === "cancelled")
         );
         channelUsability.set(channel, channelHasUsableData);
+        if (channelHasUsableData && read !== null) channelReads.set(channel, read);
         acknowledgeStreamedRecords(channel, requestId);
       } catch (processingError) {
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
@@ -1461,6 +1504,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     // guard when "All channels" was used.
     const processedChannelNames = [...processedChannels];
     clearVisibleRequestPublication(requestId);
+    // The request is still current: every iteration above checked, and nothing has awaited since.
+    for (const [channel, read] of channelReads) channelReadEpochs.set(channel, read);
     set((state) => {
       const merged = mergeRecordsPreservingSelection(
         state.records,
@@ -1575,9 +1620,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       MAX_CONCURRENT_CHANNEL_QUERIES,
       async (channel) => {
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) {
-          return { channel, result: null, error: null, stale: true };
+          return { channel, result: null, error: null, stale: true, read: null };
         }
         try {
+          const issuedEpoch = Date.now();
           const result = await invokeEventQuery<EvtxParseResult>(
             requestId,
             remoteMachine,
@@ -1589,12 +1635,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
               filterSnapshot.filterLevels
             )
           );
+          const read: ChannelRead = { issuedEpoch, repliedEpoch: Date.now() };
           observeStreamReply(channel, requestId, { kind: "success" });
-          return { channel, result, error: null, stale: false };
+          return { channel, result, error: null, stale: false, read };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           observeStreamReply(channel, requestId, { kind: "error", message });
-          return { channel, result: null, error: message, stale: false };
+          return { channel, result: null, error: message, stale: false, read: null };
         }
       }
     );
@@ -1602,11 +1649,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     const recordsToMerge: EvtxRecord[] = [];
     const eventCounts = new Map<string, number>();
     const channelUsability = new Map<string, boolean>();
+    const channelReads = new Map<string, ChannelRead>();
     const reportedGaps: string[] = [];
     const reportedDetails: EvtxCoverageGap[] = [];
     let loadError: string | null = null;
 
-    for (const { channel, result, error, stale } of results) {
+    for (const { channel, result, error, stale, read } of results) {
       if (stale || !isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
       const context = remoteMachine ? `${remoteMachine}/${channel}` : channel;
       try {
@@ -1640,16 +1688,15 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         }
         reportedGaps.push(...reconciliation.gaps);
         reportedDetails.push(...checked.coverageGaps);
-        channelUsability.set(
-          channel,
-          hasUsableChannelData(
-            records.length,
-            result.channels.find((candidate) => candidate.name === channel)?.eventCount ?? 0,
-            reconciliation.gaps.length,
-            reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall,
-            checked.coverageGaps.some((gap) => gap.kind === "cancelled")
-          )
+        const usable = hasUsableChannelData(
+          records.length,
+          result.channels.find((candidate) => candidate.name === channel)?.eventCount ?? 0,
+          reconciliation.gaps.length,
+          reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall,
+          checked.coverageGaps.some((gap) => gap.kind === "cancelled")
         );
+        channelUsability.set(channel, usable);
+        if (usable && read !== null) channelReads.set(channel, read);
         acknowledgeStreamedRecords(channel, requestId);
       } catch (processingError) {
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
@@ -1673,6 +1720,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     const loadedChannels = new Set(
       [...channelUsability].filter(([, usable]) => usable).map(([channel]) => channel)
     );
+    // The request is still current: every iteration above checked, and nothing has awaited since.
+    for (const [channel, read] of channelReads) channelReadEpochs.set(channel, read);
     const nextCoverageGaps = mergeCoverageGaps(finalState.coverageGaps, reportedGaps);
     const remoteRefreshFailed =
       remoteMachine !== null &&
@@ -2184,6 +2233,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 listen<{ requestId: string; channel: string; fetched: number }>(
   "evtx-query-progress",
   (event) => {
+    // A comparison's scan progress belongs to the comparison, not to the load on screen.
+    if (isComparisonRequestId(event.payload.requestId)) {
+      observeComparisonProgress(event.payload);
+      return;
+    }
     if (!isCurrentRequest(event.payload.requestId)) return;
     useEvtxStore.setState({
       loadingChannel: event.payload.channel,
@@ -2191,6 +2245,84 @@ listen<{ requestId: string; channel: string; fetched: number }>(
     });
   }
 );
+
+/**
+ * What a previous-period comparison is a statement about: the source, the channels read, the window,
+ * the criteria the view applies, and the load whose records the current period was counted from. A
+ * change to any of them makes the comparison describe something no longer on screen, so it is
+ * cancelled and its result cleared. Streaming appends, selection and sorting change none of them.
+ *
+ * Every path that removes, replaces or re-reads a compared channel's records, or changes which
+ * channels are loaded, was audited: a load, a refresh, a source switch and a reset all begin a
+ * request and bump `loadGeneration`; a source or window change sets its own key; a Clear is the one
+ * that changes the records and `loadedChannels` without a load, and is caught by the subscription
+ * below; stopping the tail removes no rows. The tail's own appends change none of the above, and
+ * are left out of the count by identity instead.
+ */
+const COMPARISON_INPUTS: ReadonlyArray<keyof EvtxState> = [
+  "sourceMode",
+  "sourcePaths",
+  "remoteMachine",
+  "selectedChannels",
+  "timeWindow",
+  "filterLevels",
+  "filterEventIds",
+  "filterSearch",
+  "quickFilter",
+  "loadGeneration",
+];
+/** Only a quick filter reads the clock a timestamp is printed in or the columns it scans. */
+const QUICK_FILTER_INPUTS: ReadonlyArray<keyof EvtxState> = ["timeZoneMode", "columnConfig"];
+useEvtxStore.subscribe((state, previous) => {
+  const changed = (keys: ReadonlyArray<keyof EvtxState>) =>
+    keys.some((key) => state[key] !== previous[key]);
+  if (changed(COMPARISON_INPUTS) || (state.quickFilter.query.trim() !== "" && changed(QUICK_FILTER_INPUTS))) {
+    cancelComparison();
+    return;
+  }
+  // Starting a live tail changes what is on screen for the compared channels, and a result made
+  // before it has no note for rows that are about to arrive. The cancel is keyed on `tailRequestId`
+  // becoming a new non-null value, not on `tailChannels` alone, which the tail listener rewrites as
+  // a new Set on every append and `tailRequestId` rewrites with the same string: an append under a
+  // tail that is already running changes neither the request nor what the result says. A denied
+  // Clear restarts the tail and so cancels as well, which is acceptable over-cancelling.
+  if (state.tailRequestId !== null && state.tailRequestId !== previous.tailRequestId) {
+    cancelComparison();
+    return;
+  }
+  // The request id alone misses a start whose first batch arrives early. A batch from one channel
+  // sets `tailRequestId` before the start has landed for the others, so the landing then leaves the
+  // request as it was and only adds channels to `tailChannels`. A comparison made in between has no
+  // note for the channels that are about to be tailed, so it is cancelled when a channel it depends
+  // on enters `tailChannels`. Once a start has landed, an append adds no channel to the set and a
+  // stop removes them, so neither reaches this.
+  if (
+    comparedChannelsOfComparison().some(
+      (channel) => state.tailChannels.has(channel) && !previous.tailChannels.has(channel)
+    )
+  ) {
+    cancelComparison();
+    return;
+  }
+  // A Clear takes a channel out of what is loaded without a load. A comparison depends on the
+  // channels it compared, so it is cancelled when one of them was loaded and no longer is; it is
+  // left alone when any other channel is cleared, and a load cancels it through `loadGeneration`.
+  // The test is stated on the two sets and not on a set's identity, so it is false for files, which
+  // never fill `loadedChannels`. An outcome that could not be made holds no result and names
+  // channels it refused (a capped one, an unstamped one), so it depends on every channel and goes
+  // with any change to what is loaded.
+  const comparison = getComparisonState();
+  const unavailable = comparison.phase === "settled" && comparison.outcome.status === "unavailable";
+  if (
+    (unavailable && state.loadedChannels !== previous.loadedChannels) ||
+    comparedChannelsOfComparison().some(
+      (channel) => previous.loadedChannels.has(channel) && !state.loadedChannels.has(channel)
+    )
+  ) {
+    cancelComparison();
+  }
+});
+
 type StreamReply =
   | { kind: "success" }
   | { kind: "error"; message: string };
@@ -2512,7 +2644,7 @@ function reconcileStreamedResult(
     // A channel that came back at the bound may hold more, and this side cannot tell: the read
     // stopped at the bound rather than counting the channel. Saying what was not read is the
     // difference between a partial view and a view that claims to be whole.
-    gaps.push(`${context}: newest ${cappedAt} events shown (the channel may hold more)`);
+    gaps.push(`${context}: newest ${cappedAt} ${CAPPED_GAP_SUFFIX}`);
   }
   return {
     checked,
@@ -2523,6 +2655,9 @@ function reconcileStreamedResult(
     gaps,
   };
 }
+
+/** What a channel's coverage note ends with when a bounded read stopped at its bound. */
+const CAPPED_GAP_SUFFIX = "events shown (the channel may hold more)";
 
 function invalidateAllStreamedRecords(requestId: string): void {
   const channels = new Set([
@@ -2536,6 +2671,12 @@ listen<{ channel: string; requestId: string; sequence: number; records: EvtxReco
   "evtx-record-batch",
   (event) => {
     const { channel, requestId, sequence, records } = event.payload;
+    // A previous-period comparison shares these events with a load. Its batches are aggregated by
+    // the comparison and never reach the load's streams, `records`, or anything derived from them.
+    if (isComparisonRequestId(requestId)) {
+      observeComparisonBatch({ channel, requestId, sequence, records });
+      return;
+    }
     if (!isCurrentRequest(requestId) || activeRequestIds.get(channel) !== requestId) return;
     const pending = pendingFor(channel, requestId) ?? createPendingStream(channel, requestId);
     if (pending.consumerAcknowledged || pending.sequences.has(sequence)) return;
@@ -2562,6 +2703,10 @@ listen<{ channel: string; requestId: string; sequenceCount: number; totalRecords
   "evtx-record-stream-complete",
   (event) => {
     const { channel, requestId, sequenceCount, totalRecords } = event.payload;
+    if (isComparisonRequestId(requestId)) {
+      observeComparisonComplete({ channel, requestId, sequenceCount, totalRecords });
+      return;
+    }
     if (!isCurrentRequest(requestId) || activeRequestIds.get(channel) !== requestId) return;
     const pending = pendingFor(channel, requestId) ?? createPendingStream(channel, requestId);
     if (pending.consumerAcknowledged) return;
@@ -2588,6 +2733,7 @@ listen<EvtxTailBatch>("evtx-tail-batch", (event) => {
     tailSequences.set(key, sequences);
   }
   if (sequences.has(payload.sequence)) return;
+  markTailAppended(payload.records);
 
   const missing: string[] = [];
   let highest = -1;
@@ -2700,4 +2846,298 @@ export async function cancelActiveLoad(): Promise<void> {
     // control, so a failed stop is logged rather than turned into a failed load.
     console.warn("[evtx] Failed to cancel active load:", error);
   }
+}
+
+/**
+ * Why a comparison cannot be made, in words that name only actions that exist: Load reads a channel
+ * a stopped load left partly read, in full; deselecting leaves a channel out. No control reads a
+ * capped channel in full. When nothing would remain to compare, it says so rather than promising a
+ * result that does not exist.
+ *
+ * "Remain" means channels that would be compared: the loaded selected channels that are not listed,
+ * and the listed ones that Load would bring in. A selected channel that was never loaded is not
+ * compared, so deselecting around it leaves nothing.
+ */
+function incompleteCurrentPeriodDetail(
+  capped: readonly string[],
+  notReadInFull: readonly string[],
+  compared: readonly string[]
+): string {
+  const listed = new Set([...capped, ...notReadInFull]);
+  const othersRemain = notReadInFull.length > 0 || compared.some((channel) => !listed.has(channel));
+  const causes = [
+    ...(capped.length > 0
+      ? [
+          `${capped.join(", ")} reached the automatic load's cap of ${AUTO_LOAD_MAX_EVENTS.toLocaleString("en-US")} events`,
+        ]
+      : []),
+    ...(notReadInFull.length > 0
+      ? [
+          `${notReadInFull.join(", ")} ${notReadInFull.length === 1 ? "was" : "were"} not read in full`,
+        ]
+      : []),
+  ];
+  const advice: string[] = [];
+  if (notReadInFull.length > 0) {
+    advice.push(
+      `Load ${notReadInFull.join(", ")} to read ${notReadInFull.length === 1 ? "it" : "them"} in full.`
+    );
+  }
+  if (capped.length > 0) {
+    advice.push(
+      othersRemain
+        ? `Deselect ${capped.join(", ")} to compare the other channels.`
+        : "No channel can be compared while every loaded selected channel is at the cap."
+    );
+  }
+  return `${causes.join("; ")}, so the current period is only partly loaded. ${advice.join(" ")}`;
+}
+
+/**
+ * The criteria a comparison counts under, other than the time window: the view's own channel
+ * selection, levels, event IDs, search and quick filter, plus the columns and clock a quick filter
+ * reads. The comparison counts its previous period with these, and whoever counts its current
+ * period from the result (`countCurrentPeriod`) must count with the very same object, so the two
+ * sides cannot be taken under different criteria. Any change to one of them cancels the comparison.
+ */
+export function comparisonVisibility(
+  state: Pick<
+    EvtxState,
+    | "selectedChannels"
+    | "filterLevels"
+    | "filterEventIds"
+    | "filterSearch"
+    | "quickFilter"
+    | "columnConfig"
+    | "timeZoneMode"
+  >
+): ComparisonVisibility {
+  return {
+    selectedChannels: state.selectedChannels,
+    filterLevels: state.filterLevels,
+    filterEventIds: state.filterEventIds,
+    filterSearch: state.filterSearch,
+    quickFilter: state.quickFilter,
+    visibleColumns: state.columnConfig.order,
+    timeZoneMode: state.timeZoneMode,
+  };
+}
+
+/**
+ * Compares the current time window with the period of the same length immediately before it.
+ *
+ * Files are compared from the records already loaded, when they cover the previous period.
+ * `nowEpoch` is the workspace's clock, the instant `isWithinTimeWindow` measures the window from,
+ * and is used only for files. A live source's current period ends at the anchor, the earliest
+ * instant a compared channel's current read was issued. A channel read later covers a window that
+ * starts later, and the service evaluates a window at an instant after the invoke that is not
+ * observed, so what each channel may lack from the start of the period is bounded from both sides
+ * and stated. The workspace clock keeps moving after a load, and a criterion change hours later
+ * must not move the comparison with it; neither does a load of a channel the comparison does not
+ * include, nor a live tail, which reads only events that have not happened yet. The tail's events
+ * stay on the grid, are never counted, and are named in a note as left out.
+ *
+ * A live source is queried again, once per loaded selected channel, with the view's own pushed-down
+ * criteria and an explicit `between` window, under a request ID of its own: the events stream into
+ * the comparison's aggregator and are discarded, never entering `records`. The outcome, including
+ * why a comparison is unavailable or only partial, is published to `useComparisonStore`; it is
+ * cleared when the source, channels, window or criteria change. The returned promise resolves when
+ * the comparison settles, or is cancelled or superseded; a cancelled comparison does not hold it
+ * for a read that has not replied.
+ */
+export async function comparePreviousPeriod(nowEpoch: number): Promise<void> {
+  const state = useEvtxStore.getState();
+  const notReady = state.isLoading
+    ? "Events are still loading."
+    : state.sourceMode === null
+      ? "No source is open."
+      : hasInvalidEventIdFilter(state.filterEventIds)
+        ? "The event ID filter is not valid."
+        : null;
+  if (notReady !== null) {
+    publishComparisonUnavailable("notReady", notReady);
+    return;
+  }
+
+  const visibility = comparisonVisibility(state);
+  if (state.sourceMode === "files") {
+    publishFilesComparison({
+      records: state.records,
+      window: state.timeWindow,
+      anchorEpoch: nowEpoch,
+      visibility,
+      coverageDetails: state.coverageDetails,
+      sourceCoverage: state.sourceManifest?.coverage ?? [],
+    });
+    return;
+  }
+
+  // Only channels the current view was counted from: a selected channel that was never loaded has
+  // no current events, and counting its previous period would compare unlike sets.
+  const channels = [...state.selectedChannels].filter((channel) =>
+    state.loadedChannels.has(channel)
+  );
+
+  // Where the current period ends: the earliest instant a compared channel's current read was
+  // issued. The service evaluates a window after the invoke, at an instant this side does not
+  // observe, so each channel's window ends at or after its own issue time, and the part of the
+  // comparison's current period a later channel lacks is bounded below and above (see
+  // `channelStartGap`). The workspace clock keeps moving after a load and is not used, and neither
+  // is the tail: it reads only events that have not happened yet, so what lies between a read and
+  // the tail's start is in neither the records nor a gap.
+  const readEpochs = new Map<string, ChannelRead>();
+  for (const channel of channels) {
+    const read = channelReadEpochs.get(channel);
+    if (read !== undefined && Number.isFinite(read.issuedEpoch) && Number.isFinite(read.repliedEpoch)) {
+      readEpochs.set(channel, read);
+    }
+  }
+  // Until every compared channel is stamped this only tells a window that has no previous period
+  // from one that has; it is never the anchor of a published result.
+  const anchorEpoch =
+    readEpochs.size > 0
+      ? Math.min(...[...readEpochs.values()].map((read) => read.issuedEpoch))
+      : nowEpoch;
+  // Before anything about completeness: a window with no previous period cannot be fixed by loading.
+  const windowResult = computePriorWindow(state.timeWindow, anchorEpoch);
+  if (windowResult.status === "unavailable") {
+    publishComparisonUnavailable(windowResult.reason, windowResult.detail);
+    return;
+  }
+  const unstamped = channels.filter((channel) => !readEpochs.has(channel));
+  if (unstamped.length > 0) {
+    publishComparisonUnavailable(
+      "notReady",
+      `When ${unstamped.join(", ")} was read is not recorded, so the current period cannot be compared.`
+    );
+    return;
+  }
+
+  // The grid counts every selected channel that has records, wholly read or not. A channel left
+  // partly on screen by a stopped load, or cut off at the automatic load's bound, is a slice of its
+  // period; comparing a slice with a whole previous period would be a ratio of unlike sets.
+  const channelsWithRecords = new Set(state.records.map((record) => record.channel));
+  const notReadInFull = [...state.selectedChannels].filter(
+    (channel) => channelsWithRecords.has(channel) && !state.loadedChannels.has(channel)
+  );
+  const capped = [...state.selectedChannels].filter((channel) =>
+    state.coverageGaps.some(
+      (gap) =>
+        gap.endsWith(CAPPED_GAP_SUFFIX) &&
+        coverageBelongsToChannel(gap, channel, state.remoteMachine)
+    )
+  );
+  if (notReadInFull.length > 0 || capped.length > 0) {
+    publishComparisonUnavailable(
+      "currentPeriodIncomplete",
+      incompleteCurrentPeriodDetail(capped, notReadInFull, channels)
+    );
+    return;
+  }
+
+  // What is short in the current period of the channels compared. These do not stop a comparison,
+  // but a ratio against a clean previous period would otherwise read as complete.
+  // One list per cause, so the comparison limits each on its own.
+  const missingStarts = new Set<string>();
+  const possibleStarts = new Set<string>();
+  const reportedGaps = new Set<string>();
+  const currentPeriodHoleChannels = new Set<string>();
+  for (const [channel, read] of readEpochs) {
+    const startGap = channelStartGap(channel, read, anchorEpoch, windowResult.prior.lengthMs);
+    if (startGap !== null) {
+      (startGap.definite ? missingStarts : possibleStarts).add(startGap.text);
+      currentPeriodHoleChannels.add(channel);
+    }
+  }
+  const textCriterion = messageTextCriterionActive(visibility);
+  for (const detail of state.coverageDetails) {
+    if (detail.kind === "provider" && !textCriterion) continue;
+    const concerned = channels.filter((channel) =>
+      coverageBelongsToChannel(detail.source, channel, state.remoteMachine)
+    );
+    if (concerned.length > 0) {
+      reportedGaps.add(formatCoverageGap(detail));
+      for (const channel of concerned) currentPeriodHoleChannels.add(channel);
+    }
+  }
+  // Tail gaps are not among these: the comparison never counts the tail's events, so what the tail
+  // did or did not deliver does not bear on its completeness. The note below covers it.
+
+  // What the tail appends to the compared channels is on the grid and never counted, whatever its
+  // timestamp. The note says so without a number: the tail keeps appending after the result is on
+  // show, and a count taken here would drift from the rows then on the grid (a consumer states the
+  // number from `countCurrentPeriod`, over the same records as its counts). It is given when a
+  // compared channel already holds the tail's rows, which a later load keeps for the channels it
+  // does not read, or is being tailed now, so the rows that are about to arrive are announced too.
+  const comparedChannels = new Set(channels);
+  const tailTouchesCompared =
+    state.records.some((record) => comparedChannels.has(record.channel) && isTailAppended(record)) ||
+    (state.tailRequestId !== null && channels.some((channel) => state.tailChannels.has(channel)));
+  const notes = tailTouchesCompared
+    ? ["Events the live tail appends to the compared channels are not counted in the current period."]
+    : [];
+  // A collector's forwarded events arrive through subscriptions, in batches, after they were
+  // written. The current period was read once; the previous period is read later and includes its
+  // own late arrivals, so the current side can be low against it.
+  if (channels.some((channel) => channel.toLowerCase() === "forwardedevents")) {
+    notes.push(
+      "ForwardedEvents is delivered by subscriptions; events written to it after the read are not counted, so the current period can be low against the previous period."
+    );
+  }
+
+  const session = beginLiveComparison({
+    window: state.timeWindow,
+    anchorEpoch,
+    remote: state.remoteMachine !== null,
+    notes,
+    currentPeriodGaps: [[...missingStarts], [...possibleStarts], [...reportedGaps]],
+    currentPeriodHoleChannels: [...currentPeriodHoleChannels],
+    channels,
+    visibility,
+    cancelQuery: (requestId) => {
+      // Best effort: the backend registers a request's cancel flag when its first read is polled,
+      // and a cancel that arrives before that finds nothing to flag, so a scan started a moment
+      // before the cancel can run on with every batch dropped. Whether that window is real is
+      // still to be confirmed on Windows; the unbounded scan makes it worth knowing.
+      invoke("evtx_cancel_channel_query", { requestId }).catch((error: unknown) => {
+        console.warn("[evtx] Failed to cancel the previous-period comparison:", error);
+      });
+    },
+  });
+  if (!session) return;
+
+  const remoteMachine = state.remoteMachine;
+  const filter: ServerFilter = {
+    ...buildServerFilter("all", state.filterEventIds, state.filterLevels),
+    time: { kind: "between", from: session.prior.from, to: session.prior.to },
+  };
+  const pool = mapWithConcurrency(channels, MAX_CONCURRENT_CHANNEL_QUERIES, async (channel) => {
+    if (!session.isActive()) return;
+    let result: EvtxParseResult;
+    try {
+      // Unbounded: nothing is retained, so a whole period costs time and not memory, and a cap
+      // would make the previous period a different sample from the one it is compared with.
+      result = await invokeEventQuery<EvtxParseResult>(
+        session.requestId,
+        remoteMachine,
+        [channel],
+        null,
+        filter
+      );
+    } catch (error) {
+      session.failed(channel, error instanceof Error ? error.message : String(error));
+      return;
+    }
+    session.replied(channel, result);
+  });
+  // A cancelled or superseded comparison must hand the call back at once. The pool returns only
+  // when every backend scan has, the scan is unbounded, and the cancel is best effort, so waiting on
+  // it would keep a caller busy long after the comparison went idle. `session.done` resolves on a
+  // cancel, a supersede and a settle. The abandoned pool drains on its own: the session drops every
+  // late reply, and a rejection it ends in is logged and not left unhandled.
+  pool.catch((error: unknown) => {
+    console.debug("[evtx] A previous-period comparison read ended in an error:", error);
+  });
+  await Promise.race([pool, session.done]);
+  await session.done;
 }

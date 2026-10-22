@@ -271,6 +271,15 @@ test.describe("event-logs screenshots", () => {
     // Chart data is throttled; wait for the settled KPI grid and all four figures.
     await expect(page.getByRole("figure")).toHaveCount(4);
     await expect(page.getByTestId("kpi-value-events")).not.toHaveText("0");
+    // Files open at All time, which has no previous period: Compare is offered, disabled, with the
+    // reason beside it and no delta anywhere on the tiles.
+    await expect(
+      page.getByRole("button", { name: "Compare with previous period" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await expect(page.getByTestId("comparison-disabled-reason")).toHaveText(
+      "All time has no previous period.",
+    );
+    await expect(page.getByText(/vs prior/)).toHaveCount(0);
     await assertNoHostPaths(page);
     // The page capture stays at the harness's 1440x900; the view element is captured on its own
     // (it scrolls inside the shell) so all four figures can be reviewed.
@@ -290,6 +299,56 @@ test.describe("event-logs screenshots", () => {
     });
     await view.screenshot({
       path: outPath("event-logs-charts-view.png"),
+      animations: "disabled",
+    });
+  });
+  test("event-logs charts compare unavailable", async ({ page }) => {
+    await page.getByRole("tab", { name: "Charts" }).click();
+    await expect(page.getByRole("figure", { name: /^Events by channel/ })).toBeVisible({
+      timeout: 15_000,
+    });
+    // The filter bar offers the time window for live sources only, so a saved capture's window is
+    // set through the store, as the harness opens the sources. 30 d holds every record of the
+    // 24 hour dataset (a saved capture is measured from its own end), so the visible rows, and the
+    // analysis the replies were captured for, are unchanged.
+    await page.evaluate(async () => {
+      const { useEvtxStore } = await import("/src/workspaces/event-log/evtx-store.ts");
+      useEvtxStore.getState().setTimeWindow("30d");
+    });
+    await expect(page.getByTestId("kpi-value-events")).not.toHaveText("0");
+
+    // The words are the comparison's own, rendered whole: ask it what it says for the loaded
+    // records, from the same instant the grid is measured from.
+    const expected = await page.evaluate(async () => {
+      const { useEvtxStore } = await import("/src/workspaces/event-log/evtx-store.ts");
+      const { filesWindowAnchor, resolveFilesPrior } = await import(
+        "/src/workspaces/event-log/evtx-comparison.ts"
+      );
+      const state = useEvtxStore.getState();
+      const resolved = resolveFilesPrior(
+        state.records,
+        state.selectedChannels,
+        state.timeWindow,
+        filesWindowAnchor(state.records, Date.now()),
+      );
+      return resolved.status === "unavailable"
+        ? { reason: resolved.reason, detail: resolved.detail }
+        : null;
+    });
+    expect(expected?.reason).toBe("priorPeriodNotSpanned");
+    expect(expected?.detail.startsWith("The loaded files do not cover the previous period.")).toBe(
+      true,
+    );
+
+    const reason = page.getByTestId("comparison-disabled-reason");
+    await expect(reason).toHaveText(expected!.detail);
+    await expect(
+      page.getByRole("button", { name: "Compare with previous period" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await expect(page.getByText(/vs prior/)).toHaveCount(0);
+    await assertNoHostPaths(page);
+    await page.screenshot({
+      path: outPath("event-logs-charts-compare-unavailable.png"),
       animations: "disabled",
     });
   });

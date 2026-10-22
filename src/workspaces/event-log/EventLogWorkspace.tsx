@@ -43,6 +43,7 @@ import {
   type EvtxRailTabId,
   type EvtxViewId,
 } from "./evtx-layout-store";
+import { filesWindowAnchor } from "./evtx-comparison";
 import { selectVisibleRecords } from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
@@ -54,6 +55,7 @@ import {
 } from "./evtx-chart-data";
 import { orderChannelNames } from "./evtx-channel-order";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
+import { useEvtxChartComparison } from "./useEvtxChartComparison";
 import type {
   DiagnosisSummary,
   EvtxCoverageGap,
@@ -243,9 +245,15 @@ export function EventLogWorkspace() {
   const quickFilter = useEvtxStore((s) => s.quickFilter);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const columnOrder = useEvtxStore((s) => s.columnConfig.order);
+  // The instant every relative window is measured from. A live source is measured from the clock. A
+  // saved capture is a snapshot, so it is measured from its own end: "Last 24 h" is the last 24
+  // hours it holds, not the last 24 hours before this computer's clock, which would show nothing
+  // for an export that is a day old. Everything that applies a window (the grid, the timeline, the
+  // view bar, the "as of" label and the comparison) takes it from here.
   const nowEpoch = useMemo(
-    () => Date.now(),
+    () => (sourceMode === "files" ? filesWindowAnchor(records, Date.now()) : Date.now()),
     [
+      sourceMode,
       records,
       selectedChannels,
       filterLevels,
@@ -626,6 +634,9 @@ export function EventLogWorkspace() {
     [activeView, scopedLogEntries, records],
   );
   const chartHideRules = useMemo(() => [quickFilter], [quickFilter]);
+  // The previous-period comparison (spec 8.16). It reads the grid's `nowEpoch`, so what it offers,
+  // the anchor it compares from and the clock it is checked against are the ones the tiles use.
+  const chartComparison = useEvtxChartComparison(activeView === "charts", nowEpoch);
   // Phase 10c replaces this with the shared chain model. Until then the Charts chains KPI builds
   // its own from the first timeline page and its bounded edge preview, only while Charts is
   // active, so `edgeInputComplete` tells the tile when the count is a loaded subset.
@@ -652,6 +663,7 @@ export function EventLogWorkspace() {
       textLogCount={chartTextLogCount}
       loading={isLoading}
       windowLabel={chartWindowLabel(timeWindow)}
+      comparison={chartComparison}
       metrics={chartMetrics}
       visualTokens={visualTokens}
     />

@@ -14,6 +14,10 @@ vi.mock("./event-analysis-session", () => ({
   buildEventLogAnalysisSession: vi.fn(() => new Promise(() => undefined)),
   EventLogAnalysisCancelled: class EventLogAnalysisCancelled extends Error {},
 }));
+vi.mock("./useEvtxChartComparison", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./useEvtxChartComparison")>();
+  return { ...actual, useEvtxChartComparison: vi.fn(actual.useEvtxChartComparison) };
+});
 vi.mock("./SourcePicker", () => ({ SourcePicker: () => null }));
 vi.mock("./ChannelPicker", () => ({
   ChannelPicker: () => <input aria-label="Filter channels" data-testid="channel-picker" />,
@@ -40,6 +44,7 @@ import {
   useEvtxLayoutStore,
 } from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
+import { useEvtxChartComparison } from "./useEvtxChartComparison";
 import type { EvtxRecord } from "./types";
 import type { LogEntry } from "../../types/log";
 
@@ -488,5 +493,140 @@ describe("EventLogWorkspace Charts view wiring", () => {
   it("shows n/a for the chains tile until a timeline page exists", async () => {
     await eventsTile();
     expect(screen.getByTestId("kpi-value-chains").textContent).toBe("n/a");
+  });
+
+  // Files are measured from the capture's end (owner ruling b), so "Last 24 h" of an old export is
+  // the last 24 hours it holds. A live source is measured from the clock.
+  describe("the window of a saved capture", () => {
+    const HOUR = 60 * 60 * 1000;
+    const END = Date.parse("2026-08-10T12:00:00.000Z");
+    const at = (id: number, epoch: number, channel = "Application"): EvtxRecord => ({
+      ...RECORD,
+      id,
+      eventRecordId: 100 + id,
+      channel,
+      timestampEpoch: epoch,
+      timestamp: new Date(epoch).toISOString(),
+    });
+    const events = () => screen.getByTestId("kpi-value-events").textContent;
+    const setUp = (records: EvtxRecord[], overrides: Record<string, unknown>) =>
+      useEvtxStore.setState({
+        records,
+        selectedChannels: new Set(["Application", "System"]),
+        sourceMode: "files",
+        timeWindow: "24h",
+        ...overrides,
+      });
+    const show = async (records: EvtxRecord[], overrides: Record<string, unknown> = {}) => {
+      setUp(records, overrides);
+      await eventsTile();
+    };
+    /** The view replaces itself with its empty state when nothing is in the window. */
+    const showEmpty = async (records: EvtxRecord[], overrides: Record<string, unknown> = {}) => {
+      setUp(records, overrides);
+      render(<EventLogWorkspace />);
+      await screen.findByText("No events to chart. Load events or relax the filters.", {}, { timeout: 10_000 });
+    };
+    const capture = [at(1, END - 48 * HOUR), at(2, END - 10 * HOUR), at(3, END)];
+
+    it("means the last 24 hours the capture holds, however old the capture is", async () => {
+      await show(capture);
+      expect(events()).toBe("2");
+    });
+
+    it("leaves a fresh load alone: All time shows every record, old or not", async () => {
+      await show(capture, { timeWindow: "all" });
+      expect(events()).toBe("3");
+    });
+
+    it("is moved, for every window, by one record stamped far in the future", async () => {
+      // The ruled behaviour: the capture's end is the latest usable timestamp, so a single
+      // far-future record becomes the end and the other records fall out of the window.
+      await show([...capture, at(4, END + 400 * 24 * HOUR)]);
+      expect(events()).toBe("1");
+    });
+
+    it("does not move when channels are selected or deselected", async () => {
+      // System holds the latest record, so the window ends there even while only Application is
+      // selected, and Application's records, which are older than that window, are out of it.
+      await showEmpty([...capture, at(5, END + 30 * HOUR, "System")], {
+        selectedChannels: new Set(["Application"]),
+      });
+    });
+
+    it("follows the source: the window is the clock's as soon as the source is live", async () => {
+      await show(capture);
+      expect(events()).toBe("2");
+      act(() => useEvtxStore.setState({ sourceMode: "live" }));
+      await screen.findByText("No events to chart. Load events or relax the filters.");
+    });
+
+    it("measures a live source from the clock, not from its newest record", async () => {
+      await showEmpty(capture, { sourceMode: "live" });
+    });
+  });
+
+  describe("the previous-period comparison", () => {
+    const compare = () => screen.getByRole("button", { name: "Compare with previous period" });
+    const hook = vi.mocked(useEvtxChartComparison);
+
+    it("is built only while Charts is the active view, from the grid's own instant", async () => {
+      hook.mockClear();
+      useEvtxLayoutStore.setState({ activeView: "table" });
+      render(<EventLogWorkspace />);
+      await screen.findByTestId("records-table");
+      expect(hook).toHaveBeenCalled();
+      expect(hook.mock.calls.every(([active]) => active === false)).toBe(true);
+      cleanup();
+
+      hook.mockClear();
+      useEvtxLayoutStore.setState({ activeView: "charts" });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(Date.parse("2026-08-10T12:00:00.000Z"));
+        await eventsTile();
+        // The clock moves, and a change that is not one of the grid's inputs renders it again.
+        vi.setSystemTime(Date.parse("2026-08-10T15:00:00.000Z"));
+        act(() => useEvtxStore.setState({ selectedRecordId: 1 }));
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(hook.mock.calls.length).toBeGreaterThan(1);
+      expect(hook.mock.calls.every(([active]) => active === true)).toBe(true);
+      // The grid's instant, not the clock: one finite number that did not move with the clock.
+      const instants = new Set(hook.mock.calls.map(([, nowEpoch]) => nowEpoch));
+      expect(instants.size).toBe(1);
+      expect(Number.isFinite([...instants][0])).toBe(true);
+    });
+
+    it("offers Compare, disabled with the reason, for All time (the default for opened files)", async () => {
+      await eventsTile();
+      expect(compare()).toHaveAttribute("aria-disabled", "true");
+      expect(screen.getByTestId("comparison-disabled-reason").textContent).toBe(
+        "All time has no previous period.",
+      );
+    });
+
+    it("names the capture that cannot speak for the previous period, in the comparison's words", async () => {
+      useEvtxStore.setState({ timeWindow: "24h" });
+      await eventsTile();
+      expect(compare()).toHaveAttribute("aria-disabled", "true");
+      expect(screen.getByTestId("comparison-disabled-reason").textContent).toBe(
+        "The loaded files do not cover the previous period. sample.evtx (Application) does not span it. No selected channel has entries that can be compared.",
+      );
+    });
+
+    it("offers Compare in live mode for a window with a previous period, and states a refusal in the comparison's words", async () => {
+      useEvtxStore.setState({ sourceMode: "live", timeWindow: "24h" });
+      await eventsTile();
+      expect(compare()).not.toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(compare());
+      // Nothing was read under this test's store, so the comparison cannot fix its current period.
+      await vi.waitFor(() =>
+        expect(screen.getByTestId("comparison-status").textContent).toBe(
+          "Comparison unavailable: When Application was read is not recorded, so the current period cannot be compared.",
+        ),
+      );
+    });
   });
 });

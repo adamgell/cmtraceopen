@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  isEventRecord,
   isWithinTimeWindow,
   parseEventIdSelectors,
   selectVisibleRecords,
@@ -239,6 +240,21 @@ describe("event id range matching", () => {
     ).toHaveLength(4999);
   });
 });
+
+describe("isEventRecord", () => {
+  it("is false only for an archived text-log line", () => {
+    expect(isEventRecord(record({ originKind: "log" }))).toBe(false);
+    expect(isEventRecord(record({ originKind: "event" }))).toBe(true);
+    // A live or file record carries no origin; it is a Windows event.
+    expect(isEventRecord(record())).toBe(true);
+  });
+
+  it("does not read the event ID, which is 0 on a text-log line and may be 0 on an event", () => {
+    expect(isEventRecord(record({ originKind: "log", eventId: 4624 }))).toBe(false);
+    expect(isEventRecord(record({ originKind: "event", eventId: 0 }))).toBe(true);
+  });
+});
+
 describe("time-window boundaries", () => {
   it("includes the exact lower boundary and excludes older records", () => {
     const now = 10_000;
