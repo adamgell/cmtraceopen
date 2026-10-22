@@ -135,6 +135,14 @@ impl<'a> ProjectedText<'a> {
         Self(file_name(self.0))
     }
 
+    /// The text before the first `separator`, and the text after it. The head is for reading
+    /// (to hash or to compare); what is printed from the text is the tail or the whole.
+    pub(super) fn split_once(self, separator: char) -> Option<(&'a str, Self)> {
+        self.0
+            .split_once(separator)
+            .map(|(head, tail)| (head, Self(tail)))
+    }
+
     /// The first `count` characters.
     pub(super) fn first_chars(self, count: usize) -> Self {
         match self.0.char_indices().nth(count) {

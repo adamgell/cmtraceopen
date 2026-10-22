@@ -2193,6 +2193,199 @@ fn a_gap_the_engine_lists_once_per_event_is_written_once_with_its_count() {
     assert!(report.contains("  - absent: MDM enrollment: A different detail.\n"));
 }
 
+/// The lines under "Coverage gaps the engine listed", without their indent.
+fn coverage_lines(report: &str) -> Vec<&str> {
+    let start = report
+        .find("- Coverage gaps the engine listed (")
+        .expect("the gaps are listed");
+    report[start..]
+        .lines()
+        .skip(1)
+        .take_while(|line| line.starts_with("  - "))
+        .map(|line| &line[4..])
+        .collect()
+}
+
+#[test]
+fn coverage_sources_that_differ_are_never_printed_alike() {
+    // Two live channels share their last segment, so a source reduced to it printed both as
+    // "Operational" and folded them into one line with a count of two.
+    let gaps = vec![
+        gap(
+            "Microsoft-Windows-AAD/Operational",
+            CoverageState::AccessDenied,
+            "Access is denied.",
+        ),
+        gap(
+            "Microsoft-Windows-Sysmon/Operational",
+            CoverageState::AccessDenied,
+            "Access is denied.",
+        ),
+        gap("Security", CoverageState::AccessDenied, "Access is denied."),
+    ];
+    let report = render_with(
+        &base_request(),
+        &snapshot_of(Vec::new(), 0),
+        &summary_of(Vec::new(), gaps),
+    );
+    assert_eq!(
+        coverage_lines(&report),
+        [
+            "access denied: Microsoft-Windows-AAD/Operational: Access is denied.",
+            "access denied: Microsoft-Windows-Sysmon/Operational: Access is denied.",
+            "access denied: Security: Access is denied.",
+        ]
+    );
+}
+
+#[test]
+fn files_with_one_name_in_two_folders_are_two_gaps_and_a_path_shows_its_file_name() {
+    let denied = |source: &str| gap(source, CoverageState::AccessDenied, "Access is denied.");
+    let gaps = vec![
+        denied(r"C:\Cases\CASE-0001\System.evtx"),
+        denied(r"C:\Cases\CASE-0002\System.evtx"),
+        denied("/home/case0003/System.evtx"),
+        denied("Cases/CASE-0004/System.evtx"),
+        denied("C:/Cases/CASE-0005/System.evtx"),
+        denied("/var/log/messages"),
+        denied(r"C:\Cases\CASE-0006\Archive"),
+        denied("Cases/CASE-0007/Export.jsonl"),
+    ];
+    let report = render_with(
+        &base_request(),
+        &snapshot_of(Vec::new(), 0),
+        &summary_of(Vec::new(), gaps),
+    );
+    assert!(
+        report.contains("- Coverage gaps the engine listed (8):"),
+        "{report}"
+    );
+    // Each file is its own line, whatever it is called: nothing folds two sources together.
+    let lines = coverage_lines(&report);
+    assert_eq!(lines.len(), 8, "{lines:?}");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("System.evtx"))
+            .count(),
+        5
+    );
+    assert!(lines.contains(&"access denied: messages: Access is denied."));
+    assert!(lines.contains(&"access denied: Archive: Access is denied."));
+    assert!(lines.contains(&"access denied: Export.jsonl: Access is denied."));
+    assert!(!report.contains(" gaps)"), "{report}");
+    for folder in [
+        "CASE-0001",
+        "CASE-0002",
+        "case0003",
+        "CASE-0004",
+        "CASE-0005",
+        "CASE-0006",
+        "CASE-0007",
+        "/var/log",
+    ] {
+        assert!(!leaks(&report, folder), "{folder} leaked:\n{report}");
+    }
+}
+
+#[test]
+fn a_remote_host_prefix_of_a_coverage_source_is_never_printed_as_written() {
+    let denied = |source: &str| gap(source, CoverageState::AccessDenied, "Access is denied.");
+    let gaps = vec![
+        denied("HOST-0003/Microsoft-Windows-AAD/Operational"),
+        denied("HOST-0003/Microsoft-Windows-Sysmon/Operational"),
+        denied("HOST-0009/Microsoft-Windows-AAD/Operational"),
+        denied("HOST-0009/Security"),
+        denied("HOST-0003/Custom Channel"),
+    ];
+    // HOST-0003 delivered events, so the session knows it. HOST-0009 delivered nothing.
+    let mut snapshot = snapshot_of(Vec::new(), 0);
+    snapshot.machines.insert("HOST-0003".to_owned());
+    let report = render_with(&base_request(), &snapshot, &summary_of(Vec::new(), gaps));
+    let (known, unknown) = (host("HOST-0003"), host("HOST-0009"));
+    assert_eq!(
+        coverage_lines(&report),
+        [
+            format!("access denied: {known}/Microsoft-Windows-AAD/Operational: Access is denied."),
+            format!(
+                "access denied: {known}/Microsoft-Windows-Sysmon/Operational: Access is denied."
+            ),
+            format!(
+                "access denied: {unknown}/Microsoft-Windows-AAD/Operational: Access is denied."
+            ),
+            format!("access denied: {unknown}/Security: Access is denied."),
+            format!("access denied: {known}/Custom Channel: Access is denied."),
+        ]
+    );
+    assert!(
+        !leaks(&report, "HOST-0003") && !leaks(&report, "HOST-0009"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_remote_host_before_any_of_the_classic_logs_is_a_machine_token_whatever_its_case() {
+    let classic = [
+        "Application",
+        "Security",
+        "Setup",
+        "System",
+        "ForwardedEvents",
+        "HardwareEvents",
+        "Windows PowerShell",
+        "Internet Explorer",
+        "Key Management Service",
+    ];
+    let gaps: Vec<CoverageGap> = classic
+        .iter()
+        .map(|name| {
+            gap(
+                &format!("HOST-0009/{}", name.to_lowercase()),
+                CoverageState::AccessDenied,
+                "Access is denied.",
+            )
+        })
+        .collect();
+    let report = render_with(
+        &base_request(),
+        &snapshot_of(Vec::new(), 0),
+        &summary_of(Vec::new(), gaps),
+    );
+    let unknown = host("HOST-0009");
+    let expected: Vec<String> = classic
+        .iter()
+        .map(|name| {
+            format!(
+                "access denied: {unknown}/{}: Access is denied.",
+                name.to_lowercase()
+            )
+        })
+        .collect();
+    assert_eq!(coverage_lines(&report), expected);
+    assert!(!leaks(&report, "HOST-0009"), "{report}");
+}
+
+#[test]
+fn a_remote_host_the_session_never_heard_from_is_printed_as_written_before_a_custom_channel() {
+    // The limit, pinned. `host/Channel` and `Provider/Type` have the same shape, so a host that
+    // delivered no event and fronts a channel that is not one of Windows' classic logs cannot be
+    // told from a provider. The banner does not promise otherwise.
+    let gaps = vec![gap(
+        "HOST-0009/Custom Channel",
+        CoverageState::AccessDenied,
+        "Access is denied.",
+    )];
+    let report = render_with(
+        &base_request(),
+        &snapshot_of(Vec::new(), 0),
+        &summary_of(Vec::new(), gaps),
+    );
+    assert_eq!(
+        coverage_lines(&report),
+        ["access denied: HOST-0009/Custom Channel: Access is denied."]
+    );
+}
+
 #[test]
 fn collect_gathers_the_rows_machines_unplaced_split_and_the_engines_compaction_notes() {
     let mut timeline = timeline_of(

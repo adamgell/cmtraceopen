@@ -951,23 +951,29 @@ fn render_coverage(
             .count(listed.len() as u64)
             .lit("):")
             .nl();
-        // The engine can list the same gap once per event it affects. Identical lines are
-        // written once with their count, in the order they first appear.
-        let mut lines: Vec<(Safe, u64)> = Vec::new();
+        // The engine can list the same gap once per event it affects. A gap that repeats is
+        // written once with its count, in the order it first appears. Two gaps are the same gap
+        // only when their source, state and detail are the same as the engine wrote them, so
+        // two files that print alike are still two lines.
+        let mut lines: Vec<((&str, &str, &str), Safe, u64)> = Vec::new();
         for gap in &listed {
-            let line = Safe::join(&[
-                Safe::literal(coverage_state_word(gap.get().state)),
-                Safe::literal(": "),
-                redactor.projected(gap.text(|g| &g.source).file_name(), REPORT_NAME_CHARS),
-                Safe::literal(": "),
-                redactor.projected(gap.text(|g| &g.detail), REPORT_COVERAGE_DETAIL_CHARS),
-            ]);
-            match lines.iter_mut().find(|(known, _)| *known == line) {
-                Some((_, count)) => *count += 1,
-                None => lines.push((line, 1)),
+            let (source, detail) = (gap.text(|g| &g.source), gap.text(|g| &g.detail));
+            let state = coverage_state_word(gap.get().state);
+            let key = (source.as_str(), state, detail.as_str());
+            if let Some((_, _, count)) = lines.iter_mut().find(|(known, _, _)| *known == key) {
+                *count += 1;
+                continue;
             }
+            let line = Safe::join(&[
+                Safe::literal(state),
+                Safe::literal(": "),
+                coverage_source(redactor, source),
+                Safe::literal(": "),
+                redactor.projected(detail, REPORT_COVERAGE_DETAIL_CHARS),
+            ]);
+            lines.push((key, line, 1));
         }
-        for (line, count) in &lines {
+        for (_, line, count) in &lines {
             doc.lit("  - ").safe(line);
             if *count > 1 {
                 doc.lit(" (").count(*count).lit(" gaps)");
@@ -1178,6 +1184,61 @@ fn text_log_variant(evidence: &EvidenceRef) -> Option<&TextLogEvidenceRef> {
         EvidenceRef::TextLog(log) => Some(log),
         _ => None,
     }
+}
+
+/// Windows' classic logs have no provider part. Behind a remote host they read `host/Security`,
+/// and no provider channel ends this way (`Provider/Operational` always has a provider).
+const CLASSIC_CHANNELS: [&str; 9] = [
+    "application",
+    "security",
+    "setup",
+    "system",
+    "forwardedevents",
+    "hardwareevents",
+    "windows powershell",
+    "internet explorer",
+    "key management service",
+];
+
+/// How a coverage gap names its source, so that two sources that differ never print alike:
+///
+/// - A file path shows its file name.
+/// - A live channel shows its whole name (`Microsoft-Windows-AAD/Operational`): its last segment
+///   alone is the same for every provider's Operational channel.
+/// - A remote query names its channel behind the host (`HOST/Microsoft-Windows-AAD/Operational`,
+///   `HOST/Security`). The host is written as a machine token, never as it was. Where a host and a
+///   provider cannot be told apart (`HOST/Custom Channel`), only a host the session knows is
+///   replaced, like any machine name in text.
+fn coverage_source(redactor: &Redactor, source: ProjectedText<'_>) -> Safe {
+    let text = source.as_str();
+    if is_file_path(text) {
+        return redactor.projected(source.file_name(), REPORT_NAME_CHARS);
+    }
+    if let Some((host, channel)) = source.split_once('/') {
+        let behind_a_host = channel.as_str().contains('/')
+            || CLASSIC_CHANNELS.contains(&channel.as_str().to_ascii_lowercase().as_str());
+        if behind_a_host {
+            return Safe::join(&[
+                redactor.machine(host),
+                Safe::literal("/"),
+                redactor.projected(channel, REPORT_NAME_CHARS),
+            ]);
+        }
+    }
+    redactor.projected(source, REPORT_NAME_CHARS)
+}
+
+/// A Windows path, a rooted path, or a name whose last segment has a file extension. A channel
+/// has none of the three: it uses `/` but never a backslash, is never rooted, and does not end
+/// in `.ext`.
+fn is_file_path(source: &str) -> bool {
+    source.contains('\\') || source.starts_with('/') || has_file_extension(file_name(source))
+}
+
+/// A short suffix after the last dot: `System.evtx`, `Sync.log`, `Export.jsonl`.
+fn has_file_extension(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(_, extension)| (1..=5).contains(&extension.len()))
 }
 
 fn confidence_rank(confidence: FindingConfidence) -> u8 {
