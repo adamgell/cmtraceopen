@@ -312,8 +312,13 @@ export function EvtxExportSubsetDialog({
                     <span style={{ fontFamily: LOG_MONOSPACE_FONT_FAMILY }}>
                       {"{source}-subset.evtx"}
                     </span>
-                    . Message text is saved in a LocaleMetaData folder beside them, so keep that
-                    folder with the files. Existing files are never overwritten.
+                    , or{" "}
+                    <span style={{ fontFamily: LOG_MONOSPACE_FONT_FAMILY }}>
+                      {"{source}-2-subset.evtx"}
+                    </span>{" "}
+                    when two sources share a name. When archiving succeeds, message text is saved in
+                    a LocaleMetaData folder beside them, so keep that folder with the files; a file
+                    says if it was not. Existing files are never overwritten.
                   </div>
 
                   <div

@@ -392,6 +392,18 @@ describe("EvtxExportSubsetDialog", () => {
     expect(screen.getByText("1 text log line (not Windows events)")).toBeInTheDocument();
   });
 
+  it("says how files are named and that message text is saved only when archiving succeeds", async () => {
+    renderDialog();
+    const note = await screen.findByText(/Files are named/);
+    expect(note).toHaveTextContent("{source}-subset.evtx");
+    expect(note).toHaveTextContent("{source}-2-subset.evtx when two sources share a name");
+    expect(note).toHaveTextContent(
+      "When archiving succeeds, message text is saved in a LocaleMetaData folder beside them",
+    );
+    expect(note).toHaveTextContent("a file says if it was not");
+    expect(note).toHaveTextContent("Existing files are never overwritten.");
+  });
+
   it("sends the same id from two machines as two events, one group each", async () => {
     vi.mocked(invoke).mockResolvedValueOnce({ folder: "C:\\out", files: [] });
     renderDialog([

@@ -18,7 +18,9 @@
 //!   the path), and two sources that sanitize to the same name are numbered in request order
 //!   (`{label}-2-subset.evtx`). Both readings are deliberate and are recorded in the PR.
 //! - Nothing is overwritten. The whole request is refused before any API call if a target name is
-//!   already taken, and `EvtExportLogOverwrite` is never passed, so the service refuses too.
+//!   already taken, and `EvtExportLogOverwrite` is never passed, so the service refuses too. A
+//!   file whose name already has an entry in `LocaleMetaData` is exported but not archived, with
+//!   its own warning, because `EvtArchiveExportedLog` would overwrite that entry.
 //!   The request is also refused as a whole when the output folder is unusable, when no source is
 //!   given, or when one source is listed twice: those are problems with the request itself.
 //! - A problem with one source (a file that disappeared, a selection too fragmented to express,
@@ -792,6 +794,50 @@ mod engine {
         }
     }
 
+    /// `EvtArchiveExportedLog` overwrites what it finds in `LocaleMetaData`, so a file whose name
+    /// already has an entry there (left by an earlier export whose `.evtx` was moved or deleted) is
+    /// not archived: "existing files are never overwritten" holds for the folder as well. The
+    /// documentation does not name the entry the service writes; in practice it is
+    /// `{log name}_{locale id}.MTA`, so an entry counts when it begins with the target's stem and
+    /// `_` or `.`, in any case. Lab item (i) checks that rule against what the service writes. A
+    /// folder that cannot be listed is no proof that nothing would be overwritten, so it skips too.
+    pub(super) fn locale_entry_block_reason(folder: &Path, file_name: &str) -> Option<String> {
+        let locale_dir = folder.join(LOCALE_METADATA_DIR);
+        let unreadable = |error: std::io::Error| {
+            Some(format!(
+                "{} could not be read to check for entries that archiving would overwrite \
+                 ({error}), so the localized messages were not archived",
+                locale_dir.display()
+            ))
+        };
+        let entries = match fs::read_dir(&locale_dir) {
+            Ok(entries) => entries,
+            // Nothing has been archived here yet.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => return unreadable(error),
+        };
+        let stem = file_name
+            .strip_suffix(".evtx")
+            .unwrap_or(file_name)
+            .to_lowercase();
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => return unreadable(error),
+            };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let lower = name.to_lowercase();
+            if lower.starts_with(&format!("{stem}_")) || lower.starts_with(&format!("{stem}.")) {
+                return Some(format!(
+                    "{} already holds an entry for {file_name} ({name}), so the localized \
+                     messages were not archived rather than overwrite it",
+                    locale_dir.display()
+                ));
+            }
+        }
+        None
+    }
+
     struct PreparedSource {
         groups: Vec<EventGroup>,
         requested: u64,
@@ -1311,8 +1357,14 @@ mod engine {
         }
         result.status = EvtxSubsetFileStatus::Exported;
 
-        match &plan.archive_blocked {
-            Some(reason) => result.warnings.push(reason.clone()),
+        // The folder is looked at here, immediately before the call, not when the plan was made: an
+        // earlier export of this request or another process may have written there since.
+        let archive_skipped = plan
+            .archive_blocked
+            .clone()
+            .or_else(|| locale_entry_block_reason(&plan.folder, &export.file_name));
+        match archive_skipped {
+            Some(reason) => result.warnings.push(reason),
             None => match backend.archive_log(&export.target) {
                 Ok(()) => result.messages_archived = true,
                 Err(error) => result.warnings.push(format!(
@@ -2997,6 +3049,88 @@ mod tests {
             .all(|call| !call.starts_with("archive")));
     }
 
+    #[test]
+    fn archiving_is_skipped_for_a_file_whose_name_already_has_an_entry_in_locale_metadata() {
+        let out = tempfile::tempdir().unwrap();
+        let locale = out.path().join(LOCALE_METADATA_DIR);
+        fs::create_dir(&locale).unwrap();
+        // What an earlier export of a file with this name left behind, in any case.
+        let earlier = locale.join("SYSTEM-subset_1033.MTA");
+        fs::write(&earlier, b"earlier archive").unwrap();
+        let plan = plan_for(
+            &out,
+            &[channel("System", &[1]), channel("Application", &[7])],
+        );
+        let backend = FakeBackend {
+            reads: reads(vec![
+                ("System-subset.evtx", found(&[1])),
+                ("Application-subset.evtx", found(&[7])),
+            ]),
+            ..Default::default()
+        };
+        let result = run_plan(&plan, &backend);
+
+        let system = &result.files[0];
+        assert_eq!(system.status, EvtxSubsetFileStatus::Exported);
+        assert_eq!(system.exported_records, Some(1));
+        assert!(!system.messages_archived);
+        let warning = system.warnings.join(" | ");
+        assert!(
+            warning.contains("already holds an entry for System-subset.evtx"),
+            "{warning}"
+        );
+        assert!(warning.contains("not archived"), "{warning}");
+        // The other file in the same request is archived as usual.
+        assert!(result.files[1].messages_archived);
+        assert!(result.files[1].warnings.is_empty());
+        assert_eq!(
+            *backend.calls.borrow(),
+            vec![
+                "export:System-subset.evtx",
+                "export:Application-subset.evtx",
+                "archive:Application-subset.evtx",
+            ]
+        );
+        // Nothing that was there was overwritten.
+        assert_eq!(fs::read(&earlier).unwrap(), b"earlier archive");
+    }
+
+    #[test]
+    fn an_entry_for_another_name_does_not_block_archiving() {
+        let out = tempfile::tempdir().unwrap();
+        let locale = out.path().join(LOCALE_METADATA_DIR);
+        fs::create_dir(&locale).unwrap();
+        // The archive of `System-subset-subset.evtx` starts with this file's stem but is not its
+        // entry, and neither is an unrelated name.
+        fs::write(locale.join("System-subset-subset_1033.MTA"), b"other").unwrap();
+        fs::write(locale.join("Application_1033.MTA"), b"other").unwrap();
+        let plan = plan_for(&out, &[channel("System", &[1])]);
+        let backend = FakeBackend {
+            reads: reads(vec![("System-subset.evtx", found(&[1]))]),
+            ..Default::default()
+        };
+        let file = &run_plan(&plan, &backend).files[0];
+        assert!(file.messages_archived, "{:?}", file.warnings);
+        assert!(file.warnings.is_empty(), "{:?}", file.warnings);
+    }
+
+    #[test]
+    fn a_locale_folder_that_cannot_be_read_skips_archiving_instead_of_guessing() {
+        let out = tempfile::tempdir().unwrap();
+        // A file where the folder should be cannot be listed. (The plan blocks that case as a
+        // whole; this is the check on its own.)
+        fs::write(out.path().join(LOCALE_METADATA_DIR), b"not a folder").unwrap();
+        let reason = locale_entry_block_reason(out.path(), "System-subset.evtx")
+            .expect("an unreadable folder is not proof that nothing would be overwritten");
+        assert!(reason.contains("could not be read"), "{reason}");
+        // No folder yet is a different thing: nothing has been archived here.
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(
+            locale_entry_block_reason(empty.path(), "System-subset.evtx"),
+            None
+        );
+    }
+
     // ---- what the written file holds, compared with what was asked for -----------------------
 
     fn exported_file(
@@ -3706,6 +3840,13 @@ mod windows_lab_tests {
         let file = run_one_source(out.path(), request);
         assert_exported_exactly(&file, &wanted);
         assert_archived_cleanly(&file);
+        // Lab item (i): the guard against overwriting an earlier archive recognises the entry the
+        // service has just written for this file, so its naming rule is the service's.
+        assert!(
+            locale_entry_block_reason(out.path(), &file.file_name).is_some(),
+            "no entry in LocaleMetaData matches the guard's rule for {}",
+            file.file_name
+        );
     }
 
     #[test]
