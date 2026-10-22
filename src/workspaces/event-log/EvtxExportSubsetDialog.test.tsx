@@ -321,7 +321,7 @@ describe("EvtxExportSubsetDialog", () => {
     });
     const files = await screen.findByRole("list", { name: "Exported files" });
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Exported 1 of 2 EVTX subset files (1 event, counts not verified); 1 failed.",
+      "Exported 1 of 2 EVTX subset files (1 requested, count not verified); 1 failed.",
     );
     expect(files).toHaveTextContent("Application-subset.evtx: 1 requested, count not verified");
     expect(files).toHaveTextContent("Warning: which events the file holds could not be verified");

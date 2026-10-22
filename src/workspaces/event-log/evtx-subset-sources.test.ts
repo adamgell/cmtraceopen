@@ -292,13 +292,59 @@ describe("summarizeEvtxSubsetResult", () => {
     ).toBe("Exported 2 EVTX subset files (4 events).");
   });
 
-  it("says when a count could not be verified rather than presenting the request as fact", () => {
+  it("gives the requested figure, and says it is not verified, when no file could be read back", () => {
     expect(
       summarizeEvtxSubsetResult({
         folder: "C:\\out",
         files: [file({ ...unverified, requestedRecords: 5 })],
       }),
-    ).toBe("Exported 1 EVTX subset file (5 events, counts not verified).");
+    ).toBe("Exported 1 EVTX subset file (5 requested, count not verified).");
+    // Two files, neither verified: one requested figure, never a sum that reads as found.
+    expect(
+      summarizeEvtxSubsetResult({
+        folder: "C:\\out",
+        files: [
+          file({ ...unverified, requestedRecords: 20 }),
+          file({ ...unverified, fileName: "b", outputPath: "b", requestedRecords: 11 }),
+        ],
+      }),
+    ).toBe("Exported 2 EVTX subset files (31 requested, count not verified).");
+  });
+
+  it("keeps the verified figure and the requested one apart when only some files were read back", () => {
+    const other = (partial: Partial<EvtxSubsetFileResult>) =>
+      file({ fileName: "b", outputPath: "b", ...partial });
+    expect(
+      summarizeEvtxSubsetResult({
+        folder: "C:\\out",
+        files: [
+          file({ requestedRecords: 10, exportedRecords: 10 }),
+          other({ ...unverified, requestedRecords: 31 }),
+        ],
+      }),
+    ).toBe("Exported 2 EVTX subset files (10 events; 1 file not verified, 31 requested).");
+    expect(
+      summarizeEvtxSubsetResult({
+        folder: "C:\\out",
+        files: [
+          file({ requestedRecords: 10, exportedRecords: 10 }),
+          other({ ...unverified, requestedRecords: 31 }),
+          other({ ...unverified, fileName: "c", outputPath: "c", requestedRecords: 5 }),
+        ],
+      }),
+    ).toBe("Exported 3 EVTX subset files (10 events; 2 files not verified, 36 requested).");
+    // A failed file asked for events too, but nothing of it is exported: it is not counted as
+    // requested, and it does not make the other files look unverified.
+    expect(
+      summarizeEvtxSubsetResult({
+        folder: "C:\\out",
+        files: [
+          file({ requestedRecords: 3, exportedRecords: 3 }),
+          other({ status: "failed", ...unverified, requestedRecords: 99, error: "denied" }),
+          other({ ...unverified, fileName: "c", outputPath: "c", requestedRecords: 5 }),
+        ],
+      }),
+    ).toBe("Exported 2 of 3 EVTX subset files (3 events; 1 file not verified, 5 requested); 1 failed.");
   });
 
   it("names failures, and the all-failed case exports nothing", () => {

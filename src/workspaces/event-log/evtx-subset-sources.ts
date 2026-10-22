@@ -257,7 +257,8 @@ export function fileDiffersFromRequest(file: EvtxSubsetFileResult): boolean {
  * The one-line outcome, for the done heading, the polite announcement and the view bar's status
  * line (the last stays on screen after the dialog is gone). It must not read as a complete export
  * of the view when it is not, so it says how many events were left out of the plan, and how many
- * files were found to differ from the request.
+ * files were found to differ from the request. A file that could not be read back has no count of
+ * events found, so its requested figure is given as "requested" and never added to the found one.
  */
 export function summarizeEvtxSubsetResult(result: EvtxSubsetResult, notIncluded = 0): string {
   const total = result.files.length;
@@ -275,14 +276,21 @@ export function summarizeEvtxSubsetResult(result: EvtxSubsetResult, notIncluded 
   if (exported.length === 0) {
     return `Nothing was exported: ${total} EVTX subset ${plural(total, "file")} failed${suffix}.`;
   }
-  const verified = exported.every((file) => file.exportedRecords !== null);
-  const events = exported.reduce(
-    (sum, file) => sum + (file.exportedRecords ?? file.requestedRecords),
-    0,
-  );
-  const eventText = `${events.toLocaleString()} ${plural(events, "event")}${
-    verified ? "" : ", counts not verified"
-  }`;
+  // What was found in the files that were read back is a count. What a file that could not be read
+  // back was asked for is only a request, so the two are never added into one figure.
+  const verifiedFiles = exported.filter((file) => file.exportedRecords !== null);
+  const unverifiedFiles = exported.filter((file) => file.exportedRecords === null);
+  const found = verifiedFiles.reduce((sum, file) => sum + (file.exportedRecords ?? 0), 0);
+  const requested = unverifiedFiles
+    .reduce((sum, file) => sum + file.requestedRecords, 0)
+    .toLocaleString();
+  const foundText = `${found.toLocaleString()} ${plural(found, "event")}`;
+  const eventText =
+    unverifiedFiles.length === 0
+      ? foundText
+      : verifiedFiles.length === 0
+        ? `${requested} requested, count not verified`
+        : `${foundText}; ${unverifiedFiles.length} ${plural(unverifiedFiles.length, "file")} not verified, ${requested} requested`;
   const files =
     failed === 0
       ? `${exported.length} EVTX subset ${plural(exported.length, "file")}`
