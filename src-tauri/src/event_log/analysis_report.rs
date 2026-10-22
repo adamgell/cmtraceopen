@@ -563,6 +563,26 @@ fn confirm_members(row: &ReportChainRow) -> Result<(), String> {
             return Err(LINKS_MISMATCH.to_owned());
         }
     }
+    // One chain: every pair end is reachable from the first through the row's own pairs. Two
+    // confirmed links that share no entry are two chains, and printing them as one would imply a
+    // link between them that the engine never produced.
+    let mut reached: HashSet<&str> = HashSet::with_capacity(ends.len());
+    let mut frontier = vec![row.pairs[0].left.as_str()];
+    while let Some(id) = frontier.pop() {
+        if !reached.insert(id) {
+            continue;
+        }
+        for pair in &row.pairs {
+            if pair.left == id {
+                frontier.push(pair.right.as_str());
+            } else if pair.right == id {
+                frontier.push(pair.left.as_str());
+            }
+        }
+    }
+    if reached.len() != ends.len() {
+        return Err(LINKS_MISMATCH.to_owned());
+    }
     Ok(())
 }
 

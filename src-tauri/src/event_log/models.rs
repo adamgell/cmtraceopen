@@ -62,8 +62,9 @@ pub enum EvtxOriginKind {
 }
 
 /// A coverage gap. The app sends the gaps it holds back to the backend (diagnosis and the
-/// Markdown report), and every one of them was written by this type, so a key it does not have
-/// is refused instead of ignored.
+/// Markdown report). Each was built either by this type or by the frontend's
+/// `mergeDiagnosisCoverageGaps` (evtx-coverage.ts) with exactly these keys, so a key this type
+/// does not have is refused instead of ignored; a frontend change that adds one must add it here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvtxCoverageGap {

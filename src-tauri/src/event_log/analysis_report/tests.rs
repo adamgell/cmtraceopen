@@ -114,7 +114,7 @@ fn flatten_collapses_whitespace_and_strips_format_characters() {
 
 /// One character from every class of the invisible set. The endpoints of both variation selector
 /// ranges are here, so a range that is one short at either end is caught.
-const INVISIBLE_SAMPLES: [(&str, char); 21] = [
+const INVISIBLE_SAMPLES: [(&str, char); 26] = [
     ("zero width space", '\u{200b}'),
     ("zero width non-joiner", '\u{200c}'),
     ("zero width joiner", '\u{200d}'),
@@ -136,6 +136,11 @@ const INVISIBLE_SAMPLES: [(&str, char); 21] = [
     ("variation selector 16", '\u{fe0f}'),
     ("variation selector 17", '\u{e0100}'),
     ("variation selector 256", '\u{e01ef}'),
+    ("khmer vowel inherent aq", '\u{17b4}'),
+    ("khmer vowel inherent aa", '\u{17b5}'),
+    ("mongolian free variation selector one", '\u{180b}'),
+    ("mongolian free variation selector three", '\u{180d}'),
+    ("mongolian free variation selector four", '\u{180f}'),
 ];
 
 #[test]
@@ -146,7 +151,7 @@ fn flatten_keeps_deleting_every_invisible_class_as_a_guard() {
 }
 
 #[test]
-fn stripping_removes_each_invisible_class_and_nothing_a_reader_sees() {
+fn stripping_removes_each_invisible_class_and_leaves_ordinary_text() {
     for (name, mark) in INVISIBLE_SAMPLES {
         assert_eq!(strip_invisible(&format!("a{mark}b")), "ab", "{name}");
     }
@@ -2253,6 +2258,32 @@ fn a_chain_row_without_a_pair_confirms_nothing_and_is_refused() {
             assert!(!error.contains(name), "{name} in {error}");
         }
     }
+}
+
+#[test]
+fn a_row_whose_pairs_do_not_connect_is_refused() {
+    // Two unrelated links the session does hold, (a, b) and (c, d), merged into one row: every
+    // pair and every member is confirmed, but the row would print one chain of four entries,
+    // which implies a link between a and c that the engine never produced.
+    let (mut timeline, a, b) = two_event_timeline();
+    let (c, d) = (stable(3), stable(4));
+    timeline.items.push(chain_item(3, 78, 20, "m"));
+    timeline.items.push(chain_item(4, 79, 30, "m"));
+    timeline
+        .edges
+        .push(exact_edge(&c, &d, "00000000-0000-4000-8000-0000000000c4"));
+    let pairs = json!([
+        pair(&a, &b, &[("activityId", GUID_A)]),
+        pair(
+            &c,
+            &d,
+            &[("activityId", "00000000-0000-4000-8000-0000000000c4")]
+        ),
+    ]);
+    let members = vec![a.clone(), b.clone(), c.clone(), d.clone()];
+    let chains = chains_value(1, (1, 0, 0, 0), vec![row("exact", &members, pairs)]);
+    let error = chain_report_for(&timeline, chains).expect_err("refused");
+    assert_links_mismatch(&error, "a row of two separate chains");
 }
 
 #[test]
