@@ -193,13 +193,13 @@ describe("useEvtxChartComparison", () => {
     it("is enabled in live mode for a window that has a previous period", () => {
       setFiles(coveringRecords(), { sourceMode: "live" });
       render(<Harness />);
-      expect(compareButton()).toBeEnabled();
+      expect(compareButton()).not.toHaveAttribute("aria-disabled", "true");
     });
 
     it("is enabled in files mode when the loaded files span the previous period", () => {
       setFiles(coveringRecords());
       render(<Harness />);
-      expect(compareButton()).toBeEnabled();
+      expect(compareButton()).not.toHaveAttribute("aria-disabled", "true");
     });
 
     // Pinned by the comparison's reason code. The words are the comparison's own, rendered whole.
@@ -239,7 +239,7 @@ describe("useEvtxChartComparison", () => {
       // Covered from the capture's end, not covered from a clock a year later.
       setFiles(coveringRecords());
       const { rerender } = render(<Harness nowEpoch={ANCHOR} />);
-      expect(compareButton()).toBeEnabled();
+      expect(compareButton()).not.toHaveAttribute("aria-disabled", "true");
       rerender(<Harness nowEpoch={ANCHOR + 365 * 24 * HOUR} />);
       await flush();
       expect(compareButton()).toHaveAttribute("aria-disabled", "true");
@@ -330,7 +330,7 @@ describe("useEvtxChartComparison", () => {
       await flush();
       expect(getComparisonState().phase).toBe("idle");
       expect(errorsSublabel()).toBeNull();
-      expect(compareButton()).toBeEnabled();
+      expect(compareButton()).not.toHaveAttribute("aria-disabled", "true");
       expect(status()).toBeEmptyDOMElement();
     });
 

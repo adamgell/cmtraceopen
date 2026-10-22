@@ -577,7 +577,7 @@ describe("the previous-period comparison", () => {
       const comparison = comparisonProps();
       view(comparison);
       const button = compareButton();
-      expect(button).toBeEnabled();
+      expect(button).not.toHaveAttribute("aria-disabled", "true");
       fireEvent.click(button!);
       expect(comparison.onCompare).toHaveBeenCalledTimes(1);
       expect(comparison.onRecompare).not.toHaveBeenCalled();
@@ -827,7 +827,7 @@ describe("the previous-period comparison", () => {
       });
       view(comparison);
       expect(screen.getByTestId("comparison-status").textContent).toBe(`Comparison unavailable: ${detail}`);
-      expect(compareButton()).toBeEnabled();
+      expect(compareButton()).not.toHaveAttribute("aria-disabled", "true");
       expect(clearButton()).not.toBeNull();
       expect(errorsText()).toBeNull();
     });
@@ -859,7 +859,7 @@ describe("the previous-period comparison", () => {
           snapshotEpoch: ANCHOR + 3 * HOUR,
         }),
       );
-      expect(screen.getByRole("button", { name: "Refresh and compare again" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Refresh and compare again" })).not.toHaveAttribute("aria-disabled", "true");
     });
   });
 

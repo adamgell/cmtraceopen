@@ -468,7 +468,7 @@ describe("EventLogWorkspace Charts view wiring", () => {
     it("offers Compare in live mode for a window with a previous period, and states a refusal in the comparison's words", async () => {
       useEvtxStore.setState({ sourceMode: "live", timeWindow: "24h" });
       await eventsTile();
-      expect(compare()).toBeEnabled();
+      expect(compare()).not.toHaveAttribute("aria-disabled", "true");
       fireEvent.click(compare());
       // Nothing was read under this test's store, so the comparison cannot fix its current period.
       await vi.waitFor(() =>
