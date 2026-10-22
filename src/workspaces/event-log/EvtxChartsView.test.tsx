@@ -560,6 +560,16 @@ describe("the previous-period comparison", () => {
   const compareButton = () => screen.queryByRole("button", { name: "Compare with previous period" });
   const clearButton = () => screen.queryByRole("button", { name: "Clear comparison" });
   const errorsText = () => screen.queryByTestId("kpi-sublabel-errors")?.textContent ?? null;
+  /** A sublabel's text with the nodes matching `selector` removed. */
+  const sublabelWithout = (id: string, selector: string) => {
+    const clone = screen.getByTestId(`kpi-sublabel-${id}`).cloneNode(true) as HTMLElement;
+    clone.querySelectorAll(selector).forEach((node) => node.remove());
+    return clone.textContent;
+  };
+  /** What a sighted reader sees: the visually hidden direction word is left out. */
+  const visibleSublabel = (id: string) => sublabelWithout(id, '[data-testid="kpi-trend-direction"]');
+  /** What a screen reader says: the glyph, which is hidden from it, is left out. */
+  const spokenSublabel = (id: string) => sublabelWithout(id, '[aria-hidden="true"]');
   const distinctText = () => screen.queryByTestId("kpi-sublabel-distinctIds")?.textContent ?? null;
 
   describe("not compared", () => {
@@ -712,7 +722,7 @@ describe("the previous-period comparison", () => {
   describe("complete and current", () => {
     it("shows the deltas on the two tiles, from the comparison's own current period", () => {
       view(comparisonProps({ state: settled(filesOutcome()) }));
-      expect(errorsText()).toBe("\u25b2Up 3\u00d7 vs prior 24 h");
+      expect(visibleSublabel("errors")).toBe("\u25b2 3\u00d7 vs prior 24 h");
       expect(distinctText()).toBe("2 new vs prior 24 h");
       // The tile's value is the grid's, and is not the comparison's.
       expect(screen.getByTestId("kpi-value-errors")).toHaveTextContent("3");
@@ -725,8 +735,21 @@ describe("the previous-period comparison", () => {
     it("gives the arrow an accessible direction and hides the glyph from assistive technology", () => {
       view(comparisonProps({ state: settled(filesOutcome()) }));
       const sublabel = screen.getByTestId("kpi-sublabel-errors");
-      expect(sublabel.querySelector('[aria-hidden="true"]')?.textContent).toBe("\u25b2");
-      expect(within(sublabel).getByText("Up")).toBeInTheDocument();
+      // The glyph is hidden from assistive technology; a screen reader says the direction instead.
+      expect(sublabel.querySelector('[aria-hidden="true"]')?.textContent?.trim()).toBe("\u25b2");
+      expect(within(sublabel).getByTestId("kpi-trend-direction").textContent).toBe("Up ");
+      expect(spokenSublabel("errors")).toBe("Up 3\u00d7 vs prior 24 h");
+    });
+
+    it("keeps a visible space between the glyph and the ratio, and a spoken space after the direction", () => {
+      view(comparisonProps({ state: settled(filesOutcome()) }));
+      // What a sighted reader sees, with the visually hidden word left out.
+      expect(visibleSublabel("errors")).toBe("\u25b2 3\u00d7 vs prior 24 h");
+      expect(visibleSublabel("errors")).not.toMatch(/\u25b2\S/);
+      expect(visibleSublabel("errors")).not.toMatch(/\s{2}/);
+      // What a screen reader says, with the glyph left out.
+      expect(spokenSublabel("errors")).toBe("Up 3\u00d7 vs prior 24 h");
+      expect(spokenSublabel("errors")).not.toMatch(/Up\S/);
     });
 
     it("shows a down arrow and its direction for a decrease", () => {
@@ -736,7 +759,8 @@ describe("the previous-period comparison", () => {
           countCurrent: () => ({ ...TALLY, errors: 1 }),
         }),
       );
-      expect(errorsText()).toBe("\u25bcDown 0.5\u00d7 vs prior 24 h");
+      expect(visibleSublabel("errors")).toBe("\u25bc 0.5\u00d7 vs prior 24 h");
+      expect(spokenSublabel("errors")).toBe("Down 0.5\u00d7 vs prior 24 h");
     });
 
     it("states the notes, and the tail events left out", () => {

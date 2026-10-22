@@ -213,8 +213,11 @@ function KpiCard({
         >
           {kpi.trend ? (
             <>
-              <span aria-hidden="true">{TREND_GLYPH[kpi.trend]}</span>
-              <span style={visuallyHidden}>{kpi.trend === "up" ? "Up " : "Down "}</span>
+              {/* The glyph and its space are hidden from a screen reader, which says the direction. */}
+              <span aria-hidden="true">{TREND_GLYPH[kpi.trend]} </span>
+              <span data-testid="kpi-trend-direction" style={visuallyHidden}>
+                {kpi.trend === "up" ? "Up " : "Down "}
+              </span>
               {kpi.sublabel.slice(TREND_GLYPH[kpi.trend].length + 1)}
             </>
           ) : (

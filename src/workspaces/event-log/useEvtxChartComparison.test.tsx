@@ -263,7 +263,7 @@ describe("useEvtxChartComparison", () => {
       await flush();
       // Six errors now against two in the previous period. The current period holds A 1, C 3, C 4
       // and the event stamped at the anchor, of which the previous period had only A 1.
-      expect(errorsSublabel()).toBe("\u25b2Up 3\u00d7 vs prior 24 h");
+      expect(errorsSublabel()).toBe("\u25b2 Up 3\u00d7 vs prior 24 h");
       expect(screen.getByTestId("kpi-sublabel-distinctIds").textContent).toBe("3 new vs prior 24 h");
       expect(screen.getByTestId("comparison-label")).toHaveTextContent("Comparing with ");
     });
