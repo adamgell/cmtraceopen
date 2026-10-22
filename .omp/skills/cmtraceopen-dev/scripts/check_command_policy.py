@@ -200,6 +200,19 @@ def _validate_git(argv: tuple[str, ...]) -> None:
         _reject("git verification paths must be repository-relative")
 
 
+def _validate_pwsh(argv: tuple[str, ...]) -> None:
+    expected = (
+        "pwsh",
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        "scripts/run-windows-signing-contract-tests.ps1",
+    )
+    if argv != expected:
+        _reject("pwsh is limited to the fixed offline Windows signing contract check")
+
+
 def validate_check_command(argv: Sequence[object]) -> tuple[str, ...]:
     if isinstance(argv, (str, bytes)):
         _reject("command must be an argument vector")
@@ -223,6 +236,7 @@ def validate_check_command(argv: Sequence[object]) -> tuple[str, ...]:
         "git": _validate_git,
         "npm": _validate_npm,
         "python3": _validate_python,
+        "pwsh": _validate_pwsh,
     }
     validator = validators.get(executable)
     if validator is None:
