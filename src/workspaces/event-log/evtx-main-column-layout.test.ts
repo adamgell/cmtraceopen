@@ -2,24 +2,29 @@ import { describe, expect, it } from "vitest";
 import { MIN_DOCK_HEIGHT } from "./evtx-layout-store";
 import {
   DOCK_MIN_HEIGHT_PX,
-  TABLE_GRID_FLOOR_ROWS,
-  correlationViewMinHeightPx,
   dockHandleBounds,
-  genericViewMinHeightPx,
-  listRowPx,
+  gridRecordRowPx,
   tableGridFloorPx,
-  tableViewMinHeightPx,
   timelineStripHeightPx,
   viewMinHeightPx,
 } from "./evtx-main-column-layout";
 
+/** The least height a view keeps at the default window and font, through the one function that decides it. */
+const floorOf = (
+  view: Parameters<typeof viewMinHeightPx>[0]["view"],
+  extra: Partial<Parameters<typeof viewMinHeightPx>[0]> = {},
+) => viewMinHeightPx({ view, gridRowPx: 25, windowHeight: 900, logListFontSize: 13, ...extra });
+
 describe("the floors of the main column", () => {
-  it("counts a list row as the lists measure it", () => {
-    expect(listRowPx(23)).toBe(25);
+  it("counts a grid row as a list row and, with the Level column on, 4 px more", () => {
+    // A list row is the lists' row height and its 2 px; the Level badge makes a grid row 4 px taller.
+    expect(gridRecordRowPx(23, [])).toBe(25);
+    expect(gridRecordRowPx(23, ["level"])).toBe(29);
+    expect(gridRecordRowPx(35, [])).toBe(37);
   });
 
-  it("keeps five grid rows", () => {
-    expect(TABLE_GRID_FLOOR_ROWS).toBe(5);
+  it("keeps five grid rows, whatever a row is", () => {
+    for (const row of [25, 29, 37]) expect(tableGridFloorPx(row) / row).toBe(5);
     expect(tableGridFloorPx(25)).toBe(125);
   });
 
@@ -35,11 +40,19 @@ describe("the floors of the main column", () => {
   });
 
   it("holds the Table view at its strip plus the grid floor", () => {
-    expect(tableViewMinHeightPx(25, 900)).toBe(320 + 125);
-    expect(tableViewMinHeightPx(25, 600)).toBe(300 + 125);
-    expect(tableViewMinHeightPx(25, 100)).toBe(240 + 125);
+    expect(floorOf("table")).toBe(320 + 125);
+    expect(floorOf("table", { windowHeight: 600 })).toBe(300 + 125);
+    expect(floorOf("table", { windowHeight: 100 })).toBe(240 + 125);
     // A taller row (a larger font) raises the floor with it.
-    expect(tableViewMinHeightPx(35, 900)).toBe(320 + 175);
+    expect(floorOf("table", { gridRowPx: 35 })).toBe(320 + 175);
+    // And it is the strip the window leaves plus the grid's own floor, in every case.
+    for (const windowHeight of [900, 600, 481, 100]) {
+      for (const gridRowPx of [25, 29, 35]) {
+        expect(floorOf("table", { windowHeight, gridRowPx })).toBe(
+          timelineStripHeightPx(windowHeight) + tableGridFloorPx(gridRowPx),
+        );
+      }
+    }
   });
 
   it("gives the dock one minimum, its header and one lane at the largest font, that the store shares", () => {
@@ -54,18 +67,22 @@ describe("the floor of every view", () => {
   it("keeps the Correlation view's chain list header and three chain rows in sight", () => {
     // At the default font: a 36 px header, and three 83 px rows (16 px of padding, 6 px of gaps, a
     // 1 px border and three 20 px lines); the detail header and legend need only 88 px.
-    expect(correlationViewMinHeightPx(13)).toBe(36 + 3 * 83);
+    expect(floorOf("correlation")).toBe(36 + 3 * 83);
   });
 
   it("raises the Correlation floor with the font, because its lines do", () => {
     // Text over 13 px outgrows the 20 px minimum line: 26 px for the header, 29 for a row's title.
-    expect(correlationViewMinHeightPx(20)).toBe(16 + 26 + 3 * (23 + 3 * 29));
-    expect(correlationViewMinHeightPx(20)).toBeGreaterThan(correlationViewMinHeightPx(13));
+    expect(floorOf("correlation", { logListFontSize: 20 })).toBe(16 + 26 + 3 * (23 + 3 * 29));
+    expect(floorOf("correlation", { logListFontSize: 20 })).toBeGreaterThan(floorOf("correlation"));
   });
 
   it("gives the placeholder views one generic minimum: a header and three list rows", () => {
-    expect(genericViewMinHeightPx(13)).toBe(36 + 3 * 25);
-    expect(genericViewMinHeightPx(20)).toBeGreaterThan(genericViewMinHeightPx(13));
+    for (const view of ["grouped", "timeline", "charts"] as const) {
+      expect(floorOf(view)).toBe(36 + 3 * 25);
+      expect(floorOf(view, { logListFontSize: 20 })).toBeGreaterThan(floorOf(view));
+    }
+    // It does not depend on the Table's row or the window: a placeholder has neither.
+    expect(floorOf("charts", { gridRowPx: 40, windowHeight: 400 })).toBe(floorOf("charts"));
   });
 
   it("decides every view's floor in one place", () => {

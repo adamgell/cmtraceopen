@@ -512,6 +512,7 @@ describe("an unplaced item is never positioned (acceptance)", () => {
         "../../lib/file-paths",
         "../../lib/tab-snapshot-cache",
         "./evtx-insights-data",
+        "./evtx-kind-chip-value",
         "./evtx-timeline-paging",
         "./unified-timeline",
       ].sort(),

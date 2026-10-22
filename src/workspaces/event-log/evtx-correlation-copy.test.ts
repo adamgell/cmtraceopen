@@ -3,6 +3,8 @@
  * are that a narrowed or partial view says so, and that nothing here reads as cause.
  */
 import { describe, expect, it } from "vitest";
+import dockSource from "./EvtxCorrelationDock.tsx?raw";
+import viewSource from "./EvtxCorrelationView.tsx?raw";
 import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import {
   buildCorrelationChains,
@@ -22,6 +24,7 @@ import {
   STRENGTH_LABELS,
   UNREAD_SOURCES_NOTE,
   UNTIMED_TEXT,
+  UPDATING_CORRELATION_TEXT,
   ambiguousEventNote,
   chainCopyText,
   coverageGapNotice,
@@ -41,6 +44,7 @@ import {
   plotOmissionNotice,
   renderCapNotice,
   scanNotice,
+  sharedOriginNote,
   scopeDisclosure,
   sourcesText,
   unmatchableNote,
@@ -554,6 +558,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "SCOPE_NOT_KNOWN_NOTICE",
     "STRENGTH_LABELS",
     "UNREAD_SOURCES_NOTE",
+    "UPDATING_CORRELATION_TEXT",
     "ambiguousEventNote",
     "chainCopyText",
     "coverageGapNotice",
@@ -574,6 +579,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "renderCapNotice",
     "scanNotice",
     "scopeDisclosure",
+    "sharedOriginNote",
     "sourcesText",
     "unmatchableNote",
     "unresolvedNotice",
@@ -630,6 +636,8 @@ describe("no string claims an entry is unplaced without proof", () => {
     "partitionUnplaced",
     "placeInWindow",
     "reconcileSelection",
+    // A predicate over the plot's inputs: it produces no text.
+    "sessionSpeaksForAbsence",
   ]);
 
   it("names every runtime export of both modules in one of the two sets", () => {
@@ -657,6 +665,7 @@ describe("no string claims an entry is unplaced without proof", () => {
   function dockStrings(): string[] {
     const partial = { complete: false, windowItems: 40, omittedItems: 15, items: new Array(25), halfWidthMs: 75_000, error: null };
     return [
+      UPDATING_CORRELATION_TEXT,
       DOCK_SCOPE_NOTE,
       LINKS_LOADING_TEXT,
       NOT_IN_TIMELINE_NOTE,
@@ -688,6 +697,8 @@ describe("no string claims an entry is unplaced without proof", () => {
       emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
       outsideWindowNote(1, 3) ?? "",
       outsideWindowNote(3, 5) ?? "",
+      sharedOriginNote(1) ?? "",
+      sharedOriginNote(4) ?? "",
       notReadNote(1, 3) ?? "",
       notReadNote(3, 5) ?? "",
       partialChainTitle(5, 2, true),
@@ -1197,6 +1208,94 @@ describe("the dock's words (spec 8.12, #842)", () => {
   });
 });
 
+/**
+ * The Details context list says "entries" where the dock says "sources" and "listed" where the dock
+ * says "drawn" (#843). Same facts, same conditions, so the same functions with a different noun; the
+ * dock's own words are untouched.
+ */
+describe("the notes shared by the dock and the Details context list", () => {
+  const WIDTH = 300_000;
+  const whole = { halfWidthMs: WIDTH, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 };
+
+  describe("emptyWindowText with a subject", () => {
+    it("says 'sources' by default and when asked, exactly as before", () => {
+      expect(emptyWindowText(whole)).toEqual({ text: "No other sources have entries within \u00b15 min.", absolute: true });
+      expect(emptyWindowText({ ...whole, subject: "sources" })).toEqual(emptyWindowText(whole));
+    });
+
+    it("says 'entries' for the list, and makes the absolute claim only under the same five inputs", () => {
+      const list = { ...whole, subject: "entries" as const };
+      expect(emptyWindowText(list)).toEqual({ text: "No other entries within \u00b15 min.", absolute: true });
+      for (const [why, change] of [
+        ["a narrowed scope", { narrowed: true }],
+        ["an unread source", { unreadSources: true }],
+        ["an earlier session's pair", { updating: true }],
+        ["an unknown unplaced count", { unplacedTotal: null }],
+        ["entries that have no usable time", { unplacedTotal: 3 }],
+      ] as const) {
+        const said = emptyWindowText({ ...list, ...change });
+        expect(said.absolute, why).toBe(false);
+        expect(said.text, why).toMatch(/^No other visible entries within \u00b15 min\./);
+      }
+    });
+
+    it("keeps the qualifiers of the dock's sentence for either subject", () => {
+      const dock = emptyWindowText({ ...whole, narrowed: true, unreadSources: true, updating: true, unplacedTotal: 2 });
+      const list = emptyWindowText({ ...whole, narrowed: true, unreadSources: true, updating: true, unplacedTotal: 2, subject: "entries" });
+      const tail = (text: string) => text.slice(text.indexOf("\u00b15 min.") + "\u00b15 min.".length);
+      expect(tail(list.text)).toBe(tail(dock.text));
+      expect(list.text).not.toMatch(NO_UNPROVEN_CLAIM);
+    });
+  });
+
+  describe("the notes about the event that cannot be told from the entries", () => {
+    it("say 'not drawn' for the dock by default and for 'dock'", () => {
+      expect(ambiguousEventNote(2)).toContain("They are not drawn as context");
+      expect(ambiguousEventNote(2, "dock")).toBe(ambiguousEventNote(2));
+      expect(unmatchableNote(3, 75_000)).toContain("They are not drawn");
+      expect(unmatchableNote(3, 75_000, "dock")).toBe(unmatchableNote(3, 75_000));
+    });
+
+    it("say 'not listed' for the list, and never 'drawn'", () => {
+      expect(ambiguousEventNote(2, "list")).toBe(
+        "2 entries of this window match this event, so which one it is cannot be told. They are not listed, and no link is shown.",
+      );
+      expect(unmatchableNote(3, WIDTH, "list")).toBe(
+        "This event has no record identity the timeline can match, so which of the 3 entries within \u00b15 min it is cannot be told. They are not listed, and no link is shown.",
+      );
+      for (const text of [ambiguousEventNote(5, "list"), unmatchableNote(1, WIDTH, "list"), unmatchableNote(0, WIDTH, "list")]) {
+        expect(text).not.toMatch(/drawn/);
+      }
+    });
+
+    it("count the same entries for either surface", () => {
+      expect(unmatchableNote(0, WIDTH, "list")).toBe(unmatchableNote(0, WIDTH));
+      expect(ambiguousEventNote(7, "list")).toContain("7 entries");
+      expect(unmatchableNote(1, WIDTH, "list")).toContain("which of the 1 entry within");
+    });
+  });
+});
+
+describe("the note about entries read from an origin more than once (#843)", () => {
+  it("is said for one entry and for several, and claims only what the count proves", () => {
+    expect(sharedOriginNote(1)).toBe("1 entry read repeats another entry's origin and is counted once.");
+    expect(sharedOriginNote(3)).toBe("3 entries read repeat another entry's origin and are counted once.");
+    expect(sharedOriginNote(1500)).toBe("1,500 entries read repeat another entry's origin and are counted once.");
+  });
+
+  it("says nothing about a list or about the window, which it cannot know", () => {
+    for (const text of [sharedOriginNote(1), sharedOriginNote(5)]) {
+      expect(text).not.toMatch(/listed|window|shown|drawn/i);
+      expect(text).not.toMatch(NO_UNPROVEN_CLAIM);
+    }
+  });
+
+  it("is not said when there is nothing to say, and never for a negative count", () => {
+    expect(sharedOriginNote(0)).toBeNull();
+    expect(sharedOriginNote(-2)).toBeNull();
+  });
+});
+
 describe("the two session states a surface that reads the analysis session can be in", () => {
   it("says to wait while the analysis is on the way, and does not tell anyone to load events they have loaded", () => {
     expect(ANALYSIS_BUILDING_TEXT).toBe(
@@ -1210,5 +1309,18 @@ describe("the two session states a surface that reads the analysis session can b
     expect(NO_SESSION_TEXT).toBe("No event analysis is available. Load events to see what is around an event.");
     expect(NO_SESSION_TEXT).not.toBe(ANALYSIS_BUILDING_TEXT);
     expect(NO_SESSION_TEXT).not.toMatch(/being built|yet\b/);
+  });
+});
+
+describe("the words for a correlation that is being rebuilt (#843)", () => {
+  it("are one constant", () => {
+    expect(UPDATING_CORRELATION_TEXT).toBe("Updating correlation...");
+  });
+
+  it("are not spelled out again by the dock or the Correlation view, which say them from the constant", () => {
+    for (const source of [dockSource, viewSource]) {
+      expect(source).toContain("UPDATING_CORRELATION_TEXT");
+      expect(source).not.toMatch(/Updating correlation/);
+    }
   });
 });

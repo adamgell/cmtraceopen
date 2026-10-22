@@ -16,12 +16,14 @@ import { bundleOfSource } from "./evtx-collector-bundle";
 import { buildCorrelationChains } from "./evtx-correlation-chains";
 import {
   isUnmatchableEvent,
+  itemsByOriginId,
   logOriginNamesRecord,
   originLookup,
   linkCountsByRecord,
   linkPartnerCounts,
   originIdentityText,
   recordLinkStatus,
+  repeatedItems,
   resolveOriginRecords,
   scopeForChain,
   soleRecordForOrigin,
@@ -1806,5 +1808,62 @@ describe("isUnmatchableEvent: an event record the join can never name (#842)", (
       const found = [...candidates].some((identity) => recordsForOriginIdentity(index, sample.eventId, identity).includes(sample));
       expect(isUnmatchableEvent(sample), `${sample.eventRecordIdText ?? "null"} / ${sample.eventRecordId}`).toBe(!found);
     }
+  });
+});
+
+/**
+ * `itemsByOriginId` keeps the first entry of an origin and leaves the rest out; `repeatedItems` is
+ * those rest, so a surface that counts the entries read and shows each origin once can say how many
+ * it left out, from the same rule (#843).
+ */
+describe("repeatedItems: the entries an origin's first entry leaves out", () => {
+  const at = (n: number, timestampMs: number): TimelineItem => ({
+    timestampMs,
+    severity: "info",
+    message: `message ${n}`,
+    origin: {
+      kind: "event",
+      stableId: `source4:Live|machine10:DESKTOP-01|channel6:System|record${n}`,
+      source: "Live",
+      machine: "DESKTOP-01",
+      bundle: null,
+      channel: "System",
+      provider: "P",
+      processId: null,
+      eventId: 100 + n,
+      recordId: n,
+    },
+  });
+
+  it("is empty when every origin is read once", () => {
+    expect(repeatedItems([at(1, 10), at(2, 20)])).toEqual([]);
+    expect(repeatedItems([])).toEqual([]);
+  });
+
+  it("holds each later entry of an origin, in the order read, and never the first", () => {
+    const first = at(1, 10);
+    const later = at(1, 30);
+    const third = at(1, 50);
+    const other = at(2, 20);
+    const repeats = repeatedItems([first, other, later, third]);
+    expect(repeats).toEqual([later, third]);
+    expect(repeats[0]).toBe(later);
+    expect(repeats).not.toContain(first);
+  });
+
+  it("counts an entry that is the very same object twice", () => {
+    const entry = at(1, 10);
+    expect(repeatedItems([entry, entry])).toEqual([entry]);
+  });
+
+  it("splits the entries with itemsByOriginId exactly: the first of each origin and the rest", () => {
+    const items = [at(1, 10), at(2, 20), at(1, 25), at(3, 30), at(2, 35), at(1, 40)];
+    const byId = itemsByOriginId(items);
+    const repeats = repeatedItems(items);
+    expect(byId.size + repeats.length).toBe(items.length);
+    for (const item of repeats) {
+      expect(byId.get(timelineOriginId(item.origin))).not.toBe(item);
+    }
+    expect(repeats.map((item) => item.timestampMs)).toEqual([25, 35, 40]);
   });
 });

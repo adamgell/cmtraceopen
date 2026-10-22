@@ -37,8 +37,8 @@ import {
   type UnplacedListInput,
   type UnplacedRow,
 } from "./evtx-unplaced";
+import { EvtxKindChip } from "./EvtxKindChip";
 import { useRailTextColors } from "./evtx-rail-text";
-import { useEvtxVisualTokens } from "./evtx-visual-tokens";
 
 interface EvtxUnplacedListProps {
   /** The engine's unplaced list and its count, from the model on show. Null is no run: nothing to show. */
@@ -57,7 +57,6 @@ interface EvtxUnplacedListProps {
 const NO_LINES: ReadonlySet<number> = new Set();
 
 export function EvtxUnplacedList({ list, updating, sizes, onReply, onFail, onEscape }: EvtxUnplacedListProps) {
-  const visuals = useEvtxVisualTokens();
   const { cardSecondary } = useRailTextColors();
   const view = useMemo(() => describeUnplaced(list), [list]);
   const openFilePath = useLogStore((s) => s.openFilePath);
@@ -79,7 +78,6 @@ export function EvtxUnplacedList({ list, updating, sizes, onReply, onFail, onEsc
 
   if (!view.present) return null;
 
-  const chipSize = sizes.tick;
   const open = (row: UnplacedRow) => {
     if (row.file === null || row.line === null) return;
     // Judged again from the store as it is NOW, never from the render's copy or a derived list.
@@ -153,12 +151,6 @@ export function EvtxUnplacedList({ list, updating, sizes, onReply, onFail, onEsc
         style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", fontSize: `${sizes.lane}px` }}
       >
         {view.rows.map((row) => {
-          const chip =
-            row.kind === "event"
-              ? { backgroundColor: visuals.selection.background, color: visuals.selection.foreground }
-              : // Spec 8.13 puts LOG on bg4; Foreground2 on bg4 measures 4.36:1 in solarized-dark, so
-                // it is bg3 (at least 4.86:1 in every theme).
-                { backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground2 };
           const availability =
             row.file === null || row.line === null
               ? null
@@ -177,19 +169,7 @@ export function EvtxUnplacedList({ list, updating, sizes, onReply, onFail, onEsc
                 color: tokens.colorNeutralForeground1,
               }}
             >
-              <span
-                data-chip={row.chip}
-                style={{
-                  ...chip,
-                  fontFamily: tokens.fontFamilyBase,
-                  fontSize: `${chipSize}px`,
-                  fontWeight: 700,
-                  padding: "1px 6px",
-                  borderRadius: "4px",
-                }}
-              >
-                {row.chip}
-              </span>
+              <EvtxKindChip chip={row.chip} />
               <span style={{ fontFamily: tokens.fontFamilyNumeric }}>{row.label}</span>
               <span style={{ color: cardSecondary }}>{row.context}</span>
               <span style={{ fontFamily: tokens.fontFamilyNumeric, color: tokens.colorNeutralForeground2 }}>

@@ -7,6 +7,9 @@
  * came from. Nothing here scans the timeline: the dock reads the items inside its window and the rows
  * and edges the counts hold, and says plainly what that leaves out.
  *
+ * The first half of that, which entry of the window is the selected event and what may be shown, is
+ * `readWindowFacts`, which the Details context list reads too (#843): one ladder, two surfaces.
+ *
  * Rules, all enforced here:
  * - A window answers ONE center. A record whose timestamp is another center is not paired with it.
  * - The counts are paired with the window only when they are the SAME session (`builtFor` equals the
@@ -100,7 +103,7 @@ export type DockCounts = Pick<
   "model" | "builtFor" | "linkPartners" | "gaps" | "scope" | "unplacedList" | "updating"
 >;
 
-interface DockModelInput {
+export interface DockModelInput {
   /** The selected record, or null for none. */
   record: EvtxRecord | null;
   /** What was read around the record, or null before any read. */
@@ -159,7 +162,7 @@ interface DockRow {
  * - `notRead`: none does in what was read, and the read stopped early: the event may be in the part
  *   that was not read, so nothing is said about whether it is in the timeline.
  */
-type DockSelected =
+export type DockSelected =
   | { status: "found"; originId: string }
   | { status: "ambiguous"; candidates: number }
   | { status: "unmatchable" }
@@ -294,9 +297,10 @@ function openDisabledReason(selected: DockSelected, paired: boolean): OpenDisabl
 }
 
 /**
- * The instant the dock centers its window on: the selected event's own timestamp, or null when it
- * has none (no selection, or an event the dock cannot place). The reader of the window and the model
- * decide this with one predicate, the one the time-range criterion uses.
+ * The instant a window is read around for `record`: its epoch, when it is a usable whole number of
+ * milliseconds, else null (no selection, or an event that cannot be placed). The ONE definition: the
+ * reader of the window (the dock's and the Details context's) and `readWindowFacts` decide it with
+ * the same predicate, the one the time-range criterion uses.
  */
 export function dockCenterMs(record: EvtxRecord | null): number | null {
   if (record === null || !hasUsableTimestamp(record) || !Number.isSafeInteger(record.timestampEpoch)) {
@@ -305,12 +309,82 @@ export function dockCenterMs(record: EvtxRecord | null): number | null {
   return record.timestampEpoch;
 }
 
-export function buildDockModel(input: DockModelInput): DockModel {
+/**
+ * Nearest `centerMs` first, ties broken by `idOf` so the order never depends on the input order.
+ * The one nearest-first order of the dock's context and of the Details context.
+ */
+export function compareByDistance<T extends { timestampMs: number }>(
+  centerMs: number,
+  idOf: (entry: T) => string,
+): (a: T, b: T) => number {
+  return (a, b) =>
+    Math.abs(a.timestampMs - centerMs) - Math.abs(b.timestampMs - centerMs) ||
+    compareStrings(idOf(a), idOf(b));
+}
+
+/**
+ * What a window read says about the selected event, shared by every surface that lists the entries
+ * around it. `kind` is `read` only for a record with a window that answers its instant and whose
+ * first reply gave a count; the other kinds are the states before there is anything to list.
+ */
+export interface WindowRead {
+  kind: "read";
+  record: EvtxRecord;
+  window: LoadedCorrelationWindow;
+  /** Every entry inside the window, read or not: the first reply's count, which a read always has. */
+  windowItems: number;
+  /** The counts belong to the window's session (the keys are equal). */
+  paired: boolean;
+  /** The counts when `paired`, else null: nothing is ever read from counts of another session. */
+  pairedCounts: DockCounts | null;
+  /** The pair is an earlier session's, shown while a newer one is read. */
+  updating: boolean;
+  /** The window's entries by origin id, the first of equal ids winning. */
+  byId: Map<string, TimelineItem>;
+  /** The distinct entries read (the values of `byId`), in the order they were read. */
+  items: TimelineItem[];
+  /** The origin ids of the entries that name the record. */
+  naming: ReadonlySet<string>;
+  selected: DockSelected;
+  /** The selected event's origin id, when found. */
+  originId: string | null;
+  /** Whether an entry's link to the event can be said: the event is found, or is known to be absent. */
+  identified: boolean;
+  /**
+   * What may be shown: nothing when the event cannot be told from the entries (unmatchable), and not
+   * the entries that could each be the event when several name it (ambiguous). `items` itself
+   * otherwise (the same array).
+   */
+  usable: TimelineItem[];
+  /** The scope is narrower than what is loaded, or is not known. Unpaired counts cannot speak for it. */
+  scopeNarrowed: boolean;
+  /**
+   * "Not linked" is a claim that no event missing from the session could carry the link. The scope
+   * says events were left out of it; an unread source is records that never reached it; and a pair
+   * that an earlier session left behind is being replaced because events were added or reloaded.
+   */
+  narrowed: boolean;
+  /** The session's own count of entries it could not place in time, from the paired counts only. */
+  unplacedTotal: number | null;
+}
+
+type WindowFacts =
+  | { kind: "noSelection" }
+  | { kind: "untimed" }
+  /** There is no read for this selection (yet): the window is null or answers another center. */
+  | { kind: "unread" }
+  /** The first reply never came, so even the count of entries is not known. */
+  | { kind: "failed"; error: string | null }
+  | WindowRead;
+
+/** Reads the window around the selected record: the ruled ladder, in one place. */
+export function readWindowFacts(input: DockModelInput): WindowFacts {
   const { record, window, counts } = input;
   if (record === null) return { kind: "noSelection" };
-  if (dockCenterMs(record) === null) return { kind: "untimed" };
+  const center = dockCenterMs(record);
+  if (center === null) return { kind: "untimed" };
   // A window answers one center. Another selection's window is never shown under this record.
-  if (window === null || window.centerMs !== record.timestampEpoch) return { kind: "unread" };
+  if (window === null || window.centerMs !== center) return { kind: "unread" };
   if (window.windowItems === null) return { kind: "failed", error: window.error };
 
   const paired = counts !== null && counts.builtFor === window.sessionKey;
@@ -331,17 +405,55 @@ export function buildDockModel(input: DockModelInput): DockModel {
         : window.complete
           ? { status: "notInTimeline" }
           : { status: "notRead" };
-  const originId = selected.status === "found" ? selected.originId : null;
-  // An entry's link to the selected event can be said only when the event is identified.
-  const identified = selected.status === "found" || selected.status === "notInTimeline";
-  // What may be drawn: nothing when the event cannot be told from the entries, and not the entries
-  // that could each be the event when several name it.
-  const drawItems =
+  const usable =
     selected.status === "unmatchable"
       ? []
       : selected.status === "ambiguous"
         ? items.filter((item) => !naming.has(timelineOriginId(item.origin)))
         : items;
+  const scopeNarrowed = pairedCounts === null ? true : scopeDisclosure(pairedCounts.scope) !== null;
+  return {
+    kind: "read",
+    record,
+    window,
+    windowItems: window.windowItems,
+    paired,
+    pairedCounts,
+    updating,
+    byId,
+    items,
+    naming,
+    selected,
+    originId: selected.status === "found" ? selected.originId : null,
+    // An entry's link to the selected event can be said only when the event is identified.
+    identified: selected.status === "found" || selected.status === "notInTimeline",
+    usable,
+    scopeNarrowed,
+    narrowed: scopeNarrowed || input.unreadSources || updating,
+    unplacedTotal: pairedCounts === null ? null : pairedCounts.unplacedList.total,
+  };
+}
+
+export function buildDockModel(input: DockModelInput): DockModel {
+  const windowRead = readWindowFacts(input);
+  if (windowRead.kind !== "read") return windowRead;
+  const {
+    record,
+    window,
+    windowItems,
+    pairedCounts,
+    paired,
+    updating,
+    byId,
+    items,
+    selected,
+    originId,
+    identified,
+    usable: drawItems,
+    scopeNarrowed,
+    narrowed,
+    unplacedTotal,
+  } = windowRead;
 
   // ---- its rows, from the uncapped index of the SAME session ----
   const rows =
@@ -395,20 +507,12 @@ export function buildDockModel(input: DockModelInput): DockModel {
   const part = chainInWindow(row, originId, drawableById);
 
   // ---- context: everything else in the window, nearest the selected event first ----
-  const byDistance = (a: TimelineItem, b: TimelineItem) =>
-    Math.abs(a.timestampMs - record.timestampEpoch) - Math.abs(b.timestampMs - record.timestampEpoch) ||
-    compareStrings(timelineOriginId(a.origin), timelineOriginId(b.origin));
   const context = drawable
     .filter((item) => !readMembers.has(timelineOriginId(item.origin)))
-    .sort(byDistance);
+    .sort(compareByDistance<TimelineItem>(record.timestampEpoch, (item) => timelineOriginId(item.origin)));
   const drawnContext = context.slice(0, DOCK_NEARBY_MARKER_CAP);
   const allContextCount = drawItems.filter((item) => !readMembers.has(timelineOriginId(item.origin))).length;
 
-  // "Not linked" is a claim that no event missing from the session could carry the link. The scope
-  // says events were left out of it; an unread source is records that never reached it; and a pair
-  // that an earlier session left behind is being replaced because events were added or reloaded.
-  const scopeNarrowed = pairedCounts === null ? true : scopeDisclosure(pairedCounts.scope) !== null;
-  const narrowed = scopeNarrowed || input.unreadSources || updating;
   const plot = buildChainPlot({
     chain: part,
     itemsById: drawableById,
@@ -435,11 +539,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
     annotations.get(marker.id) ?? reasonOfLabel(marker.linkLabel);
 
   const nearby: DockNearbyEntry[] = [...plot.nearby]
-    .sort(
-      (a, b) =>
-        Math.abs(a.timestampMs - record.timestampEpoch) - Math.abs(b.timestampMs - record.timestampEpoch) ||
-        compareStrings(a.id, b.id),
-    )
+    .sort(compareByDistance<PlotMarker>(record.timestampEpoch, (marker) => marker.id))
     .slice(0, DOCK_NEARBY_LINE_CAP)
     .map((marker) => ({
       id: marker.id,
@@ -527,7 +627,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
   if (selected.status === "notInTimeline") push(NOT_IN_TIMELINE_NOTE);
   if (selected.status === "notRead") push(NOT_READ_NOTE);
   if (selected.status === "ambiguous") push(ambiguousEventNote(selected.candidates));
-  if (selected.status === "unmatchable") push(unmatchableNote(window.windowItems, window.halfWidthMs));
+  if (selected.status === "unmatchable") push(unmatchableNote(windowItems, window.halfWidthMs));
   if (dockRow !== null) {
     push(
       window.complete
@@ -557,7 +657,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
           unreadSources: input.unreadSources,
           updating,
           // The same run's own count, from the paired counts only; unpaired is not known.
-          unplacedTotal: pairedCounts === null ? null : pairedCounts.unplacedList.total,
+          unplacedTotal,
         })
       : null;
 

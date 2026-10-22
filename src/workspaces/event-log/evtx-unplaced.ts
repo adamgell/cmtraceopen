@@ -22,6 +22,7 @@
 import { getBaseName } from "../../lib/file-paths";
 import type { SourceOpenMode } from "../../lib/tab-snapshot-cache";
 import { engineRecordIdentity } from "./evtx-insights-data";
+import { chipForOriginKind, type KindChip } from "./evtx-kind-chip-value";
 import { EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT } from "./evtx-timeline-paging";
 import {
   isEventOrigin,
@@ -46,7 +47,7 @@ export interface UnplacedRow {
   originId: string;
   kind: "event" | "log";
   /** The kind chip the Chains tab uses (8.13): `EVT` or `LOG`. */
-  chip: "EVT" | "LOG";
+  chip: KindChip;
   /** `originLabel`: the file (with its component) or `channel leaf (event id)`. */
   label: string;
   /** `originContext`: machine and source. */
@@ -90,7 +91,7 @@ function toRow(item: UnplacedItem, index: number): UnplacedRow {
     return {
       ...base,
       kind: "event",
-      chip: "EVT",
+      chip: chipForOriginKind(origin.kind),
       position: record === null ? "no record ID" : `record ${record}`,
       file: null,
       line: null,
@@ -99,7 +100,7 @@ function toRow(item: UnplacedItem, index: number): UnplacedRow {
   return {
     ...base,
     kind: "log",
-    chip: "LOG",
+    chip: chipForOriginKind(origin.kind),
     position: `line ${origin.line}`,
     file: origin.file,
     line: origin.line,
