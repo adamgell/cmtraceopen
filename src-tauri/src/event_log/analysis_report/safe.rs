@@ -1,9 +1,12 @@
 //! The only code that can write text into the report.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use cmtraceopen_parser::diagnosis::{redacted_display_projection, DiagnosisSummary};
 use cmtraceopen_parser::intune::apps::windows::common::redact_field_value;
+use regex::Regex;
 
 use crate::event_log::export::redact_export_text;
 
@@ -49,13 +52,16 @@ impl Safe {
     }
 }
 
-/// A diagnosis summary after `redacted_display_projection`. The report reads findings and
-/// evidence only through one of these, so it cannot print a summary that was not projected.
+/// A diagnosis summary after `redacted_display_projection`, projected from a copy whose strings
+/// had their invisible characters removed first. The report reads findings and evidence only
+/// through one of these, so it cannot print a summary that was not projected.
 pub(super) struct Projected(DiagnosisSummary);
 
 impl Projected {
-    pub(super) fn new(summary: DiagnosisSummary) -> Self {
-        Self(redacted_display_projection(summary))
+    /// Fails only when the summary cannot be walked as JSON, which no summary the engine builds
+    /// should do. The error names nothing from the summary.
+    pub(super) fn new(summary: DiagnosisSummary) -> Result<Self, String> {
+        Ok(Self(redacted_display_projection(strip_summary(&summary)?)))
     }
 
     pub(super) fn summary(&self) -> &DiagnosisSummary {
@@ -120,6 +126,9 @@ impl Redactor {
         let mut machines = HashMap::new();
         let mut skipped_short = 0;
         for name in names {
+            // A name is known by what it reads as, so an invisible character inside it does not
+            // keep it from matching the same name in text.
+            let name = strip_invisible(name);
             let name = name.trim();
             if name.chars().count() < MIN_SUBSTITUTED_MACHINE_CHARS {
                 skipped_short += 1;
@@ -144,18 +153,20 @@ impl Redactor {
         self.skipped_short
     }
 
-    /// A machine name as its token. This is the same token the diagnosis projection writes.
+    /// A machine name as its token. This is the same token the diagnosis projection writes for
+    /// the name as it reads, without its invisible characters.
     pub(super) fn machine(&self, name: &str) -> Safe {
-        Safe::token("host", name.trim())
+        Safe::token("host", strip_invisible(name).trim())
     }
 
     /// Free text from the session, safe to print. The order is the point:
-    /// redact the whole field, substitute the machine names the session knows, flatten
-    /// whitespace, cut to `max_chars`, and only then escape Markdown. Escaping first would
-    /// change the text the redaction patterns read; cutting first could split a value the
-    /// patterns would have caught.
+    /// delete the invisible characters, redact the whole field, substitute the machine names
+    /// the session knows, flatten whitespace, cut to `max_chars`, and only then escape Markdown.
+    /// An invisible character inside an identifier keeps every pattern from matching it, so it
+    /// goes first. Escaping first would change the text the redaction patterns read; cutting
+    /// first could split a value the patterns would have caught.
     pub(super) fn text(&self, raw: &str, max_chars: usize) -> Safe {
-        self.finish(&redact_export_text(raw), max_chars)
+        self.finish(&redact_export_text(&strip_invisible(raw)), max_chars)
     }
 
     /// Text read from a projected summary. The projection is the diagnosis' own redaction, so
@@ -259,14 +270,13 @@ pub(super) fn token_len_at(text: &str, start: usize) -> Option<usize> {
     (bytes.get(index) == Some(&b']')).then_some(index + 1 - start)
 }
 
-/// Strips format and control characters, and collapses every run of whitespace to one space.
+/// Strips the invisible characters (again, as a guard) and the control characters, and collapses
+/// every run of whitespace to one space.
 pub(super) fn flatten(text: &str) -> String {
+    let text = strip_invisible(text);
     let mut out = String::with_capacity(text.len());
     let mut pending_space = false;
     for character in text.chars() {
-        if is_invisible(character) {
-            continue;
-        }
         if character.is_whitespace() || character.is_control() {
             pending_space = !out.is_empty();
             continue;
@@ -280,18 +290,50 @@ pub(super) fn flatten(text: &str) -> String {
     out
 }
 
-/// Zero-width and bidirectional format characters. They can reorder or hide text when a
-/// reader opens the file, so they are removed rather than shown.
-fn is_invisible(character: char) -> bool {
-    matches!(
-        character,
-        '\u{61c}'
-            | '\u{200b}'..='\u{200f}'
-            | '\u{202a}'..='\u{202e}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{2069}'
-            | '\u{feff}'
-    )
+/// The invisible set, in one place. Characters that draw nothing, or that reorder what is drawn,
+/// and so can sit inside an identifier without changing how it reads:
+///
+/// - Unicode general category Cf (zero width space, joiners, word joiner, byte order mark, soft
+///   hyphen, the bidirectional controls, tag characters);
+/// - the combining grapheme joiner U+034F;
+/// - the Hangul fillers U+115F, U+1160, U+3164 and U+FFA0;
+/// - the variation selectors U+FE00 to U+FE0F and U+E0100 to U+E01EF.
+///
+/// Homoglyphs and fullwidth forms are not normalized.
+static INVISIBLE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"[\p{Cf}\x{34F}\x{115F}\x{1160}\x{3164}\x{FFA0}",
+        r"\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}]"
+    ))
+    .expect("the invisible character class must compile")
+});
+
+/// `text` without its invisible characters. This is the one definition of them: the redaction
+/// paths strip first, and [`flatten`] strips again as a guard.
+pub(super) fn strip_invisible(text: &str) -> Cow<'_, str> {
+    INVISIBLE.replace_all(text, "")
+}
+
+/// A copy of `summary` with every string stripped of its invisible characters. The summary is
+/// walked as JSON, so a string field added to it later is covered without anyone listing it.
+pub(super) fn strip_summary(summary: &DiagnosisSummary) -> Result<DiagnosisSummary, String> {
+    const UNPREPARED: &str = "the diagnosis summary could not be prepared for the report";
+    let mut value = serde_json::to_value(summary).map_err(|_| UNPREPARED.to_owned())?;
+    strip_strings(&mut value);
+    serde_json::from_value(value).map_err(|_| UNPREPARED.to_owned())
+}
+
+fn strip_strings(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => {
+            if let Cow::Owned(stripped) = strip_invisible(text) {
+                *text = stripped;
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(strip_strings),
+        serde_json::Value::Object(fields) => fields.values_mut().for_each(strip_strings),
+        _ => {}
+    }
 }
 
 /// At most `max_chars` characters, with `...` when text was cut. A cut never lands inside a

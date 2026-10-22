@@ -1,4 +1,6 @@
-use super::safe::{cut_chars, escape, flatten, token_len_at, Doc, Redactor, Safe};
+use super::safe::{
+    cut_chars, escape, flatten, strip_invisible, strip_summary, token_len_at, Doc, Redactor, Safe,
+};
 use super::{collect, collect_chains, REPORT_CHAIN_ROW_CAP};
 use super::{
     render_report, render_report_within, EngineNotes, EventLogAnalysisReportRequest, ReportInput,
@@ -6,8 +8,9 @@ use super::{
 };
 use crate::event_log::analysis_session::EventLogAnalysisSessionStatus;
 use cmtraceopen_parser::diagnosis::{
-    CoverageGap, CoverageState, DiagnosisFinding, DiagnosisSummary, EventEvidenceRef, EvidenceRef,
-    FindingClass, FindingConfidence, FindingSeverity, TextLogEvidenceRef,
+    adapt_timeline_edge, CoverageGap, CoverageState, DiagnosisFinding, DiagnosisSummary,
+    ErrorToken, EventDiagnosis, EventEvidenceRef, EventFamily, EvidenceRef, FindingClass,
+    FindingConfidence, FindingSeverity, TextLogEvidenceRef,
 };
 use cmtraceopen_parser::intune::apps::windows::common::redact_field_value;
 use cmtraceopen_parser::unified_timeline::{
@@ -106,6 +109,224 @@ fn a_cut_never_lands_inside_a_token() {
 fn flatten_collapses_whitespace_and_strips_format_characters() {
     assert_eq!(flatten("a\r\n\tb\u{202e}c\u{200b}d\u{0}e  f"), "a bcd e f");
     assert_eq!(flatten("  lead and trail  "), "lead and trail");
+}
+
+/// One character from every class of the invisible set. The endpoints of both variation selector
+/// ranges are here, so a range that is one short at either end is caught.
+const INVISIBLE_SAMPLES: [(&str, char); 21] = [
+    ("zero width space", '\u{200b}'),
+    ("zero width non-joiner", '\u{200c}'),
+    ("zero width joiner", '\u{200d}'),
+    ("word joiner", '\u{2060}'),
+    ("byte order mark", '\u{feff}'),
+    ("soft hyphen", '\u{ad}'),
+    ("right-to-left override", '\u{202e}'),
+    ("left-to-right isolate", '\u{2066}'),
+    ("arabic letter mark", '\u{61c}'),
+    ("arabic number sign", '\u{600}'),
+    ("mongolian vowel separator", '\u{180e}'),
+    ("tag latin small letter a", '\u{e0061}'),
+    ("combining grapheme joiner", '\u{34f}'),
+    ("hangul choseong filler", '\u{115f}'),
+    ("hangul jungseong filler", '\u{1160}'),
+    ("hangul filler", '\u{3164}'),
+    ("halfwidth hangul filler", '\u{ffa0}'),
+    ("variation selector 1", '\u{fe00}'),
+    ("variation selector 16", '\u{fe0f}'),
+    ("variation selector 17", '\u{e0100}'),
+    ("variation selector 256", '\u{e01ef}'),
+];
+
+#[test]
+fn flatten_keeps_deleting_every_invisible_class_as_a_guard() {
+    for (name, mark) in INVISIBLE_SAMPLES {
+        assert_eq!(flatten(&format!("a{mark}b")), "ab", "{name}");
+    }
+}
+
+#[test]
+fn stripping_removes_each_invisible_class_and_nothing_a_reader_sees() {
+    for (name, mark) in INVISIBLE_SAMPLES {
+        assert_eq!(strip_invisible(&format!("a{mark}b")), "ab", "{name}");
+    }
+    // Whitespace, control characters and ordinary punctuation are not invisible characters.
+    let visible = "a b\tc\nd-e_f.g:h/i\\j\u{a0}k\u{e9}\u{4e2d}";
+    assert_eq!(strip_invisible(visible), visible);
+}
+
+/// A summary with a marked string in every string field the report could read, and every other
+/// kind of value a summary holds.
+fn marked_summary(mark: &str) -> DiagnosisSummary {
+    let marked = |name: &str| format!("{name}{mark}x");
+    let event = || {
+        EvidenceRef::Event(EventEvidenceRef {
+            source: marked("source"),
+            provider: marked("provider"),
+            event_id: 7,
+            record_id: 8,
+            record_id_text: Some(marked("record")),
+            fallback_identity: Some(marked("fallback")),
+            machine: Some(marked("machine")),
+            channel: Some(marked("channel")),
+            activity_id: Some(marked("activity")),
+        })
+    };
+    let text_log = || {
+        EvidenceRef::TextLog(TextLogEvidenceRef {
+            source: marked("log"),
+            file_path: marked("path"),
+            line_number: 9,
+            entry_id: 10,
+        })
+    };
+    let mut one = finding(
+        &marked("id"),
+        FindingClass::ConfirmedFailure,
+        FindingSeverity::Error,
+        FindingConfidence::High,
+        &marked("title"),
+    );
+    one.summary = marked("summary");
+    one.evidence = vec![event(), text_log(), EvidenceRef::DsregcmdRaw(marked("raw"))];
+    one.recommended_checks = vec![marked("check one"), marked("check two")];
+    one.coverage_gaps = vec![gap(
+        &marked("nested source"),
+        CoverageState::Capped,
+        &marked("nested detail"),
+    )];
+    let mut top_gap = gap(
+        &marked("gap source"),
+        CoverageState::AccessDenied,
+        &marked("gap detail"),
+    );
+    top_gap.evidence = vec![event()];
+    let mut summary = summary_of(vec![one.clone()], vec![top_gap]);
+    summary.evidence = vec![event(), text_log()];
+    summary.correlations = vec![adapt_timeline_edge(&exact_edge(
+        &marked("left"),
+        &marked("right"),
+        &marked("value"),
+    ))];
+    summary.events = vec![EventDiagnosis {
+        evidence: vec![event()],
+        family: EventFamily::Other,
+        findings: vec![one],
+        error_tokens: vec![ErrorToken {
+            raw: marked("0x80070005"),
+            decimal: Some(2_147_942_405),
+            hex: Some(marked("0x80070005")),
+            malformed: false,
+            found: true,
+            description: Some(marked("description")),
+            category: Some(marked("category")),
+        }],
+    }];
+    summary.overview.outcome = marked("outcome");
+    summary.overview.headline = marked("headline");
+    summary
+}
+
+#[test]
+fn stripping_a_summary_removes_the_characters_from_every_string_and_changes_nothing_else() {
+    let clean = marked_summary("");
+    // The control: with nothing to remove, the copy is the summary.
+    assert_eq!(strip_summary(&clean).expect("strips"), clean);
+    for (name, mark) in INVISIBLE_SAMPLES {
+        let stripped = strip_summary(&marked_summary(&mark.to_string())).expect("strips");
+        assert_eq!(stripped, clean, "{name}");
+    }
+}
+
+#[test]
+fn an_invisible_character_cannot_hide_an_identifier_from_the_text_redaction() {
+    // The character sits inside the machine name and inside the SID. The comparison is with the
+    // same text without it, which is itself redacted: a leak that both texts shared would not
+    // make them differ, so the control is checked first.
+    let r = redactor(&["HOST-0002"]);
+    let with = |mark: &str| {
+        format!(
+            "Sync with HOST{mark}-0002 failed for \
+             S-1-5-21-1000000001-1000000002-1000000003-{mark}1001 today"
+        )
+    };
+    let clean = r.text(&with(""), 240);
+    assert!(clean.as_str().contains(&host("HOST-0002")), "{clean:?}");
+    assert!(clean.as_str().contains("[sid:"), "{clean:?}");
+    assert!(!clean.as_str().contains("1000000001"), "{clean:?}");
+    for (name, mark) in INVISIBLE_SAMPLES {
+        assert_eq!(r.text(&with(&mark.to_string()), 240), clean, "{name}");
+    }
+}
+
+#[test]
+fn an_invisible_character_cannot_hide_an_identifier_from_the_diagnosis_projection() {
+    // HOST-0007 is named only by the evidence's machine field, so only the projection knows it:
+    // the report's own machine list is empty. The character is also inside that field.
+    let report_with = |mark: &str| {
+        let mut one = finding(
+            "a",
+            FindingClass::Symptom,
+            FindingSeverity::Info,
+            FindingConfidence::Low,
+            "Sign-in",
+        );
+        one.summary = format!(
+            "Sync with HOST{mark}-0007 failed for \
+             S-1-5-21-1000000001-1000000002-1000000003-{mark}1001"
+        );
+        one.evidence = vec![EvidenceRef::Event(EventEvidenceRef {
+            source: "s".to_owned(),
+            provider: format!("Vendor.HOST{mark}-0007.Provider"),
+            event_id: 1,
+            record_id: 1,
+            record_id_text: Some("1".to_owned()),
+            fallback_identity: None,
+            machine: Some(format!("HOST{mark}-0007")),
+            channel: None,
+            activity_id: None,
+        })];
+        render_with(
+            &base_request(),
+            &snapshot_of(Vec::new(), 0),
+            &summary_of(vec![one], Vec::new()),
+        )
+    };
+    let clean = report_with("");
+    assert!(!leaks(&clean, "HOST-0007"), "{clean}");
+    assert_eq!(clean.matches(&host("HOST-0007")).count(), 2, "{clean}");
+    assert!(clean.contains("[sid:"), "{clean}");
+    assert!(!clean.contains("1000000001"), "{clean}");
+    for (name, mark) in INVISIBLE_SAMPLES {
+        assert_eq!(report_with(&mark.to_string()), clean, "{name}");
+    }
+}
+
+#[test]
+fn a_machine_name_that_carries_an_invisible_character_is_known_by_what_it_reads_as() {
+    let marked = "HOST\u{200b}-0003";
+    let r = redactor(&[marked]);
+    assert_eq!(r.skipped_short(), 0);
+    assert_eq!(
+        r.text("see HOST-0003 now", 240).as_str(),
+        format!("see {} now", host("HOST-0003"))
+    );
+    // The header and the text carry one token for it, the token of the name as it reads.
+    assert_eq!(r.machine(marked).as_str(), host("HOST-0003"));
+    let item = event_item(
+        FIXTURE_NOW_MS,
+        TimelineSeverity::Info,
+        1,
+        "Application",
+        "P",
+        Some(marked),
+        1,
+        "m",
+    );
+    let report = render(&base_request(), &snapshot_of(vec![item], 1));
+    assert!(
+        report.contains(&format!("- Machines (1): {}\n", host("HOST-0003"))),
+        "{report}"
+    );
 }
 
 #[test]

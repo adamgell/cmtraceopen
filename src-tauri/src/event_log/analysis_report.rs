@@ -650,7 +650,7 @@ fn render_report_within(input: &ReportInput<'_>, limit: usize) -> Result<String,
     let request = input.request;
     let snapshot = input.snapshot;
     let redactor = Redactor::new(&snapshot.machines);
-    let summary = Projected::new(input.summary.clone());
+    let summary = Projected::new(input.summary.clone())?;
     let mut doc = Doc::new();
     render_title(&mut doc);
     render_scope(&mut doc, &redactor, request, snapshot);
@@ -1354,7 +1354,7 @@ fn render_chains(
     let projected = Projected::new(DiagnosisSummary {
         correlations: adapted,
         ..DiagnosisSummary::default()
-    });
+    })?;
     let mut cursor = 0usize;
     for (index, (row, resolved)) in chains.rows.iter().zip(&snapshot.chains).enumerate() {
         let projected_edges =
