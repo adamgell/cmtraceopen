@@ -82,6 +82,8 @@ const MAX_REPORT_ID_BYTES: usize = 2 * 1024;
 const MAX_REPORT_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const MAX_REPORT_CHANNELS: usize = 64;
 const MAX_REPORT_CHANNEL_BYTES: usize = 512;
+/// A DNS name is at most 253 bytes.
+const MAX_REPORT_MACHINE_BYTES: usize = 255;
 const MAX_REPORT_EVENT_ID_SELECTORS: usize = 64;
 const MAX_REPORT_TOP_EVENT_IDS: usize = 50;
 const REPORT_LEVEL_COUNT: usize = 5;
@@ -101,6 +103,10 @@ pub struct EventLogAnalysisReportRequest {
     /// The merged coverage gaps the rail was diagnosed with, so the findings match the screen.
     #[serde(default)]
     pub coverage_gaps: Vec<EvtxCoverageGap>,
+    /// The remote machine the events were read from, as the app names it, or `null` for a local
+    /// source. The report treats it as a known machine, so it is replaced by its token wherever
+    /// it appears: in a coverage source, in a gap's detail, in a finding and in event text.
+    pub remote_machine: Option<String>,
     pub scope: ReportScope,
     /// The chains the app built from the session's correlation edges, or `null` when it had not
     /// loaded them. Unknown is sent as `null`, never as an empty list.
@@ -329,6 +335,13 @@ impl EventLogAnalysisReportRequest {
             if distinct > events || distinct < listed {
                 return Err("report scope: the distinct event ID count is impossible".to_owned());
             }
+        }
+        if self
+            .remote_machine
+            .as_deref()
+            .is_some_and(|name| name.trim().is_empty() || name.len() > MAX_REPORT_MACHINE_BYTES)
+        {
+            return Err("report scope: the remote machine name is impossible".to_owned());
         }
         let filters = &scope.filters;
         if filters.levels.len() > REPORT_LEVEL_COUNT {
@@ -707,7 +720,14 @@ pub(crate) fn render_report(input: &ReportInput<'_>) -> Result<String, String> {
 fn render_report_within(input: &ReportInput<'_>, limit: usize) -> Result<String, String> {
     let request = input.request;
     let snapshot = input.snapshot;
-    let redactor = Redactor::new(&snapshot.machines);
+    // The machines the session's origins record, and the remote machine the request names: both
+    // are known, so both are replaced by their token wherever they appear.
+    let redactor = Redactor::new(
+        snapshot
+            .machines
+            .iter()
+            .chain(request.remote_machine.iter()),
+    );
     let summary = Projected::new(input.summary.clone())?;
     let mut doc = Doc::new();
     render_title(&mut doc);

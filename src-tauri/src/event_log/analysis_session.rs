@@ -2912,6 +2912,7 @@ mod tests {
             "expectedRevision": revision,
             "generatedAtMs": 1_791_282_047_123_i64,
             "coverageGaps": [],
+            "remoteMachine": null,
             "chains": null,
             "scope": {
                 "sourceMode": "files",

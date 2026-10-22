@@ -463,6 +463,7 @@ fn request_json() -> serde_json::Value {
         "expectedRevision": 3,
         "generatedAtMs": FIXTURE_NOW_MS,
         "coverageGaps": [],
+        "remoteMachine": null,
         "chains": null,
         "scope": {
             "sourceMode": "files",
@@ -2763,10 +2764,10 @@ fn a_remote_host_before_any_of_the_classic_logs_is_a_machine_token_whatever_its_
 }
 
 #[test]
-fn a_remote_host_the_session_never_heard_from_is_printed_as_written_before_a_custom_channel() {
-    // The limit, pinned. `host/Channel` and `Provider/Type` have the same shape, so a host that
-    // delivered no event and fronts a channel that is not one of Windows' classic logs cannot be
-    // told from a provider. The banner does not promise otherwise.
+fn a_remote_host_the_request_does_not_name_is_printed_as_written_before_a_custom_channel() {
+    // The limit, pinned for a request with no remote machine. `host/Channel` and
+    // `Provider/Type` have the same shape, so a host that delivered no event and fronts a
+    // channel that is not one of Windows' classic logs cannot be told from a provider.
     let gaps = vec![gap(
         "HOST-0009/Custom Channel",
         CoverageState::AccessDenied,
@@ -2781,6 +2782,121 @@ fn a_remote_host_the_session_never_heard_from_is_printed_as_written_before_a_cus
         coverage_lines(&report),
         ["access denied: HOST-0009/Custom Channel: Access is denied."]
     );
+}
+
+/// A report whose source is remote: the host is named by the request, and appears in a coverage
+/// source, in a gap detail, in a finding and in an event's text. No origin records it.
+fn remote_report(remote_machine: serde_json::Value) -> String {
+    let mut value = request_json();
+    value["remoteMachine"] = remote_machine;
+    let mut one = finding(
+        "a",
+        FindingClass::Symptom,
+        FindingSeverity::Info,
+        FindingConfidence::Low,
+        "Query",
+    );
+    one.summary = "The query to HOST-0009 returned nothing.".to_owned();
+    let gaps = vec![gap(
+        "HOST-0009/Custom Channel",
+        CoverageState::AccessDenied,
+        "cannot open remote session to HOST-0009: The RPC server is unavailable.",
+    )];
+    let item = event_item(
+        FIXTURE_NOW_MS,
+        TimelineSeverity::Error,
+        1001,
+        "Application",
+        "Fixture.Provider",
+        Some("HOST-0001"),
+        1,
+        "Forwarded from HOST-0009 by the collector.",
+    );
+    render_with(
+        &request_from(value),
+        &snapshot_of(vec![item], 1),
+        &summary_of(vec![one], gaps),
+    )
+}
+
+#[test]
+fn the_remote_machine_the_request_names_is_a_known_machine_wherever_it_appears() {
+    let report = remote_report(json!("HOST-0009"));
+    let token = host("HOST-0009");
+    assert_eq!(
+        coverage_lines(&report),
+        [format!(
+            "access denied: {token}/Custom Channel: cannot open remote session to {token}: \
+             The RPC server is unavailable."
+        )]
+    );
+    assert!(
+        report.contains(&format!(
+            "- Summary: The query to {token} returned nothing."
+        )),
+        "{report}"
+    );
+    assert!(
+        report.contains(&format!("Forwarded from {token} by the collector.")),
+        "{report}"
+    );
+    assert!(!leaks(&report, "HOST-0009"), "{report}");
+    // Named or not, the host is not an origin of the session, so the header does not list it.
+    assert!(report.contains(&format!("- Machines (1): {}\n", host("HOST-0001"))));
+}
+
+#[test]
+fn a_request_without_a_remote_machine_keeps_the_text_as_it_was() {
+    // `null` and an absent key both mean a local source: nothing is added to what is known.
+    let report = remote_report(json!(null));
+    assert!(
+        report.contains("cannot open remote session to HOST-0009:"),
+        "{report}"
+    );
+    assert!(report.contains("- Summary: The query to HOST-0009 returned nothing."));
+    assert!(report.contains("Forwarded from HOST-0009 by the collector."));
+    assert!(
+        coverage_lines(&report)[0].starts_with("access denied: HOST-0009/Custom Channel: "),
+        "{report}"
+    );
+    let mut value = request_json();
+    value.as_object_mut().unwrap().remove("remoteMachine");
+    assert!(request_from(value).remote_machine.is_none());
+}
+
+#[test]
+fn the_remote_machine_is_bounded_and_read_by_what_it_reads_as() {
+    let with = |remote: serde_json::Value| {
+        let mut value = request_json();
+        value["remoteMachine"] = remote;
+        value
+    };
+    request_from(with(json!("HOST-0009")))
+        .validate()
+        .expect("a name is valid");
+    request_from(with(json!("h".repeat(255))))
+        .validate()
+        .expect("the longest name is valid");
+    for (name, remote) in [
+        ("a name over the cap", json!("h".repeat(256))),
+        ("an empty name", json!("")),
+        ("a blank name", json!("  \t")),
+    ] {
+        let error = request_from(with(remote)).validate().expect_err(name);
+        assert!(error.contains("remote machine"), "{name}: {error}");
+    }
+    // Not a string, and not a key the type has.
+    assert!(
+        serde_json::from_value::<EventLogAnalysisReportRequest>(with(json!(7))).is_err(),
+        "a number was accepted"
+    );
+    let mut value = request_json();
+    value["remoteMachineName"] = json!("HOST-0009");
+    assert!(serde_json::from_value::<EventLogAnalysisReportRequest>(value).is_err());
+    // An invisible character inside the name does not keep it from matching the same name.
+    let report = remote_report(json!("HOST\u{200b}-0009"));
+    assert!(!leaks(&report, "HOST-0009"), "{report}");
+    assert!(report.contains(&format!("Forwarded from {} by", host("HOST-0009"))));
 }
 
 #[test]
