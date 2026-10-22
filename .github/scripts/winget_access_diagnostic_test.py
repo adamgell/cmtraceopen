@@ -97,7 +97,9 @@ class WorkflowTests(unittest.TestCase):
     def test_diagnostic_and_publisher_are_mutually_exclusive(self):
         workflow = (ROOT / ".github/workflows/winget-publish.yml").read_text()
         self.assertIn("diagnostic_only:\n", workflow)
-        self.assertIn("if: ${{ github.event_name != 'workflow_dispatch' || !inputs.diagnostic_only }}", workflow)
+        self.assertIn("if: ${{ (github.event_name == 'release' && !github.event.release.draft && !github.event.release.prerelease) || (github.event_name == 'workflow_dispatch' && !inputs.diagnostic_only) }}", workflow)
+        publisher = workflow.split("  winget:\n")[1].split("  diagnose-access:\n")[0]
+        self.assertLess(publisher.index("stable-release-guard.py"), publisher.index("- name: Install komac"))
         self.assertIn("if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_only }}", workflow)
         diagnostic = workflow.split("  diagnose-access:\n")[1]
         self.assertIn("environment: release", diagnostic)
