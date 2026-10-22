@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
 import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
 import { countByLevel, EVTX_LEVELS } from "./evtx-filter";
+import { displayReference } from "./evtx-engine-compaction-test-fixtures";
 import {
   buildEvidenceIndex,
   buildSameIdSeries,
-  correlationBreakdown,
   describeScopeCounts,
   DIAGNOSIS_NESTED_ROW_CAP,
   DIAGNOSIS_PROJECTION_GAP_SOURCE,
+  engineRecordIdentity,
   eventEvidenceLabel,
   evidenceMatchesRecord,
   findRecordById,
@@ -16,6 +17,7 @@ import {
   formatCount,
   redactedValueMatches,
   neighborRecordId,
+  recordsForIdentity,
   scopeForFinding,
   summarizeRecords,
   summaryIsBounded,
@@ -285,6 +287,36 @@ describe("findingForRecord", () => {
     const other = record(1, { provider: `${longProvider}-b`, channel: longChannel });
     expect(findingForRecord([finding], other, [other])).toBeNull();
   });
+  it("matches evidence the diagnosis compacted at 4096 bytes (compact_display_text), and only the record it was compacted from", () => {
+    const longSource = `C:\\Users\\case.user\\Cases\\${"x".repeat(5000)}.evtx`;
+    const longProvider = `Provider-${"y".repeat(4200)}`;
+    const longChannel = `Channel/${"z".repeat(4100)}`;
+    const longMachine = `HOST-${"m".repeat(4300)}`;
+    const rec = record(1, {
+      sourceLabel: longSource,
+      provider: longProvider,
+      channel: longChannel,
+      computer: longMachine,
+    });
+    const compacted = {
+      // The engine compacts first and redacts the kept prefix afterwards.
+      source: displayReference(longSource).replace("case.user", USER),
+      provider: displayReference(longProvider),
+      channel: displayReference(longChannel),
+      machine: displayReference(longMachine),
+    };
+    for (const text of Object.values(compacted)) expect(text).toMatch(/\.\.\.\[\d+ bytes; digest=[0-9a-f]{8}\]$/);
+    const finding = findingWith(evidence(compacted));
+    expect(findingForRecord([finding], rec, [rec])).toBe(finding);
+    // The same prefix with another tail has another length and digest, and is not the record.
+    for (const other of [
+      record(1, { sourceLabel: `${longSource}z`, provider: longProvider, channel: longChannel, computer: longMachine }),
+      record(1, { sourceLabel: longSource, provider: `${longProvider}z`, channel: longChannel, computer: longMachine }),
+      record(1, { sourceLabel: longSource, provider: longProvider, channel: longChannel, computer: `${longMachine}z` }),
+    ]) {
+      expect(findingForRecord([finding], other, [other])).toBeNull();
+    }
+  });
   it("rejects a different raw machine or source around a token", () => {
     const wrong = findingWith(evidence({ machine: "PC-2" }));
     expect(findingForRecord([wrong], selected, loaded)).toBeNull();
@@ -343,20 +375,6 @@ describe("eventEvidenceLabel", () => {
   });
 });
 
-describe("correlationBreakdown", () => {
-  it("keeps coverage-blocked, not-causal and timestamp-only edges out of the correlation total", () => {
-    const edge = (status: string) => ({ status, left: "l", basis: "b", candidateIds: [], evidence: [] });
-    const summary = {
-      correlations: [edge("exact"), edge("candidate"), edge("coverageBlocked"), edge("notCausal")],
-      overview: { correlationCount: 4 },
-    } as unknown as DiagnosisSummary;
-    const breakdown = correlationBreakdown(summary);
-    expect(breakdown.correlations).toBe(2);
-    expect(breakdown.coverageBlocked).toBe(1);
-    expect(breakdown.complete).toBe(true);
-  });
-});
-
 describe("formatCount", () => {
   it("uses the locale's thousands separator like the status bar", () => {
     expect(formatCount(1331)).toBe((1331).toLocaleString());
@@ -370,6 +388,76 @@ describe("findRecordById", () => {
     expect(findRecordById(records, 7)).toBe(records[2]);
     expect(findRecordById(records, 99)).toBeNull();
     expect(findRecordById(records, null)).toBeNull();
+  });
+});
+
+describe("engineRecordIdentity (the engine's rule, timeline.rs stable_event_id)", () => {
+  it.each([
+    ["7", 7, "7"],
+    [" 7", 7, "7"],
+    ["  42\t", 0, "42"],
+    ["007", 7, "007"],
+    ["000", 7, "7"],
+    ["0", 7, "7"],
+    ["", 7, "7"],
+    ["x7", 7, "7"],
+    ["7x", 7, "7"],
+    ["-7", 7, "7"],
+    [null, 7, "7"],
+    [undefined, 7, "7"],
+    ["000", 0, null],
+    ["0", 0, null],
+    ["", 0, null],
+    [null, 0, null],
+    ["x", 0, null],
+    [" ", 0, null],
+    ["x", -3, null],
+    ["x", Number.NaN, null],
+  ] as [string | null | undefined, number, string | null][])(
+    "reads text %j with number %d as %j",
+    (text, numericId, expected) => {
+      expect(engineRecordIdentity(text, numericId)).toBe(expected);
+    },
+  );
+
+  it("takes the text over a different number, as the engine does", () => {
+    expect(engineRecordIdentity("42", 7)).toBe("42");
+  });
+
+  it("reads a number past the safe range as 2^53, which is how the transport sends it", () => {
+    expect(engineRecordIdentity(null, Number.MAX_SAFE_INTEGER + 5)).toBe("9007199254740992");
+    expect(engineRecordIdentity("9007199254740993", 9007199254740992)).toBe("9007199254740993");
+  });
+
+  it("keys a record by it, so padded, zero and non-digit text all land on the record the number names", () => {
+    const plain = record(1, { eventId: 7, eventRecordId: 7, eventRecordIdText: "7" });
+    const padded = record(2, { eventId: 7, eventRecordId: 7, eventRecordIdText: " 7" });
+    const zero = record(3, { eventId: 7, eventRecordId: 7, eventRecordIdText: "000" });
+    const text = record(4, { eventId: 7, eventRecordId: 7, eventRecordIdText: "x7" });
+    const index = buildEvidenceIndex([plain, padded, zero, text]);
+    expect(recordsForIdentity(index, 7, "7")).toEqual([plain, padded, zero, text]);
+  });
+});
+
+describe("recordsForIdentity", () => {
+  it("returns every loaded record for one event ID and record identity, in load order", () => {
+    const first = record(1, { eventId: 7, eventRecordId: 42, eventRecordIdText: "42" });
+    const twin = record(2, { eventId: 7, eventRecordId: 42, eventRecordIdText: "42", sourceLabel: "b.evtx" });
+    const index = buildEvidenceIndex([first, twin, record(3, { eventId: 8, eventRecordId: 42 })]);
+    expect(recordsForIdentity(index, 7, "42")).toEqual([first, twin]);
+  });
+
+  it("separates the event ID from the identity, so 7 and 42 is not 74 and 2", () => {
+    const index = buildEvidenceIndex([record(1, { eventId: 7, eventRecordId: 42 })]);
+    expect(recordsForIdentity(index, 74, "2")).toEqual([]);
+    expect(recordsForIdentity(index, 7, "42")).toHaveLength(1);
+  });
+
+  it("is empty for an identity nothing loaded has, and for a record the provider never numbered", () => {
+    const unnumbered = record(1, { eventRecordId: 0, eventRecordIdText: "0" });
+    const index = buildEvidenceIndex([unnumbered]);
+    expect(recordsForIdentity(index, 100, "0")).toEqual([]);
+    expect(recordsForIdentity(index, 100, "5")).toEqual([]);
   });
 });
 
@@ -388,6 +476,14 @@ describe("scopeForFinding", () => {
     const scope = find(finding, loaded);
     expect(names(scope.records)).toEqual([1, 3]);
     expect(scope.records[0]).toBe(loaded[0]);
+    expect(scope.counts).toEqual({ notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false });
+  });
+
+  it("resolves a record whose source label the engine compacted in the evidence, counting nothing as not loaded", () => {
+    const longSource = `bundle\\${"d".repeat(5000)}\\System.evtx`;
+    const loaded = [record(1, { sourceLabel: longSource }), record(2)];
+    const scope = find(findingWith(evidence({ recordId: 1001, source: displayReference(longSource) })), loaded);
+    expect(names(scope.records)).toEqual([1]);
     expect(scope.counts).toEqual({ notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false });
   });
 
@@ -543,6 +639,66 @@ describe("scopeForFinding", () => {
   });
 });
 
+describe("evidence identity follows the engine's rule, as the record and the origin do (J3)", () => {
+  const scopeOf = (evidenceValue: Record<string, unknown>, loaded: EvtxRecord[]) =>
+    scopeForFinding(findingWith(evidence(evidenceValue)), buildEvidenceIndex(loaded), false);
+
+  it("reads evidence with all-zero text and no number as having no usable identity, never as not loaded", () => {
+    const scope = scopeOf({ recordIdText: "000", recordId: 0 }, [record(1)]);
+    expect(scope.counts).toEqual({ notLoaded: 0, noUsableIdentity: 1, ambiguous: 0, bounded: false });
+    expect(scope.references).toEqual([]);
+  });
+
+  it("ignores all-zero evidence text and falls back to the number, as the engine does", () => {
+    const loaded = record(7, { eventRecordId: 7, eventRecordIdText: "7" });
+    const scope = scopeOf({ recordIdText: "000", recordId: 7 }, [loaded]);
+    expect(scope.references).toEqual([[loaded]]);
+    expect(evidenceMatchesRecord(evidence({ recordIdText: "000", recordId: 7 }).value, loaded)).toBe(true);
+  });
+
+  it("falls back to the fallback identity, which a record cannot reproduce, when the text is all zero", () => {
+    const loaded = record(7, { eventRecordId: 7, eventRecordIdText: "7" });
+    const scope = scopeOf({ recordIdText: "000", fallbackIdentity: "abc123", recordId: 7 }, [loaded]);
+    expect(scope.counts).toMatchObject({ noUsableIdentity: 1, notLoaded: 0 });
+    expect(evidenceMatchesRecord(evidence({ fallbackIdentity: "abc123", recordId: 7 }).value, loaded)).toBe(false);
+  });
+
+  it("lets usable text win over a fallback identity and over a different number", () => {
+    const loaded = record(7, { eventRecordId: 42, eventRecordIdText: "42" });
+    const value = evidence({ recordIdText: "42", fallbackIdentity: "abc123", recordId: 7 }).value;
+    expect(evidenceMatchesRecord(value, loaded)).toBe(true);
+  });
+
+  it("reads padded evidence text as the trimmed text, on either side", () => {
+    const plain = record(1, { eventRecordId: 7, eventRecordIdText: "7" });
+    const padded = record(2, { eventRecordId: 7, eventRecordIdText: " 7" });
+    for (const text of [" 7", "7", "  7\t"]) {
+      const scope = scopeOf({ recordIdText: text, recordId: 7 }, [plain, padded]);
+      expect(scope.references, JSON.stringify(text)).toEqual([[plain, padded]]);
+      expect(scope.counts.ambiguous, JSON.stringify(text)).toBe(1);
+    }
+  });
+
+  it("takes padded text as the text, not as a reason to use the number", () => {
+    // The number differs from the text, so only the trimmed text names this record.
+    const loaded = record(5, { eventRecordId: 42, eventRecordIdText: "42" });
+    expect(evidenceMatchesRecord(evidence({ recordIdText: " 42 ", recordId: 7 }).value, loaded)).toBe(true);
+    expect(evidenceMatchesRecord(evidence({ recordIdText: " 43 ", recordId: 42 }).value, loaded)).toBe(false);
+  });
+
+  it("matches a loaded record whose own text is all zero by the number, from either shape of evidence", () => {
+    const zero = record(3, { eventRecordId: 7, eventRecordIdText: "000" });
+    for (const evidenceValue of [{ recordIdText: "7", recordId: 7 }, { recordId: 7 }, { recordIdText: "000", recordId: 7 }]) {
+      expect(scopeOf(evidenceValue, [zero]).references, JSON.stringify(evidenceValue)).toEqual([[zero]]);
+    }
+  });
+
+  it("keeps a number-only reference with no number as no usable identity", () => {
+    const scope = scopeOf({ recordId: 0 }, [record(1)]);
+    expect(scope.counts).toMatchObject({ noUsableIdentity: 1, notLoaded: 0 });
+  });
+});
+
 describe("summaryIsBounded", () => {
   const gap = (source: string) => ({ id: "g", source, state: "capped" as const, detail: "", evidence: [] });
   const summary = (overrides: Partial<DiagnosisSummary>): DiagnosisSummary =>
@@ -570,12 +726,12 @@ describe("describeScopeCounts", () => {
   });
 
   it("says nothing when the scope fell short in no way", () => {
-    expect(describeScopeCounts(counts({}))).toEqual([]);
+    expect(describeScopeCounts(counts({}), "finding")).toEqual([]);
   });
 
   it("names each class on its own line, in a fixed order", () => {
     expect(
-      describeScopeCounts(counts({ notLoaded: 2, noUsableIdentity: 1, ambiguous: 3, bounded: true })),
+      describeScopeCounts(counts({ notLoaded: 2, noUsableIdentity: 1, ambiguous: 3, bounded: true }), "finding"),
     ).toEqual([
       "2 cited events are not loaded.",
       "1 cited event cannot be matched to a loaded event: no usable record identity.",
@@ -584,9 +740,78 @@ describe("describeScopeCounts", () => {
     ]);
   });
 
+  it("names references it could not look for apart from ones that are not loaded, and claims no absence", () => {
+    expect(describeScopeCounts(counts({ unresolved: 3 }), "finding")).toEqual([
+      "3 cited entries could not be matched to a record because their timeline items were not read.",
+    ]);
+    expect(describeScopeCounts(counts({ unresolved: 1 }), "finding")).toEqual([
+      "1 cited entry could not be matched to a record because its timeline item was not read.",
+    ]);
+    const text = describeScopeCounts(counts({ unresolved: 5 }), "finding").join(" ");
+    expect(text).not.toMatch(/not loaded|no record|absent|missing/);
+  });
+
+  it("puts the unresolved sentence after no usable identity and before ambiguous", () => {
+    expect(
+      describeScopeCounts(counts({ notLoaded: 1, noUsableIdentity: 1, unresolved: 1, ambiguous: 1 }), "finding"),
+    ).toEqual([
+      "1 cited event is not loaded.",
+      "1 cited event cannot be matched to a loaded event: no usable record identity.",
+      "1 cited entry could not be matched to a record because its timeline item was not read.",
+      "1 cited reference matches more than one loaded event. Every match is included.",
+    ]);
+  });
+
+  describe("for a chain scope", () => {
+    it("names each class in a chain's words, in the same fixed order", () => {
+      expect(
+        describeScopeCounts(
+          counts({ notLoaded: 2, noUsableIdentity: 1, unresolved: 4, ambiguous: 3, bounded: true }),
+          "chain",
+        ),
+      ).toEqual([
+        "2 events of this chain are not loaded.",
+        "1 event of this chain cannot be matched to a loaded event: no usable record identity.",
+        "4 entries of this chain could not be matched to a record because their timeline items were not read.",
+        "3 entries of this chain match more than one loaded event. Every match is included.",
+        "Edges were not all loaded, so this chain may include more events.",
+      ]);
+    });
+
+    it("uses the singular for one", () => {
+      expect(describeScopeCounts(counts({ notLoaded: 1 }), "chain")).toEqual(["1 event of this chain is not loaded."]);
+      expect(describeScopeCounts(counts({ unresolved: 1 }), "chain")).toEqual([
+        "1 entry of this chain could not be matched to a record because its timeline item was not read.",
+      ]);
+      expect(describeScopeCounts(counts({ ambiguous: 1 }), "chain")).toEqual([
+        "1 entry of this chain matches more than one loaded event. Every match is included.",
+      ]);
+    });
+
+    it("never speaks of a finding, a citation or a diagnosis response", () => {
+      const text = describeScopeCounts(
+        counts({ notLoaded: 2, noUsableIdentity: 1, unresolved: 4, ambiguous: 3, bounded: true }),
+        "chain",
+      ).join(" ");
+      expect(text).not.toMatch(/cited|cite|finding|diagnosis response/i);
+    });
+
+    it("claims no absence for an entry whose item was not read", () => {
+      const text = describeScopeCounts(counts({ unresolved: 5 }), "chain").join(" ");
+      expect(text).not.toMatch(/not loaded|no record|absent|missing/);
+    });
+
+    it("keeps a finding's words for the same counts", () => {
+      const same = counts({ notLoaded: 2, bounded: true });
+      expect(describeScopeCounts(same, "finding")).not.toEqual(describeScopeCounts(same, "chain"));
+      expect(describeScopeCounts(same, "finding").join(" ")).toMatch(/cited events are not loaded/);
+      expect(describeScopeCounts(same, "finding").join(" ")).toMatch(/diagnosis response is bounded/);
+    });
+  });
+
   it("uses the singular for one", () => {
-    expect(describeScopeCounts(counts({ notLoaded: 1 }))).toEqual(["1 cited event is not loaded."]);
-    expect(describeScopeCounts(counts({ ambiguous: 1 }))).toEqual([
+    expect(describeScopeCounts(counts({ notLoaded: 1 }), "finding")).toEqual(["1 cited event is not loaded."]);
+    expect(describeScopeCounts(counts({ ambiguous: 1 }), "finding")).toEqual([
       "1 cited reference matches more than one loaded event. Every match is included.",
     ]);
   });

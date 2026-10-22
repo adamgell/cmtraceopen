@@ -120,3 +120,30 @@ export function boundUtf8WithDigest(value: string, byteLimit: number): string {
     scan.prefixHasLoneSurrogate ? replaceLoneSurrogates(prefix) : prefix
   }${suffix}`;
 }
+
+export interface Utf8Fingerprint {
+  /** The UTF-8 length of the whole value. */
+  byteLength: number;
+  /** Both 32-bit lanes as 16 hex digits: the engine's `compact_text_digest` (timeline.rs). */
+  digest: string;
+  /** The first lane alone, 8 hex digits: the engine's `display_text_digest` (analysis_session.rs). */
+  firstLaneDigest: string;
+  /** The longest prefix of whole code points that fits in `prefixByteLimit` UTF-8 bytes. */
+  prefix: string;
+}
+
+/**
+ * What the engine's own text compaction reads off a value: its UTF-8 length, its digest, and the
+ * prefix it keeps for a given byte budget, cut back to a code point boundary. A lone surrogate
+ * counts as U+FFFD and is replaced by it in the prefix, as in `boundUtf8WithDigest`.
+ */
+export function utf8Fingerprint(value: string, prefixByteLimit: number): Utf8Fingerprint {
+  const scan = scanUtf8(value, Math.max(0, prefixByteLimit));
+  const prefix = value.slice(0, scan.prefixEnd);
+  return {
+    byteLength: scan.byteLength,
+    digest: textDigest(scan.firstDigestLane, scan.secondDigestLane),
+    firstLaneDigest: scan.firstDigestLane.toString(16).padStart(8, "0"),
+    prefix: scan.prefixHasLoneSurrogate ? replaceLoneSurrogates(prefix) : prefix,
+  };
+}

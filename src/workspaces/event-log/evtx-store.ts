@@ -813,7 +813,12 @@ function pruneRecordScope(
     ...scope,
     records: new Set(kept),
     references,
-    counts: countScopeReferences(references, scope.counts.noUsableIdentity, scope.counts.bounded),
+    counts: countScopeReferences(
+      references,
+      scope.counts.noUsableIdentity,
+      scope.counts.bounded,
+      scope.counts.unresolved,
+    ),
   };
 }
 

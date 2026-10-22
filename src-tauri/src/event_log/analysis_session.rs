@@ -2745,6 +2745,91 @@ mod tests {
             encoded.len()
         );
     }
+
+    /// The same fixture `timeline.rs` checks and `evtx-engine-compaction.test.ts` reads.
+    fn engine_compaction_vectors() -> serde_json::Value {
+        serde_json::from_str(include_str!(
+            "../../../src/workspaces/event-log/__fixtures__/engine-compaction-vectors.json"
+        ))
+        .expect("the engine compaction vectors parse")
+    }
+
+    #[test]
+    fn display_text_compaction_matches_the_committed_vectors() {
+        let vectors = engine_compaction_vectors();
+        let cases = vectors["displayText"]
+            .as_array()
+            .expect("displayText cases");
+        assert!(cases.len() >= 5, "the vectors lost cases");
+        for case in cases {
+            let name = case["name"].as_str().expect("case name");
+            let input = case["input"].as_str().expect("case input");
+            let mut compacted = input.to_string();
+            let mut stats = DiagnosisDisplayProjectionStats::default();
+            compact_display_text(&mut compacted, &mut stats);
+            assert_eq!(compacted, case["compacted"].as_str().unwrap(), "{name}");
+            assert_eq!(
+                stats.compacted_text_fields == 1,
+                case["changed"].as_bool().unwrap(),
+                "{name}"
+            );
+            assert_eq!(
+                input.len() as u64,
+                case["inputBytes"].as_u64().unwrap(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_identities_match_the_committed_vectors() {
+        use cmtraceopen_parser::unified_timeline::TimelineOrigin;
+
+        let vectors = engine_compaction_vectors();
+        let cases = vectors["identities"].as_array().expect("identity cases");
+        assert!(cases.len() >= 23, "the vectors lost cases");
+        for case in cases {
+            let name = case["name"].as_str().expect("case name");
+            let mut source = record(1, 1_000, "m");
+            source.event_record_id = case["id"].as_u64().expect("case id");
+            source.event_record_id_text = case["text"].as_str().map(str::to_string);
+            source.origin_kind = match case["originKind"].as_str().unwrap() {
+                "log" => EvtxOriginKind::Log,
+                _ => EvtxOriginKind::Event,
+            };
+            let malformed = matches!(
+                diagnosis_record_identity(&source),
+                DiagnosisRecordIdentity::Malformed { .. }
+            );
+            assert_eq!(malformed, case["malformed"].as_bool().unwrap(), "{name}");
+            if matches!(source.origin_kind, EvtxOriginKind::Event) && malformed {
+                sanitize_malformed_timeline_record(&mut source);
+            }
+            let origin = match crate::event_log::timeline::from_event(&source) {
+                Ok(item) => item.origin,
+                Err(item) => item.origin,
+            };
+            let (record_id_text, record_id) = match origin {
+                TimelineOrigin::Event {
+                    record_id_text,
+                    record_id,
+                    ..
+                } => (record_id_text, record_id),
+                TimelineOrigin::Log { record_id, .. } => (None, record_id),
+                _ => panic!("{name}: unexpected origin variant"),
+            };
+            assert_eq!(
+                record_id_text.as_deref(),
+                case["originRecordIdText"].as_str(),
+                "{name} record id text"
+            );
+            assert_eq!(
+                record_id,
+                case["originRecordId"].as_u64().unwrap(),
+                "{name} record id"
+            );
+        }
+    }
 }
 
 /// The Event Logs screenshot harness replies, and the always-on test that keeps them honest.

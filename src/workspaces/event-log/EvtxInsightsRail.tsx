@@ -15,7 +15,6 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
-  useState,
   type ReactNode,
 } from "react";
 import { Tab, TabList, tokens } from "@fluentui/react-components";
@@ -35,6 +34,8 @@ import { findRecordById, formatCount } from "./evtx-insights-data";
 import { useRailTextColors } from "./evtx-rail-text";
 import { useEvtxStore } from "./evtx-store";
 import type { DiagnosisFinding, DiagnosisSummary, EvtxRecord } from "./types";
+import { DERIVATION_THROTTLE_MS, useThrottledValue } from "./evtx-throttle";
+import type { ScopeDisclosureInput } from "./evtx-correlation-copy";
 
 interface EvtxInsightsRailProps {
   summary: DiagnosisSummary | null;
@@ -44,15 +45,16 @@ interface EvtxInsightsRailProps {
   pending?: boolean;
   /** Why the last diagnosis build failed. */
   error?: string | null;
-  /** How many text-log entries the diagnosis session was given (the event criteria never narrow them). */
-  textLogCount?: number;
+  /**
+   * What the session `summary` came from was built from: the visible, loaded and text-log counts,
+   * read once when the session was published. The workspace gives the Correlation view the same
+   * object, so the two surfaces state one scope for one session. Null when there is none.
+   */
+  scope?: ScopeDisclosureInput | null;
 }
 
 /** Tabs the rail can show today, in order. Phase 10c adds "chains" between the two. */
 const RAIL_TABS: readonly EvtxRailTabId[] = ["insights", "details"];
-
-/** Record summaries publish at most once per this long (spec section 11, the 75 ms precedent). */
-export const INSIGHTS_DEBOUNCE_MS = 75;
 
 /**
  * The one event ID a quick filter is showing, or null: the applied filter is in Event IDs mode, shows
@@ -84,34 +86,6 @@ export function quickFilterAfterEventIdClick(
 const NO_RECORDS: readonly EvtxRecord[] = [];
 const NO_FINDINGS: readonly DiagnosisFinding[] = [];
 
-/**
- * `value`, published at most once per `delayMs`: the first change starts a timer that publishes the
- * latest value when it fires, and further changes do not restart it (the analysis pump's precedent).
- * A pure trailing debounce would starve the cards while a tail never goes quiet for the delay. The
- * first value is immediate.
- */
-export function useThrottledValue<T>(value: T, delayMs: number): T {
-  const [published, setPublished] = useState(value);
-  const latestRef = useRef(value);
-  const timerRef = useRef<number | null>(null);
-  latestRef.current = value;
-  useEffect(() => {
-    if (Object.is(published, value) || timerRef.current !== null) return;
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = null;
-      setPublished(latestRef.current);
-    }, delayMs);
-  }, [value, published, delayMs]);
-  useEffect(
-    () => () => {
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    },
-    [],
-  );
-  return published;
-}
-
 function Count({ value, size, color }: { value: number; size: number; color: string }) {
   return (
     <span
@@ -133,7 +107,7 @@ export function EvtxInsightsRail({
   records,
   pending = false,
   error = null,
-  textLogCount = 0,
+  scope = null,
 }: EvtxInsightsRailProps) {
   const railTab = useEvtxLayoutStore((s) => s.railTab);
   const setRailTab = useEvtxLayoutStore((s) => s.setRailTab);
@@ -168,20 +142,21 @@ export function EvtxInsightsRail({
 
   // The diagnosis is cleared while it rebuilds. Keep showing the previous build, marked as
   // updating, so the reader's place survives a live-tail batch; drop it on failure or no input.
-  // The visible-event count is stored WITH the summary, so the scope line states the scope the
-  // shown numbers were built from, never the new count beside old numbers.
+  // The session's scope is stored WITH the summary, so the scope line states the scope the shown
+  // numbers were built from, never the new count beside old numbers. It is the workspace's scope
+  // for that session, not the store's records now: the loaded count is read once, at the publish.
   const lastBuildRef = useRef<{
     summary: DiagnosisSummary;
-    scopeCount: number;
+    scopeCount: number | null;
     textLogCount: number;
-    loadedCount: number;
+    loadedCount: number | undefined;
   } | null>(null);
   if (summary && lastBuildRef.current?.summary !== summary) {
     lastBuildRef.current = {
       summary,
-      scopeCount: records.length,
-      textLogCount,
-      loadedCount: storeRecords.length,
+      scopeCount: scope?.visibleCount ?? null,
+      textLogCount: scope?.textLogCount ?? 0,
+      loadedCount: scope?.loadedCount,
     };
   }
   if (error || (!summary && !pending)) lastBuildRef.current = null;
@@ -191,7 +166,7 @@ export function EvtxInsightsRail({
   // Record-derived cards are skipped while the rail cannot be seen. Everything derived from the
   // records (cards, Details order, Same ID series) follows the debounced set (spec section 11).
   const insightsActive = railVisible && activeTab === "insights";
-  const debouncedRecords = useThrottledValue(records, INSIGHTS_DEBOUNCE_MS);
+  const debouncedRecords = useThrottledValue(records, DERIVATION_THROTTLE_MS);
   const cardRecords = insightsActive ? debouncedRecords : NO_RECORDS;
 
   // A finding from the previous build is not evidence for the records now shown, so the Details

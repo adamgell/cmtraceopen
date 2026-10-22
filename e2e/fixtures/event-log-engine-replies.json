@@ -1,11 +1,11 @@
 {
   "about": "Replies captured from the real event-log analysis engine (EventLogAnalysisSession) over the records in event-log-data.ts. Do not edit by hand. Regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`; engineCommit is the commit the engine was built from.",
   "provenance": {
-    "engineCommit": "434d2fe51361c238f7b1e9cf0e0b3471d7fdca9c",
+    "engineCommit": "822bbb25c3cfa1ff893cb95289cec566d4ff23ec",
     "engineTreeDirty": false,
     "capturedBy": "e2e/fixtures/capture-event-log-replies.mjs",
-    "inputSha256": "da1e4812542fcd92895e8151f3cf130f8d5d7b396234afcdf9d1da5921182544",
-    "engineSourceSha256": "8c7e60d7632809f8a0a23a2859207d6bab1789c6675d5716caf80247a6387251"
+    "inputSha256": "772a7cf87e68dace166c1bb040bf33f8112693dd160d24f9cf2cd5206dd7dc72",
+    "engineSourceSha256": "b7e604242dfa2a4a223ab32d4f293b1173b50c498282ce46a683c1302aefe273"
   },
   "sessionId": "00000000-0000-4000-8000-000000000828",
   "appendChunkRecordCounts": [
@@ -61,8 +61,8 @@
     "eventItems": 1331,
     "logItems": 0,
     "totalUnplaced": 0,
-    "totalEdges": 0,
-    "totalCoverageGaps": 0,
+    "totalEdges": 7,
+    "totalCoverageGaps": 1,
     "finalized": true
   },
   "timelinePages": [
@@ -78,8 +78,8 @@
         "eventItems": 1331,
         "logItems": 0,
         "totalUnplaced": 0,
-        "totalEdges": 0,
-        "totalCoverageGaps": 0,
+        "totalEdges": 7,
+        "totalCoverageGaps": 1,
         "items": [
           {
             "timestampMs": 1791282047000,
@@ -8536,6 +8536,7 @@
               "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
               "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
               "processId": null,
+              "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}",
               "eventId": 813,
               "recordId": 89623,
               "recordIdText": "89623"
@@ -8626,6 +8627,7 @@
               "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
               "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
               "processId": null,
+              "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}",
               "eventId": 72,
               "recordId": 89638,
               "recordIdText": "89638"
@@ -8644,6 +8646,7 @@
               "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
               "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
               "processId": null,
+              "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}",
               "eventId": 76,
               "recordId": 89641,
               "recordIdText": "89641"
@@ -18083,9 +18086,229 @@
           }
         ],
         "unplacedPreview": [],
-        "edgesPreview": [],
-        "coverageGapsPreview": [],
-        "serializedBytes": 505000
+        "edgesPreview": [
+          {
+            "id": "edge|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638|activityId|38:{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}",
+            "fromId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623",
+            "toId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638",
+            "key": {
+              "kind": "activityId",
+              "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+            },
+            "strength": "ambiguous",
+            "confidence": "unknown",
+            "candidateIds": [
+              "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638",
+              "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641"
+            ],
+            "evidence": [
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623",
+                "field": "activityId",
+                "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+              },
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638",
+                "field": "activityId",
+                "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+              }
+            ],
+            "coverage": {
+              "state": "gap",
+              "gap": {
+                "source": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623",
+                "reason": "multiple exact identity candidates remain: source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638, source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641"
+              }
+            }
+          },
+          {
+            "id": "edge|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641|activityId|38:{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}",
+            "fromId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623",
+            "toId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641",
+            "key": {
+              "kind": "activityId",
+              "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+            },
+            "strength": "ambiguous",
+            "confidence": "unknown",
+            "candidateIds": [
+              "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638",
+              "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641"
+            ],
+            "evidence": [
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623",
+                "field": "activityId",
+                "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+              },
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641",
+                "field": "activityId",
+                "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+              }
+            ],
+            "coverage": {
+              "state": "gap",
+              "gap": {
+                "source": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623",
+                "reason": "multiple exact identity candidates remain: source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638, source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641"
+              }
+            }
+          },
+          {
+            "id": "edge|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641|activityId|38:{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}",
+            "fromId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638",
+            "toId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641",
+            "key": {
+              "kind": "activityId",
+              "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+            },
+            "strength": "ambiguous",
+            "confidence": "unknown",
+            "candidateIds": [
+              "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623",
+              "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641"
+            ],
+            "evidence": [
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638",
+                "field": "activityId",
+                "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+              },
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641",
+                "field": "activityId",
+                "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+              }
+            ],
+            "coverage": {
+              "state": "gap",
+              "gap": {
+                "source": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638",
+                "reason": "multiple exact identity candidates remain: source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623, source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641"
+              }
+            }
+          },
+          {
+            "id": "edge|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91912|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91915|activityId|38:{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}",
+            "fromId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91912",
+            "toId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91915",
+            "key": {
+              "kind": "activityId",
+              "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
+            },
+            "strength": "exact",
+            "confidence": "high",
+            "candidateIds": [],
+            "evidence": [
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91912",
+                "field": "activityId",
+                "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
+              },
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91915",
+                "field": "activityId",
+                "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
+              }
+            ],
+            "coverage": {
+              "state": "covered"
+            }
+          },
+          {
+            "id": "edge|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91921|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91924|activityId|38:{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}",
+            "fromId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91921",
+            "toId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91924",
+            "key": {
+              "kind": "activityId",
+              "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
+            },
+            "strength": "exact",
+            "confidence": "high",
+            "candidateIds": [],
+            "evidence": [
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91921",
+                "field": "activityId",
+                "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
+              },
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91924",
+                "field": "activityId",
+                "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
+              }
+            ],
+            "coverage": {
+              "state": "covered"
+            }
+          },
+          {
+            "id": "edge|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91945|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91948|activityId|38:{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}",
+            "fromId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91945",
+            "toId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91948",
+            "key": {
+              "kind": "activityId",
+              "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
+            },
+            "strength": "exact",
+            "confidence": "high",
+            "candidateIds": [],
+            "evidence": [
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91945",
+                "field": "activityId",
+                "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
+              },
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91948",
+                "field": "activityId",
+                "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
+              }
+            ],
+            "coverage": {
+              "state": "covered"
+            }
+          },
+          {
+            "id": "edge|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008|175:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92011|sessionId|21:fixture-session-alpha",
+            "fromId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008",
+            "toId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92011",
+            "key": {
+              "kind": "sessionId",
+              "value": "fixture-session-alpha"
+            },
+            "strength": "exact",
+            "confidence": "high",
+            "candidateIds": [],
+            "evidence": [
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008",
+                "field": "sessionId",
+                "value": "fixture-session-alpha"
+              },
+              {
+                "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92011",
+                "field": "sessionId",
+                "value": "fixture-session-alpha"
+              }
+            ],
+            "coverage": {
+              "state": "gap",
+              "gap": {
+                "source": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008",
+                "reason": "conflicting explicit identity aliases for activityId"
+              }
+            }
+          }
+        ],
+        "coverageGapsPreview": [
+          {
+            "source": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008",
+            "reason": "conflicting explicit identity aliases for activityId"
+          }
+        ],
+        "serializedBytes": 519146
       }
     },
     {
@@ -18100,8 +18323,8 @@
         "eventItems": 1331,
         "logItems": 0,
         "totalUnplaced": 0,
-        "totalEdges": 0,
-        "totalCoverageGaps": 0,
+        "totalEdges": 7,
+        "totalCoverageGaps": 1,
         "items": [
           {
             "timestampMs": 1791349914000,
@@ -22292,6 +22515,7 @@
               "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
               "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
               "processId": null,
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}",
               "eventId": 72,
               "recordId": 91912,
               "recordIdText": "91912"
@@ -22310,6 +22534,7 @@
               "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
               "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
               "processId": null,
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}",
               "eventId": 76,
               "recordId": 91915,
               "recordIdText": "91915"
@@ -22346,6 +22571,7 @@
               "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
               "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
               "processId": null,
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}",
               "eventId": 72,
               "recordId": 91921,
               "recordIdText": "91921"
@@ -22364,6 +22590,7 @@
               "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
               "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
               "processId": null,
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}",
               "eventId": 76,
               "recordId": 91924,
               "recordIdText": "91924"
@@ -22490,6 +22717,7 @@
               "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
               "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
               "processId": null,
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}",
               "eventId": 72,
               "recordId": 91945,
               "recordIdText": "91945"
@@ -22508,6 +22736,7 @@
               "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
               "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
               "processId": null,
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}",
               "eventId": 76,
               "recordId": 91948,
               "recordIdText": "91948"
@@ -22868,6 +23097,11 @@
               "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
               "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
               "processId": null,
+              "activityId": "{5ee0a1d3-a30b-4c3d-8e3f-c0de0a0b0c01}",
+              "sessionId": "fixture-session-alpha",
+              "identityConflicts": [
+                "activityId"
+              ],
               "eventId": 72,
               "recordId": 92008,
               "recordIdText": "92008"
@@ -22886,6 +23120,7 @@
               "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
               "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
               "processId": null,
+              "sessionId": "fixture-session-alpha",
               "eventId": 76,
               "recordId": 92011,
               "recordIdText": "92011"
@@ -24065,7 +24300,7 @@
         "unplacedPreview": [],
         "edgesPreview": [],
         "coverageGapsPreview": [],
-        "serializedBytes": 170487
+        "serializedBytes": 170972
       }
     }
   ],
@@ -25384,7 +25619,8 @@
               "recordId": 89623,
               "recordIdText": "89623",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
             }
           }
         ],
@@ -25404,7 +25640,8 @@
                   "recordId": 89623,
                   "recordIdText": "89623",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
                 }
               }
             ]
@@ -25431,7 +25668,8 @@
               "recordId": 89638,
               "recordIdText": "89638",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
             }
           }
         ],
@@ -25451,7 +25689,8 @@
                   "recordId": 89638,
                   "recordIdText": "89638",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
                 }
               }
             ]
@@ -25478,7 +25717,8 @@
               "recordId": 89641,
               "recordIdText": "89641",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
             }
           }
         ],
@@ -27084,7 +27324,8 @@
               "recordId": 91912,
               "recordIdText": "91912",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
             }
           }
         ],
@@ -27104,7 +27345,8 @@
                   "recordId": 91912,
                   "recordIdText": "91912",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
                 }
               }
             ]
@@ -27131,7 +27373,8 @@
               "recordId": 91915,
               "recordIdText": "91915",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
             }
           }
         ],
@@ -27158,7 +27401,8 @@
               "recordId": 91921,
               "recordIdText": "91921",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
             }
           }
         ],
@@ -27178,7 +27422,8 @@
                   "recordId": 91921,
                   "recordIdText": "91921",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
                 }
               }
             ]
@@ -27205,7 +27450,8 @@
               "recordId": 91924,
               "recordIdText": "91924",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
             }
           }
         ],
@@ -27279,7 +27525,8 @@
               "recordId": 91945,
               "recordIdText": "91945",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
             }
           }
         ],
@@ -27299,7 +27546,8 @@
                   "recordId": 91945,
                   "recordIdText": "91945",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
                 }
               }
             ]
@@ -27326,7 +27574,8 @@
               "recordId": 91948,
               "recordIdText": "91948",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
             }
           }
         ],
@@ -27353,7 +27602,8 @@
               "recordId": 92008,
               "recordIdText": "92008",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d3-a30b-4c3d-8e3f-c0de0a0b0c01}"
             }
           }
         ],
@@ -27373,7 +27623,8 @@
                   "recordId": 92008,
                   "recordIdText": "92008",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d3-a30b-4c3d-8e3f-c0de0a0b0c01}"
                 }
               }
             ]
@@ -27389,7 +27640,7 @@
         "severity": "error",
         "confidence": "medium",
         "title": "MDM enrollment status reports failure",
-        "summary": "Auto MDM Enroll: Failed (Data=Auto MDM Enroll: Failed)",
+        "summary": "Auto MDM Enroll: Failed (Data=Auto MDM Enroll: Failed, SessionId=fixture-session-alpha)",
         "evidence": [
           {
             "kind": "event",
@@ -27430,6 +27681,27 @@
         "recommendedChecks": [
           "Collect or grant access to the C:\\Fixture\\EventLogs\\Security.evtx evidence source."
         ]
+      },
+      {
+        "findingId": "coverage-gap:timeline:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008:conflicting explicit identity aliases for activityId",
+        "class": "coverageGap",
+        "severity": "info",
+        "confidence": "unknown",
+        "title": "timeline:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008 evidence coverage is incomplete",
+        "summary": "conflicting explicit identity aliases for activityId",
+        "evidence": [],
+        "coverageGaps": [
+          {
+            "id": "coverage:timeline:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008:Skipped:conflicting explicit identity aliases for activityId",
+            "source": "timeline:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008",
+            "state": "skipped",
+            "detail": "conflicting explicit identity aliases for activityId",
+            "evidence": []
+          }
+        ],
+        "recommendedChecks": [
+          "Collect or grant access to the timeline:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008 evidence source."
+        ]
       }
     ],
     "evidence": [
@@ -27466,7 +27738,8 @@
           "recordId": 89638,
           "recordIdText": "89638",
           "machine": "[host:610d3f569955ca35]",
-          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+          "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
         }
       },
       {
@@ -27550,7 +27823,8 @@
           "recordId": 91912,
           "recordIdText": "91912",
           "machine": "[host:610d3f569955ca35]",
-          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+          "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
         }
       },
       {
@@ -27562,7 +27836,8 @@
           "recordId": 91921,
           "recordIdText": "91921",
           "machine": "[host:610d3f569955ca35]",
-          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+          "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
         }
       },
       {
@@ -27574,7 +27849,8 @@
           "recordId": 91945,
           "recordIdText": "91945",
           "machine": "[host:610d3f569955ca35]",
-          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+          "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
         }
       },
       {
@@ -27586,7 +27862,8 @@
           "recordId": 92008,
           "recordIdText": "92008",
           "machine": "[host:610d3f569955ca35]",
-          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+          "activityId": "{5ee0a1d3-a30b-4c3d-8e3f-c0de0a0b0c01}"
         }
       },
       {
@@ -27598,7 +27875,8 @@
           "recordId": 89641,
           "recordIdText": "89641",
           "machine": "[host:610d3f569955ca35]",
-          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+          "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
         }
       },
       {
@@ -27682,7 +27960,8 @@
           "recordId": 91915,
           "recordIdText": "91915",
           "machine": "[host:610d3f569955ca35]",
-          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+          "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
         }
       },
       {
@@ -27694,7 +27973,8 @@
           "recordId": 91924,
           "recordIdText": "91924",
           "machine": "[host:610d3f569955ca35]",
-          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+          "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
         }
       },
       {
@@ -27706,7 +27986,8 @@
           "recordId": 91948,
           "recordIdText": "91948",
           "machine": "[host:610d3f569955ca35]",
-          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+          "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
         }
       },
       {
@@ -28066,7 +28347,8 @@
           "recordId": 89623,
           "recordIdText": "89623",
           "machine": "[host:610d3f569955ca35]",
-          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+          "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+          "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
         }
       },
       {
@@ -28367,6 +28649,13 @@
         "evidence": []
       },
       {
+        "id": "coverage:timeline:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008:Skipped:conflicting explicit identity aliases for activityId",
+        "source": "timeline:source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008",
+        "state": "skipped",
+        "detail": "conflicting explicit identity aliases for activityId",
+        "evidence": []
+      },
+      {
         "id": "event:48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx12:[host:610d3f569955ca35]72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin66:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider2:725:88726:mdm-enrollment-status",
         "source": "MDM enrollment",
         "state": "absent",
@@ -28421,7 +28710,8 @@
               "recordId": 89638,
               "recordIdText": "89638",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
             }
           }
         ]
@@ -28561,7 +28851,8 @@
               "recordId": 91912,
               "recordIdText": "91912",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
             }
           }
         ]
@@ -28581,7 +28872,8 @@
               "recordId": 91921,
               "recordIdText": "91921",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
             }
           }
         ]
@@ -28601,7 +28893,8 @@
               "recordId": 91945,
               "recordIdText": "91945",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
             }
           }
         ]
@@ -28621,7 +28914,8 @@
               "recordId": 92008,
               "recordIdText": "92008",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d3-a30b-4c3d-8e3f-c0de0a0b0c01}"
             }
           }
         ]
@@ -29141,7 +29435,8 @@
               "recordId": 89623,
               "recordIdText": "89623",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
             }
           }
         ]
@@ -29627,7 +29922,150 @@
         ]
       }
     ],
-    "correlations": [],
+    "correlations": [
+      {
+        "left": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623",
+        "right": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638",
+        "basis": "exactIdentifier",
+        "status": "coverageBlocked",
+        "candidateIds": [
+          "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638",
+          "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641"
+        ],
+        "evidence": [
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623",
+            "field": "activityId",
+            "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+          },
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638",
+            "field": "activityId",
+            "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+          }
+        ]
+      },
+      {
+        "left": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623",
+        "right": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641",
+        "basis": "exactIdentifier",
+        "status": "coverageBlocked",
+        "candidateIds": [
+          "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638",
+          "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641"
+        ],
+        "evidence": [
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623",
+            "field": "activityId",
+            "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+          },
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641",
+            "field": "activityId",
+            "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+          }
+        ]
+      },
+      {
+        "left": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638",
+        "right": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641",
+        "basis": "exactIdentifier",
+        "status": "coverageBlocked",
+        "candidateIds": [
+          "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89623",
+          "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641"
+        ],
+        "evidence": [
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89638",
+            "field": "activityId",
+            "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+          },
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89641",
+            "field": "activityId",
+            "value": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
+          }
+        ]
+      },
+      {
+        "left": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91912",
+        "right": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91915",
+        "basis": "exactIdentifier",
+        "status": "exact",
+        "candidateIds": [],
+        "evidence": [
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91912",
+            "field": "activityId",
+            "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
+          },
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91915",
+            "field": "activityId",
+            "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
+          }
+        ]
+      },
+      {
+        "left": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91921",
+        "right": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91924",
+        "basis": "exactIdentifier",
+        "status": "exact",
+        "candidateIds": [],
+        "evidence": [
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91921",
+            "field": "activityId",
+            "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
+          },
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91924",
+            "field": "activityId",
+            "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
+          }
+        ]
+      },
+      {
+        "left": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91945",
+        "right": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91948",
+        "basis": "exactIdentifier",
+        "status": "exact",
+        "candidateIds": [],
+        "evidence": [
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91945",
+            "field": "activityId",
+            "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
+          },
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91948",
+            "field": "activityId",
+            "value": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
+          }
+        ]
+      },
+      {
+        "left": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008",
+        "right": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92011",
+        "basis": "exactIdentifier",
+        "status": "coverageBlocked",
+        "candidateIds": [],
+        "evidence": [
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92008",
+            "field": "sessionId",
+            "value": "fixture-session-alpha"
+          },
+          {
+            "originId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:[host:610d3f569955ca35]|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record92011",
+            "field": "sessionId",
+            "value": "fixture-session-alpha"
+          }
+        ]
+      }
+    ],
     "events": [
       {
         "evidence": [
@@ -31496,7 +31934,8 @@
               "recordId": 89623,
               "recordIdText": "89623",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
             }
           }
         ],
@@ -31519,7 +31958,8 @@
                   "recordId": 89623,
                   "recordIdText": "89623",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
                 }
               }
             ],
@@ -31539,7 +31979,8 @@
                       "recordId": 89623,
                       "recordIdText": "89623",
                       "machine": "[host:610d3f569955ca35]",
-                      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                      "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
                     }
                   }
                 ]
@@ -31563,7 +32004,8 @@
               "recordId": 89638,
               "recordIdText": "89638",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
             }
           }
         ],
@@ -31586,7 +32028,8 @@
                   "recordId": 89638,
                   "recordIdText": "89638",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
                 }
               }
             ],
@@ -31606,7 +32049,8 @@
                       "recordId": 89638,
                       "recordIdText": "89638",
                       "machine": "[host:610d3f569955ca35]",
-                      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                      "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
                     }
                   }
                 ]
@@ -31630,7 +32074,8 @@
               "recordId": 89641,
               "recordIdText": "89641",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
             }
           }
         ],
@@ -31653,7 +32098,8 @@
                   "recordId": 89641,
                   "recordIdText": "89641",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d2-a20b-4c2d-8e2f-c0de0a0b0c01}"
                 }
               }
             ],
@@ -31678,6 +32124,15 @@
             "raw": "2026",
             "decimal": 2026,
             "hex": "0x000007EA",
+            "malformed": false,
+            "found": false,
+            "description": null,
+            "category": null
+          },
+          {
+            "raw": "5ee0a1d2",
+            "decimal": 1591779794,
+            "hex": "0x5EE0A1D2",
             "malformed": false,
             "found": false,
             "description": null,
@@ -34129,7 +34584,8 @@
               "recordId": 91912,
               "recordIdText": "91912",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
             }
           }
         ],
@@ -34152,7 +34608,8 @@
                   "recordId": 91912,
                   "recordIdText": "91912",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
                 }
               }
             ],
@@ -34172,7 +34629,8 @@
                       "recordId": 91912,
                       "recordIdText": "91912",
                       "machine": "[host:610d3f569955ca35]",
-                      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                      "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
                     }
                   }
                 ]
@@ -34196,7 +34654,8 @@
               "recordId": 91915,
               "recordIdText": "91915",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
             }
           }
         ],
@@ -34219,7 +34678,8 @@
                   "recordId": 91915,
                   "recordIdText": "91915",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}"
                 }
               }
             ],
@@ -34248,6 +34708,15 @@
             "found": false,
             "description": null,
             "category": null
+          },
+          {
+            "raw": "5ee0a1d1",
+            "decimal": 1591779793,
+            "hex": "0x5EE0A1D1",
+            "malformed": false,
+            "found": false,
+            "description": null,
+            "category": null
           }
         ]
       },
@@ -34262,7 +34731,8 @@
               "recordId": 91921,
               "recordIdText": "91921",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
             }
           }
         ],
@@ -34285,7 +34755,8 @@
                   "recordId": 91921,
                   "recordIdText": "91921",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
                 }
               }
             ],
@@ -34305,7 +34776,8 @@
                       "recordId": 91921,
                       "recordIdText": "91921",
                       "machine": "[host:610d3f569955ca35]",
-                      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                      "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
                     }
                   }
                 ]
@@ -34329,7 +34801,8 @@
               "recordId": 91924,
               "recordIdText": "91924",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
             }
           }
         ],
@@ -34352,7 +34825,8 @@
                   "recordId": 91924,
                   "recordIdText": "91924",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c02}"
                 }
               }
             ],
@@ -34377,6 +34851,15 @@
             "raw": "2026",
             "decimal": 2026,
             "hex": "0x000007EA",
+            "malformed": false,
+            "found": false,
+            "description": null,
+            "category": null
+          },
+          {
+            "raw": "5ee0a1d1",
+            "decimal": 1591779793,
+            "hex": "0x5EE0A1D1",
             "malformed": false,
             "found": false,
             "description": null,
@@ -34462,7 +34945,8 @@
               "recordId": 91945,
               "recordIdText": "91945",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
             }
           }
         ],
@@ -34485,7 +34969,8 @@
                   "recordId": 91945,
                   "recordIdText": "91945",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
                 }
               }
             ],
@@ -34505,7 +34990,8 @@
                       "recordId": 91945,
                       "recordIdText": "91945",
                       "machine": "[host:610d3f569955ca35]",
-                      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                      "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
                     }
                   }
                 ]
@@ -34529,7 +35015,8 @@
               "recordId": 91948,
               "recordIdText": "91948",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
             }
           }
         ],
@@ -34552,7 +35039,8 @@
                   "recordId": 91948,
                   "recordIdText": "91948",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c03}"
                 }
               }
             ],
@@ -34581,6 +35069,15 @@
             "found": false,
             "description": null,
             "category": null
+          },
+          {
+            "raw": "5ee0a1d1",
+            "decimal": 1591779793,
+            "hex": "0x5EE0A1D1",
+            "malformed": false,
+            "found": false,
+            "description": null,
+            "category": null
           }
         ]
       },
@@ -34595,7 +35092,8 @@
               "recordId": 92008,
               "recordIdText": "92008",
               "machine": "[host:610d3f569955ca35]",
-              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "activityId": "{5ee0a1d3-a30b-4c3d-8e3f-c0de0a0b0c01}"
             }
           }
         ],
@@ -34618,7 +35116,8 @@
                   "recordId": 92008,
                   "recordIdText": "92008",
                   "machine": "[host:610d3f569955ca35]",
-                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                  "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                  "activityId": "{5ee0a1d3-a30b-4c3d-8e3f-c0de0a0b0c01}"
                 }
               }
             ],
@@ -34638,7 +35137,8 @@
                       "recordId": 92008,
                       "recordIdText": "92008",
                       "machine": "[host:610d3f569955ca35]",
-                      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+                      "activityId": "{5ee0a1d3-a30b-4c3d-8e3f-c0de0a0b0c01}"
                     }
                   }
                 ]
@@ -34674,7 +35174,7 @@
             "severity": "error",
             "confidence": "medium",
             "title": "MDM enrollment status reports failure",
-            "summary": "Auto MDM Enroll: Failed (Data=Auto MDM Enroll: Failed)",
+            "summary": "Auto MDM Enroll: Failed (Data=Auto MDM Enroll: Failed, SessionId=fixture-session-alpha)",
             "evidence": [
               {
                 "kind": "event",
@@ -34721,11 +35221,11 @@
     "overview": {
       "outcome": "confirmedFailure",
       "headline": "Evidence contains confirmed operational failure(s).",
-      "findingCount": 78,
+      "findingCount": 79,
       "actionableFindingCount": 14,
-      "coverageGapCount": 64,
+      "coverageGapCount": 65,
       "evidenceCount": 77,
-      "correlationCount": 0,
+      "correlationCount": 7,
       "errorTokenEventCount": 11
     }
   }

@@ -20,6 +20,7 @@
  *   input here.
  */
 
+import { getBaseName } from "../../lib/file-paths";
 import type { DiagnosisFindingClass } from "./types";
 import {
   TIMELINE_SEVERITY_RANK,
@@ -128,6 +129,15 @@ export interface CorrelationChain {
   title: string | null;
 }
 
+/** One reduced exact or candidate pair: the unit the links index counts partners from. */
+export interface CorrelationLinkedPair {
+  /** Endpoints are ordered (`left` < `right`). */
+  left: string;
+  right: string;
+  /** The reduced label of this pair, after every observation of it was combined. */
+  strength: "exact" | "candidate";
+}
+
 export interface CorrelationChainModel {
   /** Ordered rows, capped at `CORRELATION_CHAIN_RENDER_LIMIT`. */
   chains: CorrelationChain[];
@@ -150,6 +160,12 @@ export interface CorrelationChainModel {
   unloadedEdgeCount: number;
   /** Rows per strength before the cap, after collapsing. */
   counts: Record<CorrelationChainStrength, number>;
+  /**
+   * Every reduced exact or candidate pair, NOT capped by `CORRELATION_CHAIN_RENDER_LIMIT` (that cap
+   * trims `chains` only), in the model's deterministic pair order. A pair that any observation
+   * labelled ambiguous or coverage blocked is not here: the weakest label already vetoed it.
+   */
+  linkedPairs: CorrelationLinkedPair[];
   /**
    * Reduced pairs that cannot link two entries: fewer than 2 distinct member ids, or an exact or
    * candidate relation with no second endpoint. Counted once per reduced pair, whatever the label.
@@ -351,10 +367,14 @@ function messageHead(message: string): string {
     : line;
 }
 
+/**
+ * A log line is named by its FILE, never by `origin.source`: for a CCM line `source` is the code
+ * file that wrote it (`entry.source_file`), so two unrelated logs would read alike.
+ */
 function itemLabel(item: TimelineItem): string {
   return item.origin.kind === "event"
     ? String(item.origin.eventId)
-    : `${item.origin.source} · line ${item.origin.line}`;
+    : `${getBaseName(item.origin.file) || item.origin.file} · line ${item.origin.line}`;
 }
 
 /** D19: highest-severity member, ties broken by earliest timestamp, then by id. */
@@ -650,6 +670,12 @@ export function buildCorrelationChains(
       ? Math.max(0, input.totalTimelineEdges - input.timelineEdges.length)
       : 0,
     counts,
+    // `links` is already one relation per pair and in pair-key order; this is the uncapped list.
+    linkedPairs: links.map((relation) => ({
+      left: relation.left,
+      right: relation.right as string,
+      strength: relation.strength as "exact" | "candidate",
+    })),
     ignoredRelationCount,
   };
 }

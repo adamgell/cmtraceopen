@@ -1,4 +1,5 @@
 import {
+  lazy,
   useCallback,
   useMemo,
   useRef,
@@ -26,6 +27,7 @@ import { EvtxFilterChips } from "./EvtxFilterChips";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
+import { UNIFIED_TIMELINE_STRIP_HEIGHT_PX } from "./evtx-timeline-strip";
 import { EvtxInsightsRail } from "./EvtxInsightsRail";
 import { EvtxViewBar } from "./EvtxViewBar";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
@@ -57,6 +59,12 @@ import {
   buildEventLogAnalysisSession,
   EventLogAnalysisCancelled,
 } from "./event-analysis-session";
+import type { ScopeDisclosureInput } from "./evtx-correlation-copy";
+import { EvtxCorrelationProvider, useEvtxCorrelation } from "./useEvtxCorrelation";
+
+// The view is lazy (spec 11); the hook and the provider above it are not, because the Insights
+// card and later the status bar read the same shared data whether or not this view is open.
+const EvtxCorrelationView = lazy(() => import("./EvtxCorrelationView"));
 
 const DIAGNOSIS_DEBOUNCE_MS = 75;
 
@@ -338,6 +346,9 @@ export function EventLogWorkspace() {
     useState<EventLogAnalysisSessionStatus | null>(null);
   const [initialTimelinePage, setInitialTimelinePage] =
     useState<EventLogAnalysisTimelinePage | null>(null);
+  // What the published session was built from, set in the same batch as its status and page so
+  // the correlation hook stores it with the models it builds from them.
+  const [analysisScope, setAnalysisScope] = useState<ScopeDisclosureInput | null>(null);
   const [timelinePending, setTimelinePending] = useState(false);
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const analysisPumpRef = useRef<EventLogAnalysisPump>({
@@ -407,6 +418,7 @@ export function EventLogWorkspace() {
     setDiagnosisError(null);
     setAnalysisStatus(null);
     setInitialTimelinePage(null);
+    setAnalysisScope(null);
     setTimelineError(null);
 
     if (isLoading) {
@@ -468,6 +480,16 @@ export function EventLogWorkspace() {
           pump.publishedSessionId = result.status.sessionId;
           setAnalysisStatus(result.status);
           setInitialTimelinePage(result.initialPage);
+          // The one scope of this session, for the Correlation view and the Insights rail alike.
+          // visible and the text logs are what the session was BUILT from (the snapshot); loaded is
+          // what the store holds NOW, at the publish, in the same batch as the status and the page:
+          // an event the filter hides that arrived during the build is loaded, and the session
+          // was not built from it, which is exactly what makes the view narrowed.
+          setAnalysisScope({
+            visibleCount: snapshot.records.length,
+            loadedCount: useEvtxStore.getState().records.length,
+            textLogCount: snapshot.entries.length,
+          });
           setDiagnosis(result.diagnosis);
           setTimelinePending(false);
         })
@@ -501,6 +523,19 @@ export function EventLogWorkspace() {
     scopedLogEntries,
     isLoading,
   ]);
+
+  // One shared correlation model for the Correlation view, the Insights card and the later chains
+  // tab, charts tile and status bar. `initialPage` is the STATE value: one object for the life of a
+  // session, because the hook keys what it has loaded on it (a fresh object per render would
+  // restart it every time). Items are scanned only while the Correlation view is the one shown;
+  // counts-only consumers never cause a scan.
+  const correlation = useEvtxCorrelation({
+    status: analysisStatus,
+    initialPage: initialTimelinePage,
+    pending: timelinePending,
+    scope: analysisScope,
+    needItems: activeView === "correlation",
+  });
 
   const loadTimelinePage = useCallback(
     async (offset: number, limit: number) => {
@@ -543,12 +578,13 @@ export function EventLogWorkspace() {
         diagnosisCoverageGaps.length > 0));
 
   // Today's stack: the unified timeline and the record grid. The diagnosis and the record details
-  // live in the rail; Phases 10 and 11 move the unified timeline; Phase 7 restyles the grid.
+  // live in the rail; Phase 11 moves the unified timeline (the Table keeps it, so its
+  // unplaced and coverage previews stay until then); Phase 7 restyles the grid.
   const renderTableView = () => (
     <>
       <div
         style={{
-          height: "320px",
+          height: `${UNIFIED_TIMELINE_STRIP_HEIGHT_PX}px`,
           minHeight: "240px",
           maxHeight: "50vh",
           flexShrink: 0,
@@ -579,7 +615,10 @@ export function EventLogWorkspace() {
     grouped: { keepAlive: false, render: () => <ViewPlaceholder view="grouped" /> },
     timeline: { keepAlive: false, render: () => <ViewPlaceholder view="timeline" /> },
     charts: { keepAlive: false, render: () => <ViewPlaceholder view="charts" /> },
-    correlation: { keepAlive: false, render: () => <ViewPlaceholder view="correlation" /> },
+    correlation: {
+      keepAlive: false,
+      render: () => <EvtxCorrelationView />,
+    },
   };
 
   if (!hasData && !isLoading) {
@@ -602,182 +641,184 @@ export function EventLogWorkspace() {
   }
 
   return (
-    <div
-      style={{
-        flex: 1,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
-    >
-      {loadError && (
-        <div
-          role="alert"
-          style={{
-            color: tokens.colorPaletteRedForeground1,
-            padding: "4px 12px",
-          }}
-        >
-          {loadError}
-        </div>
-      )}
-      {diagnosisError && (
-        <div
-          role="alert"
-          style={{
-            color: tokens.colorPaletteRedForeground1,
-            padding: "4px 12px",
-          }}
-        >
-          {diagnosisError}
-        </div>
-      )}
-      {isLoading && <ProgressBar style={{ width: "100%", flexShrink: 0 }} />}
-      <EvtxViewBar nowEpoch={nowEpoch} />
-      <EvtxFilterBar nowEpoch={nowEpoch} />
-      <EvtxFilterChips
-        visibleCount={visibleRecords.length}
-        loadedCount={records.length}
-        untimedHiddenCount={untimedHiddenCount}
-      />
-      <EvtxCoverageBanner />
-
-      {timelineError && (
-        <div
-          role="alert"
-          style={{
-            color: tokens.colorPaletteRedForeground1,
-            padding: "4px 12px",
-          }}
-        >
-          {timelineError}
-        </div>
-      )}
-
+    <EvtxCorrelationProvider value={correlation}>
       <div
         style={{
           flex: 1,
           display: "flex",
+          flexDirection: "column",
           overflow: "hidden",
         }}
       >
-        {/* Hidden, not unmounted: the picker keeps its search text, expanded nodes and width. */}
-        {channels.length > 0 && (
+        {loadError && (
           <div
-            data-evtx-region="channels"
-            // The body row's flex child, so this percentage resolves against the row. The pane
-            // inside shrinks to fit (a cap on the pane itself would be relative to this
-            // shrink-to-fit wrapper, i.e. to itself).
+            role="alert"
             style={{
-              display: panels.channels ? "flex" : "none",
-              flexShrink: 0,
-              minWidth: 0,
-              maxWidth: "40%",
+              color: tokens.colorPaletteRedForeground1,
+              padding: "4px 12px",
             }}
           >
-            <ChannelPicker />
+            {loadError}
+          </div>
+        )}
+        {diagnosisError && (
+          <div
+            role="alert"
+            style={{
+              color: tokens.colorPaletteRedForeground1,
+              padding: "4px 12px",
+            }}
+          >
+            {diagnosisError}
+          </div>
+        )}
+        {isLoading && <ProgressBar style={{ width: "100%", flexShrink: 0 }} />}
+        <EvtxViewBar nowEpoch={nowEpoch} />
+        <EvtxFilterBar nowEpoch={nowEpoch} />
+        <EvtxFilterChips
+          visibleCount={visibleRecords.length}
+          loadedCount={records.length}
+          untimedHiddenCount={untimedHiddenCount}
+        />
+        <EvtxCoverageBanner />
+
+        {timelineError && (
+          <div
+            role="alert"
+            style={{
+              color: tokens.colorPaletteRedForeground1,
+              padding: "4px 12px",
+            }}
+          >
+            {timelineError}
           </div>
         )}
 
         <div
-          data-evtx-region="main"
           style={{
             flex: 1,
-            minWidth: 0,
             display: "flex",
-            flexDirection: "column",
             overflow: "hidden",
-            backgroundColor: tokens.colorNeutralBackground1,
           }}
         >
-          <EvtxViewHost views={views} activeView={activeView} />
+          {/* Hidden, not unmounted: the picker keeps its search text, expanded nodes and width. */}
+          {channels.length > 0 && (
+            <div
+              data-evtx-region="channels"
+              // The body row's flex child, so this percentage resolves against the row. The pane
+              // inside shrinks to fit (a cap on the pane itself would be relative to this
+              // shrink-to-fit wrapper, i.e. to itself).
+              style={{
+                display: panels.channels ? "flex" : "none",
+                flexShrink: 0,
+                minWidth: 0,
+                maxWidth: "40%",
+              }}
+            >
+              <ChannelPicker />
+            </div>
+          )}
 
-          {/* Hidden, not unmounted, so the dock's future state survives a toggle. */}
           <div
-            id={EVTX_DOCK_ID}
-            data-evtx-region="dock"
+            data-evtx-region="main"
             style={{
-              display: panels.dock ? "block" : "none",
+              flex: 1,
+              minWidth: 0,
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+              backgroundColor: tokens.colorNeutralBackground1,
+            }}
+          >
+            <EvtxViewHost views={views} activeView={activeView} />
+
+            {/* Hidden, not unmounted, so the dock's future state survives a toggle. */}
+            <div
+              id={EVTX_DOCK_ID}
+              data-evtx-region="dock"
+              style={{
+                display: panels.dock ? "block" : "none",
+                position: "relative",
+                height: `${effectiveDockHeight}px`,
+                flexShrink: 0,
+                boxSizing: "border-box",
+                borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
+                backgroundColor: tokens.colorNeutralBackground2,
+              }}
+            >
+              <EvtxResizeHandle
+                orientation="horizontal"
+                edge="start"
+                label="Resize correlation dock"
+                controls={EVTX_DOCK_ID}
+                value={effectiveDockHeight}
+                min={MIN_DOCK_HEIGHT}
+                max={dockMax}
+                direction={-1}
+                onChange={(next) => {
+                  // The viewport can cap the dock below its stored height; a proposal that leaves
+                  // the rendered height unchanged must not overwrite the stored preference.
+                  const proposed = proposeResize(next, {
+                    value: effectiveDockHeight,
+                    min: MIN_DOCK_HEIGHT,
+                    max: dockMax,
+                  });
+                  if (proposed !== null) setDockHeight(proposed, window.innerHeight);
+                }}
+              />
+              <div style={{ height: "100%", overflow: "auto" }}>{DOCK_SLOTS.correlation()}</div>
+            </div>
+          </div>
+
+          {/* Hidden, not unmounted, so the rail's tab and scroll state survive a toggle. */}
+          <aside
+            id={EVTX_RAIL_ID}
+            ref={railRef}
+            data-evtx-region="rail"
+            aria-label="Insights rail"
+            style={{
+              display: panels.insights ? "flex" : "none",
+              flexDirection: "column",
               position: "relative",
-              height: `${effectiveDockHeight}px`,
+              width: `${railWidth}px`,
+              // The aside is a child of the body row, so this resolves against the row.
+              minWidth: 0,
+              maxWidth: "40%",
               flexShrink: 0,
               boxSizing: "border-box",
-              borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
+              borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
               backgroundColor: tokens.colorNeutralBackground2,
             }}
           >
             <EvtxResizeHandle
-              orientation="horizontal"
+              orientation="vertical"
               edge="start"
-              label="Resize correlation dock"
-              controls={EVTX_DOCK_ID}
-              value={effectiveDockHeight}
-              min={MIN_DOCK_HEIGHT}
-              max={dockMax}
+              label="Resize insights rail"
+              controls={EVTX_RAIL_ID}
+              value={railRange.value}
+              min={railRange.min}
+              max={railRange.max}
               direction={-1}
               onChange={(next) => {
-                // The viewport can cap the dock below its stored height; a proposal that leaves
-                // the rendered height unchanged must not overwrite the stored preference.
-                const proposed = proposeResize(next, {
-                  value: effectiveDockHeight,
-                  min: MIN_DOCK_HEIGHT,
-                  max: dockMax,
-                });
-                if (proposed !== null) setDockHeight(proposed, window.innerHeight);
+                // Same rule as the channel pane: never overwrite the requested width with a value
+                // that leaves the rendered rail unchanged.
+                const proposed = proposeResize(next, railRange);
+                if (proposed !== null) setRailWidth(proposed);
               }}
             />
-            <div style={{ height: "100%", overflow: "auto" }}>{DOCK_SLOTS.correlation()}</div>
-          </div>
+            {/* The rail scrolls its own tab bodies under a fixed tablist, so this wrapper does not. */}
+            <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              <EvtxInsightsRail
+                summary={diagnosis}
+                records={analysisRecords}
+                pending={timelinePending}
+                error={diagnosisError}
+                scope={analysisScope}
+              />
+            </div>
+          </aside>
         </div>
-
-        {/* Hidden, not unmounted, so the rail's tab and scroll state survive a toggle. */}
-        <aside
-          id={EVTX_RAIL_ID}
-          ref={railRef}
-          data-evtx-region="rail"
-          aria-label="Insights rail"
-          style={{
-            display: panels.insights ? "flex" : "none",
-            flexDirection: "column",
-            position: "relative",
-            width: `${railWidth}px`,
-            // The aside is a child of the body row, so this resolves against the row.
-            minWidth: 0,
-            maxWidth: "40%",
-            flexShrink: 0,
-            boxSizing: "border-box",
-            borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
-            backgroundColor: tokens.colorNeutralBackground2,
-          }}
-        >
-          <EvtxResizeHandle
-            orientation="vertical"
-            edge="start"
-            label="Resize insights rail"
-            controls={EVTX_RAIL_ID}
-            value={railRange.value}
-            min={railRange.min}
-            max={railRange.max}
-            direction={-1}
-            onChange={(next) => {
-              // Same rule as the channel pane: never overwrite the requested width with a value
-              // that leaves the rendered rail unchanged.
-              const proposed = proposeResize(next, railRange);
-              if (proposed !== null) setRailWidth(proposed);
-            }}
-          />
-          {/* The rail scrolls its own tab bodies under a fixed tablist, so this wrapper does not. */}
-          <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-            <EvtxInsightsRail
-              summary={diagnosis}
-              records={analysisRecords}
-              pending={timelinePending}
-              error={diagnosisError}
-              textLogCount={scopedLogEntries.length}
-            />
-          </div>
-        </aside>
       </div>
-    </div>
+    </EvtxCorrelationProvider>
   );
 }

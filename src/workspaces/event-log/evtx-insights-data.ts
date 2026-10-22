@@ -4,7 +4,7 @@
  * `summarizeRecords` takes its level counts from `countByLevel` in `evtx-filter.ts`, the count the
  * filter row's toggles show, so the rail and the filter row cannot disagree about one.
  */
-import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
+import { boundUtf8WithDigest, utf8Fingerprint } from "../../lib/bounded-utf8";
 import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
 import {
   countByLevel,
@@ -12,6 +12,7 @@ import {
   EVTX_LEVELS,
   hasUsableTimestamp,
   type EvtxRecordScopeCounts,
+  type EvtxRecordScopeKind,
 } from "./evtx-filter";
 import type {
   DiagnosisEventEvidence,
@@ -126,15 +127,23 @@ export function neighborRecordId(
   return ordered[index + step]?.id ?? null;
 }
 
-/** True when `value` is a real EventRecordID text: present and not the parser's zero placeholder. */
+/**
+ * True when `value` is present and is not the parser's single "0" placeholder. This is a DISPLAY
+ * test: any other text, "000" included, is the record's own text and is shown as written. Whether
+ * two things are the same record is decided elsewhere, by `engineRecordIdentity`, which ignores
+ * all-zero text.
+ */
 function hasRecordIdText(value: string | null | undefined): value is string {
   return typeof value === "string" && value.length > 0 && value !== "0";
 }
 
 /**
- * How an evidence reference names its record, following the engine's `stable_id` order: a
- * non-zero `recordIdText`, then `fallbackIdentity`, then a non-zero `recordId`. A record the
- * provider never numbered says so; it is never printed as "record 0".
+ * How an evidence reference NAMES its record for display, following the engine's `stable_id`
+ * order: a `recordIdText` that is present and not the single "0" placeholder (shown as written,
+ * so "000" reads "record 000"), then `fallbackIdentity`, then a non-zero `recordId`. A record the
+ * provider never numbered says so; it is never printed as "record 0". This is a label, not an
+ * identity claim: matching evidence to a loaded record uses `engineRecordIdentity`, under which
+ * all-zero text names nothing.
  */
 export function eventRecordIdentity(evidence: DiagnosisEventEvidence): string {
   if (hasRecordIdText(evidence.recordIdText)) return `record ${evidence.recordIdText}`;
@@ -191,11 +200,32 @@ function matchesWithTokens(evidence: string, raw: string): boolean {
 }
 
 /**
+ * Compares a value that may carry the transport's bound (`boundUtf8WithDigest`) with the record's
+ * raw value. Null when `value` carries no `\u2026[truncated:hex16]` suffix, so the caller applies
+ * its own rule for text that was not bounded. With the suffix, the record's value is bounded the
+ * same way, the digests must be equal, and `prefixMatches` decides the text before the suffix.
+ */
+function matchesTransportBound(
+  value: string,
+  recordValue: string,
+  prefixMatches: (valuePrefix: string, boundedPrefix: string) => boolean,
+): boolean | null {
+  const truncated = TRUNCATED_SUFFIX.exec(value);
+  if (!truncated) return null;
+  const bounded = boundUtf8WithDigest(recordValue, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
+  const boundedSuffix = TRUNCATED_SUFFIX.exec(bounded);
+  if (!boundedSuffix || boundedSuffix[1] !== truncated[1]) return false;
+  return prefixMatches(value.slice(0, truncated.index), bounded.slice(0, boundedSuffix.index));
+}
+
+/**
  * Whether an evidence value from the redacted display projection names the record's raw value.
- * The engine redacts identifiers partially: a profile segment or a machine name inside a longer
- * string becomes a `[kind:hex16]` token (`C:\Users\[user:...]\Downloads\System.evtx`,
- * `Remote: [host:...]`). A value with tokens is compared with each token as a non-empty wildcard
- * and the rest literal; a value without tokens must be equal.
+ * This is for DIAGNOSIS EVIDENCE ONLY, the one surface where the engine really redacts: it
+ * redacts identifiers partially, so a profile segment or a machine name inside a longer string
+ * becomes a `[kind:hex16]` token (`C:\Users\[user:...]\Downloads\System.evtx`, `Remote: [host:...]`).
+ * A value with tokens is compared with each token as a non-empty wildcard and the rest literal; a
+ * value without tokens must be equal. Timeline origins are never redacted, so their text goes
+ * through `timelineTextMatches`, which never reads a token as a wildcard.
  *
  * An identity field over the transport's byte limit reaches the engine digest-bounded: a prefix
  * plus `\u2026[truncated:hex16]`. When the EVIDENCE carries that suffix, the record's value is
@@ -204,21 +234,163 @@ function matchesWithTokens(evidence: string, raw: string): boolean {
  * were bounded.
  */
 export function redactedValueMatches(evidenceValue: string, recordValue: string): boolean {
-  const truncated = TRUNCATED_SUFFIX.exec(evidenceValue);
-  if (!truncated) return matchesWithTokens(evidenceValue, recordValue);
-  const bounded = boundUtf8WithDigest(recordValue, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
-  const boundedSuffix = TRUNCATED_SUFFIX.exec(bounded);
-  if (!boundedSuffix || boundedSuffix[1] !== truncated[1]) return false;
-  return matchesWithTokens(
-    evidenceValue.slice(0, truncated.index),
-    bounded.slice(0, boundedSuffix.index),
+  return (
+    matchesTransportBound(evidenceValue, recordValue, matchesWithTokens) ??
+    matchesWithTokens(evidenceValue, recordValue)
   );
+}
+
+/**
+ * The engine's own text compaction, which is NOT the transport's `boundUtf8WithDigest`. A value over
+ * the limit becomes `<prefix>...[{len} bytes; digest={hex}]`, where `len` is its UTF-8 length, the
+ * digest is taken over the whole value, and the prefix is the longest run of whole characters in
+ * `limit - suffix length` bytes. Two places write it:
+ * - `compact_timeline_text` (event_log/timeline.rs) for timeline-origin identity text: 256 bytes,
+ *   a 16-hex digest of two FNV lanes. Applied to an UNPROJECTED record's source label, channel,
+ *   provider, and to its machine and component AFTER they are trimmed (`normalized_provenance`).
+ * - `compact_display_text` (event_log/analysis_session.rs) for diagnosis evidence: 4096 bytes, an
+ *   8-hex digest of the first lane. Applied to the evidence's source, provider, machine, channel.
+ * `engine-compaction-vectors.json` holds the engine's output for both, the Rust tests recompute it,
+ * and `evtx-engine-compaction-pin.test.ts` pins the constants in the Rust source.
+ */
+export const ENGINE_TIMELINE_IDENTITY_TEXT_BYTES = 256;
+export const ENGINE_DIAGNOSIS_DISPLAY_TEXT_BYTES = 4096;
+const ENGINE_TIMELINE_SUFFIX = /\.\.\.\[(0|[1-9][0-9]*) bytes; digest=([0-9a-f]{16})\]$/;
+const ENGINE_DISPLAY_SUFFIX = /\.\.\.\[(0|[1-9][0-9]*) bytes; digest=([0-9a-f]{8})\]$/;
+
+/**
+ * Whether `compacted` is the engine's compaction of `raw`: it carries the suffix, the suffix names
+ * `raw`'s UTF-8 length (which must be over the limit, or the engine would have left it alone) and
+ * its digest, and the text before the suffix is `raw` cut to the same budget at a character
+ * boundary. The budget is the limit less the suffix's own length, as the engine computes it.
+ */
+function isEngineCompactionOf(
+  compacted: string,
+  raw: string,
+  limit: number,
+  suffixPattern: RegExp,
+  twoLanes: boolean,
+  prefixMatches: (compactedPrefix: string, rawPrefix: string) => boolean,
+): boolean {
+  const found = suffixPattern.exec(compacted);
+  if (!found) return false;
+  const length = Number(found[1]);
+  if (!Number.isSafeInteger(length) || length <= limit) return false;
+  const fingerprint = utf8Fingerprint(raw, limit - found[0].length);
+  if (fingerprint.byteLength !== length) return false;
+  if ((twoLanes ? fingerprint.digest : fingerprint.firstLaneDigest) !== found[2]) return false;
+  return prefixMatches(compacted.slice(0, found.index), fingerprint.prefix);
+}
+
+/**
+ * Whether a timeline origin's text names the record's raw value. At least one of three holds, and
+ * none reads a redaction token as a wildcard, because the engine never redacts a timeline origin
+ * (`origin_of` copies the source label, channel and provider raw; redaction is for the diagnosis
+ * summary only), so a folder named `[case:0f1e2d3c4b5a6978]` is that folder and nothing else:
+ * - the texts are equal (short text stays exact);
+ * - the engine compacted it (`compact_timeline_text`: the record reached the engine whole, the
+ *   common case), and the length, the digest and the exact prefix agree;
+ * - it is the transport's bound on a record the transport projected, and the digest and the exact
+ *   prefix agree.
+ * Machine and component must be NORMALIZED before they are compared (see `provenanceAgrees`): the
+ * engine trims them before it compacts them.
+ */
+export function timelineTextMatches(originValue: string, recordValue: string): boolean {
+  if (originValue === recordValue) return true;
+  const exactPrefix = (valuePrefix: string, otherPrefix: string) => valuePrefix === otherPrefix;
+  return (
+    isEngineCompactionOf(
+      originValue,
+      recordValue,
+      ENGINE_TIMELINE_IDENTITY_TEXT_BYTES,
+      ENGINE_TIMELINE_SUFFIX,
+      true,
+      exactPrefix,
+    ) || matchesTransportBound(originValue, recordValue, exactPrefix) === true
+  );
+}
+
+/**
+ * Whether diagnosis evidence text names the record's raw value: `redactedValueMatches`, or the
+ * engine's display compaction (`compact_display_text`) of a value over 4096 bytes, whose kept prefix
+ * is redacted afterwards and so is compared with the redaction tokens as wildcards.
+ */
+export function evidenceTextMatches(evidenceValue: string, recordValue: string): boolean {
+  return (
+    isEngineCompactionOf(
+      evidenceValue,
+      recordValue,
+      ENGINE_DIAGNOSIS_DISPLAY_TEXT_BYTES,
+      ENGINE_DISPLAY_SUFFIX,
+      false,
+      matchesWithTokens,
+    ) || redactedValueMatches(evidenceValue, recordValue)
+  );
+}
+
+/**
+ * The engine's record identity (`stable_event_id`, event_log/timeline.rs): the TRIMMED text when it
+ * is digits with a non-zero digit, otherwise the non-zero number, otherwise none. Padded text
+ * (" 7"), all-zero text ("000") and text that is not digits are therefore the record the number
+ * names, exactly as the engine reads them, so a loaded record and the timeline origin the engine
+ * built from it are keyed the same.
+ *
+ * A number past the safe-integer range reaches the engine as 2^53 (`eventLogAnalysisRecordForTransport`),
+ * so it is read that way here.
+ */
+export function engineRecordIdentity(
+  text: string | null | undefined,
+  numericId: number,
+): string | null {
+  const trimmed = typeof text === "string" ? text.trim() : "";
+  if (/^\d+$/.test(trimmed) && /[1-9]/.test(trimmed)) return trimmed;
+  if (!Number.isFinite(numericId) || numericId <= 0) return null;
+  return String(Number.isSafeInteger(numericId) ? numericId : Number.MAX_SAFE_INTEGER + 1);
 }
 
 /** The record's identity text in the engine's order, or null when the provider never numbered it. */
 function recordIdentityText(record: EvtxRecord): string | null {
-  if (hasRecordIdText(record.eventRecordIdText)) return record.eventRecordIdText;
-  return record.eventRecordId !== 0 ? String(record.eventRecordId) : null;
+  return engineRecordIdentity(record.eventRecordIdText, record.eventRecordId);
+}
+
+/** `MAX_SAFE_EVENT_RECORD_ID` (event_log/models.rs): 2^53 - 1, the largest id a JavaScript number holds. */
+const ENGINE_MAX_SAFE_EVENT_RECORD_ID = Number.MAX_SAFE_INTEGER;
+const U64_MAX = BigInt("18446744073709551615");
+
+/**
+ * Whether the engine refuses this identity (`diagnosis_record_identity`, event_log/commands.rs):
+ * text that is empty or not all ASCII digits (padding counts, so " 7" is refused), text outside
+ * u64, text that differs from a numeric id the transport could carry exactly, or a numeric id past
+ * 2^53 - 1 with no text. `sentId` is the number the transport sends.
+ */
+function isMalformedEngineIdentity(text: string | null, sentId: number): boolean {
+  if (text === null) return sentId > ENGINE_MAX_SAFE_EVENT_RECORD_ID;
+  if (!/^[0-9]+$/.test(text)) return true;
+  const parsed = BigInt(text);
+  if (parsed > U64_MAX) return true;
+  return sentId <= ENGINE_MAX_SAFE_EVENT_RECORD_ID && parsed !== BigInt(sentId);
+}
+
+/**
+ * The identity the ENGINE gives the timeline origin built from this record, which is not always
+ * the one `engineRecordIdentity` reads off the record. An event record whose identity the engine
+ * refuses (`isMalformedEngineIdentity`) is rewritten before its origin is built
+ * (`sanitize_malformed_timeline_record`, event_log/analysis_session.rs): it keeps its numeric id
+ * when that is 1 to 2^53 - 1, as the text of that number, and otherwise has no identity at all. The
+ * diagnosis never sees such a record, so finding evidence keeps using `engineRecordIdentity`. A
+ * text-log record is never rewritten; a record with no `originKind` is an event, as the engine's
+ * default is. A record the transport cannot send (a negative or fractional id) builds no origin and
+ * has none here.
+ */
+export function engineTimelineRecordIdentity(record: EvtxRecord): string | null {
+  const numeric = record.eventRecordId;
+  if (!Number.isInteger(numeric) || numeric < 0) return null;
+  const text = typeof record.eventRecordIdText === "string" ? record.eventRecordIdText : null;
+  const sent = Number.isSafeInteger(numeric) ? numeric : ENGINE_MAX_SAFE_EVENT_RECORD_ID + 1;
+  if (record.originKind !== "log" && isMalformedEngineIdentity(text, sent)) {
+    return sent > 0 && sent <= ENGINE_MAX_SAFE_EVENT_RECORD_ID ? String(sent) : null;
+  }
+  return engineRecordIdentity(text, numeric);
 }
 
 /**
@@ -226,7 +398,8 @@ function recordIdentityText(record: EvtxRecord): string | null {
  * provider, channel, and the record identity in the engine's `stable_id` order (non-zero
  * `recordIdText`, then `fallbackIdentity`, then non-zero `recordId`). A `fallbackIdentity` is a hash
  * the record cannot reproduce, so evidence identified only that way never matches. Machine, source,
- * provider and channel are compared with `redactedValueMatches`, so partial redaction still matches.
+ * provider and channel are compared with `evidenceTextMatches`, so partial redaction, the
+ * transport's bound and the engine's 4096-byte display compaction all still match.
  */
 export function evidenceMatchesRecord(
   value: DiagnosisEventEvidence,
@@ -237,17 +410,12 @@ export function evidenceMatchesRecord(
   // record that merely shares the event ID.
   const own = recordIdentityText(record);
   if (own === null) return false;
-  if (hasRecordIdText(value.recordIdText)) {
-    if (value.recordIdText !== own) return false;
-  } else if (value.fallbackIdentity) {
-    return false;
-  } else if (value.recordId === 0 || String(value.recordId) !== own) {
-    return false;
-  }
-  if (!redactedValueMatches(value.provider, record.provider)) return false;
-  if (value.channel && !redactedValueMatches(value.channel, record.channel)) return false;
-  if (value.machine && !redactedValueMatches(value.machine, record.computer)) return false;
-  if (value.source && !redactedValueMatches(value.source, record.sourceLabel)) return false;
+  const named = evidenceIdentityText(value);
+  if (named === null || named !== own) return false;
+  if (!evidenceTextMatches(value.provider, record.provider)) return false;
+  if (value.channel && !evidenceTextMatches(value.channel, record.channel)) return false;
+  if (value.machine && !evidenceTextMatches(value.machine, record.computer)) return false;
+  if (value.source && !evidenceTextMatches(value.source, record.sourceLabel)) return false;
   return true;
 }
 
@@ -303,6 +471,8 @@ export function summaryIsBounded(summary: DiagnosisSummary): boolean {
 export type EvidenceIndex = ReadonlyMap<string, readonly EvtxRecord[]>;
 
 const identityKey = (eventId: number, identity: string) => `${eventId}\u0000${identity}`;
+/** A record whose timeline origin carries another identity than its evidence identity. */
+const originIdentityKey = (eventId: number, identity: string) => `origin\u0000${eventId}\u0000${identity}`;
 
 /**
  * Indexes `records` once, so resolving a finding costs a lookup per reference and not a pass over
@@ -310,22 +480,67 @@ const identityKey = (eventId: number, identity: string) => `${eventId}\u0000${id
  */
 export function buildEvidenceIndex(records: readonly EvtxRecord[]): EvidenceIndex {
   const index = new Map<string, EvtxRecord[]>();
-  for (const record of records) {
-    const identity = recordIdentityText(record);
-    if (identity === null) continue;
-    const key = identityKey(record.eventId, identity);
+  const add = (key: string, record: EvtxRecord) => {
     const bucket = index.get(key);
     if (bucket) bucket.push(record);
     else index.set(key, [record]);
+  };
+  for (const record of records) {
+    const identity = recordIdentityText(record);
+    if (identity !== null) add(identityKey(record.eventId, identity), record);
+    // The origin the engine builds from a record with a refused identity carries another one.
+    const originIdentity = engineTimelineRecordIdentity(record);
+    if (originIdentity !== null && originIdentity !== identity) {
+      add(originIdentityKey(record.eventId, originIdentity), record);
+    }
   }
   return index;
 }
 
-/** The identity an evidence reference names, in the engine's `stable_id` order, or null when it has none a record can match. */
+/**
+ * The loaded records the index holds for one event ID and one record identity text (the text
+ * `recordIdentityText` gives a record). Empty when none is loaded. For a caller that names a
+ * record by something other than a diagnosis evidence reference, such as a timeline origin.
+ */
+export function recordsForIdentity(
+  index: EvidenceIndex,
+  eventId: number,
+  identity: string,
+): readonly EvtxRecord[] {
+  return index.get(identityKey(eventId, identity)) ?? [];
+}
+
+/**
+ * The loaded records whose timeline origin carries this event ID and identity text
+ * (`engineTimelineRecordIdentity`). The same records as `recordsForIdentity` for every record the
+ * engine accepts as it is; a record it rewrote is found under the identity it was rewritten to, and
+ * not under the one it came with.
+ */
+export function recordsForOriginIdentity(
+  index: EvidenceIndex,
+  eventId: number,
+  identity: string,
+): readonly EvtxRecord[] {
+  const regular = index.get(identityKey(eventId, identity)) ?? [];
+  const rewritten = index.get(originIdentityKey(eventId, identity)) ?? [];
+  return [...regular, ...rewritten].filter(
+    (record) => engineTimelineRecordIdentity(record) === identity,
+  );
+}
+
+/**
+ * The identity an evidence reference names, by the engine's own rule (`EventEvidenceRef::record_identity`,
+ * diagnosis.rs): a usable `recordIdText`, else the `fallbackIdentity`, else the number. Null when
+ * what it names is a hash a record cannot reproduce, or no number at all. Text and number go
+ * through `engineRecordIdentity`, the rule the loaded record and the timeline origin use, so all
+ * three agree: all-zero text is no identity (it falls through to the fallback, then the number), and
+ * padded text is the trimmed text.
+ */
 function evidenceIdentityText(value: DiagnosisEventEvidence): string | null {
-  if (hasRecordIdText(value.recordIdText)) return value.recordIdText;
+  const text = engineRecordIdentity(value.recordIdText, 0);
+  if (text !== null) return text;
   if (value.fallbackIdentity) return null;
-  return value.recordId === 0 ? null : String(value.recordId);
+  return engineRecordIdentity(null, value.recordId);
 }
 
 export interface FindingScope {
@@ -402,11 +617,25 @@ export function scopeForFinding(
 
 /**
  * One sentence for each way a record scope falls short of what it was made from, apart from each
- * other and in a fixed order. Empty when it falls short in none.
+ * other and in a fixed order. Empty when it falls short in none. The words follow the scope's
+ * KIND: a finding CITES events, a chain is made of entries, and the reason a chain scope can be
+ * bounded is its edges, not a diagnosis response. The kind is required so a caller cannot forget
+ * it and get a finding's wording for a chain.
  */
-export function describeScopeCounts(counts: EvtxRecordScopeCounts): string[] {
+export function describeScopeCounts(
+  counts: EvtxRecordScopeCounts,
+  kind: EvtxRecordScopeKind,
+): string[] {
+  const chain = kind === "chain";
   const sentences: string[] = [];
-  const events = (n: number) => `${formatCount(n)} cited ${n === 1 ? "event" : "events"}`;
+  const events = (n: number) =>
+    chain
+      ? `${formatCount(n)} ${n === 1 ? "event" : "events"} of this chain`
+      : `${formatCount(n)} cited ${n === 1 ? "event" : "events"}`;
+  const entries = (n: number) =>
+    chain
+      ? `${formatCount(n)} ${n === 1 ? "entry" : "entries"} of this chain`
+      : `${formatCount(n)} cited ${n === 1 ? "entry" : "entries"}`;
   if (counts.notLoaded > 0) {
     sentences.push(`${events(counts.notLoaded)} ${counts.notLoaded === 1 ? "is" : "are"} not loaded.`);
   }
@@ -415,47 +644,28 @@ export function describeScopeCounts(counts: EvtxRecordScopeCounts): string[] {
       `${events(counts.noUsableIdentity)} cannot be matched to a loaded event: no usable record identity.`,
     );
   }
+  const unresolved = counts.unresolved ?? 0;
+  if (unresolved > 0) {
+    // No absence is claimed: the record these name was never looked for, so it may well be loaded.
+    sentences.push(
+      `${entries(unresolved)} could not be matched to a record because ${unresolved === 1 ? "its timeline item was" : "their timeline items were"} not read.`,
+    );
+  }
   if (counts.ambiguous > 0) {
     sentences.push(
-      `${formatCount(counts.ambiguous)} cited ${counts.ambiguous === 1 ? "reference matches" : "references match"} more than one loaded event. Every match is included.`,
+      chain
+        ? `${entries(counts.ambiguous)} ${counts.ambiguous === 1 ? "matches" : "match"} more than one loaded event. Every match is included.`
+        : `${formatCount(counts.ambiguous)} cited ${counts.ambiguous === 1 ? "reference matches" : "references match"} more than one loaded event. Every match is included.`,
     );
   }
   if (counts.bounded) {
-    sentences.push("The diagnosis response is bounded, so this finding may cite more events than were sent.");
+    sentences.push(
+      chain
+        ? "Edges were not all loaded, so this chain may include more events."
+        : "The diagnosis response is bounded, so this finding may cite more events than were sent.",
+    );
   }
   return sentences;
-}
-
-export interface CorrelationBreakdown {
-  exact: number;
-  candidate: number;
-  ambiguous: number;
-  coverageBlocked: number;
-  /** The preview holds every edge the overview counts. */
-  complete: boolean;
-  /** exact + candidate + ambiguous: the only edges that are correlations. */
-  correlations: number;
-}
-
-/**
- * Correlation counts for the summary card. Only exact, candidate and ambiguous edges are
- * correlations; a coverage-blocked relation is a coverage state (soul.md) and is counted apart,
- * never folded into the total.
- */
-export function correlationBreakdown(summary: DiagnosisSummary): CorrelationBreakdown {
-  const count = (status: string) =>
-    summary.correlations.filter((edge) => edge.status === status).length;
-  const exact = count("exact");
-  const candidate = count("candidate");
-  const ambiguous = count("ambiguous");
-  return {
-    exact,
-    candidate,
-    ambiguous,
-    coverageBlocked: count("coverageBlocked"),
-    complete: summary.correlations.length >= summary.overview.correlationCount,
-    correlations: exact + candidate + ambiguous,
-  };
 }
 
 /**

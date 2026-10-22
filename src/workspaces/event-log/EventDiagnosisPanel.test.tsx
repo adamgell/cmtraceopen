@@ -6,8 +6,15 @@ import { getAllThemes, getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import { DETAIL_RENDER_CAP, OUTCOME_LABELS, EventDiagnosisPanel } from "./EventDiagnosisPanel";
+import { useEvtxCorrelationStore } from "./evtx-correlation-store";
+import { fixtureEdges, makeData, type DataOptions } from "./evtx-correlation-test-fixtures";
+import { useEvtxLayoutStore } from "./evtx-layout-store";
+import {
+  EvtxCorrelationProvider,
+  UNAVAILABLE_CORRELATION,
+  type EvtxCorrelationData,
+} from "./useEvtxCorrelation";
 import type {
-  DiagnosisCorrelationEdge,
   DiagnosisCoverageGap,
   DiagnosisFinding,
   DiagnosisSummary,
@@ -243,9 +250,8 @@ describe("EventDiagnosisPanel", () => {
     expect(screen.getByTestId("overview-counts")).toHaveTextContent(
       "1 actionable finding, 1 source coverage gap",
     );
-    expect(screen.getByRole("region", { name: "Correlations" })).toHaveTextContent(
-      "1 correlation",
-    );
+    // The Correlations card reads the shared model, which this render does not provide.
+    expect(screen.queryByRole("region", { name: "Correlations" })).toBeNull();
     expect(screen.getByText("Issues detected")).toBeTruthy();
     expect(screen.getByText("Evidence contains confirmed operational failure(s).")).toBeTruthy();
   });
@@ -465,12 +471,35 @@ describe("EventDiagnosisPanel", () => {
       expect(screen.queryByText(/ordinary\.evtx/)).toBeNull();
     });
 
-    it("keeps the per-edge correlation rows reachable", () => {
-      render(<EventDiagnosisPanel summary={summary} />);
+    it("lists no correlation row and no correlation count, whatever the summary carries (#838 ruling 1)", () => {
+      // The summary previews one candidate edge and counts 849 relations of every status. Neither
+      // is a correlation count the UI may show: the Correlations card and the Correlation view,
+      // built from the timeline's edges, are the only correlation surfaces.
+      render(
+        <EventDiagnosisPanel
+          summary={{ ...summary, overview: { ...summary.overview, correlationCount: 849 } }}
+        />,
+      );
       expand("Show diagnosis details");
+      const details = disclosure("Show diagnosis details");
+      expect(details).toHaveAttribute("open");
+      expect(details.textContent).not.toMatch(/Correlation:|Correlation evidence|correlations? omitted|848|849/);
+      expect(screen.queryByText(/event-1 activityId=activity-1/)).toBeNull();
+      // And nowhere else in the panel either.
+      expect(document.body.textContent).not.toMatch(/848 correlations|849 correlations|Correlation: candidate/);
+    });
 
-      expect(screen.getByText(/Correlation: candidate \(candidateIdentifier\) event-1/)).toBeTruthy();
-      expect(screen.getByText(/event-1 activityId=activity-1/)).toBeTruthy();
+    it("offers the disclosure only when there is an error-token event to show", () => {
+      render(
+        <EventDiagnosisPanel
+          summary={{
+            ...summary,
+            events: [],
+            overview: { ...summary.overview, correlationCount: 849, errorTokenEventCount: 0 },
+          }}
+        />,
+      );
+      expect(screen.queryByText("Show diagnosis details")).toBeNull();
     });
   });
 
@@ -498,7 +527,7 @@ describe("EventDiagnosisPanel", () => {
     expand("Coverage gaps (4,228)");
     expect(screen.getByText("4,227 coverage gaps omitted.")).toBeTruthy();
     expand("Show diagnosis details");
-    expect(screen.getByText("848 correlations omitted.")).toBeTruthy();
+    expect(screen.queryByText(/correlations omitted/)).toBeNull();
     expect(
       screen.getByText("206 error-token event details omitted."),
     ).toBeTruthy();
@@ -584,44 +613,118 @@ describe("EventDiagnosisPanel", () => {
     });
   });
 
-  describe("correlation summary", () => {
-    it("reports the authoritative total with a per-status breakdown of the preview", () => {
-      render(<EventDiagnosisPanel summary={summary} />);
-      const card = screen.getByRole("region", { name: "Correlations" });
-      expect(card).toHaveTextContent("1 correlation");
-      expect(card).toHaveTextContent("0 exact \u00b7 1 candidate \u00b7 0 ambiguous");
-    });
-
-    it("says when the breakdown covers only a preview and states no correlation total", () => {
-      render(
-        <EventDiagnosisPanel
-          summary={{ ...summary, overview: { ...summary.overview, correlationCount: 849 } }}
-        />,
-      );
-      const card = screen.getByRole("region", { name: "Correlations" });
-      expect(card).toHaveTextContent("Showing the first 1 of 849 relations");
-      expect(card).not.toHaveTextContent(/849 correlations/);
-    });
-
-    it("never counts a coverage-blocked relation as a correlation", () => {
-      const edge = (status: DiagnosisCorrelationEdge["status"], id: string) => ({
-        ...summary.correlations[0],
-        status,
-        left: id,
+  describe("correlation summary (the shared edges-only model)", () => {
+    /** Counts-only data as the hook stores it: the real chain model over these edges, no items. */
+    const counted = (extra: Partial<DataOptions> = {}): EvtxCorrelationData =>
+      makeData({
+        edges: fixtureEdges("pairAndGroupDisjoint"),
+        items: [],
+        hasItems: false,
+        stage: "edgesOnly",
+        ...extra,
       });
+    const renderCard = (data: EvtxCorrelationData, props: { updating?: boolean; summary?: DiagnosisSummary } = {}) =>
       render(
-        <EventDiagnosisPanel
-          summary={{
-            ...summary,
-            correlations: [edge("exact", "a"), edge("coverageBlocked", "b"), edge("coverageBlocked", "c")],
-            overview: { ...summary.overview, correlationCount: 3 },
-          }}
-        />,
+        <EvtxCorrelationProvider value={data}>
+          <EventDiagnosisPanel summary={props.summary ?? summary} updating={props.updating} />
+        </EvtxCorrelationProvider>,
       );
-      const card = screen.getByRole("region", { name: "Correlations" });
-      expect(card).toHaveTextContent(/^Correlations1 correlation1 exact/);
-      expect(card).toHaveTextContent("2 coverage blocked");
-      expect(card).not.toHaveTextContent("3 correlations");
+    const card = () => screen.getByRole("region", { name: "Correlations" });
+
+    beforeEach(() => {
+      useEvtxLayoutStore.setState({ activeView: "table", railTab: "insights" });
+      useEvtxCorrelationStore.setState({ selectedChainId: null });
+    });
+
+    it("counts chains by strength from the model, not from the diagnosis summary", () => {
+      // The summary says 849 relations and previews one candidate edge; the model has an exact pair
+      // and an ambiguous group. The card shows the model.
+      renderCard(counted(), {
+        summary: { ...summary, overview: { ...summary.overview, correlationCount: 849 } },
+      });
+      expect(card()).toHaveTextContent("2 chains");
+      expect(card()).toHaveTextContent("1 exact \u00b7 0 candidate \u00b7 1 ambiguous");
+      expect(card()).not.toHaveTextContent(/849|Showing the first/);
+    });
+
+    it("reads 'unknown' while the model is not in, never 0", () => {
+      renderCard({ ...UNAVAILABLE_CORRELATION, stage: "pending" });
+      expect(screen.getByTestId("correlation-card-headline")).toHaveTextContent("unknown");
+      expect(card().textContent).not.toMatch(/\b0\b/);
+    });
+
+    it.each([
+      ["not a number", Number.NaN],
+      ["negative", -1],
+    ])("reads 'unknown' when the session's edge total is %s, with the paged-and-bounded sentence", (_why, total) => {
+      renderCard(counted({ totalEdges: total }));
+      expect(screen.getByTestId("correlation-card-headline")).toHaveTextContent("unknown");
+      expect(card()).toHaveTextContent("the number of correlation edges in this session is not known");
+      expect(card().textContent).not.toMatch(/\b0 chains|\b0 exact/);
+    });
+
+    it("states the paged-and-bounded shortfall when edges were not all loaded", () => {
+      renderCard(counted({ totalEdges: 12 }));
+      expect(card()).toHaveTextContent(
+        "Correlation details are paged and bounded: 8 correlation edges were not loaded, so chains may be incomplete.",
+      );
+      expect(card()).toHaveTextContent("2 chains");
+    });
+
+    it("counts a coverage blocked row apart, never as a chain", () => {
+      renderCard(counted({ edges: fixtureEdges("gappedPair") }));
+      expect(screen.getByTestId("correlation-card-headline")).toHaveTextContent("0 chains");
+      expect(card()).toHaveTextContent("1 coverage blocked");
+      expect(card()).not.toHaveTextContent("exact");
+    });
+
+    it("has no card without a session, nor for a session known to hold no edge", () => {
+      renderCard(UNAVAILABLE_CORRELATION);
+      expect(screen.queryByRole("region", { name: "Correlations" })).toBeNull();
+      cleanup();
+      renderCard(counted({ edges: [], totalEdges: 0 }));
+      expect(screen.queryByRole("region", { name: "Correlations" })).toBeNull();
+    });
+
+    it("still shows a card for a session with no loaded edge but more in it", () => {
+      renderCard(counted({ edges: [], totalEdges: 5 }));
+      expect(card()).toHaveTextContent("0 chains");
+      expect(card()).toHaveTextContent("5 correlation edges were not loaded");
+    });
+
+    it("opens the Correlation view from its link, and leaves the rail tab alone (acceptance 21)", () => {
+      useEvtxLayoutStore.setState({ railTab: "insights" });
+      useEvtxCorrelationStore.setState({ selectedChainId: "keep" });
+      renderCard(counted());
+      fireEvent.click(within(card()).getByRole("button", { name: "Open correlation view" }));
+      expect(useEvtxLayoutStore.getState().activeView).toBe("correlation");
+      expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
+      expect(useEvtxCorrelationStore.getState().selectedChainId).toBe("keep");
+    });
+
+    it("keeps the link in an unknown state, where the view says what is being read", () => {
+      renderCard({ ...UNAVAILABLE_CORRELATION, stage: "pending" });
+      expect(within(card()).getByRole("button", { name: "Open correlation view" })).toBeInTheDocument();
+    });
+
+    it("dims for a newer session's counts and for a rebuilding diagnosis", () => {
+      const data = counted({ updating: true });
+      const view = renderCard(data);
+      expect(card()).toHaveAttribute("aria-busy", "true");
+      expect(card()).toHaveStyle({ opacity: "0.6" });
+      view.unmount();
+      renderCard(counted(), { updating: true });
+      expect(card()).toHaveAttribute("aria-busy", "true");
+      cleanup();
+      renderCard(counted());
+      expect(card()).not.toHaveAttribute("aria-busy");
+    });
+
+    it("builds no item to count: a model without items is enough", () => {
+      const data = counted();
+      expect(data.hasItems).toBe(false);
+      renderCard(data);
+      expect(card()).toHaveTextContent("2 chains");
     });
   });
 
@@ -809,14 +912,12 @@ describe("EventDiagnosisPanel", () => {
     it("dims every one of them and clears the marks when the build lands", () => {
       const { rerender } = render(<EventDiagnosisPanel summary={bounded} updating />);
       busy(screen.getByText(/Coverage gaps/, { selector: "summary" }).closest("details"));
-      busy(screen.getByRole("region", { name: "Correlations" }));
       busy(screen.getByText("2 actionable findings omitted."));
       busy(screen.getByText(/Show diagnosis details/, { selector: "summary" }).closest("details"));
 
       rerender(<EventDiagnosisPanel summary={bounded} />);
       for (const element of [
         screen.getByText(/Coverage gaps/, { selector: "summary" }).closest("details"),
-        screen.getByRole("region", { name: "Correlations" }),
         screen.getByText("2 actionable findings omitted."),
       ]) {
         expect(element).not.toHaveAttribute("aria-busy");
@@ -841,7 +942,6 @@ describe("EventDiagnosisPanel", () => {
       for (const text of [
         "2 actionable findings omitted.",
         "3 coverage gaps omitted.",
-        "4 correlations omitted.",
         "2 error-token event details omitted.",
       ]) {
         expect(effectiveOpacity(screen.getByText(text)), text).toBeCloseTo(0.6, 5);
@@ -849,6 +949,8 @@ describe("EventDiagnosisPanel", () => {
       // The rows inside a stale disclosure carry no dimming of their own.
       expect(screen.getByText("3 coverage gaps omitted.").style.opacity).toBe("");
       expect(screen.getByText("2 actionable findings omitted.").style.opacity).toBe("0.6");
+      // The summary also counts 5 relations; the panel does not turn that into an omitted line.
+      expect(screen.queryByText(/correlations? omitted/)).toBeNull();
     });
 
     it("dims 'No actionable findings.'", () => {

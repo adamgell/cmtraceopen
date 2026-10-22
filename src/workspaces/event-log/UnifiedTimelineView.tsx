@@ -9,7 +9,13 @@ import type {
 import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { formatEventTime } from "./evtx-time";
+import { knownTotal } from "./evtx-correlation-load";
 import { useEvtxStore } from "./evtx-store";
+import {
+  EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT,
+  EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT,
+  EVENT_LOG_TIMELINE_PAGE_SIZE,
+} from "./evtx-timeline-paging";
 import {
   isEventOrigin,
   originContext,
@@ -20,12 +26,21 @@ import {
   type TimelineSeverity,
   type UnifiedTimeline,
 } from "./unified-timeline";
+import { timelineStripLayout } from "./evtx-timeline-strip";
 
 const UNPLACED_PREVIEW_LIMIT = 100;
-export const EVENT_LOG_TIMELINE_PAGE_SIZE = 1_000;
+
+/**
+ * The total a page reports for a preview IT carries, or null when it cannot be trusted: missing,
+ * not a count, or below what the preview already holds (a contradiction is not proof). A preview
+ * is paired with its own page's total and never with a session total from another reply, and an
+ * unknown total is never read as 0 (soul.md: unknown is never zero).
+ */
+function pagedTotal(total: unknown, shown: number): number | null {
+  const known = knownTotal(total);
+  return known !== null && known >= shown ? known : null;
+}
 export const EVENT_LOG_TIMELINE_CACHE_RADIUS = 1;
-export const EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT = 24 * 1024 * 1024;
-export const EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT = 2;
 
 export interface TimelinePageCacheSegment {
   items: TimelineItem[];
@@ -274,7 +289,10 @@ export function UnifiedTimelineView({
     [],
   );
 
-  const totalItems = status?.totalItems ?? 0;
+  // The row count of the virtualizer: no rows while the size is not known. What the view SAYS about
+  // an unknown size is `itemsTotal === null` below, never "nothing to place".
+  const itemsTotal = knownTotal(status?.totalItems);
+  const totalItems = itemsTotal ?? 0;
 
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -283,6 +301,10 @@ export function UnifiedTimelineView({
     estimateSize: () => metrics.rowHeight + 2,
     overscan: 12,
   });
+
+  // One row as the list measures it (the virtualizer's estimate), and what the strip keeps of it.
+  const rowPx = metrics.rowHeight + 2;
+  const { floorPx, detailsMaxPx } = timelineStripLayout(rowPx);
 
   const virtualRows = virtualizer.getVirtualItems();
   const firstVirtualIndex = virtualRows[0]?.index ?? 0;
@@ -495,11 +517,10 @@ export function UnifiedTimelineView({
     [initialPage],
   );
 
-  const counts = {
-    logs: status?.logItems ?? 0,
-    events: status?.eventItems ?? 0,
-    unplaced: status?.totalUnplaced ?? 0,
-  };
+  // Counts the session reported. A session that is not there reports nothing, and nothing is not 0.
+  const sessionKnown = status !== null || initialPage !== null;
+  const logItems = knownTotal(status?.logItems);
+  const eventItems = knownTotal(status?.eventItems);
   const correlationEdges = previewTimeline.edges;
   const coverageGaps = previewTimeline.coverageGaps;
   const correlationCounts = useMemo(() => {
@@ -507,30 +528,38 @@ export function UnifiedTimelineView({
     for (const edge of correlationEdges) result[edge.strength] += 1;
     return result;
   }, [correlationEdges]);
-  const totalCorrelationEdges = status?.totalEdges ?? 0;
-  const coverageGapCount = status?.totalCoverageGaps ?? 0;
-  const unplacedCount = status?.totalUnplaced ?? 0;
+  // Each preview is paired with the SAME page's own total (null when it is not a trusted count).
+  const totalCorrelationEdges = pagedTotal(initialPage?.totalEdges, correlationEdges.length);
+  const coverageGapCount = pagedTotal(initialPage?.totalCoverageGaps, coverageGaps.length);
+  const unplacedCount = pagedTotal(initialPage?.totalUnplaced, previewTimeline.unplaced.length);
   const dropped =
     unplacedCount === 0
       ? null
-      : `${unplacedCount.toLocaleString()} timeline ${unplacedCount === 1 ? "item" : "items"} could not be placed: no timestamp`;
+      : unplacedCount === null
+        ? "The number of timeline items that could not be placed is not known"
+        : `${unplacedCount.toLocaleString()} timeline ${unplacedCount === 1 ? "item" : "items"} could not be placed: no timestamp`;
   const unplacedPreview = previewTimeline.unplaced.slice(
     0,
     UNPLACED_PREVIEW_LIMIT,
   );
-  const unplacedOmittedCount = unplacedCount - unplacedPreview.length;
+  const unplacedOmittedCount =
+    unplacedCount === null ? 0 : unplacedCount - unplacedPreview.length;
   const correlationPreview = correlationEdges.slice(0, UNPLACED_PREVIEW_LIMIT);
   const correlationOmittedCount =
-    totalCorrelationEdges - correlationPreview.length;
+    totalCorrelationEdges === null ? 0 : totalCorrelationEdges - correlationPreview.length;
   const coverageGapPreview = coverageGaps.slice(0, UNPLACED_PREVIEW_LIMIT);
-  const coverageGapOmittedCount = coverageGapCount - coverageGapPreview.length;
+  const coverageGapOmittedCount =
+    coverageGapCount === null ? 0 : coverageGapCount - coverageGapPreview.length;
 
   const fontSize = metrics.fontSize;
   const smallFontSize = Math.max(9, fontSize - 3);
   const monoFontSize = Math.max(10, fontSize - 1);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+    <div
+      data-testid="unified-timeline"
+      style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
+    >
       <div
         style={{
           display: "flex",
@@ -545,19 +574,33 @@ export function UnifiedTimelineView({
           flexShrink: 0,
         }}
       >
-        <span>{counts.logs.toLocaleString()} log lines</span>
-        <span>{counts.events.toLocaleString()} events</span>
+        {!sessionKnown && <span>counts unknown</span>}
+        {sessionKnown && (
+          <span>{logItems === null ? "log lines unknown" : `${logItems.toLocaleString()} log lines`}</span>
+        )}
+        {sessionKnown && (
+          <span>{eventItems === null ? "events unknown" : `${eventItems.toLocaleString()} events`}</span>
+        )}
         {/* Only shown when something was actually dropped; a "0 unplaced" badge would read as
-            reassurance and invite no attention. */}
-        {dropped && (
+            reassurance and invite no attention. An unknown number is not that reassurance: it is said. */}
+        {sessionKnown && dropped && (
           <span
             style={{ color: tokens.colorPaletteMarigoldForeground1 }}
-            title="These carried no timestamp, so placing them would invent a sequence the evidence does not support"
+            title={
+              unplacedCount === null
+                ? "The session did not report a trusted count of unplaced items"
+                : "These carried no timestamp, so placing them would invent a sequence the evidence does not support"
+            }
           >
             {dropped}
           </span>
         )}
-        {totalCorrelationEdges > correlationEdges.length ? (
+        {sessionKnown && totalCorrelationEdges === null ? (
+          <span title="The number of correlation edges in this session is not known">
+            correlations unknown
+          </span>
+        ) : null}
+        {totalCorrelationEdges !== null && totalCorrelationEdges > correlationEdges.length ? (
           <span title="Correlation details are paged and bounded">
             correlations {totalCorrelationEdges.toLocaleString()}
           </span>
@@ -586,7 +629,10 @@ export function UnifiedTimelineView({
             ambiguous {correlationCounts.ambiguous}
           </span>
         )}
-        {coverageGapCount > 0 && (
+        {sessionKnown && coverageGapCount === null && (
+          <span title="The number of coverage gaps in this session is not known">coverage gaps unknown</span>
+        )}
+        {coverageGapCount !== null && coverageGapCount > 0 && (
           <span
             style={{ color: tokens.colorPaletteMarigoldForeground1 }}
             title="Missing or unsupported identity coverage prevents a stronger conclusion"
@@ -620,7 +666,8 @@ export function UnifiedTimelineView({
           </Button>
         </div>
       )}
-      {(totalCorrelationEdges > 0 || coverageGapCount > 0) && (
+      {((totalCorrelationEdges === null ? correlationEdges.length > 0 : totalCorrelationEdges > 0) ||
+        (coverageGapCount === null ? coverageGaps.length > 0 : coverageGapCount > 0)) && (
         <details
           style={{
             borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -641,7 +688,7 @@ export function UnifiedTimelineView({
               display: "grid",
               gap: "4px",
               padding: "0 12px 6px",
-              maxHeight: "min(320px, 40vh)",
+              maxHeight: `min(${detailsMaxPx}px, 40vh)`,
               overflowY: "auto",
               overflowWrap: "anywhere",
             }}
@@ -692,18 +739,30 @@ export function UnifiedTimelineView({
                 coverage: {gap.reason} ({gap.source})
               </div>
             ))}
-            {coverageGapOmittedCount > 0 && (
+            {coverageGapCount !== null && coverageGapOmittedCount > 0 && (
               <div>
                 Showing the first {coverageGapPreview.length.toLocaleString()} of{" "}
                 {coverageGapCount.toLocaleString()} coverage gaps;{" "}
                 {coverageGapOmittedCount.toLocaleString()} omitted.
               </div>
             )}
-            {correlationOmittedCount > 0 && (
+            {coverageGapCount === null && coverageGapPreview.length > 0 && (
+              <div>
+                Showing the first {coverageGapPreview.length.toLocaleString()} coverage gaps; the number
+                in this session is not known.
+              </div>
+            )}
+            {totalCorrelationEdges !== null && correlationOmittedCount > 0 && (
               <div>
                 Showing the first {correlationPreview.length.toLocaleString()} of{" "}
                 {totalCorrelationEdges.toLocaleString()} correlations;{" "}
                 {correlationOmittedCount.toLocaleString()} omitted.
+              </div>
+            )}
+            {totalCorrelationEdges === null && correlationPreview.length > 0 && (
+              <div>
+                Showing the first {correlationPreview.length.toLocaleString()} correlations; the number
+                in this session is not known.
               </div>
             )}
           </div>
@@ -712,7 +771,11 @@ export function UnifiedTimelineView({
 
       {totalItems === 0 ? (
         <div
+          data-testid="unified-timeline-empty"
           style={{
+            // A floor, not a size: it can still grow, and shrink only down to three rows.
+            minHeight: `${floorPx}px`,
+            boxSizing: "border-box",
             padding: "24px",
             textAlign: "center",
             color: tokens.colorNeutralForeground3,
@@ -723,6 +786,9 @@ export function UnifiedTimelineView({
         >
           {pending ? (
             "Building the unified timeline..."
+          ) : itemsTotal === null ? (
+            // No session reported a size: that is not "nothing to place".
+            "The unified timeline is not available: its size is not known."
           ) : unplacedCount === 0 ? (
             "Nothing to place on the timeline yet. Load a log file and an event source to correlate them."
           ) : (
@@ -792,7 +858,13 @@ export function UnifiedTimelineView({
                   </div>
                 ))}
               </div>
-              {unplacedOmittedCount > 0 && (
+              {unplacedCount === null && unplacedPreview.length > 0 && (
+                <div style={{ marginTop: "12px", fontSize: `${smallFontSize}px` }}>
+                  Showing the first {unplacedPreview.length.toLocaleString()} unplaced entries; the number
+                  in this session is not known.
+                </div>
+              )}
+              {unplacedCount !== null && unplacedOmittedCount > 0 && (
                 <div style={{ marginTop: "12px", fontSize: `${smallFontSize}px` }}>
                   Showing the first {unplacedPreview.length.toLocaleString()} of{" "}
                   {unplacedCount.toLocaleString()} unplaced entries;{" "}
@@ -806,10 +878,12 @@ export function UnifiedTimelineView({
       ) : (
         <div
           ref={parentRef}
+          data-testid="unified-timeline-list"
           style={{
             overflowY: "auto",
             flex: 1,
-            minHeight: 0,
+            // Three rows, or all it has when that is less. Not 0: see evtx-timeline-strip.ts.
+            minHeight: `${Math.min(floorPx, virtualizer.getTotalSize())}px`,
             backgroundColor: tokens.colorNeutralBackground1,
             fontFamily: LOG_UI_FONT_FAMILY,
           }}
@@ -947,7 +1021,7 @@ export function UnifiedTimelineView({
               );
             })}
           </div>
-          {unplacedCount > 0 && (
+          {(unplacedCount === null ? unplacedPreview.length > 0 : unplacedCount > 0) && (
             <div
               style={{
                 padding: "10px 12px",
@@ -965,7 +1039,13 @@ export function UnifiedTimelineView({
                   {originContext(unplaced.origin)}
                 </div>
               ))}
-              {unplacedOmittedCount > 0 && (
+              {unplacedCount === null && (
+                <div style={{ padding: "4px 0" }}>
+                  Showing the first {unplacedPreview.length.toLocaleString()} unplaced entries; the
+                  number in this session is not known.
+                </div>
+              )}
+              {unplacedCount !== null && unplacedOmittedCount > 0 && (
                 <div style={{ padding: "4px 0" }}>
                   Showing the first {unplacedPreview.length.toLocaleString()} of{" "}
                   {unplacedCount.toLocaleString()} unplaced entries;{" "}

@@ -311,7 +311,7 @@ describe("EventLogWorkspace three-column shell", () => {
 
   it("shows a placeholder for views that are not built yet, behind the same tablist", () => {
     render(<EventLogWorkspace />);
-    for (const name of ["Grouped", "Timeline", "Charts", "Correlation"]) {
+    for (const name of ["Grouped", "Timeline", "Charts"]) {
       fireEvent.click(screen.getByRole("tab", { name }));
       expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
       expect(screen.getByRole("tab", { name })).toHaveAttribute("aria-selected", "true");
@@ -319,6 +319,21 @@ describe("EventLogWorkspace three-column shell", () => {
       expect(screen.getAllByText(/Not implemented in this phase/).length).toBeGreaterThan(0);
       expect(screen.getByTestId("records-table")).not.toBeVisible();
     }
+  });
+
+  it("builds the Correlation view instead of a placeholder, behind the same tablist and panel", async () => {
+    render(<EventLogWorkspace />);
+    fireEvent.click(screen.getByRole("tab", { name: "Correlation" }));
+    expect(await screen.findByTestId("correlation-view")).toBeVisible();
+    expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Correlation" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByText("Correlation view")).toBeNull();
+    expect(screen.getByRole("tabpanel", { name: "Correlation" })).toContainElement(
+      screen.getByTestId("correlation-view"),
+    );
+    // No analysis session is built yet in this test: the view says so rather than showing a count.
+    expect(screen.getByTestId("correlation-view")).toHaveTextContent("Reading correlation edges");
+    expect(screen.getByTestId("records-table")).not.toBeVisible();
   });
 
   it("keeps selection and filters when switching views and returning to the table", () => {

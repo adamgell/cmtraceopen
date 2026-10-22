@@ -409,6 +409,29 @@ describe("a scope's counts are of references", () => {
     expect(held()?.counts).toEqual({ notLoaded: 1, noUsableIdentity: 2, ambiguous: 0, bounded: true });
   });
 
+  it("keeps the unresolved count through a prune, as its own class and not as not loaded", async () => {
+    useEvtxStore.getState().setRecordScope(
+      refScope([[loaded[3]], [loaded[0]]], { unresolved: 4 }),
+    );
+    expect(held()?.counts.unresolved).toBe(4);
+    await useEvtxStore.getState().clearChannel("Application", true);
+    expect(held()?.counts).toEqual({
+      notLoaded: 1,
+      noUsableIdentity: 0,
+      ambiguous: 0,
+      bounded: false,
+      unresolved: 4,
+    });
+  });
+
+  it("keeps the unresolved count for a scope with no references too", async () => {
+    useEvtxStore
+      .getState()
+      .setRecordScope(scopeOf([loaded[0], loaded[3]], { counts: { ...NO_COUNTS, unresolved: 2 } }));
+    await useEvtxStore.getState().clearChannel("Application", true);
+    expect(held()?.counts).toMatchObject({ notLoaded: 1, unresolved: 2 });
+  });
+
   it("falls back to one reference per record for a scope that has none", async () => {
     useEvtxStore.getState().setRecordScope(scopeOf([loaded[0], loaded[1], loaded[3]]));
     await useEvtxStore.getState().clearChannel("Application", true);

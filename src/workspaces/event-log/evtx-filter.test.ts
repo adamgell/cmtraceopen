@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   compileFieldQuery,
   countByLevel,
+  countScopeReferences,
   countHiddenForWantOfTimestamp,
   EVTX_LEVELS,
   EVTX_LEVEL_RANK,
@@ -1023,5 +1024,29 @@ describe("transient criteria in selectVisibleRecords", () => {
         expect(twoPass(value)).toBeGreaterThan(3);
       });
     });
+  });
+});
+
+describe("countScopeReferences", () => {
+  const one = [record({ id: 1 })];
+  const two = [record({ id: 2 }), record({ id: 3 })];
+
+  it("counts a reference that names no record as not loaded, and one that names several as ambiguous", () => {
+    expect(countScopeReferences([one, [], two], 0, false)).toEqual({
+      notLoaded: 1,
+      noUsableIdentity: 0,
+      ambiguous: 1,
+      bounded: false,
+    });
+  });
+
+  it("carries unresolved references as their own class, never as not loaded", () => {
+    const counts = countScopeReferences([one], 1, true, 3);
+    expect(counts).toEqual({ notLoaded: 0, noUsableIdentity: 1, ambiguous: 0, bounded: true, unresolved: 3 });
+  });
+
+  it("leaves the field out when there are none, so a finding's counts keep their shape", () => {
+    expect("unresolved" in countScopeReferences([one], 0, false)).toBe(false);
+    expect("unresolved" in countScopeReferences([one], 0, false, 0)).toBe(false);
   });
 });

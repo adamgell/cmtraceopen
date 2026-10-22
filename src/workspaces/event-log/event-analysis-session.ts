@@ -13,11 +13,11 @@ import {
   type EventLogAnalysisSessionStatus,
   type EventLogAnalysisTimelinePage,
 } from "../../lib/commands";
+import { EVENT_LOG_TIMELINE_PAGE_SIZE } from "./evtx-timeline-paging";
 import type { DiagnosisSummary, EvtxCoverageGap, EvtxRecord } from "./types";
 
 export const EVENT_LOG_ANALYSIS_CHUNK_RECORD_LIMIT = 1_000;
 export const EVENT_LOG_ANALYSIS_CHUNK_BYTE_LIMIT = 8 * 1024 * 1024;
-export const EVENT_LOG_ANALYSIS_PAGE_SIZE = 1_000;
 export const EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT = 256;
 export const EVENT_LOG_ANALYSIS_MESSAGE_BYTE_LIMIT = 8 * 1024;
 
@@ -491,7 +491,7 @@ export async function buildEventLogAnalysisSession({
     const status = await finalizeEventLogAnalysisSession(sessionId);
     if (cancelled()) throw new EventLogAnalysisCancelled();
     const [initialPage, diagnosis] = await Promise.all([
-      queryEventLogAnalysisTimeline(sessionId, 0, EVENT_LOG_ANALYSIS_PAGE_SIZE),
+      queryEventLogAnalysisTimeline(sessionId, 0, EVENT_LOG_TIMELINE_PAGE_SIZE),
       diagnoseEventLogAnalysisSession(sessionId, coverageGaps),
     ]);
     if (cancelled()) throw new EventLogAnalysisCancelled();
