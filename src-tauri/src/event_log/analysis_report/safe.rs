@@ -378,20 +378,23 @@ pub(super) fn flatten(text: &str) -> String {
     out
 }
 
-/// The invisible set, in one place. Characters that draw nothing, or that reorder what is drawn,
-/// and so can sit inside an identifier without changing how it reads:
+/// The invisible set, in one place. Characters that can sit inside an identifier without breaking
+/// how it reads, because they draw nothing, reorder what is drawn, or are format marks:
 ///
 /// - Unicode general category Cf (zero width space, joiners, word joiner, byte order mark, soft
-///   hyphen, the bidirectional controls, tag characters);
+///   hyphen, the bidirectional controls, tag characters). Cf also holds a few prepended marks that
+///   do draw (U+0600 to U+0605 and the like); deleting those is the safe direction;
 /// - the combining grapheme joiner U+034F;
 /// - the Hangul fillers U+115F, U+1160, U+3164 and U+FFA0;
-/// - the variation selectors U+FE00 to U+FE0F and U+E0100 to U+E01EF.
+/// - the variation selectors U+FE00 to U+FE0F and U+E0100 to U+E01EF, and the Mongolian free
+///   variation selectors U+180B to U+180D and U+180F;
+/// - the Khmer inherent vowels U+17B4 and U+17B5, which render as nothing.
 ///
 /// Homoglyphs and fullwidth forms are not normalized.
 static INVISIBLE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"[\p{Cf}\x{34F}\x{115F}\x{1160}\x{3164}\x{FFA0}",
-        r"\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}]"
+        r"\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}\x{180B}-\x{180D}\x{180F}\x{17B4}\x{17B5}]"
     ))
     .expect("the invisible character class must compile")
 });
