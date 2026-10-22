@@ -7,8 +7,10 @@
  *
  * The pair a text sits on is read from the DOM: its own color, or the nearest ancestor's, against its
  * own surface, or the nearest ancestor's, or the rail's (`colorNeutralBackground2`) where none is set.
- * The kind chip and the strength badge write their own pair and are measured in their own tests as
- * well as here.
+ * A text with no color of its own anywhere above it is only allowed inside a library control (a Fluent
+ * class on it or above it, which sets the control's color); anywhere else it FAILS, because a text
+ * the component never colored is one this test cannot measure (review L4). The kind chip and the
+ * strength badge write their own pair and are measured in their own tests as well as here.
  */
 import { tokens } from "@fluentui/react-components";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -96,6 +98,9 @@ const surfaceOf = (node: HTMLElement): string => {
   return tokens.colorNeutralBackground2;
 };
 
+/** A Fluent control: the element, or one above it, carries a `fui-` class, and the library colors it. */
+const isInLibraryControl = (owner: HTMLElement): boolean => owner.closest("[class*='fui-']") !== null;
+
 /** Every element that holds text of its own and is not decoration. */
 function textNodes(container: HTMLElement): HTMLElement[] {
   const found: HTMLElement[] = [];
@@ -110,6 +115,41 @@ function textNodes(container: HTMLElement): HTMLElement[] {
   return found;
 }
 
+/**
+ * Texts with no color written on them or above them, outside a library control. The text of a Fluent
+ * button, link or tab takes its color from the library's class; any other such text is one this test
+ * cannot measure, so it is reported and the test fails on it (review L4).
+ */
+function uncoloredTexts(container: HTMLElement): string[] {
+  return textNodes(container)
+    .filter((owner) => colorOf(owner) === null && !isInLibraryControl(owner))
+    .map((owner) => `"${owner.textContent!.trim().slice(0, 40)}" <${owner.tagName.toLowerCase()}>`);
+}
+
+describe("the check for a text nobody colored", () => {
+  const inDom = (html: string) => {
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    document.body.appendChild(host);
+    return host;
+  };
+  afterEach(() => document.body.replaceChildren());
+
+  it("reports a text with no color of its own or above it, and a summary like the nearby group's", () => {
+    expect(uncoloredTexts(inDom("<div><span>plain</span></div>"))).toEqual(['"plain" <span>']);
+    expect(uncoloredTexts(inDom("<details><summary>Nearby, no loaded link (1)</summary></details>"))).toEqual([
+      '"Nearby, no loaded link (1)" <summary>',
+    ]);
+  });
+
+  it("lets a text through that has a color on it or above it, or sits in a library control", () => {
+    expect(uncoloredTexts(inDom('<span style="color: red">x</span>'))).toEqual([]);
+    expect(uncoloredTexts(inDom('<div style="color: red"><details><summary>y</summary></details></div>'))).toEqual([]);
+    expect(uncoloredTexts(inDom('<a class="fui-Link"><span>z</span></a>'))).toEqual([]);
+    expect(uncoloredTexts(inDom('<button class="fui-Button r1"><span>w</span></button>'))).toEqual([]);
+  });
+});
+
 describe.each(themes.map((theme) => [theme.id, theme] as const))("the Chains tab in %s", (themeId, theme) => {
   const resolve = (value: string) => toHex(resolveToken(value, theme));
 
@@ -117,9 +157,9 @@ describe.each(themes.map((theme) => [theme.id, theme] as const))("the Chains tab
     const { container } = renderIn(themeId);
     const measured: string[] = [];
     const failing: string[] = [];
+    const uncolored = uncoloredTexts(container);
     for (const owner of textNodes(container)) {
       const color = colorOf(owner);
-      // The text of a library control (a Fluent button) takes its color from the library's class.
       if (color === null) continue;
       const ratio = contrastRatio(resolve(color), resolve(surfaceOf(owner)));
       measured.push(owner.textContent!.trim().slice(0, 24));
@@ -127,7 +167,17 @@ describe.each(themes.map((theme) => [theme.id, theme] as const))("the Chains tab
     }
     // Not vacuous: the scene's titles, spans, steps, notices, legend, notes and the card are all read.
     expect(measured.length).toBeGreaterThan(40);
+    expect(uncolored).toEqual([]);
     expect(failing).toEqual([]);
+  });
+
+  it("reaches 4.5:1 for the nearby group's heading, which writes its own color on the card surface (review L4)", () => {
+    const { container } = renderIn(themeId);
+    const heading = screen.getByText(/^Nearby, /);
+    expect(heading.tagName).toBe("SUMMARY");
+    expect(colorOf(heading)).not.toBeNull();
+    expect(container.contains(heading)).toBe(true);
+    expect(contrastRatio(resolve(colorOf(heading)!), resolve(surfaceOf(heading)))).toBeGreaterThanOrEqual(TEXT_FLOOR);
   });
 
   it("reaches 3:1 for the level dots, against the card they sit on", () => {

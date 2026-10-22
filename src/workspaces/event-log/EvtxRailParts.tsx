@@ -119,7 +119,9 @@ export function Disclosure({
           event.preventDefault();
           onOpenChange(!open);
         }}
-        style={{ cursor: "pointer", fontSize: `${sizes.small}px`, fontWeight: 600 }}
+        // The label's own color, on the card surface the disclosure draws (Background1), where
+        // Foreground1 reaches 4.5:1 in all seven themes: a text with no color of its own cannot be measured.
+        style={{ cursor: "pointer", fontSize: `${sizes.small}px`, fontWeight: 600, color: tokens.colorNeutralForeground1 }}
       >
         {label}
       </summary>
