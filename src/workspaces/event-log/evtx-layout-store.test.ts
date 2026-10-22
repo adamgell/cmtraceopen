@@ -184,20 +184,38 @@ describe("evtx-layout-store", () => {
     });
   });
 
-  // Guard for the ship-a-panel rule (see EVTX_PANELS_AVAILABLE): flip the availability and the
-  // default together and bump the persist version, with no migrate. A version-1 envelope holding
-  // `false` must then resolve to the current default. If a phase flips a default without bumping
-  // the version, the stored `false` survives and this fails; with the bump, the old envelope is
-  // dropped and this passes.
-  it("resolves a stored version-1 false to the current default for every panel", async () => {
-    await rehydrateFrom(
-      { panels: { channels: true, insights: false, dock: false } },
-      1,
-    );
-    const defaults = sanitizeLayout(undefined).panels;
-    const panels = useEvtxLayoutStore.getState().panels;
-    expect(panels.insights).toBe(defaults.insights);
-    expect(panels.dock).toBe(defaults.dock);
-    expect(panels).toEqual(defaults);
+  // Guard for the ship-a-panel rule (see EVTX_PANELS_AVAILABLE): the phase that ships a panel flips
+  // its availability and its default together AND bumps EVTX_LAYOUT_VERSION, with no migrate. The
+  // bump is what makes a stored layout forget the old `false`. This writes an envelope at the
+  // CURRENT version that holds `false` for the one panel not shipped yet (dock). The store accepts
+  // that envelope, so it reaches `merge` and must come back as the current default. If a phase
+  // flips the dock's two flags without the bump, `false` is still a valid stored choice and
+  // survives, which fails here.
+  //
+  // `activeView` and `channels` are the positive control. Neither equals its default, so they
+  // prove the envelope was applied and not dropped. `dock: false` alone proves nothing: it equals
+  // today's default, which is how an envelope at version 1 (dropped by a version 2 store) once let
+  // this test compare the defaults with themselves.
+  //
+  // When the dock ships, aim this case at the next unshipped panel, or remove it, in the same
+  // change that edits the pin below.
+  it("resolves a current-version stored false to the current default for a panel not yet shipped", async () => {
+    await rehydrateFrom({
+      activeView: "grouped",
+      panels: { channels: false, insights: true, dock: false },
+    });
+    const state = useEvtxLayoutStore.getState();
+    expect(state.activeView).toBe("grouped");
+    expect(state.panels.channels).toBe(false);
+    expect(state.panels.dock).toBe(sanitizeLayout(undefined).panels.dock);
+  });
+
+  // Written out in full on purpose, not read from the store: flipping a default or the version has
+  // to be an edit to this line, beside the other half of the pair.
+  it("pins the persist version together with the default panels", () => {
+    expect([EVTX_LAYOUT_VERSION, sanitizeLayout(undefined).panels]).toEqual([
+      2,
+      { channels: true, insights: true, dock: false },
+    ]);
   });
 });
