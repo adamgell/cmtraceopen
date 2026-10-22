@@ -326,12 +326,6 @@ export interface WindowRead {
   usable: TimelineItem[];
   /** The scope is narrower than what is loaded, or is not known. Unpaired counts cannot speak for it. */
   scopeNarrowed: boolean;
-  /**
-   * "Not linked" is a claim that no event missing from the session could carry the link. The scope
-   * says events were left out of it; an unread source is records that never reached it; and a pair
-   * that an earlier session left behind is being replaced because events were added or reloaded.
-   */
-  narrowed: boolean;
   /** The session's own count of entries it could not place in time, from the paired counts only. */
   unplacedTotal: number | null;
 }
@@ -397,7 +391,6 @@ export function readWindowFacts(input: DockModelInput): WindowFacts {
     identified: selected.status === "found" || selected.status === "notInTimeline",
     usable,
     scopeNarrowed,
-    narrowed: scopeNarrowed || input.unreadSources || updating,
     unplacedTotal: pairedCounts === null ? null : pairedCounts.unplacedList.total,
   };
 }
@@ -419,7 +412,6 @@ export function buildDockModel(input: DockModelInput): DockModel {
     identified,
     usable: drawItems,
     scopeNarrowed,
-    narrowed,
     unplacedTotal,
   } = windowRead;
 
@@ -483,7 +475,12 @@ export function buildDockModel(input: DockModelInput): DockModel {
     chain: part,
     itemsById: drawableById,
     edgeInputComplete: pairedCounts === null ? false : pairedCounts.model.edgeInputComplete,
-    narrowed,
+    // "Not linked" claims that no event missing from the session could carry the link. The scope says
+    // events were left out of it; an unread source is records that never reached it; and a pair an
+    // earlier session left behind is being replaced. Three inputs, each of which withdraws the claim.
+    scopeNarrowed,
+    unreadSources: input.unreadSources,
+    updating,
     gaps: pairedCounts === null ? UNKNOWN_CORRELATION_GAPS : pairedCounts.gaps,
     window: { startMs: window.startMs, endMs: window.endMs },
     nearby: drawnContext,

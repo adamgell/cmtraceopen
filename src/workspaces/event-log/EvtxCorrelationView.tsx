@@ -90,6 +90,7 @@ import {
   type TimeWindow,
 } from "./evtx-correlation-view-model";
 import { useEvtxCorrelationData } from "./useEvtxCorrelation";
+import { useUnreadSources } from "./useUnreadSources";
 import { useRailTextColors } from "./evtx-rail-text";
 import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
@@ -458,7 +459,10 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
   // never a newer session's. A scope that is not known is disclosed as such and reads as narrowed:
   // "Not linked" is never said without it.
   const scope = scopeDisclosure(data.scope);
-  const narrowed = scope !== null;
+  const scopeNarrowed = scope !== null;
+  // A source that was not fully read is events that never reached the session; both it and a rebuild
+  // under way withdraw "Not linked" as the narrowed scope does, as the dock and the rail say.
+  const unreadSources = useUnreadSources();
 
   // The zoom band's window is view-local and belongs to its chain: another chain starts from its own
   // default. It reaches the plot as `undefined` for that default (null would mean no window at all)
@@ -488,13 +492,15 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
             chain,
             itemsById,
             edgeInputComplete: model.edgeInputComplete,
-            narrowed,
+            scopeNarrowed,
+            unreadSources,
+            updating: data.updating,
             gaps,
             nearby,
             window: zoomWindow ?? undefined,
           })
         : null,
-    [chain, model, hasItems, showPane, itemsById, narrowed, gaps, nearby, zoomWindow],
+    [chain, model, hasItems, showPane, itemsById, scopeNarrowed, unreadSources, data.updating, gaps, nearby, zoomWindow],
   );
   const sequence = useMemo(
     () => (chain !== null && hasItems ? chainSequence(chain, itemsById) : null),

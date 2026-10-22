@@ -699,10 +699,13 @@ describe("buildChainPlot", () => {
     });
 
     it.each([
-      ["edges and events are all there", { edgeInputComplete: true, narrowed: false }, NOT_LINKED_LABEL],
-      ["edges were not all loaded", { edgeInputComplete: false, narrowed: false }, NO_LOADED_LINK_LABEL],
-      ["the view is narrowed", { edgeInputComplete: true, narrowed: true }, NO_LOADED_LINK_LABEL],
-      ["both", { edgeInputComplete: false, narrowed: true }, NO_LOADED_LINK_LABEL],
+      ["edges and events are all there", {}, NOT_LINKED_LABEL],
+      ["edges were not all loaded", { edgeInputComplete: false }, NO_LOADED_LINK_LABEL],
+      ["the view is narrowed", { scopeNarrowed: true }, NO_LOADED_LINK_LABEL],
+      ["a source was not fully read", { unreadSources: true }, NO_LOADED_LINK_LABEL],
+      ["a rebuild is under way", { updating: true }, NO_LOADED_LINK_LABEL],
+      ["edges and the scope", { edgeInputComplete: false, scopeNarrowed: true }, NO_LOADED_LINK_LABEL],
+      ["all three caveats", { scopeNarrowed: true, unreadSources: true, updating: true }, NO_LOADED_LINK_LABEL],
     ])("labels a context marker and the legend by what is known: %s", (_why, state, label) => {
       const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], ...state });
       expect(plot.nearby[0]?.linkLabel).toBe(label);
@@ -892,10 +895,12 @@ describe("buildChainPlot", () => {
 
     it("says so whatever else is incomplete: a loaded partner is a fact", () => {
       for (const state of [
-        { edgeInputComplete: false, narrowed: false },
-        { edgeInputComplete: true, narrowed: true },
-        { edgeInputComplete: false, narrowed: true, gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) },
-        { edgeInputComplete: true, narrowed: false, gaps: classifyCoverageGaps([{ source: rid(9), reason: "x" }], 1) },
+        { edgeInputComplete: false },
+        { scopeNarrowed: true },
+        { unreadSources: true },
+        { updating: true },
+        { edgeInputComplete: false, scopeNarrowed: true, gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) },
+        { gaps: classifyCoverageGaps([{ source: rid(9), reason: "x" }], 1) },
       ]) {
         const plot = buildChainPlot({ ...COMPLETE_VIEW, ...state, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners([9, 3]) });
         expect(plot.nearby[0]?.linkLabel).toBe(IN_ANOTHER_CHAIN_LABEL);
@@ -972,7 +977,7 @@ describe("buildChainPlot", () => {
     });
 
     it("says it whatever else is incomplete, as a loaded partner does", () => {
-      const plot = buildChainPlot({ ...COMPLETE_VIEW, edgeInputComplete: false, narrowed: true, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners, selectionIdentified: false });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, edgeInputComplete: false, scopeNarrowed: true, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners, selectionIdentified: false });
       expect(plot.nearby[0]?.linkLabel).toBe(LINK_TO_EVENT_UNKNOWN_LABEL);
     });
 
@@ -1344,7 +1349,9 @@ describe("sessionSpeaksForAbsence", () => {
   const clear = classifyCoverageGaps([], 0);
   const speaks = {
     edgeInputComplete: true,
-    narrowed: false,
+    scopeNarrowed: false,
+    unreadSources: false,
+    updating: false,
     gaps: clear,
     memberIds: [rid(1), rid(2)],
   };
@@ -1359,7 +1366,24 @@ describe("sessionSpeaksForAbsence", () => {
   });
 
   it("does not hold for a narrowed view", () => {
-    expect(sessionSpeaksForAbsence({ ...speaks, narrowed: true })).toBe(false);
+    expect(sessionSpeaksForAbsence({ ...speaks, scopeNarrowed: true })).toBe(false);
+  });
+
+  it("does not hold while a source was not fully read: its events never reached the session", () => {
+    expect(sessionSpeaksForAbsence({ ...speaks, unreadSources: true })).toBe(false);
+  });
+
+  it("does not hold while a rebuild is under way: a negative claim from a superseded session is unproven", () => {
+    expect(sessionSpeaksForAbsence({ ...speaks, updating: true })).toBe(false);
+  });
+
+  it("asks for each of the three caveats by name, and any one is enough to withdraw it", () => {
+    for (const caveat of ["scopeNarrowed", "unreadSources", "updating"] as const) {
+      expect(sessionSpeaksForAbsence({ ...speaks, [caveat]: true }), caveat).toBe(false);
+      expect(sessionSpeaksForAbsence({ ...speaks, memberIds: [], [caveat]: true }), `${caveat} with no member`).toBe(false);
+    }
+    // And the folded flag is gone from the contract: no field stands for the three.
+    expect(viewModelSource).not.toMatch(/\bnarrowed:\s*boolean/);
   });
 
   it("does not hold when a limit or truncation gap exists", () => {
@@ -1396,9 +1420,36 @@ describe("sessionSpeaksForAbsence", () => {
         .nearby[0]?.linkLabel;
     expect(labelWith({})).toBe(NOT_LINKED_LABEL);
     expect(labelWith({ edgeInputComplete: false })).toBe(NO_LOADED_LINK_LABEL);
-    expect(labelWith({ narrowed: true })).toBe(NO_LOADED_LINK_LABEL);
+    expect(labelWith({ scopeNarrowed: true })).toBe(NO_LOADED_LINK_LABEL);
+    expect(labelWith({ unreadSources: true })).toBe(NO_LOADED_LINK_LABEL);
+    expect(labelWith({ updating: true })).toBe(NO_LOADED_LINK_LABEL);
     expect(labelWith({ gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) })).toBe(NO_LOADED_LINK_LABEL);
     expect(labelWith({ gaps: classifyCoverageGaps([{ source: rid(2), reason: "x" }], 1) })).toBe(NO_LOADED_LINK_LABEL);
+  });
+});
+
+describe("the plot withdraws 'Not linked' under each caveat, for a marker and for the legend (#841)", () => {
+  const T0 = Date.UTC(2026, 9, 6, 10, 20, 0);
+  const items = [eventItem(1, T0), eventItem(2, T0 + 6_000)];
+  const chain = chainOf(fixtureEdges("exactPair"), items);
+  const plotWith = (caveats: Partial<typeof COMPLETE_VIEW>) =>
+    buildChainPlot({ ...COMPLETE_VIEW, ...caveats, chain, itemsById: mapOf(items), nearby: [eventItem(9, T0 + 3_000)] });
+
+  it("says 'Not linked' when everything is complete", () => {
+    const plot = plotWith({});
+    expect(plot.nearby[0]?.linkLabel).toBe(NOT_LINKED_LABEL);
+    expect(plot.notLinkedLabel).toBe(NOT_LINKED_LABEL);
+  });
+
+  it.each([
+    ["the scope is narrowed", { scopeNarrowed: true }],
+    ["a source was not fully read", { unreadSources: true }],
+    ["a rebuild is under way", { updating: true }],
+  ])("says 'No loaded link', and the legend follows, when %s", (_why, caveat) => {
+    const plot = plotWith(caveat);
+    expect(plot.nearby[0]?.linkLabel).toBe(NO_LOADED_LINK_LABEL);
+    expect(plot.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
+    expect(plot.showsNotLinkedLegend).toBe(true);
   });
 });
 
@@ -1484,7 +1535,9 @@ describe("the plot says what the extracted rules say (#841)", () => {
       const plot = buildChainPlot({ ...COMPLETE_VIEW, ...view, chain, itemsById: mapOf(items), nearby });
       const chainClear = sessionSpeaksForAbsence({
         edgeInputComplete: COMPLETE_VIEW.edgeInputComplete,
-        narrowed: COMPLETE_VIEW.narrowed,
+        scopeNarrowed: COMPLETE_VIEW.scopeNarrowed,
+        unreadSources: COMPLETE_VIEW.unreadSources,
+        updating: COMPLETE_VIEW.updating,
         gaps: view.gaps,
         memberIds: [...chain.memberIds, ...chain.unresolvedMemberIds],
       });
@@ -1499,8 +1552,10 @@ describe("the plot says what the extracted rules say (#841)", () => {
   it("says what the session can say when no marker is drawn", () => {
     const empty = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items), window: null });
     expect(empty.notLinkedLabel).toBe(notLinkedLegendLabel([], true));
-    const narrowed = buildChainPlot({ ...COMPLETE_VIEW, narrowed: true, chain, itemsById: mapOf(items), window: null });
-    expect(narrowed.notLinkedLabel).toBe(notLinkedLegendLabel([], false));
+    for (const caveat of ["scopeNarrowed", "unreadSources", "updating"] as const) {
+      const withCaveat = buildChainPlot({ ...COMPLETE_VIEW, [caveat]: true, chain, itemsById: mapOf(items), window: null });
+      expect(withCaveat.notLinkedLabel, caveat).toBe(notLinkedLegendLabel([], false));
+    }
   });
 
   it("keeps the rules in these exports: the plot holds no label rule of its own", () => {

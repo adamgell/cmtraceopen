@@ -380,7 +380,9 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
       pairedCounts !== null &&
       sessionSpeaksForAbsence({
         edgeInputComplete: pairedCounts.model.edgeInputComplete,
-        narrowed: read.narrowed,
+        scopeNarrowed: read.scopeNarrowed,
+        unreadSources,
+        updating: read.updating,
         gaps: pairedCounts.gaps,
         memberIds: [originId as string, ...rowsOfEvent.flatMap((row) => [...row.memberIds, ...row.unresolvedMemberIds])],
       }) &&

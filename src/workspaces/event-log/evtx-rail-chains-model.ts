@@ -231,15 +231,15 @@ export function buildRailChains(input: RailChainsInput): RailChainsModel {
   const scope = scopeDisclosure(data.scope);
   // An absence of links is claimed for the session only when nothing is narrowed, unread or being
   // rebuilt, every edge was loaded, and no gap clears completeness: a negative claim from a
-  // superseded session is unproven.
-  const speaks =
-    !data.updating &&
-    sessionSpeaksForAbsence({
-      edgeInputComplete: model.edgeInputComplete,
-      narrowed: scope !== null || input.unreadSources,
-      gaps: data.gaps,
-      memberIds: [],
-    });
+  // superseded session is unproven. The rule is the plot's and the dock's, with the same three inputs.
+  const speaks = sessionSpeaksForAbsence({
+    edgeInputComplete: model.edgeInputComplete,
+    scopeNarrowed: scope !== null,
+    unreadSources: input.unreadSources,
+    updating: data.updating,
+    gaps: data.gaps,
+    memberIds: [],
+  });
   const reading = data.nextScan?.state === "running" || data.stage === "scanning";
   const progress = data.nextScan?.progress ?? data.scan.progress;
   const listed = listedRows(model, input.selectedRowId);

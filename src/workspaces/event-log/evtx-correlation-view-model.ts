@@ -505,10 +505,20 @@ export interface ChainPlotInput {
    */
   edgeInputComplete: boolean;
   /**
-   * The view is narrowed (visible events fewer than loaded events), so an event outside it may
-   * link an entry shown here. Required for the same reason.
+   * The view is narrowed (visible events fewer than loaded events, or a scope that is not known), so
+   * an event outside it may link an entry shown here. Required for the same reason.
    */
-  narrowed: boolean;
+  scopeNarrowed: boolean;
+  /**
+   * Some source's records were not (all) loaded (`useUnreadSources`), so an event that never reached
+   * the session may link an entry shown here. Required for the same reason.
+   */
+  unreadSources: boolean;
+  /**
+   * The model on show is an earlier session's and a newer one is being built, so a negative claim
+   * from it is unproven. Required for the same reason.
+   */
+  updating: boolean;
   /**
    * The engine's correlation coverage gaps (`classifyCoverageGaps`). Required: a limit or
    * truncation gap, a preview that does not show every gap, a gap naming an entry's own origin,
@@ -548,8 +558,12 @@ function isLinkingStrength(strength: CorrelationChainStrength): strength is "exa
 interface AbsenceInput {
   /** Every timeline edge of the session was loaded. */
   edgeInputComplete: boolean;
-  /** The view is narrowed (see `ChainPlotInput.narrowed`). */
-  narrowed: boolean;
+  /** See `ChainPlotInput.scopeNarrowed`. */
+  scopeNarrowed: boolean;
+  /** See `ChainPlotInput.unreadSources`. */
+  unreadSources: boolean;
+  /** See `ChainPlotInput.updating`. */
+  updating: boolean;
   gaps: CorrelationGaps;
   /** Every member of the row the entry is compared with, placed or not. */
   memberIds: Iterable<string>;
@@ -557,19 +571,22 @@ interface AbsenceInput {
 
 /**
  * Whether the session can speak for the ABSENCE of a link: "Not linked" is a claim about the whole
- * session, so it needs every edge, every event and every origin correlated. A gap that names an
- * entry's own origin withdraws it for that entry alone (a per-entry check the caller makes with
- * `gaps.originIds`). A gap that names a MEMBER of the row withdraws it for every entry and the
- * legend: some gaps are specific to one observation (an identity alias conflict, an invalid process
- * start), and for such a member the key it would share with a context entry was never computed.
- * Every member counts, not only the drawn ones, because the key was lost whether or not the member
- * is drawn.
+ * session, so it needs every edge, every event and every origin correlated. Three caveats say events
+ * may be missing or superseded: the scope is narrowed, a source was not fully read, or a rebuild is
+ * under way. They are separate inputs, never one folded flag, and any one of them withdraws the
+ * claim. A gap that names an entry's own origin withdraws it for that entry alone (a per-entry
+ * check the caller makes with `gaps.originIds`). A gap that names a MEMBER of the row withdraws it
+ * for every entry and the legend: some gaps are specific to one observation (an identity alias
+ * conflict, an invalid process start), and for such a member the key it would share with a context
+ * entry was never computed. Every member counts, not only the drawn ones, because the key was lost
+ * whether or not the member is drawn.
  *
  * The plot's labels read it, and so does the Details context list, which decides with it whether a
  * missing link icon needs a caveat: one rule for "no link was found, and that means something".
  */
 export function sessionSpeaksForAbsence(input: AbsenceInput): boolean {
-  if (!input.edgeInputComplete || input.narrowed || gapsClearCompleteness(input.gaps)) return false;
+  if (!input.edgeInputComplete || gapsClearCompleteness(input.gaps)) return false;
+  if (input.scopeNarrowed || input.unreadSources || input.updating) return false;
   for (const id of input.memberIds) {
     if (input.gaps.originIds.has(id)) return false;
   }
@@ -582,7 +599,9 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
   // (`nearbyLinkLabel`); the rest of the rule is `sessionSpeaksForAbsence`.
   const chainClear = sessionSpeaksForAbsence({
     edgeInputComplete: input.edgeInputComplete,
-    narrowed: input.narrowed,
+    scopeNarrowed: input.scopeNarrowed,
+    unreadSources: input.unreadSources,
+    updating: input.updating,
     gaps: input.gaps,
     memberIds: [...chain.memberIds, ...chain.unresolvedMemberIds],
   });
