@@ -1949,16 +1949,17 @@ fn chains_that_were_not_loaded_are_never_reported_as_none() {
     }
 }
 
-#[test]
-fn members_and_evidence_are_capped_and_the_rest_counted() {
-    let ids: Vec<String> = (1..=50).map(stable).collect();
-    let items: Vec<TimelineItem> = (1..=50)
+/// A chain of `count` entries, each tied to the next by an edge of its own.
+fn chain_of(count: u64) -> (UnifiedTimeline, Vec<String>, Vec<serde_json::Value>) {
+    let ids: Vec<String> = (1..=count).map(stable).collect();
+    let items: Vec<TimelineItem> = (1..=count)
         .map(|record| chain_item(record, 100 + record as u32, record as i64, "m"))
         .collect();
-    let edges: Vec<TimelineCorrelationEdge> = (0..5)
+    let links = ids.len() - 1;
+    let edges: Vec<TimelineCorrelationEdge> = (0..links)
         .map(|index| exact_edge(&ids[index], &ids[index + 1], &format!("guid-{index}")))
         .collect();
-    let pairs: Vec<serde_json::Value> = (0..5)
+    let pairs: Vec<serde_json::Value> = (0..links)
         .map(|index| {
             let value = format!("guid-{index}");
             pair(
@@ -1968,19 +1969,155 @@ fn members_and_evidence_are_capped_and_the_rest_counted() {
             )
         })
         .collect();
-    let timeline = timeline_of(items, edges);
-    let chains = chains_value(5, (1, 0, 0, 0), vec![row("exact", &ids, json!(pairs))]);
+    (timeline_of(items, edges), ids, pairs)
+}
+
+const RUN_AGAIN: &str = "Run the report again.";
+
+#[test]
+fn a_capped_chain_lists_only_confirmed_members_and_attributes_the_full_count() {
+    // The app sends 50 members and a spanning set of 49 pairs, and says the chain has 80.
+    let (timeline, ids, pairs) = chain_of(50);
+    let mut capped = row("exact", &ids, json!(pairs));
+    capped["memberCount"] = json!(80);
+    let report =
+        chain_report_for(&timeline, chains_value(49, (1, 0, 0, 0), vec![capped])).expect("renders");
+    let chains = section(&report, "## Correlation chains");
+    // The heading counts the entries the session confirmed. The model's own count is its own.
+    assert!(
+        chains.contains("### Chain 1: Exact, 50 entries\n"),
+        "{chains}"
+    );
+    assert!(
+        chains.contains(
+            "### Chain 1: Exact, 50 entries\n\nThe chain model counts 80 entries in all; 30 are \
+             not listed.\n"
+        ),
+        "{chains}"
+    );
+    assert!(chains.contains(
+        "- Entries listed: 50. Of those, 50 are on the placed timeline, 0 have no usable \
+         timestamp and 0 are not in this session."
+    ));
+    assert!(chains.contains("- Link evidence (98 lines):"));
+    assert!(chains.contains("  - and 90 more evidence lines"));
+    assert_eq!(table_rows(chains), 12);
+    assert!(chains.contains("and 38 more listed entries on the timeline, not shown here"));
+
+    // Without a shortfall there is nothing to attribute.
+    let (timeline, ids, pairs) = chain_of(50);
+    let whole = row("exact", &ids, json!(pairs));
+    let report =
+        chain_report_for(&timeline, chains_value(49, (1, 0, 0, 0), vec![whole])).expect("renders");
+    assert!(report.contains("### Chain 1: Exact, 50 entries\n"));
+    assert!(!report.contains("The chain model counts"), "{report}");
+}
+
+#[test]
+fn a_chain_row_without_a_pair_confirms_nothing_and_is_refused() {
+    let (timeline, a, b) = two_event_timeline();
+    // A row that lists members but no pair, and a row that lists nothing at all: neither
+    // confirms a chain, so neither is printed as one.
+    for members in [vec![a, b], Vec::new()] {
+        let chains = chains_value(1, (1, 0, 0, 0), vec![row("exact", &members, json!([]))]);
+        let error = chain_report_for(&timeline, chains).expect_err("refused");
+        assert!(error.contains(RUN_AGAIN), "{error}");
+        for name in ["HOST-0005", "CASE-0002", "machine9", GUID_A] {
+            assert!(!error.contains(name), "{name} in {error}");
+        }
+    }
+}
+
+#[test]
+fn a_member_no_pair_of_its_row_touches_is_refused() {
+    // The session holds the entry. The row names it as a member, but none of the row's pairs
+    // ends at it, so nothing confirms it belongs to this chain.
+    let (mut timeline, a, b) = two_event_timeline();
+    let (c, d) = (stable(3), stable(4));
+    timeline.items.push(chain_item(3, 78, 20, "m"));
+    timeline.items.push(chain_item(4, 79, 30, "m"));
+    // `c` has an edge of its own elsewhere: it is in the session's edges, just not in this row.
+    timeline
+        .edges
+        .push(exact_edge(&b, &c, "00000000-0000-4000-8000-0000000000b3"));
+    let one_pair = json!([pair(&a, &b, &[("activityId", GUID_A)])]);
+    let cases = [
+        (
+            "an entry with no edge",
+            vec![a.clone(), b.clone(), d.clone()],
+        ),
+        (
+            "an entry with an edge outside the row",
+            vec![a.clone(), b.clone(), c.clone()],
+        ),
+        (
+            "an id the session does not hold",
+            vec![a.clone(), b.clone(), stable(9)],
+        ),
+        ("a duplicated member", vec![a.clone(), a.clone(), b.clone()]),
+    ];
+    for (name, members) in cases {
+        let chains = chains_value(
+            2,
+            (1, 0, 0, 0),
+            vec![row("exact", &members, one_pair.clone())],
+        );
+        let error = chain_report_for(&timeline, chains).expect_err(name);
+        assert!(error.contains(RUN_AGAIN), "{name}: {error}");
+        for leaked in ["HOST-0005", "CASE-0002", "record3", "record4"] {
+            assert!(!error.contains(leaked), "{name}: {leaked} in {error}");
+        }
+    }
+    // With the pair that touches it, the third entry is a member.
+    let three = [a.clone(), b.clone(), c.clone()];
+    let pairs = json!([
+        pair(&a, &b, &[("activityId", GUID_A)]),
+        pair(
+            &b,
+            &c,
+            &[("activityId", "00000000-0000-4000-8000-0000000000b3")]
+        )
+    ]);
+    let chains = chains_value(2, (1, 0, 0, 0), vec![row("exact", &three, pairs)]);
     let report = chain_report_for(&timeline, chains).expect("renders");
-    assert!(report.contains("### Chain 1: Exact, 50 entries"));
-    assert!(report.contains("- Link evidence (10 lines):"));
-    assert!(report.contains("  - and 2 more evidence lines"));
-    assert_eq!(report.matches("\n  - 10").count(), 8);
-    assert_eq!(table_rows(section(&report, "## Correlation chains")), 12);
-    assert!(report.contains("and 38 more listed entries on the timeline, not shown here"));
+    assert!(
+        report.contains("### Chain 1: Exact, 3 entries\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_member_count_below_the_listed_members_is_refused() {
+    let (timeline, a, b) = two_event_timeline();
+    let mut value = row(
+        "exact",
+        &[a.clone(), b.clone()],
+        json!([pair(&a, &b, &[("activityId", GUID_A)])]),
+    );
+    value["memberCount"] = json!(1);
+    let chains = chains_value(1, (1, 0, 0, 0), vec![value]);
+    // The request is refused before the session is read ...
+    let error = chain_report_for(&timeline, chains.clone()).expect_err("refused");
+    assert!(error.contains("lists more members than it has"), "{error}");
+    // ... and a renderer handed the same rows without that check refuses too, instead of
+    // counting a shortfall that is not there.
+    let mut request_value = request_json();
+    request_value["chains"] = chains;
+    let request = request_from(request_value);
+    let snapshot = collect(&timeline, status(2, 0), &request).expect("collects");
+    let error = render_report(&ReportInput {
+        request: &request,
+        snapshot: &snapshot,
+        summary: &DiagnosisSummary::default(),
+    })
+    .expect_err("refused");
+    assert!(error.contains("lists more members than it has"), "{error}");
 }
 
 #[test]
 fn entries_the_session_cannot_place_are_counted_and_never_listed() {
+    // Each member is the end of a pair the session confirms. One is placed, one has no time,
+    // and one is named by an edge but is not an entry of this session.
     let (mut timeline, a, b) = two_event_timeline();
     let placeless = stable(7);
     timeline.unplaced.push(UnplacedItem {
@@ -1988,22 +2125,36 @@ fn entries_the_session_cannot_place_are_counted_and_never_listed() {
         reason: UnplacedReason::MissingTimestamp,
     });
     let missing = stable(8);
-    let members = [a.clone(), placeless.clone(), missing.clone()];
+    let (v2, v3) = (
+        "00000000-0000-4000-8000-0000000000b2",
+        "00000000-0000-4000-8000-0000000000b3",
+    );
+    timeline.edges.push(exact_edge(&a, &placeless, v2));
+    timeline.edges.push(exact_edge(&a, &missing, v3));
+    let members = [a.clone(), b.clone(), placeless.clone(), missing.clone()];
     let chains = chains_value(
-        1,
+        3,
         (1, 0, 0, 0),
         vec![row(
             "exact",
             &members,
-            json!([pair(&a, &b, &[("activityId", GUID_A)])]),
+            json!([
+                pair(&a, &b, &[("activityId", GUID_A)]),
+                pair(&a, &placeless, &[("activityId", v2)]),
+                pair(&a, &missing, &[("activityId", v3)]),
+            ]),
         )],
     );
     let report = chain_report_for(&timeline, chains).expect("renders");
+    assert!(
+        report.contains("### Chain 1: Exact, 4 entries\n"),
+        "{report}"
+    );
     assert!(report.contains(
-        "- Entries: 3 in the chain; the app listed 3. Of those listed, 1 are on the placed \
-         timeline, 1 have no usable timestamp and 1 are not in this session."
+        "- Entries listed: 4. Of those, 2 are on the placed timeline, 1 have no usable \
+         timestamp and 1 are not in this session."
     ));
-    assert_eq!(table_rows(section(&report, "## Correlation chains")), 1);
+    assert_eq!(table_rows(section(&report, "## Correlation chains")), 2);
 }
 
 #[test]
@@ -2067,6 +2218,14 @@ fn nearby_context_is_stated_as_not_produced_and_never_as_none() {
     }
 }
 
+fn spanning_pair(index: usize) -> serde_json::Value {
+    pair(
+        &format!("id-{index}"),
+        &format!("id-{}", index + 1),
+        &[("activityId", GUID_A)],
+    )
+}
+
 #[test]
 fn chain_references_are_bounded_before_any_work_is_done() {
     let (_, a, b) = two_event_timeline();
@@ -2093,6 +2252,10 @@ fn chain_references_are_bounded_before_any_work_is_done() {
         ("too many references", {
             let ids: Vec<String> = (0..51).map(|index| format!("id-{index}")).collect();
             chains_value(1, (1, 0, 0, 0), vec![row("exact", &ids, json!([]))])
+        }),
+        ("too many references", {
+            let pairs: Vec<serde_json::Value> = (0..65).map(spanning_pair).collect();
+            chains_value(1, (1, 0, 0, 0), vec![row("exact", &[], json!(pairs))])
         }),
         ("lists more members than it has", {
             let mut value = ok_row();
@@ -2136,6 +2299,14 @@ fn chain_references_are_bounded_before_any_work_is_done() {
         let error = request_from(value).validate().expect_err(expected);
         assert!(error.contains(expected), "{expected}: {error}");
     }
+    // The caps are inclusive: 50 members and the 64 pairs that span them are a valid chain row.
+    let ids: Vec<String> = (0..50).map(|index| format!("id-{index}")).collect();
+    let pairs: Vec<serde_json::Value> = (0..64).map(spanning_pair).collect();
+    let mut value = request_json();
+    value["chains"] = chains_value(1, (1, 0, 0, 0), vec![row("exact", &ids, json!(pairs))]);
+    request_from(value)
+        .validate()
+        .expect("the capped chain row is valid");
     // A row may not claim a strength the type does not have.
     let mut value = request_json();
     value["chains"] = chains_value(1, (1, 0, 0, 0), vec![row("ambiguous", &[], json!([]))]);

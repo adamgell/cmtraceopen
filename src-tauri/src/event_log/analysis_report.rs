@@ -40,7 +40,8 @@ use self::safe::{
     file_name, Doc, Projected, ProjectedText, Redactor, Safe, Within, MIN_SUBSTITUTED_MACHINE_CHARS,
 };
 use super::analysis_session::{
-    EventLogAnalysisSessionStatus, TIMELINE_GAP_SOURCE_PREFIX, TIMELINE_TRANSPORT_PROJECTION_SOURCE,
+    EventLogAnalysisSessionStatus, REPORT_SESSION_CHANGED, TIMELINE_GAP_SOURCE_PREFIX,
+    TIMELINE_TRANSPORT_PROJECTION_SOURCE,
 };
 use super::models::{EvtxCoverageGap, EvtxLevel};
 use super::timeline::{
@@ -74,7 +75,9 @@ pub(crate) const REPORT_CHAIN_ROW_CAP: usize = 100;
 const REPORT_CHAIN_MEMBER_LINES: usize = 12;
 const REPORT_CHAIN_EVIDENCE_LINES: usize = 8;
 const MAX_REPORT_CHAIN_MEMBER_IDS: usize = 50;
-const MAX_REPORT_CHAIN_PAIRS: usize = 20;
+/// Pairs per chain row. A spanning set over the 50 members a row can list takes 49, so 64 leaves
+/// room for the pairs that carry extra identifiers.
+const MAX_REPORT_CHAIN_PAIRS: usize = 64;
 const MAX_REPORT_PAIR_KEYS: usize = 16;
 const MAX_REPORT_ID_BYTES: usize = 2 * 1024;
 const MAX_REPORT_REQUEST_BYTES: usize = 8 * 1024 * 1024;
@@ -245,11 +248,15 @@ pub enum ReportLinkStrength {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReportChainRow {
     pub strength: ReportLinkStrength,
-    /// Every member of the chain, resolved or not.
+    /// Every member of the chain as the app's model counts it, listed or not.
     pub member_count: u64,
-    /// Origin ids of the members the app listed, at most [`MAX_REPORT_CHAIN_MEMBER_IDS`].
+    /// Origin ids of the members the app listed, at most [`MAX_REPORT_CHAIN_MEMBER_IDS`]. Each is
+    /// printed only if it is the end of one of this row's `pairs`, and each appears once.
     pub member_ids: Vec<String>,
-    /// The reduced pairs the chain is made of, at most [`MAX_REPORT_CHAIN_PAIRS`].
+    /// The reduced pairs the chain is made of, at most [`MAX_REPORT_CHAIN_PAIRS`]. A row without
+    /// a pair is refused, and so is a listed member that no pair ends at. The app therefore picks
+    /// its pairs as a spanning forest over the members it lists first, then any pairs that carry
+    /// further identifiers, up to the cap.
     pub pairs: Vec<ReportChainPair>,
 }
 
@@ -384,7 +391,7 @@ fn validate_chains(chains: &ReportChains) -> Result<(), String> {
             return Err("report chains: a chain lists too many references".to_owned());
         }
         if row.member_count < row.member_ids.len() as u64 {
-            return Err("report chains: a chain lists more members than it has".to_owned());
+            return Err(MEMBER_COUNT_BELOW_LISTED.to_owned());
         }
         for id in &row.member_ids {
             measure(id)?;
@@ -451,6 +458,7 @@ const NOT_A_LINK: &str =
     "a report chain contains a relation the engine labels ambiguous or coverage blocked";
 const WEAKER_THAN_EXACT: &str =
     "an Exact report chain rests on a relation the engine does not label Exact";
+const MEMBER_COUNT_BELOW_LISTED: &str = "report chains: a chain lists more members than it has";
 
 fn ordered<'a>(left: &'a str, right: &'a str) -> (&'a str, &'a str) {
     if left <= right {
@@ -499,6 +507,7 @@ pub(crate) fn collect_chains(
                 }
             }
         }
+        confirm_members(row)?;
         picked.sort_unstable();
         wanted.extend(row.member_ids.iter().map(String::as_str));
         let mut edges = Vec::with_capacity(picked.len());
@@ -510,6 +519,29 @@ pub(crate) fn collect_chains(
         resolved.push(ResolvedChain { edges });
     }
     Ok((resolved, look_up_entries(timeline, &wanted)))
+}
+
+/// A chain prints a member only when its own pairs confirm it: the row must carry a pair, and each
+/// member it lists, once, must be the end of one of them. The pairs themselves are confirmed
+/// against the session's edges before this runs, so an unknown pair is refused for being unknown.
+/// A row that fails this is a builder bug, or a model the session has moved past, so it is
+/// refused with the run-again message and names no id.
+fn confirm_members(row: &ReportChainRow) -> Result<(), String> {
+    if row.pairs.is_empty() {
+        return Err(REPORT_SESSION_CHANGED.to_owned());
+    }
+    let ends: HashSet<&str> = row
+        .pairs
+        .iter()
+        .flat_map(|pair| [pair.left.as_str(), pair.right.as_str()])
+        .collect();
+    let mut listed: HashSet<&str> = HashSet::with_capacity(row.member_ids.len());
+    for id in &row.member_ids {
+        if !ends.contains(id.as_str()) || !listed.insert(id.as_str()) {
+            return Err(REPORT_SESSION_CHANGED.to_owned());
+        }
+    }
+    Ok(())
 }
 
 /// Gathers what one report needs from a finalized session, in one pass over its timeline. Chain
@@ -1429,7 +1461,7 @@ fn render_chains(
             row,
             resolved,
             projected_edges,
-        );
+        )?;
     }
     Ok(())
 }
@@ -1447,8 +1479,16 @@ fn render_chain(
     row: &ReportChainRow,
     resolved: &ResolvedChain,
     projected_edges: &[Within<CorrelationEdge>],
-) {
+) -> Result<(), String> {
     let ChainContext { redactor, snapshot } = *context;
+    let mut supplied: Vec<&str> = row.member_ids.iter().map(String::as_str).collect();
+    supplied.sort_unstable();
+    supplied.dedup();
+    let listed = supplied.len() as u64;
+    let not_listed = row
+        .member_count
+        .checked_sub(listed)
+        .ok_or_else(|| MEMBER_COUNT_BELOW_LISTED.to_owned())?;
     doc.lit("### Chain ")
         .count(number)
         .lit(": ")
@@ -1457,14 +1497,19 @@ fn render_chain(
             ReportLinkStrength::Candidate => "Candidate",
         })
         .lit(", ")
-        .count(row.member_count)
+        .count(listed)
         .lit(" entries")
         .nl()
         .nl();
-
-    let mut supplied: Vec<&str> = row.member_ids.iter().map(String::as_str).collect();
-    supplied.sort_unstable();
-    supplied.dedup();
+    if not_listed > 0 {
+        doc.lit("The chain model counts ")
+            .count(row.member_count)
+            .lit(" entries in all; ")
+            .count(not_listed)
+            .lit(" are not listed.")
+            .nl()
+            .nl();
+    }
     let mut placed: Vec<&TimelineItem> = Vec::new();
     let (mut unplaced, mut unknown) = (0u64, 0u64);
     for id in &supplied {
@@ -1475,11 +1520,9 @@ fn render_chain(
         }
     }
     placed.sort_by_key(|item| item.timestamp_ms);
-    doc.lit("- Entries: ")
-        .count(row.member_count)
-        .lit(" in the chain; the app listed ")
-        .count(supplied.len() as u64)
-        .lit(". Of those listed, ")
+    doc.lit("- Entries listed: ")
+        .count(listed)
+        .lit(". Of those, ")
         .count(placed.len() as u64)
         .lit(" are on the placed timeline, ")
         .count(unplaced)
@@ -1554,7 +1597,7 @@ fn render_chain(
     }
     doc.nl();
     if placed.is_empty() {
-        return;
+        return Ok(());
     }
     doc.lit(ITEM_TABLE_HEADER).nl();
     doc.lit(ITEM_TABLE_RULE).nl();
@@ -1569,6 +1612,7 @@ fn render_chain(
             .nl();
     }
     doc.nl();
+    Ok(())
 }
 
 /// How the report names an entry: an event by ID, channel and record, a text-log line by its

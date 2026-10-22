@@ -61,7 +61,7 @@ const SESSION_NOT_FOUND: &str = "event-log analysis session was not found";
 /// Said when the session a report was asked for is gone or has moved on. A rebuild closes the old
 /// session, and under a live tail that happens every few hundred milliseconds, so the operator is
 /// told why running the report again is the answer.
-const REPORT_SESSION_CHANGED: &str = "The event-log analysis changed while the report was being made, for example because new events arrived or a filter changed. Run the report again.";
+pub(crate) const REPORT_SESSION_CHANGED: &str = "The event-log analysis changed while the report was being made, for example because new events arrived or a filter changed. Run the report again.";
 const MAX_ANALYSIS_SESSIONS: usize = 16;
 const ANALYSIS_SESSION_IDLE_TTL: Duration = Duration::from_secs(60 * 60);
 
