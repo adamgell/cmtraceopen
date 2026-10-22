@@ -54,6 +54,7 @@ import {
   type EvtxColumnId,
 } from "./evtx-columns";
 import { useEvtxActiveTextColor } from "./evtx-active-state";
+import { LAYOUT_TAB_STATES, twoToneFocusInside } from "./evtx-bar-states";
 import { EVTX_EXPORT_FORMATS } from "./evtx-export";
 import {
   EVTX_GROUP_LABELS,
@@ -102,25 +103,32 @@ const useStyles = makeStyles({
   // (negative offset) instead of outside, where it would be cut off.
   layoutTab: {
     backgroundColor: "transparent",
-    color: tokens.colorNeutralForeground2,
+    color: LAYOUT_TAB_STATES.rest.foreground,
     fontWeight: 400,
-    ":hover": { backgroundColor: tokens.colorNeutralBackground1Hover },
-    ":focus-visible": {
-      outlineStyle: "solid",
-      outlineWidth: "2px",
-      outlineColor: tokens.colorStrokeFocus2,
-      outlineOffset: "-2px",
+    ":hover": {
+      backgroundColor: LAYOUT_TAB_STATES.hover.background,
+      color: LAYOUT_TAB_STATES.hover.foreground,
     },
+    ":hover:active": {
+      backgroundColor: LAYOUT_TAB_STATES.pressed.background,
+      color: LAYOUT_TAB_STATES.pressed.foreground,
+    },
+    ":focus-visible": twoToneFocusInside,
   },
   // Active states read their text color from --evtx-active-text, set on the bar from the theme:
   // the brand foreground where it reaches 4.5:1 on the selected surface, black or white where not.
   // Hover and pressed keep the selected surface (so the text contrast guarantee holds) and show
-  // the state through the border instead.
+  // the state through a border in the active text color, which is 4.5:1 on that surface in every
+  // theme (a Fluent stroke token is the same color as the fill in high-contrast).
   layoutTabActive: {
     backgroundColor: tokens.colorNeutralBackground1Selected,
     color: "var(--evtx-active-text)",
     fontWeight: 600,
     ":hover": {
+      backgroundColor: tokens.colorNeutralBackground1Selected,
+      color: "var(--evtx-active-text)",
+    },
+    ":hover:active": {
       backgroundColor: tokens.colorNeutralBackground1Selected,
       color: "var(--evtx-active-text)",
     },
@@ -131,12 +139,12 @@ const useStyles = makeStyles({
     ":hover": {
       backgroundColor: tokens.colorNeutralBackground1Selected,
       color: "var(--evtx-active-text)",
-      ...shorthands.borderColor(tokens.colorNeutralStroke1Hover),
+      ...shorthands.borderColor("var(--evtx-active-text)"),
     },
     ":hover:active": {
       backgroundColor: tokens.colorNeutralBackground1Selected,
       color: "var(--evtx-active-text)",
-      ...shorthands.borderColor(tokens.colorNeutralStroke1Pressed),
+      ...shorthands.borderColor("var(--evtx-active-text)"),
     },
   },
   visuallyHidden: {

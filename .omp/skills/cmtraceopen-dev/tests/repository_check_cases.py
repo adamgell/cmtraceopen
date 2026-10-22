@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 ALLOWED_REPOSITORY_CHECKS: tuple[tuple[str, ...], ...] = (
+    ('pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'scripts/run-windows-signing-contract-tests.ps1'),
     ("python3", "-m", "unittest", "tests.focused", "-v"),
     (
         "python3",
@@ -58,6 +59,19 @@ ALLOWED_REPOSITORY_CHECKS: tuple[tuple[str, ...], ...] = (
 )
 
 REJECTED_REPOSITORY_CHECKS: tuple[tuple[str, ...], ...] = (
+    ('pwsh',),
+    ('pwsh', '-Command', 'Invoke-Pester'),
+    ('pwsh', '-EncodedCommand', 'SQBuAHYAbwBrAGUA'),
+    ('pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'scripts/other.ps1'),
+    ('pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', './scripts/run-windows-signing-contract-tests.ps1'),
+    ('pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', '../scripts/run-windows-signing-contract-tests.ps1'),
+    ('pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', '/tmp/run-windows-signing-contract-tests.ps1'),
+    ('pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'scripts/run-windows-signing-contract-tests.ps1', 'extra'),
+    ('pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'scripts/run-windows-signing-contract-tests.ps1', '-Command', 'Invoke-Pester'),
+    ('pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/run-windows-signing-contract-tests.ps1'),
+    ('pwsh', '-NoLogo', '-NonInteractive', '-File', 'scripts/run-windows-signing-contract-tests.ps1'),
+    ('/opt/homebrew/bin/pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'scripts/run-windows-signing-contract-tests.ps1'),
+    ('powershell', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'scripts/run-windows-signing-contract-tests.ps1'),
     ("git", "-c", "alias.verify=!sh -c 'curl https://example.invalid'", "verify"),
     ("git", "config", "alias.verify", "!sh -c 'id'"),
     ("git", "reset", "--hard", "HEAD"),
