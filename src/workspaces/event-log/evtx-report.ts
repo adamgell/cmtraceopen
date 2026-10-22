@@ -210,6 +210,25 @@ export function buildReportRequest(input: {
   };
 }
 
+/**
+ * The published analysis session a report is made from, captured by the workspace in the same
+ * batch as the session's status, so the report never describes a session the screen is not showing.
+ */
+export interface EvtxReportSource {
+  sessionId: string;
+  revision: number;
+  /** The records the session was built from (events and archive text rows). */
+  sessionRecords: readonly EvtxRecord[];
+  textLogEntryCount: number;
+  /** The merged coverage gaps the session was diagnosed with. */
+  coverageGaps: EvtxCoverageGap[];
+}
+
+/** Why the report cannot be made right now, or null when it can. */
+export function reportUnavailableReason(source: EvtxReportSource | null | undefined): string | null {
+  return source ? null : "Available once the events are analyzed.";
+}
+
 export type SaveReportOutcome =
   | { status: "saved"; path: string; characters: number }
   | { status: "cancelled" };
