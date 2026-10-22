@@ -162,6 +162,7 @@ import { ChannelPicker } from "./ChannelPicker";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import { EvtxFilterBar } from "./EvtxFilterBar";
 import { EvtxViewBar } from "./EvtxViewBar";
+import { requireSelector } from "./evtx-test-dom";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { SourcePicker } from "./SourcePicker";
 import {
@@ -787,8 +788,7 @@ function seedFixtureEvents() {
   });
 }
 
-const exportStatus = () =>
-  document.querySelector<HTMLElement>("[data-evtx-export-status]") as HTMLElement;
+const exportStatus = () => requireSelector("[data-evtx-export-status]");
 
 describe("EventLogWorkspace fixtures", () => {
   beforeEach(() => {
