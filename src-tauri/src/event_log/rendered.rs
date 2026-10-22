@@ -145,6 +145,7 @@ pub fn record_from_parts(
         // The queried channel names the record. The caller knows which channel it asked for, and a
         // forwarded event names the channel it came from rather than the one holding it.
         channel: channel.to_string(),
+        event_channel: system.channel,
         event_id,
         level,
         computer,
@@ -241,6 +242,34 @@ mod tests {
         assert_eq!(record.user_sid.as_deref(), Some("S-1-5-18"));
         assert_eq!(record.keywords.as_deref(), Some("0x8020000000000000"));
         assert_eq!(field(&record, "TargetUserName"), Some("adam"));
+    }
+
+    /// A collector log holds events that name another log in their own `System/Channel`.
+    const FORWARDED: &str = r#"<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'>
+  <System>
+    <Provider Name='Provider'/>
+    <EventID>7</EventID>
+    <EventRecordID>101</EventRecordID>
+    <Channel>Security</Channel>
+    <Computer>HOST-A</Computer>
+  </System>
+</Event>"#;
+
+    #[test]
+    fn a_record_keeps_the_events_own_channel_beside_the_log_that_was_queried() {
+        let record = record_for(FORWARDED, "ForwardedEvents");
+        // The queried log still names the record: it is the log to export from.
+        assert_eq!(record.channel, "ForwardedEvents");
+        // The event's own channel is what tells two events of one machine apart.
+        assert_eq!(record.event_channel.as_deref(), Some("Security"));
+    }
+
+    #[test]
+    fn an_event_that_names_no_channel_has_none_rather_than_the_queried_log() {
+        let xml = FORWARDED.replace("<Channel>Security</Channel>", "");
+        let record = record_for(&xml, "ForwardedEvents");
+        assert_eq!(record.channel, "ForwardedEvents");
+        assert_eq!(record.event_channel, None);
     }
 
     #[test]

@@ -356,6 +356,7 @@ pub(crate) fn redact_record(record: &EvtxRecord) -> EvtxRecord {
         timestamp_epoch: record.timestamp_epoch,
         provider: redact_export_text(&record.provider),
         channel: redact_export_text(&record.channel),
+        event_channel: record.event_channel.as_deref().map(redact_export_text),
         event_id: record.event_id,
         level: record.level,
         computer: redact_labeled_value("ComputerName", &record.computer),
@@ -985,6 +986,7 @@ mod tests {
             timestamp_epoch: 0,
             provider: "ESENT".into(),
             channel: "Application".into(),
+            event_channel: None,
             event_id: 326,
             level: EvtxLevel::Error,
             computer: "TESTHOST-01".into(),
@@ -1599,6 +1601,26 @@ mod tests {
             serde_json::from_value(json).expect("a trimmed payload deserializes");
         assert_eq!(records[0].raw_xml, "");
         assert!(records[0].event_data.is_empty());
+    }
+
+    #[test]
+    fn the_events_own_channel_is_redacted_like_the_channel() {
+        let mut original = record("safe");
+        original.channel = "Pwd=hunter2".into();
+        original.event_channel = Some("Pwd=hunter2".into());
+        let redacted = redact_record(&original);
+        assert!(
+            !redacted.channel.contains("hunter2"),
+            "{}",
+            redacted.channel
+        );
+        assert_eq!(
+            redacted.event_channel.as_deref(),
+            Some(redacted.channel.as_str())
+        );
+        // A record that names no channel of its own stays that way.
+        original.event_channel = None;
+        assert_eq!(redact_record(&original).event_channel, None);
     }
 
     #[test]

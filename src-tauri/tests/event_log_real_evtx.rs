@@ -89,6 +89,13 @@ fn identity_is_populated_rather_than_defaulted() {
             "record {} has no channel",
             record.event_record_id
         );
+        // The file path reads the channel from the event, so the event's own channel is the same.
+        assert_eq!(
+            record.event_channel.as_deref(),
+            Some(record.channel.as_str()),
+            "record {} lost its own channel",
+            record.event_record_id
+        );
         // Event ID 0 is legal and several in-box providers emit it, so it is not an invariant.
         assert_ne!(
             record.timestamp_epoch, 0,

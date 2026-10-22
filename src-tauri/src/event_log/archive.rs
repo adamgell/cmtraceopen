@@ -837,6 +837,7 @@ fn text_entry_to_record(entry: LogEntry, source_label: &str) -> EvtxRecord {
         timestamp_epoch: entry.timestamp.unwrap_or_default(),
         provider,
         channel,
+        event_channel: None,
         event_id: 0,
         level: text_level(entry.severity),
         computer: String::new(),

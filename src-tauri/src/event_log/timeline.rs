@@ -879,6 +879,7 @@ mod tests {
                 .to_string(),
             channel: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
                 .to_string(),
+            event_channel: None,
             event_id: 76,
             level,
             computer: "TESTHOST-01".to_string(),

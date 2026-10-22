@@ -1619,6 +1619,7 @@ mod tests {
             timestamp_epoch: timestamp,
             provider: "Ordinary.Application.Provider".to_string(),
             channel: "Application".to_string(),
+            event_channel: None,
             event_id: 100,
             level: EvtxLevel::Information,
             computer: "TESTHOST".to_string(),
