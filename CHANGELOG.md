@@ -4,16 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Removed
-
-- **Hot Dog Stand theme**: Remove the theme. Anyone who had it selected opens in the Light theme.
-
 ### Changed
-
-- **Reference screenshots**: Remove outdated reference screenshots that showed identifying environment details, and replace the 0.3.0 workspace screenshot with a text caption.
-- **Parser source compatibility (#814)**: Advance `cmtraceopen-parser` to `0.4.0` for breaking source API changes from new Windows Firewall enum variants and public struct fields. Update affected exhaustive matches and struct literals; see the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
-
-- **DsRegCmd diagnostics link to event-log entries (#870)**: Diagnostics from rules that fire on a specific `0x` code now carry `related_error_codes` (public field on `DsregcmdDiagnosticInsight`; struct literals need `related_error_codes: Vec::new()`), and the analyzer links event-log entries that cite those codes on token boundaries. Only codes that appear in the rule's fields on token boundaries are recorded; a rule firing on a substring hit records none. See the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
 
 - **DsRegCmd splits MDM URL presence from registry-confirmed enrollment (#869)**: `DsregcmdDerived` gains `mdm_urls_present` (public field; struct literals need `mdm_urls_present: None`), and `mdm_enrolled` now means registry-confirmed enrollment: `Some(true)` on an enrollment confirmed by an EnterpriseMgmt task GUID, `Some(false)` only when the Enrollments export was read, holds no enrollment, and no EnterpriseMgmt task is listed, and `None` when the evidence is missing, unreadable or conflicting. `enrollment-missing-on-joined` fires exactly when `mdm_enrolled` is `Some(false)` on an Entra-joined device. See the [migration notes](crates/cmtraceopen-parser/README.md#versioning). In the DsRegCmd workspace:
   - The MDM chip reads the registry-confirmed `mdmEnrolled` instead of repeating the registry and task cross-reference.
@@ -22,6 +13,42 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - **DsRegCmd enrollment evidence (#869)**: Count Enrollments subkeys whose GUID Windows writes without braces, which previously read as no enrollment on enrolled devices. Match enrollment and EnterpriseMgmt task GUIDs ignoring braces and case in the analyzer and the Facts panel. Treat a failed `reg export`, or an Enrollments export without its root key, as not collected rather than as an empty registry. Read EnterpriseMgmt task GUIDs from the task path on every line, so localized `schtasks` output is recognized, and write no task evidence when the query failed or its output was not recognized. `multiple-enrollments` now counts active enrollments (EnrollmentState 1) rather than registry keys, and the Facts panel shows "Enrollment registry keys" and "Active enrollments (EnrollmentState 1)" separately; the key count warns only where the missing-enrollment warning fires.
+
+## [1.6.3] - 2026-10-20
+
+### Removed
+
+- **Hot Dog Stand theme**: Remove the theme. Anyone who had it selected opens in the Light theme.
+
+### Changed
+
+- **Desktop build compiler**: Raise the desktop Rust minimum from 1.88 to 1.89 for the maintained Linux D-Bus dependency. The parser crate remains at version 0.4.0 with its existing Rust 1.88 minimum. Supported desktop OS baselines are unchanged.
+
+- **Reference screenshots**: Remove outdated reference screenshots that showed identifying environment details, and replace the 0.3.0 workspace screenshot with a text caption.
+- **Parser source compatibility (#814)**: Advance `cmtraceopen-parser` to `0.4.0` for breaking source API changes from new Windows Firewall enum variants and public struct fields. Update affected exhaustive matches and struct literals; see the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
+
+- **DsRegCmd diagnostics link to event-log entries (#870)**: Diagnostics from rules that fire on a specific `0x` code now carry `related_error_codes` (public field on `DsregcmdDiagnosticInsight`; struct literals need `related_error_codes: Vec::new()`), and the analyzer links event-log entries that cite those codes on token boundaries. Only codes that appear in the rule's fields on token boundaries are recorded; a rule firing on a substring hit records none. See the [migration notes](crates/cmtraceopen-parser/README.md#versioning).
+
+### Fixed
+
+- **Linux single-instance handoff**: Port an owned copy of the single-instance plugin to maintained zbus 6, preserving exclusive election, file handoff and name cleanup. An unavailable session bus retains startup without instance enforcement and reports a warning; a failed delivery to an existing primary reports an error instead of successful delivery. Windows and macOS implementations are unchanged.
+
+- **Archive and TLS dependencies**: Update ZIP to 9.0.4 and Rustls to 0.23.46, retain archive symlink/special-file rejection, and remove the updater's unused legacy ZIP extraction path without suppressing the new advisories.
+
+- **IME record framing**: Recover interrupted logical records during live tailing and identify retained unparsed fragments without adding public parser fields or variants.
+
+- **Diagnostics collection bounds**: Retain bounded captures and report source changes instead of implying a complete, unchanged capture.
+
+- **Release package verification**: Require Windows embedded application signing during installer bundling, retained macOS trust evidence and complete updater platform coverage before publication.
+
+- **Find accessibility**: Give the Find bar and its live result count named accessible regions so assistive technology can identify the controls and announce search results.
+
+- **Public Autopilot parser projection**: Mask short typed identities consistently in narrative while preserving generated redaction tokens. This addresses the parser-library projection contract; the desktop has no caller of this Autopilot leaf projection.
+
+- **Development tooling dependencies (#816, #817)**: Update `source-map-js` to `1.2.2` in the application and download-metrics lockfiles, addressing indexed source-map offset validation ([GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q)).
+
+- **DsRegCmd live event coverage (#918)**: Report incomplete channel reads and unparseable records as failed coverage with their details, while retaining parsed events and counts.
+
 - **Windows Firewall logs (#814)**: Recognize firewall records separately from IIS, preserve all fields and Local wall-clock timestamps, report skipped NUL padding and warn about lost events, and retain encoding and source identity through live tailing and timeline queries.
 
 - **DsRegCmd live capture reports evidence-write failures (#760)**: Connectivity, event-log, and scheduled-task evidence now report directory creation, serialization, and file-write errors instead of returning a successful capture with missing evidence.
