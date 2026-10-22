@@ -162,6 +162,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { deferred } from "../../test-utils/deferred";
 import { EVTX_LEVELS } from "./evtx-filter";
 import { sourceKeyOf, useEvtxStore } from "./evtx-store";
+import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { defaultColumnConfig, visibleColumns } from "./evtx-columns";
 import { EventLogWorkspace } from "./EventLogWorkspace";
 import { ChannelPicker } from "./ChannelPicker";
@@ -310,6 +311,64 @@ describe("event-viewer shared font metrics", () => {
     expect(flatRow.firstElementChild).toBe(flatCells[0]);
   });
 
+  describe("the grid with a transient time range or record scope", () => {
+    const events = [1, 2, 3, 4].map(
+      (n): EvtxRecord => ({
+        ...RECORD,
+        id: n,
+        eventRecordId: 100 + n,
+        timestampEpoch: n * 1000,
+        message: `event number ${n}`,
+      }),
+    );
+    const seedFour = () => {
+      seedEventLog();
+      useEvtxStore.setState({ records: events, selectedRecordId: null });
+    };
+    const shownMessages = (root: HTMLElement) =>
+      recordGridRows(root).map((row) => /event number \d/.exec(row.textContent ?? "")?.[0]);
+
+    it("shows every event without either", () => {
+      seedFour();
+      const grid = render(<EvtxTimeline />);
+      expect(grid.getByRole("grid", { name: "Event log timeline - 4 records" })).toBeInTheDocument();
+      expect(shownMessages(grid.container)).toHaveLength(4);
+    });
+
+    it("shows only the events in the time range", () => {
+      seedFour();
+      act(() => {
+        useEvtxStore.getState().setTimeRange({ startMs: 2000, endMs: 4000 });
+      });
+      const grid = render(<EvtxTimeline />);
+      expect(grid.getByRole("grid", { name: "Event log timeline - 2 records" })).toBeInTheDocument();
+      expect(shownMessages(grid.container)).toEqual(["event number 2", "event number 3"]);
+    });
+
+    it("shows only the scoped events, and follows a change of the scope", () => {
+      seedFour();
+      const scope = (...picked: EvtxRecord[]) => ({
+        kind: "finding" as const,
+        title: "A finding",
+        records: new Set(picked),
+        counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+      });
+      act(() => {
+        useEvtxStore.getState().setRecordScope(scope(events[0], events[3]));
+      });
+      const grid = render(<EvtxTimeline />);
+      expect(shownMessages(grid.container)).toEqual(["event number 1", "event number 4"]);
+      act(() => {
+        useEvtxStore.getState().setRecordScope(scope(events[2]));
+      });
+      expect(shownMessages(grid.container)).toEqual(["event number 3"]);
+      act(() => {
+        useEvtxStore.getState().setRecordScope(null);
+      });
+      expect(shownMessages(grid.container)).toHaveLength(4);
+    });
+  });
+
   it("names channel-folder disclosure and selection controls", () => {
     useEvtxStore.setState({
       channels: [
@@ -421,11 +480,9 @@ describe("event-viewer shared font metrics", () => {
     const detail = render(<EvtxDetailPane />);
     const detailRoot = detail.container.firstElementChild as HTMLElement;
     expect(detailRoot.style.fontSize).toBe(`${MIN_LOG_DETAILS_FONT_SIZE}px`);
-    expect(detailRoot.style.overflow).toBe("auto");
+    // The root no longer scrolls; the body under the fixed header does.
+    expect((detailRoot.lastElementChild as HTMLElement).style.overflow).toBe("auto");
     expect(detailRoot.style.lineHeight).toBe(`${smallDetailLineHeight}px`);
-    expect(screen.getByRole("button", { name: "Show Raw XML" }).style.fontSize).toBe(
-      `${MIN_LOG_DETAILS_FONT_SIZE}px`
-    );
     detail.unmount();
 
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
@@ -492,17 +549,14 @@ describe("event-viewer shared font metrics", () => {
     const detailRootLarge = detailLarge.container.firstElementChild as HTMLElement;
     expect(detailRootLarge.style.fontSize).toBe(`${MIN_LOG_DETAILS_FONT_SIZE}px`);
     expect(detailRootLarge.style.lineHeight).toBe(`${smallDetailLineHeight}px`);
-    expect(detailRootLarge.style.overflow).toBe("auto");
+    expect((detailRootLarge.lastElementChild as HTMLElement).style.overflow).toBe("auto");
 
     setDetailsFontSize(MAX_LOG_DETAILS_FONT_SIZE);
     expect(detailRootLarge.style.fontSize).toBe(`${MAX_LOG_DETAILS_FONT_SIZE}px`);
     expect(detailRootLarge.style.lineHeight).toBe(
       `${getLogDetailsLineHeight(MAX_LOG_DETAILS_FONT_SIZE)}px`
     );
-    expect(detailRootLarge.style.overflow).toBe("auto");
-    expect(screen.getByRole("button", { name: "Show Raw XML" }).style.fontSize).toBe(
-      `${MAX_LOG_DETAILS_FONT_SIZE}px`
-    );
+    expect((detailRootLarge.lastElementChild as HTMLElement).style.overflow).toBe("auto");
     detailLarge.unmount();
 
     expect(useUiStore.getState().logListFontSize).toBe(MAX_LOG_LIST_FONT_SIZE);
@@ -813,6 +867,7 @@ describe("EventLogWorkspace fixtures", () => {
     invoke.mockReset();
     configureInvoke();
     useEvtxStore.getState().reset();
+    useEvtxLayoutStore.setState(sanitizeLayout(undefined));
     resetVirtualizerState();
   });
 
@@ -847,6 +902,276 @@ describe("EventLogWorkspace fixtures", () => {
 
     expect(screen.getByText(message)).toHaveAttribute("role", "alert");
     expect(recordGridRows(document.body)).toHaveLength(1);
+  });
+
+  describe("the transient time range and its Escape key", () => {
+    const SEP = "\u2013";
+    const RANGE = {
+      startMs: Date.parse("2026-01-15T11:00:00.000Z"),
+      endMs: Date.parse("2026-01-15T13:00:00.000Z"),
+    };
+    const pressEscape = (target: Element | Window = document.body) =>
+      fireEvent.keyDown(target, { key: "Escape" });
+    /** Seeds the fixture, renders the workspace, then sets the range through the store. */
+    const renderWithRange = () => {
+      seedFixtureEvents();
+      useEvtxStore.setState({ timeZoneMode: "utc" });
+      const view = render(<EventLogWorkspace />);
+      act(() => {
+        expect(useEvtxStore.getState().setTimeRange(RANGE)).toBe(true);
+      });
+      return view;
+    };
+    const chipText = () =>
+      document.querySelector("[data-evtx-chip='timeRange'] span")?.textContent ?? null;
+
+    it("shows the Time chip for the range, in the selected zone", () => {
+      renderWithRange();
+      expect(chipText()).toBe(`Time: brushed 11:00${SEP}13:00`);
+    });
+
+    it("clears the range on Escape, and says it handled the key", () => {
+      renderWithRange();
+      expect(pressEscape()).toBe(false);
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+      expect(chipText()).toBeNull();
+    });
+
+    it("leaves the key alone when there is no range", () => {
+      seedFixtureEvents();
+      render(<EventLogWorkspace />);
+      expect(pressEscape()).toBe(true);
+    });
+
+    it("does not clear the record scope", () => {
+      renderWithRange();
+      const [first] = useEvtxStore.getState().records;
+      act(() => {
+        useEvtxStore.getState().setRecordScope({
+          kind: "finding",
+          title: "A finding",
+          records: new Set([first]),
+          counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+        });
+      });
+      pressEscape();
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+      expect(useEvtxStore.getState().recordScope).not.toBeNull();
+      pressEscape();
+      expect(useEvtxStore.getState().recordScope).not.toBeNull();
+    });
+
+    it("leaves the range alone while a control is being typed into", () => {
+      renderWithRange();
+      const search = screen.getByRole("textbox", { name: "Search events" });
+      search.focus();
+      expect(pressEscape(search)).toBe(true);
+      expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+    });
+
+    it.each(["combobox", "textbox", "searchbox", "spinbutton"])(
+      "leaves the range alone while focus is in an element with the %s role",
+      (role) => {
+        renderWithRange();
+        const control = document.createElement("div");
+        control.setAttribute("role", role);
+        control.tabIndex = 0;
+        document.body.appendChild(control);
+        try {
+          control.focus();
+          expect(control).toHaveFocus();
+          expect(pressEscape(control)).toBe(true);
+          expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+        } finally {
+          control.remove();
+        }
+      },
+    );
+
+    it("leaves the range alone while focus is in a contenteditable element", () => {
+      renderWithRange();
+      const editor = document.createElement("div");
+      editor.setAttribute("contenteditable", "true");
+      // jsdom does not compute isContentEditable from the attribute, so state the property it reads.
+      Object.defineProperty(editor, "isContentEditable", { value: true });
+      document.body.appendChild(editor);
+      try {
+        expect(pressEscape(editor)).toBe(true);
+        expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+      } finally {
+        editor.remove();
+      }
+    });
+
+    it("clears the range when focus is in a button or a link, which are not for typing", () => {
+      renderWithRange();
+      const button = document.createElement("button");
+      document.body.appendChild(button);
+      try {
+        button.focus();
+        pressEscape(button);
+      } finally {
+        button.remove();
+      }
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+    });
+
+    it("leaves the range alone while a native dialog is open", () => {
+      renderWithRange();
+      const dialog = document.createElement("dialog");
+      dialog.setAttribute("open", "");
+      document.body.appendChild(dialog);
+      try {
+        expect(pressEscape()).toBe(true);
+        expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+      } finally {
+        dialog.remove();
+      }
+      // The same dialog closed (no open attribute) no longer holds the key.
+      const closed = document.createElement("dialog");
+      document.body.appendChild(closed);
+      try {
+        pressEscape();
+      } finally {
+        closed.remove();
+      }
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+    });
+
+    it("leaves the range alone while a modal dialog is open", () => {
+      renderWithRange();
+      const dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      document.body.appendChild(dialog);
+      try {
+        expect(pressEscape()).toBe(true);
+        expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+      } finally {
+        dialog.remove();
+      }
+      pressEscape();
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+    });
+
+    describe("focus when Escape clears the range under a focused control", () => {
+      const search = () => screen.getByRole("textbox", { name: "Search events" });
+      const removeTime = () => screen.getByRole("button", { name: `Remove Time: brushed 11:00${SEP}13:00` });
+      const scopeIt = () => {
+        const [first] = useEvtxStore.getState().records;
+        act(() => {
+          useEvtxStore.getState().setRecordScope({
+            kind: "finding",
+            title: "A finding",
+            records: new Set([first]),
+            counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+          });
+        });
+      };
+
+      it("moves to the search box when Escape on the Time chip's remove button removes the whole row", () => {
+        renderWithRange();
+        removeTime().focus();
+        expect(removeTime()).toHaveFocus();
+        fireEvent.keyDown(removeTime(), { key: "Escape" });
+        expect(useEvtxStore.getState().timeRange).toBeNull();
+        expect(screen.queryByRole("list", { name: "Active filters" })).toBeNull();
+        expect(search()).toHaveFocus();
+      });
+
+      it("moves to the next chip's remove button when another chip is left", () => {
+        renderWithRange();
+        scopeIt();
+        removeTime().focus();
+        fireEvent.keyDown(removeTime(), { key: "Escape" });
+        expect(screen.getByRole("button", { name: "Remove Finding: A finding" })).toHaveFocus();
+      });
+
+      it("moves to the search box when Escape on Clear all removes the last clearable chip", () => {
+        renderWithRange();
+        const clearAll = screen.getByRole("button", { name: "Clear all" });
+        clearAll.focus();
+        fireEvent.keyDown(clearAll, { key: "Escape" });
+        expect(useEvtxStore.getState().timeRange).toBeNull();
+        expect(screen.queryByRole("button", { name: "Clear all" })).toBeNull();
+        expect(search()).toHaveFocus();
+      });
+
+      it("moves to the search box when a cleared channel prunes the focused Finding chip's scope to nothing", async () => {
+        renderWithRange();
+        act(() => {
+          useEvtxStore.getState().setTimeRange(null);
+        });
+        scopeIt();
+        invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+          if (command === "evtx_clear_channel") return { channel: args?.channel, result: { status: "cleared" } };
+          if (command === "load_markers") return null;
+          return undefined;
+        });
+        const removeScope = screen.getByRole("button", { name: "Remove Finding: A finding" });
+        removeScope.focus();
+        expect(removeScope).toHaveFocus();
+
+        await act(async () => {
+          await useEvtxStore.getState().clearChannel("Application", true);
+        });
+
+        expect(useEvtxStore.getState().recordScope).toBeNull();
+        expect(search()).toHaveFocus();
+      });
+    });
+
+    it("steps aside for an Escape that something else has already used", () => {
+      renderWithRange();
+      const used = (event: Event) => event.preventDefault();
+      document.addEventListener("keydown", used);
+      try {
+        pressEscape();
+        expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+      } finally {
+        document.removeEventListener("keydown", used);
+      }
+      pressEscape();
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+    });
+
+    it("lets the More filters popover have the first Escape, and clears the range with the next", async () => {
+      renderWithRange();
+      fireEvent.click(screen.getByRole("button", { name: /^More filters/ }));
+      const dialog = await screen.findByRole("dialog", { name: "More filters" });
+
+      // The popover handles the key and prevents its default, so the workspace steps aside.
+      fireEvent.keyDown(dialog, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "More filters" })).toBeNull());
+      expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+
+      pressEscape();
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+    });
+
+    it("stops listening when the workspace unmounts", () => {
+      const view = renderWithRange();
+      view.unmount();
+      expect(pressEscape()).toBe(true);
+      expect(useEvtxStore.getState().timeRange).toEqual(RANGE);
+    });
+
+    it("counts, in the chip's tooltip, the events the range hides for want of a timestamp", () => {
+      seedFixtureEvents();
+      const untimed = { ...fixtureRecord(), eventRecordId: 43, timestampEpoch: 0, message: "no clock" };
+      useEvtxStore.setState({
+        timeZoneMode: "utc",
+        records: [fixtureRecord(), untimed, { ...untimed, eventRecordId: 44 }],
+      });
+      render(<EventLogWorkspace />);
+      act(() => {
+        useEvtxStore.getState().setTimeRange(RANGE);
+      });
+      expect(screen.getByText(`Time: brushed 11:00${SEP}13:00`)).toHaveAttribute(
+        "title",
+        `Time: brushed 11:00${SEP}13:00 (UTC)\n2 events without a timestamp are hidden by this range`,
+      );
+    });
   });
 
   it("offers CSV, TSV, JSON, and Event XML export of visible events", () => {
@@ -1463,7 +1788,7 @@ describe("EventLogWorkspace fixtures", () => {
     );
   });
 
-  it("shows event detail, Event Data, and Show/Hide Raw XML", () => {
+  it("shows event detail and Event Data in the rail, with the XML on its own sub-tab", () => {
     seedFixtureEvents();
     render(<EventLogWorkspace />);
 
@@ -1471,17 +1796,102 @@ describe("EventLogWorkspace fixtures", () => {
     expect(eventRow).toBeDefined();
     fireEvent.click(eventRow!);
 
-    expect(screen.getByText("Event 1000")).toBeInTheDocument();
+    // A row click switches the rail to Details; the tab now reads "Event {id}".
+    expect(screen.getByRole("tab", { name: "Event 1000" })).toHaveAttribute("aria-selected", "true");
+    const detail = screen.getByRole("region", { name: "Event log details" });
+    expect(within(detail).getByText("Event 1000")).toBeInTheDocument();
     expect(
-      screen.getAllByText("Faulting application name: setup.exe").length
+      within(detail).getAllByText("Faulting application name: setup.exe").length
     ).toBeGreaterThan(0);
-    expect(screen.getByText("Event Data")).toBeInTheDocument();
-    expect(screen.getByText("AppName")).toBeInTheDocument();
-    expect(screen.getAllByText("Application Error").length).toBeGreaterThan(0);
+    expect(within(detail).getByText("Event Data")).toBeInTheDocument();
+    expect(within(detail).getByText("AppName")).toBeInTheDocument();
+    expect(within(detail).getAllByText("Application Error").length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole("button", { name: "Show Raw XML" }));
-    expect(screen.getByRole("button", { name: "Hide Raw XML" })).toBeInTheDocument();
+    fireEvent.click(within(detail).getByRole("tab", { name: "XML" }));
     expect(screen.getByText(/<EventID>1000<\/EventID>/)).toBeInTheDocument();
+  });
+
+  it("reopens a hidden rail on Details when a row is clicked, even from the Insights tab", () => {
+    seedFixtureEvents();
+    useEvtxLayoutStore.setState({ panels: { channels: true, insights: false, dock: false } });
+    render(<EventLogWorkspace />);
+    const rail = document.querySelector<HTMLElement>('[data-evtx-region="rail"]');
+    expect(rail).not.toBeVisible();
+
+    fireEvent.click(recordGridRows(document.body)[0]!);
+
+    expect(rail).toBeVisible();
+    expect(useEvtxLayoutStore.getState().railTab).toBe("details");
+  });
+
+  it("re-clicking the selected row keeps it selected and brings Details back, from Insights and from a hidden rail", () => {
+    seedFixtureEvents();
+    render(<EventLogWorkspace />);
+    const rail = document.querySelector<HTMLElement>('[data-evtx-region="rail"]');
+    const firstRow = () => recordGridRows(document.body)[0]!;
+
+    fireEvent.click(firstRow());
+    const selectedId = useEvtxStore.getState().selectedRecordId;
+    expect(selectedId).not.toBeNull();
+
+    act(() => useEvtxLayoutStore.getState().setRailTab("insights"));
+    fireEvent.click(firstRow());
+    expect(useEvtxStore.getState().selectedRecordId).toBe(selectedId);
+    expect(useEvtxLayoutStore.getState().railTab).toBe("details");
+
+    act(() => {
+      useEvtxLayoutStore.getState().setRailTab("insights");
+      useEvtxLayoutStore.getState().setPanel("insights", false);
+    });
+    expect(rail).not.toBeVisible();
+    fireEvent.keyDown(firstRow(), { key: "Enter" });
+    expect(useEvtxStore.getState().selectedRecordId).toBe(selectedId);
+    expect(useEvtxLayoutStore.getState().railTab).toBe("details");
+    expect(rail).toBeVisible();
+  });
+
+  it("moves the selection with the arrow keys without switching the rail tab or reopening a hidden rail", () => {
+    seedFixtureEvents();
+    const [only] = useEvtxStore.getState().records;
+    useEvtxStore.setState({
+      records: [only, { ...only, id: only.id + 1, eventRecordId: only.eventRecordId + 1 }],
+    });
+    render(<EventLogWorkspace />);
+    fireEvent.click(recordGridRows(document.body)[0]!);
+    const first = useEvtxStore.getState().selectedRecordId;
+    act(() => {
+      useEvtxLayoutStore.getState().setRailTab("insights");
+      useEvtxLayoutStore.getState().setPanel("insights", false);
+    });
+
+    const row = recordGridRows(document.body)[0]!;
+    row.focus();
+    fireEvent.keyDown(row, { key: "ArrowDown" });
+
+    expect(useEvtxStore.getState().selectedRecordId).not.toBe(first);
+    expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
+    expect(useEvtxLayoutStore.getState().panels.insights).toBe(false);
+  });
+
+  it("scrolls a selection made outside the grid into view, but not when a live-tail renumber only changes the ids", () => {
+    seedFixtureEvents();
+    const [only] = useEvtxStore.getState().records;
+    const two = [only, { ...only, id: only.id + 1, eventRecordId: only.eventRecordId + 1 }];
+    useEvtxStore.setState({ records: two, selectedRecordId: null });
+    render(<EventLogWorkspace />);
+
+    // Previous and Next select from outside the grid: the row is brought into view.
+    virtualizerState.scrollToIndex.mockClear();
+    act(() => useEvtxStore.getState().setSelectedRecordId(1));
+    expect(virtualizerState.scrollToIndex).toHaveBeenCalledTimes(1);
+
+    // A tail batch with an older record renumbers every id; the selected record is the same
+    // record at a new id, so nothing scrolls.
+    virtualizerState.scrollToIndex.mockClear();
+    const older = { ...only, eventRecordId: only.eventRecordId - 10, timestampEpoch: only.timestampEpoch - 1000 };
+    const renumbered = [older, only, two[1]].map((record, index) => ({ ...record, id: index }));
+    act(() => useEvtxStore.setState({ records: renumbered, selectedRecordId: 2 }));
+    expect(virtualizerState.scrollToIndex).not.toHaveBeenCalled();
   });
 
   // The export control has two asynchronous phases before an abort controller exists: the save

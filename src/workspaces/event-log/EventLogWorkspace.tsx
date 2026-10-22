@@ -24,10 +24,9 @@ import { ChannelPicker } from "./ChannelPicker";
 import { EvtxFilterBar } from "./EvtxFilterBar";
 import { EvtxFilterChips } from "./EvtxFilterChips";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
-import { EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
-import { EvtxDetailPane } from "./EvtxDetailPane";
+import { EvtxInsightsRail } from "./EvtxInsightsRail";
 import { EvtxViewBar } from "./EvtxViewBar";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
 import { effectiveResizeRange, proposeResize, useRowCappedSize } from "./use-row-capped-size";
@@ -40,10 +39,13 @@ import {
   MIN_RAIL_WIDTH,
   maxDockHeightFor,
   useEvtxLayoutStore,
-  type EvtxRailTabId,
   type EvtxViewId,
 } from "./evtx-layout-store";
-import { selectVisibleRecords } from "./evtx-filter";
+import {
+  countHiddenForWantOfTimestamp,
+  selectVisibleRecords,
+  type VisibleRecordsInput,
+} from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
 import type {
@@ -56,9 +58,6 @@ import {
   EventLogAnalysisCancelled,
 } from "./event-analysis-session";
 
-const DEFAULT_DETAIL_HEIGHT = 300;
-const MIN_DETAIL_HEIGHT = 100;
-const MAX_DETAIL_RATIO = 0.7;
 const DIAGNOSIS_DEBOUNCE_MS = 75;
 
 const NOT_IMPLEMENTED = "Not implemented in this phase";
@@ -73,16 +72,6 @@ export interface EvtxViewEntry {
   keepAlive: boolean;
   render: () => ReactNode;
 }
-
-/**
- * Rail contents by tab. The rail is off in this phase (its toggle is disabled), so these never
- * show; Phase 4 replaces each entry with the Insights, Chains and Details tabs.
- */
-const RAIL_SLOTS: Record<EvtxRailTabId, () => ReactNode> = {
-  insights: () => <RegionPlaceholder title="Insights" />,
-  chains: () => <RegionPlaceholder title="Chains" />,
-  details: () => <RegionPlaceholder title="Details" />,
-};
 
 /** Dock contents. Off in this phase; Phase 11 replaces the entry with the correlation dock. */
 const DOCK_SLOTS: Record<"correlation", () => ReactNode> = {
@@ -181,6 +170,40 @@ interface EventLogAnalysisPump {
   publishedSessionId: string | null;
 }
 
+/** A control the operator types into or picks from: Escape there belongs to the control. */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return true;
+  return ["textbox", "searchbox", "combobox", "spinbutton"].includes(target.getAttribute("role") ?? "");
+}
+
+/** A modal dialog is open, and Escape is its to spend. */
+function isModalDialogOpen(): boolean {
+  return document.querySelector('[aria-modal="true"], dialog[open]') !== null;
+}
+
+/**
+ * Escape clears the transient time range (spec section 9). One window listener for the mounted
+ * workspace, so it works wherever focus sits in it. It steps aside for anything that has already
+ * used the key: a popover or menu that handled it (`defaultPrevented`), a control being typed into,
+ * and an open modal dialog. It clears the range only: the record scope is cleared from its chip.
+ */
+function useClearTimeRangeOnEscape(): void {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (isEditableTarget(event.target) || isModalDialogOpen()) return;
+      const { timeRange, setTimeRange } = useEvtxStore.getState();
+      if (timeRange === null) return;
+      setTimeRange(null);
+      event.preventDefault();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+}
+
 function hasSameRecordMembership(
   left: readonly EvtxRecord[],
   right: readonly EvtxRecord[],
@@ -206,6 +229,7 @@ function useStableRecordMembership(records: EvtxRecord[]): EvtxRecord[] {
 }
 
 export function EventLogWorkspace() {
+  useClearTimeRangeOnEscape();
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
   const isLoading = useEvtxStore((s) => s.isLoading);
@@ -230,6 +254,8 @@ export function EventLogWorkspace() {
   const filterEventIds = useEvtxStore((s) => s.filterEventIds);
   const filterSearch = useEvtxStore((s) => s.filterSearch);
   const quickFilter = useEvtxStore((s) => s.quickFilter);
+  const timeRange = useEvtxStore((s) => s.timeRange);
+  const recordScope = useEvtxStore((s) => s.recordScope);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const columnOrder = useEvtxStore((s) => s.columnConfig.order);
   const nowEpoch = useMemo(
@@ -241,30 +267,31 @@ export function EventLogWorkspace() {
       filterEventIds,
       filterSearch,
       quickFilter,
+      timeRange,
+      recordScope,
       columnOrder,
       timeZoneMode,
       timeWindow,
       isLoading,
     ],
   );
-  const visibleRecords = useMemo(
-    () =>
-      isLoading
-        ? []
-        : selectVisibleRecords({
-            records,
-            selectedChannels,
-            filterLevels,
-            nowEpoch,
-            filterEventIds,
-            filterSearch,
-            quickFilter,
-            visibleColumns: columnOrder,
-            timeZoneMode,
-            timeWindow,
-          }),
+  // One input for every pass over the records, so the chip row's count cannot read another set.
+  const visibleInput = useMemo<VisibleRecordsInput>(
+    () => ({
+      records,
+      selectedChannels,
+      filterLevels,
+      nowEpoch,
+      filterEventIds,
+      filterSearch,
+      quickFilter,
+      visibleColumns: columnOrder,
+      timeZoneMode,
+      timeWindow,
+      timeRange,
+      scopeRecords: recordScope?.records ?? null,
+    }),
     [
-      isLoading,
       records,
       selectedChannels,
       filterLevels,
@@ -274,8 +301,19 @@ export function EventLogWorkspace() {
       columnOrder,
       timeZoneMode,
       timeWindow,
+      timeRange,
+      recordScope,
       nowEpoch,
     ],
+  );
+  const visibleRecords = useMemo(
+    () => (isLoading ? [] : selectVisibleRecords(visibleInput)),
+    [isLoading, visibleInput],
+  );
+  // Events a time range hides only because they carry no usable timestamp (spec 8.4 chip tooltip).
+  const untimedHiddenCount = useMemo(
+    () => (isLoading ? 0 : countHiddenForWantOfTimestamp(visibleInput)),
+    [isLoading, visibleInput],
   );
   const analysisRecords = useStableRecordMembership(visibleRecords);
   const channels = useEvtxStore((s) => s.channels);
@@ -283,7 +321,6 @@ export function EventLogWorkspace() {
   const coverageDetails = useEvtxStore((s) => s.coverageDetails);
   const sourceManifest = useEvtxStore((s) => s.sourceManifest);
   const tailCoverageGaps = useEvtxStore((s) => s.tailCoverageGaps);
-  const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
   const diagnosisCoverageGaps = useMemo(
     () =>
       mergeDiagnosisCoverageGaps(
@@ -314,7 +351,6 @@ export function EventLogWorkspace() {
 
   const activeView = useEvtxLayoutStore((s) => s.activeView);
   const panels = useEvtxLayoutStore((s) => s.panels);
-  const railTab = useEvtxLayoutStore((s) => s.railTab);
   const railWidth = useEvtxLayoutStore((s) => s.railWidth);
   const dockHeight = useEvtxLayoutStore((s) => s.dockHeight);
   const setRailWidth = useEvtxLayoutStore((s) => s.setRailWidth);
@@ -335,43 +371,6 @@ export function EventLogWorkspace() {
   const dockMax = maxDockHeightFor(viewportHeight);
   const effectiveDockHeight = Math.min(Math.max(dockHeight, MIN_DOCK_HEIGHT), dockMax);
 
-  const [detailHeight, setDetailHeight] = useState(DEFAULT_DETAIL_HEIGHT);
-  const resizeRef = useRef<{ startY: number; startHeight: number } | null>(
-    null,
-  );
-
-  useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      if (!resizeRef.current) return;
-      const delta = resizeRef.current.startY - e.clientY;
-      const newHeight = Math.max(
-        MIN_DETAIL_HEIGHT,
-        Math.min(
-          resizeRef.current.startHeight + delta,
-          window.innerHeight * MAX_DETAIL_RATIO,
-        ),
-      );
-      setDetailHeight(newHeight);
-    };
-    const onMouseUp = () => {
-      if (resizeRef.current) {
-        resizeRef.current = null;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-      }
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-      if (resizeRef.current) {
-        resizeRef.current = null;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-      }
-    };
-  }, []);
   useEffect(() => {
     const pump = analysisPumpRef.current;
     pump.mounted = true;
@@ -543,8 +542,8 @@ export function EventLogWorkspace() {
         coverageGaps.length > 0 ||
         diagnosisCoverageGaps.length > 0));
 
-  // Today's stack: the unified timeline, the record grid and the detail pane. Phase 4 moves the
-  // detail pane and the diagnosis card into the rail; Phase 7 restyles the grid.
+  // Today's stack: the unified timeline and the record grid. The diagnosis and the record details
+  // live in the rail; Phases 10 and 11 move the unified timeline; Phase 7 restyles the grid.
   const renderTableView = () => (
     <>
       <div
@@ -572,38 +571,6 @@ export function EventLogWorkspace() {
       <div style={{ flex: 1, overflow: "hidden" }}>
         <EvtxTimeline nowEpoch={nowEpoch} />
       </div>
-
-      {/* Resize handle + detail pane */}
-      {selectedRecordId != null && (
-        <>
-          <div
-            style={{
-              height: "4px",
-              cursor: "row-resize",
-              backgroundColor: tokens.colorNeutralStroke2,
-              flexShrink: 0,
-            }}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              resizeRef.current = {
-                startY: e.clientY,
-                startHeight: detailHeight,
-              };
-              document.body.style.cursor = "row-resize";
-              document.body.style.userSelect = "none";
-            }}
-          />
-          <div
-            style={{
-              height: `${detailHeight}px`,
-              flexShrink: 0,
-              overflow: "hidden",
-            }}
-          >
-            <EvtxDetailPane />
-          </div>
-        </>
-      )}
     </>
   );
 
@@ -668,9 +635,12 @@ export function EventLogWorkspace() {
       {isLoading && <ProgressBar style={{ width: "100%", flexShrink: 0 }} />}
       <EvtxViewBar nowEpoch={nowEpoch} />
       <EvtxFilterBar nowEpoch={nowEpoch} />
-      <EvtxFilterChips visibleCount={visibleRecords.length} loadedCount={records.length} />
+      <EvtxFilterChips
+        visibleCount={visibleRecords.length}
+        loadedCount={records.length}
+        untimedHiddenCount={untimedHiddenCount}
+      />
       <EvtxCoverageBanner />
-      <EventDiagnosisPanel summary={diagnosis} />
 
       {timelineError && (
         <div
@@ -760,14 +730,15 @@ export function EventLogWorkspace() {
           </div>
         </div>
 
-        {/* Hidden, not unmounted, so the rail's future tab state survives a toggle. */}
+        {/* Hidden, not unmounted, so the rail's tab and scroll state survive a toggle. */}
         <aside
           id={EVTX_RAIL_ID}
           ref={railRef}
           data-evtx-region="rail"
           aria-label="Insights rail"
           style={{
-            display: panels.insights ? "block" : "none",
+            display: panels.insights ? "flex" : "none",
+            flexDirection: "column",
             position: "relative",
             width: `${railWidth}px`,
             // The aside is a child of the body row, so this resolves against the row.
@@ -795,7 +766,16 @@ export function EventLogWorkspace() {
               if (proposed !== null) setRailWidth(proposed);
             }}
           />
-          <div style={{ height: "100%", overflowY: "auto" }}>{RAIL_SLOTS[railTab]()}</div>
+          {/* The rail scrolls its own tab bodies under a fixed tablist, so this wrapper does not. */}
+          <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <EvtxInsightsRail
+              summary={diagnosis}
+              records={analysisRecords}
+              pending={timelinePending}
+              error={diagnosisError}
+              textLogCount={scopedLogEntries.length}
+            />
+          </div>
         </aside>
       </div>
     </div>

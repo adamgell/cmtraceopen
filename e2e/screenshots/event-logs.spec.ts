@@ -254,23 +254,57 @@ test.describe("event-logs screenshots", () => {
   });
 
   test("event-logs selected record", async ({ page }) => {
+    // Select a record that IS finding evidence, so the Details callout shows: the DeviceManagement
+    // 404 at record 89131, the first piece of evidence of the top finding. The engine's evidence is
+    // the redacted display projection (machine as a [host:...] token, source as the file path), and
+    // the callout matches on event ID, provider, channel and record ID, so this record matches
+    // uniquely. A real row click drives it into Details: newest first, this record is row 1026 of
+    // 1331, below the fold of a virtualized list, so scroll it into the rendered window first (the
+    // way the Phase 2 capture did), then click it.
     const grid = page.getByRole("grid", { name: timelineGridName });
-    // Newest first, the first Error record (MsiInstaller 11708) is the 39th row, below the fold of
-    // a virtualized list, so scroll it into the rendered window before clicking.
     await grid.evaluate((el) => {
-      el.scrollTop = 36 * 36;
+      // Rows are not a fixed height (the level badge column varies), so scale by the list's own
+      // height: a few rows above row 1026 of 1331.
+      el.scrollTop = Math.floor((el.scrollHeight * 1022) / 1331);
     });
     const row = grid
       .getByRole("row")
-      .filter({ hasText: "Installation failed." })
+      .filter({ hasText: "15:43:23" })
+      .filter({ hasText: "MDM Configurati" })
       .first();
+    await expect(row).toBeVisible();
     await row.click();
-    await expect(
-      page.getByRole("region", { name: "Event log details" }),
-    ).toContainText("Installation failed.");
+    const detail = page.getByRole("region", { name: "Event log details" });
+    await expect(detail).toContainText("Command failure status");
+    await expect(detail.getByRole("button", { name: /Part of finding/ })).toBeVisible();
     await assertNoHostPaths(page);
     await page.screenshot({
       path: outPath("event-logs-selected.png"),
+      animations: "disabled",
+    });
+  });
+
+  test("event-logs insights lower cards", async ({ page }) => {
+    // The finding cards fill the top of the rail; scroll the panel to its end so the coverage
+    // disclosure, level mix and top event IDs are reviewable. The correlation summary card does
+    // not appear here: this fixture yields no correlation edges, so it waits for Phase 10's
+    // fixture edges (#839).
+    const panel = page.locator("#evtx-rail-panel-insights");
+    await expect(panel).toBeVisible();
+    await panel.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    const rail = await page.locator('[data-evtx-region="rail"]').boundingBox();
+    // The rail is 340 px wide at its default (spec 5.2).
+    expect(Math.round(rail?.width ?? 0)).toBe(340);
+    // And the channel pane is 250 px including its 1 px border (spec 5.2).
+    // Measure the pane itself (the wrapper's child), not the wrapper around it.
+    const channels = await page.locator('[data-evtx-region="channels"] > *').first().boundingBox();
+    expect(Math.round(channels?.width ?? 0)).toBe(250);
+    await expect(page.getByRole("region", { name: "Level mix" })).toBeVisible();
+    await assertNoHostPaths(page);
+    await page.screenshot({
+      path: outPath("event-logs-insights.png"),
       animations: "disabled",
     });
   });

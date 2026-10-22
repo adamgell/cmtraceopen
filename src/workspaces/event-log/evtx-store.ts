@@ -33,8 +33,13 @@ import {
 // Re-exported so callers have one import site; the implementation lives in a Tauri-free module.
 export { selectVisibleRecords } from "./evtx-filter";
 import {
+  countScopeReferences,
   DEFAULT_QUICK_FILTER,
+  EVTX_LEVELS,
+  EVTX_RAW_LEVEL,
   fieldQueryError,
+  levelsAfterToggle,
+  levelsFilteredAtSource,
   parseEventIdSelectors,
   quickFilterApplies,
   type EvtxBeforeLoadCriteria,
@@ -42,6 +47,8 @@ import {
   type EvtxGroupField,
   type EvtxOnLoadCriteria,
   type EvtxQuickFilter,
+  type EvtxRecordScope,
+  type EvtxTimeRange,
 } from "./evtx-filter";
 import {
   defaultColumnConfig,
@@ -707,13 +714,10 @@ function buildServerFilter(
 
   // Information includes an unbounded provider-specific raw-level domain (6..254). The parser
   // intentionally caps XPath OR expressions, so leave level selection local whenever Information
-  // is selected rather than issuing an over-budget or incomplete server predicate.
-  if (
-    filterLevels.size > 0 &&
-    filterLevels.size < ALL_LEVELS.length &&
-    !filterLevels.has("Information")
-  ) {
-    filter.levels = [...filterLevels].map((level) => ALL_LEVELS.indexOf(level) + 1);
+  // is selected rather than issuing an over-budget or incomplete server predicate. The filter row
+  // reads the same rule (`levelsFilteredAtSource`) to show an unrequested level as unknown.
+  if (levelsFilteredAtSource(filterLevels)) {
+    filter.levels = [...filterLevels].map((level) => EVTX_RAW_LEVEL[level]);
   }
   return filter;
 }
@@ -747,7 +751,6 @@ function hasInvalidEventIdFilter(raw: string): boolean {
   return trimmed.length > 0 && parseEventIdSelectors(trimmed).invalid;
 }
 
-const ALL_LEVELS: EvtxLevel[] = ["Critical", "Error", "Warning", "Information", "Verbose"];
 type FilterSnapshot = {
   timeWindow: EvtxTimeWindow;
   filterEventIds: string;
@@ -779,6 +782,39 @@ export function sourceKeyOf(source: {
   return source.sourceMode === null
     ? null
     : [source.sourceMode, source.remoteMachine ?? "", ...source.sourcePaths].join("\u0000");
+}
+
+/**
+ * `scope` kept to the records still in `remaining`, or null when none are. The counts are of
+ * references: each reference keeps the candidates that remain, one left with none is not loaded, and
+ * only one left with several is ambiguous, so removing one of two candidates of a reference does not
+ * make an event "not loaded". A scope without references counts each record that left as one.
+ */
+function pruneRecordScope(
+  scope: EvtxRecordScope | null,
+  remaining: readonly EvtxRecord[]
+): EvtxRecordScope | null {
+  if (scope === null) return null;
+  const present = new Set(remaining);
+  const kept = [...scope.records].filter((record) => present.has(record));
+  if (kept.length === 0) return null;
+  if (kept.length === scope.records.size) return scope;
+  if (scope.references === undefined) {
+    return {
+      ...scope,
+      records: new Set(kept),
+      counts: { ...scope.counts, notLoaded: scope.counts.notLoaded + scope.records.size - kept.length },
+    };
+  }
+  const references = scope.references.map((candidates) =>
+    candidates.filter((record) => present.has(record))
+  );
+  return {
+    ...scope,
+    records: new Set(kept),
+    references,
+    counts: countScopeReferences(references, scope.counts.noUsableIdentity, scope.counts.bounded),
+  };
 }
 
 interface EvtxState {
@@ -830,6 +866,17 @@ interface EvtxState {
   /** The quick filter as edited while it is not applied, else null: More filters shows `quickFilter`. */
   quickFilterDraft: EvtxQuickFilter | null;
   timeWindow: EvtxTimeWindow;
+  /**
+   * The transient time range (a brush on the histogram): a span inside the loaded events, applied
+   * locally. Never read from the service and never saved. Cleared when a load starts or the source
+   * changes; see the subscription below the store.
+   */
+  timeRange: EvtxTimeRange | null;
+  /**
+   * The transient record scope (a finding's or chain's events), held by record object because ids
+   * are renumbered on every merge. Cleared with `timeRange`, and pruned when a channel is cleared.
+   */
+  recordScope: EvtxRecordScope | null;
   /** Which clock event times are shown in. */
   timeZoneMode: EvtxTimeZoneMode;
   columnConfig: EvtxColumnConfig;
@@ -884,6 +931,20 @@ loadGeneration: number;
    */
   setOnLoadCriteria: (criteria: EvtxOnLoadCriteria) => void;
   setTimeWindow: (window: EvtxTimeWindow) => void;
+  /**
+   * Sets the transient time range, or clears it with null. A reversed pair is put in order. Refused
+   * (false) for a range that is not finite or holds no time, and for any range while a load runs:
+   * the records are being replaced and the range would meet other ones. Never refetches.
+   */
+  setTimeRange: (range: EvtxTimeRange | null) => boolean;
+  /**
+   * Sets the transient record scope, or clears it with null. Refused (false) for a scope with no
+   * record still loaded, and while a load runs. Records of the scope that are not loaded are dropped
+   * and counted as not loaded. Never refetches.
+   */
+  setRecordScope: (scope: EvtxRecordScope | null) => boolean;
+  /** Clears both transient criteria. */
+  clearTransientCriteria: () => void;
   setGroupBy: (fields: EvtxGroupField[]) => void;
   toggleColumnVisible: (id: EvtxColumnId) => void;
   moveColumnBy: (id: EvtxColumnId, direction: -1 | 1) => void;
@@ -1257,7 +1318,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   selectedChannels: new Set<string>(),
   loadedChannels: new Set<string>(),
   completedSourceKey: null,
-  filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
+  filterLevels: new Set<EvtxLevel>(EVTX_LEVELS),
   filterEventIds: "",
   filterSearch: "",
   filterSearchDraft: null,
@@ -1265,6 +1326,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   quickFilterDraft: null,
   timeZoneMode: "local" as EvtxTimeZoneMode,
   timeWindow: "24h",
+  timeRange: null,
+  recordScope: null,
   columnConfig: defaultColumnConfig(),
   groupBy: [],
   collapsedGroups: new Set<string>(),
@@ -2214,8 +2277,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         const tailChannels = new Set(
           [...current.tailChannels].filter((name) => name !== channel)
         );
+        const remaining = current.records.filter((record) => record.channel !== channel);
         return {
-          records: current.records.filter((record) => record.channel !== channel),
+          records: remaining,
+          // The cleared channel's events are gone from the view; a scope that held some says so.
+          recordScope: pruneRecordScope(current.recordScope, remaining),
           loadedChannels: new Set([...current.loadedChannels].filter((name) => name !== channel)),
           channels: current.channels.map((info) =>
             info.name === channel ? { ...info, eventCount: 0 } : info
@@ -2297,11 +2363,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   },
 
   toggleFilterLevel: (level) => {
-    const current = get().filterLevels;
-    const next = new Set(current);
-    if (next.has(level)) next.delete(level);
-    else next.add(level);
-    if (next.size === 0) ALL_LEVELS.forEach((known) => next.add(known));
+    const next = levelsAfterToggle(get().filterLevels, level);
     const before = currentServerFilterKey();
     set({ filterLevels: next });
     refreshIfServerFilterChanged(before);
@@ -2352,6 +2414,34 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     set({ timeWindow: window });
     refreshIfServerFilterChanged(before);
   },
+  // Transient criteria are local to the view, so none of these refetches: they are not part of
+  // `serverFilterKey`, and `refreshBeforeLoad` is never called for them.
+  setTimeRange: (range) => {
+    if (range === null) {
+      set({ timeRange: null });
+      return true;
+    }
+    if (get().isLoading) return false;
+    if (!Number.isFinite(range.startMs) || !Number.isFinite(range.endMs)) return false;
+    const startMs = Math.min(range.startMs, range.endMs);
+    const endMs = Math.max(range.startMs, range.endMs);
+    if (startMs === endMs) return false;
+    set({ timeRange: { startMs, endMs } });
+    return true;
+  },
+  setRecordScope: (scope) => {
+    if (scope === null) {
+      set({ recordScope: null });
+      return true;
+    }
+    if (get().isLoading) return false;
+    const loaded = pruneRecordScope(scope, get().records);
+    if (loaded === null) return false;
+    // A copy, so the caller's set cannot change what the view shows.
+    set({ recordScope: { ...loaded, records: new Set(loaded.records) } });
+    return true;
+  },
+  clearTransientCriteria: () => set({ timeRange: null, recordScope: null }),
   // Changing the grouping invalidates every collapse key, so the old set is discarded rather than
   // left to collapse unrelated groups that happen to share a key.
   setGroupBy: (fields) => set({ groupBy: fields, collapsedGroups: new Set<string>() }),
@@ -2393,7 +2483,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       loadStartTime: null,
       loadElapsedMs: null,
       loadGeneration,
-      filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
+      filterLevels: new Set<EvtxLevel>(EVTX_LEVELS),
       filterEventIds: "",
       filterSearch: "",
       filterSearchDraft: null,
@@ -2401,6 +2491,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       quickFilter: { ...DEFAULT_QUICK_FILTER },
       quickFilterDraft: null,
       timeWindow: "24h",
+      timeRange: null,
+      recordScope: null,
       // Reset with everything else. Gaps describe records that are gone, so surviving a reset
       // would report a hole in a set no longer on screen, and a zone left over from a previous
       // session would silently reinterpret the next one's timestamps.
@@ -2436,6 +2528,20 @@ useEvtxStore.subscribe((state, previous) => {
   }
   if (previous.isLoading && !state.isLoading && state.completedSourceKey !== key) {
     useEvtxStore.setState({ completedSourceKey: key });
+  }
+});
+
+// Clears the transient criteria when a load starts or the source changes. Both are about records
+// that are about to be replaced: a record scope holds record objects a load drops, and a time range
+// was drawn over another set of events. One subscription covers every load entry and every source
+// change, present and future, where editing each `set` that starts a load would cover only the ones
+// it found. It is a second `set`, like the one above, and safe for the same reason: `isLoading` is
+// already true and the workspace shows no visible records while it is, so the criteria are never
+// applied to the new data.
+useEvtxStore.subscribe((state, previous) => {
+  if (state.timeRange === null && state.recordScope === null) return;
+  if ((!previous.isLoading && state.isLoading) || sourceKeyOf(state) !== sourceKeyOf(previous)) {
+    useEvtxStore.setState({ timeRange: null, recordScope: null });
   }
 });
 

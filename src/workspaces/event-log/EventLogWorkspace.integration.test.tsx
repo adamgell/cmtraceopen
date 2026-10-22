@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   buildAnalysis: vi.fn(),
   closeAnalysis: vi.fn(),
   queryTimeline: vi.fn(),
+  rail: vi.fn(),
 }));
 
 vi.mock("../../lib/commands", () => ({
@@ -28,13 +29,18 @@ vi.mock("./EvtxFilterBar", () => ({ EvtxFilterBar: () => null }));
 vi.mock("./EvtxViewBar", () => ({ EvtxViewBar: () => null }));
 vi.mock("./EvtxCoverageBanner", () => ({ EvtxCoverageBanner: () => null }));
 vi.mock("./EvtxTimeline", () => ({ EvtxTimeline: () => null }));
-vi.mock("./EvtxDetailPane", () => ({ EvtxDetailPane: () => null }));
-vi.mock("./EventDiagnosisPanel", () => ({ EventDiagnosisPanel: () => null }));
+vi.mock("./EvtxInsightsRail", () => ({
+  EvtxInsightsRail: (props: unknown) => {
+    mocks.rail(props);
+    return null;
+  },
+}));
 vi.mock("./UnifiedTimelineView", () => ({ UnifiedTimelineView: () => null }));
 
 import { useLogStore } from "../../stores/log-store";
 import { useEvtxStore } from "./evtx-store";
 import { EventLogWorkspace } from "./EventLogWorkspace";
+import type { LogEntry } from "../../types/log";
 import type { EvtxRecord } from "./types";
 
 const RECORD: EvtxRecord = {
@@ -122,6 +128,7 @@ describe("EventLogWorkspace backend-owned analysis wiring", () => {
     mocks.buildAnalysis.mockReset().mockResolvedValue(analysisResult());
     mocks.closeAnalysis.mockReset().mockResolvedValue(undefined);
     mocks.queryTimeline.mockReset();
+    mocks.rail.mockReset();
   });
 
   afterEach(() => {
@@ -157,6 +164,116 @@ describe("EventLogWorkspace backend-owned analysis wiring", () => {
     expect(mocks.buildAnalysis).toHaveBeenCalledWith(
       expect.objectContaining({ records: [RECORD] }),
     );
+  });
+
+  describe("the text logs the session is given", () => {
+    const logEntry = (n: number) => ({ id: n, lineNumber: n, message: `log ${n}` }) as unknown as LogEntry;
+    const lastRailProps = () =>
+      mocks.rail.mock.calls[mocks.rail.mock.calls.length - 1]?.[0] as { textLogCount?: number };
+
+    it("tells the rail how many, so its scope line can say they are not scoped", async () => {
+      seed([RECORD]);
+      useLogStore.setState({ entries: [logEntry(1), logEntry(2), logEntry(3)], sourceOpenMode: "merged" });
+      render(<EventLogWorkspace />);
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+      expect(mocks.buildAnalysis).toHaveBeenCalledWith(
+        expect.objectContaining({ entries: expect.arrayContaining([expect.objectContaining({ id: 1 })]) }),
+      );
+      expect(lastRailProps().textLogCount).toBe(3);
+    });
+
+    it("tells it none when the session holds no text log", async () => {
+      seed([RECORD]);
+      render(<EventLogWorkspace />);
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+      expect(lastRailProps().textLogCount).toBe(0);
+    });
+
+    it("does not narrow them when an event criterion is set", async () => {
+      seed([RECORD, { ...RECORD, id: 2, eventRecordId: 102, timestampEpoch: 5_000 }]);
+      useLogStore.setState({ entries: [logEntry(1), logEntry(2)], sourceOpenMode: "merged" });
+      useEvtxStore.getState().setTimeRange({ startMs: 4_000, endMs: 6_000 });
+      render(<EventLogWorkspace />);
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+      expect(mocks.buildAnalysis).toHaveBeenCalledWith(
+        expect.objectContaining({
+          records: [expect.objectContaining({ id: 2 })],
+          entries: [expect.objectContaining({ id: 1 }), expect.objectContaining({ id: 2 })],
+        }),
+      );
+      expect(lastRailProps().textLogCount).toBe(2);
+    });
+  });
+
+  describe("with a transient time range or record scope", () => {
+    const timed = (n: number): EvtxRecord => ({
+      ...RECORD,
+      id: n,
+      eventRecordId: 100 + n,
+      timestampEpoch: n * 1_000,
+      message: `event ${n}`,
+    });
+    const scopeOf = (...records: EvtxRecord[]) => ({
+      kind: "finding" as const,
+      title: "A finding",
+      records: new Set(records),
+      counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+    });
+
+    it("builds the first session from only the events in the time range", async () => {
+      const events = [1, 2, 3, 4].map(timed);
+      seed(events);
+      useEvtxStore.getState().setTimeRange({ startMs: 2_000, endMs: 4_000 });
+      render(<EventLogWorkspace />);
+
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+      expect(mocks.buildAnalysis).toHaveBeenCalledWith(
+        expect.objectContaining({ records: [events[1], events[2]] }),
+      );
+    });
+
+    it("builds the first session from only the scoped events", async () => {
+      const events = [1, 2, 3, 4].map(timed);
+      seed(events);
+      useEvtxStore.getState().setRecordScope(scopeOf(events[0], events[3]));
+      render(<EventLogWorkspace />);
+
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+      expect(mocks.buildAnalysis).toHaveBeenCalledWith(
+        expect.objectContaining({ records: [events[0], events[3]] }),
+      );
+    });
+
+    it("rebuilds the session when a range or a scope is set or cleared afterwards", async () => {
+      const events = [1, 2, 3, 4].map(timed);
+      seed(events);
+      render(<EventLogWorkspace />);
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+      expect(mocks.buildAnalysis).toHaveBeenLastCalledWith(expect.objectContaining({ records: events }));
+
+      act(() => {
+        useEvtxStore.getState().setTimeRange({ startMs: 1_000, endMs: 3_000 });
+      });
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(2));
+      expect(mocks.buildAnalysis).toHaveBeenLastCalledWith(
+        expect.objectContaining({ records: [events[0], events[1]] }),
+      );
+
+      act(() => {
+        useEvtxStore.getState().setRecordScope(scopeOf(events[1], events[3]));
+      });
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(3));
+      expect(mocks.buildAnalysis).toHaveBeenLastCalledWith(
+        expect.objectContaining({ records: [events[1]] }),
+      );
+
+      act(() => {
+        useEvtxStore.getState().setTimeRange(null);
+        useEvtxStore.getState().setRecordScope(null);
+      });
+      await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(4));
+      expect(mocks.buildAnalysis).toHaveBeenLastCalledWith(expect.objectContaining({ records: events }));
+    });
   });
 
   it("coalesces a burst of record changes into one session build", async () => {

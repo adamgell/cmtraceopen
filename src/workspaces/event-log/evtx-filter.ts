@@ -30,14 +30,6 @@ export type EvtxSortDirection = "asc" | "desc";
 /** Delimiters accepted by the multi-string quick-filter grammar. */
 export const EVTX_STRING_QUERY_SEPARATOR = /[,;\r\n]+/;
 
-const LEVEL_ORDER: Record<EvtxLevel, number> = {
-  Critical: 0,
-  Error: 1,
-  Warning: 2,
-  Information: 3,
-  Verbose: 4,
-};
-
 /** Every level, most severe first: the order the level toggles and the counts use. */
 export const EVTX_LEVELS: readonly EvtxLevel[] = [
   "Critical",
@@ -46,6 +38,24 @@ export const EVTX_LEVELS: readonly EvtxLevel[] = [
   "Information",
   "Verbose",
 ];
+
+/**
+ * The Windows raw level number of each level, as the Event Log service filters on it. Stated
+ * outright rather than read from a level's position in `EVTX_LEVELS`: a reorder of that list for
+ * display would otherwise change the XPath the service is sent.
+ */
+export const EVTX_RAW_LEVEL: Readonly<Record<EvtxLevel, number>> = {
+  Critical: 1,
+  Error: 2,
+  Warning: 3,
+  Information: 4,
+  Verbose: 5,
+};
+
+/** How far down the severity order a level sits: 0 for Critical, 4 for Verbose. */
+export const EVTX_LEVEL_RANK = Object.fromEntries(
+  EVTX_LEVELS.map((level, index) => [level, index]),
+) as Readonly<Record<EvtxLevel, number>>;
 
 /**
  * How many of `records` sit at each level, in one pass.
@@ -75,10 +85,9 @@ export function countByLevel(records: readonly EvtxRecord[]): Record<EvtxLevel, 
  * expressions, so any selection that includes Information is evaluated locally instead. Only a
  * strict subset without Information is pushed down.
  *
- * `evtx-store.ts` keeps its own copy of this predicate in `buildServerFilter`; it does not call this
- * function. The filter row's unknown counts depend on this one, so `evtx-store-server-filter.test.ts`
- * pins the two together for every level subset. Merging them is a store change that belongs to
- * Phase 6a (#834).
+ * `buildServerFilter` in `evtx-store.ts` calls this function, so the request the store sends and
+ * the filter row's unknown counts read one rule. `evtx-store-server-filter.test.ts` pins the level
+ * numbers it sends for every level subset.
  */
 export function levelsFilteredAtSource(levels: ReadonlySet<EvtxLevel>): boolean {
   return levels.size > 0 && levels.size < EVTX_LEVELS.length && !levels.has("Information");
@@ -113,7 +122,7 @@ export function sortRecords(
         comparison = a.eventId - b.eventId;
         break;
       case "level":
-        comparison = LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level];
+        comparison = EVTX_LEVEL_RANK[a.level] - EVTX_LEVEL_RANK[b.level];
         break;
       case "provider":
         comparison = a.provider.localeCompare(b.provider);
@@ -196,6 +205,103 @@ export interface EvtxFilterModel {
   beforeLoad: EvtxBeforeLoadCriteria;
   onLoad: EvtxOnLoadCriteria;
   afterLoad: EvtxAfterLoadCriteria;
+}
+
+/**
+ * A span of event time, half open: `startMs` is inside it and `endMs` is not, so the span of one
+ * histogram bucket and the span of the next never share an event. Both are epoch milliseconds.
+ */
+export interface EvtxTimeRange {
+  startMs: number;
+  endMs: number;
+}
+
+/** What a record scope was made from. */
+export type EvtxRecordScopeKind = "finding" | "chain";
+
+/**
+ * What did not make it into a record scope, kept apart so the interface can say each one. A scope
+ * never claims to be the whole of what it was built from. Every number counts REFERENCES (what the
+ * finding or chain cited), never records: two candidates of one reference are one reference, and
+ * the same event cited twice is one.
+ */
+export interface EvtxRecordScopeCounts {
+  /** References whose identity is usable but which now name no loaded record. */
+  notLoaded: number;
+  /** References with no usable identity (a fallback hash, or none), which can never match. */
+  noUsableIdentity: number;
+  /** References that name more than one loaded record. Every candidate is in the scope. */
+  ambiguous: number;
+  /** The source may have cited more events than it sent (the engine bounds a finding's evidence). */
+  bounded: boolean;
+}
+
+/**
+ * The counts a scope's references give: a reference with no candidate left is not loaded, and one
+ * with more than one is ambiguous. Used where a scope is built and where it is pruned, so the two
+ * cannot count differently.
+ */
+export function countScopeReferences(
+  references: readonly (readonly EvtxRecord[])[],
+  noUsableIdentity: number,
+  bounded: boolean,
+): EvtxRecordScopeCounts {
+  let notLoaded = 0;
+  let ambiguous = 0;
+  for (const candidates of references) {
+    if (candidates.length === 0) notLoaded += 1;
+    else if (candidates.length > 1) ambiguous += 1;
+  }
+  return { notLoaded, noUsableIdentity, ambiguous, bounded };
+}
+
+/**
+ * Records the operator narrowed the view to, from a finding (or, later, a chain).
+ *
+ * Held by record OBJECT: `EvtxRecord.id` is an index the store reassigns on every merge, so a set
+ * of ids would point at other events after one live-tail batch. A merge keeps the objects it
+ * already holds, so this set follows its events through a renumber.
+ */
+export interface EvtxRecordScope {
+  kind: EvtxRecordScopeKind;
+  /** The finding's or chain's title, captured when the scope was applied: a rebuilt diagnosis may drop it. */
+  title: string;
+  records: ReadonlySet<EvtxRecord>;
+  /**
+   * For each distinct cited reference with a usable identity, the loaded records it names: none
+   * (not loaded), one (a match) or several (ambiguous, all of them in `records`). Pruned with the
+   * records, and `counts` is recomputed from it, so a count never reads in records. Absent, each
+   * record is a reference of its own and a record that leaves is counted as not loaded.
+   */
+  references?: readonly (readonly EvtxRecord[])[];
+  counts: EvtxRecordScopeCounts;
+}
+
+/**
+ * Criteria that live only in the current view: not read from the service, never saved. They are
+ * deliberately NOT part of `EvtxFilterModel`, whose shape is what a saved filter stores; a field
+ * added there would be serialized. A load or a change of source clears them.
+ */
+export interface EvtxTransientCriteria {
+  timeRange: EvtxTimeRange | null;
+  recordScope: EvtxRecordScope | null;
+}
+
+/** A timestamp a time range can place: finite and after the epoch origin. */
+export function hasUsableTimestamp(record: EvtxRecord): boolean {
+  return Number.isFinite(record.timestampEpoch) && record.timestampEpoch > 0;
+}
+
+/**
+ * Whether a record lies inside the range. A record with no usable timestamp lies in no range: it
+ * cannot be shown to be inside one.
+ */
+export function isWithinTimeRange(record: EvtxRecord, range: EvtxTimeRange): boolean {
+  return (
+    hasUsableTimestamp(record) &&
+    record.timestampEpoch >= range.startMs &&
+    record.timestampEpoch < range.endMs
+  );
 }
 
 export const DEFAULT_QUICK_FILTER: EvtxQuickFilter = {
@@ -303,6 +409,16 @@ export interface VisibleRecordsInput {
   nowEpoch?: number;
   /** Parsed once by selectVisibleRecords for the whole visible-record pass. */
   eventIdSelectors?: EvtxEventIdSelectorParseResult;
+  /**
+   * The transient time range, or null for none. Required rather than optional: `tsc` then lists
+   * every caller of the selector, and a caller that left it out would show a set the others do not.
+   */
+  timeRange: EvtxTimeRange | null;
+  /**
+   * The records of the transient record scope, or null for none. Required for the same reason as
+   * `timeRange`. An empty set is a scope of nothing and shows nothing; it is not the same as null.
+   */
+  scopeRecords: ReadonlySet<EvtxRecord> | null;
 }
 
 function normalizeText(value: string, caseSensitive: boolean): string {
@@ -624,7 +740,12 @@ export function recordMatchesVisibleFilter(
   record: EvtxRecord,
   input: Pick<
     VisibleRecordsInput,
-    "filterEventIds" | "filterSearch" | "filterLevels" | "selectedChannels"
+    | "filterEventIds"
+    | "filterSearch"
+    | "filterLevels"
+    | "selectedChannels"
+    | "timeRange"
+    | "scopeRecords"
   > & {
     quickFilter?: EvtxQuickFilter;
     visibleColumns?: readonly EvtxColumnId[];
@@ -641,6 +762,9 @@ export function recordMatchesVisibleFilter(
   }
 ): boolean {
   if (!input.selectedChannels.has(record.channel)) return false;
+  // The transient criteria first: a set lookup and two comparisons, cheaper than any text match.
+  if (input.scopeRecords !== null && !input.scopeRecords.has(record)) return false;
+  if (input.timeRange !== null && !isWithinTimeRange(record, input.timeRange)) return false;
   if (
     input.timeWindow &&
     !isWithinTimeWindow(record.timestampEpoch, input.timeWindow, input.nowEpoch)
@@ -728,6 +852,20 @@ export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
         : undefined,
   };
   return input.records.filter((record) => recordMatchesVisibleFilter(record, predicateInput));
+}
+
+/**
+ * How many events a time range hides only because they have no usable timestamp: the events every
+ * other criterion shows, which the range cannot place. Zero without a range.
+ */
+export function countHiddenForWantOfTimestamp(input: VisibleRecordsInput): number {
+  if (input.timeRange === null) return 0;
+  // The records without a usable timestamp first, then every other criterion on only those: the
+  // criteria are per record, so this is the count of running them all and keeping the untimed, at
+  // the cost of a cheap pass over the loaded records and the full predicate over the few.
+  const untimed = input.records.filter((record) => !hasUsableTimestamp(record));
+  if (untimed.length === 0) return 0;
+  return selectVisibleRecords({ ...input, records: untimed, timeRange: null }).length;
 }
 
 /** A field the event list can group by. */

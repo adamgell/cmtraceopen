@@ -20,6 +20,7 @@ import {
 import { buildFilterChips, EvtxFilterChips, type EvtxFilterChipInput } from "./EvtxFilterChips";
 import { moreFiltersActiveCount } from "./EvtxMoreFilters";
 import { EVTX_LEVELS } from "./evtx-filter";
+import { buildFilterExport, parseFilterExport, SAVED_FILTER_SCHEMA } from "./evtx-saved-filters";
 import { useSavedFilterStore } from "./evtx-filter-store";
 import { QUERY_ERROR_SETTLE_MS } from "./evtx-query-error";
 import {
@@ -988,6 +989,70 @@ describe("More filters", () => {
     fireEvent.click(await screen.findByRole("option", { name: "Service noise" }));
     expect(useEvtxStore.getState().filterEventIds).toBe("7036");
     expect(useEvtxStore.getState().filterSearch).toBe("service");
+  });
+
+  describe("with a transient time range and record scope set", () => {
+    const narrow = () => {
+      const [first, second] = useEvtxStore.getState().records;
+      act(() => {
+        useEvtxStore.getState().setTimeRange({
+          startMs: Date.parse("2026-08-18T11:00:00.000Z"),
+          endMs: Date.parse("2026-08-18T13:00:00.000Z"),
+        });
+        useEvtxStore.getState().setRecordScope({
+          kind: "finding",
+          title: "Service noise finding",
+          records: new Set([first, second]),
+          counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+        });
+      });
+    };
+    const saveAs = async (name: string) => {
+      const popover = within(await openPopover());
+      fireEvent.click(popover.getByRole("combobox", { name: "Saved filters" }));
+      fireEvent.click(await screen.findByRole("option", { name: "Save current..." }));
+      const field = popover.getByRole("textbox", { name: "Name this filter" });
+      fireEvent.change(field, { target: { value: name } });
+      fireEvent.keyDown(field, { key: "Enter" });
+      return popover;
+    };
+
+    it("does not save either one: not in the stored filter, its export or an import of it", async () => {
+      seed({ filterEventIds: "7036" });
+      render(<EvtxFilterBar nowEpoch={0} />);
+      narrow();
+      expect(useEvtxStore.getState().timeRange).not.toBeNull();
+      expect(useEvtxStore.getState().recordScope).not.toBeNull();
+
+      await saveAs("Narrowed");
+
+      const [saved] = useSavedFilterStore.getState().savedFilters;
+      expect(saved.criteria.beforeLoad.eventIds).toBe("7036");
+      const stored = JSON.stringify(useSavedFilterStore.getState().savedFilters);
+      const exported = buildFilterExport(useSavedFilterStore.getState().savedFilters);
+      for (const text of [stored, exported, JSON.stringify(parseFilterExport(exported).filters)]) {
+        expect(text).not.toMatch(/timeRange|startMs|endMs|recordScope|scopeRecord|Service noise finding/i);
+      }
+      expect(JSON.parse(exported).schema).toBe(SAVED_FILTER_SCHEMA);
+      expect(localStorage.getItem("cmtraceopen-evtx-saved-filters") ?? "").not.toMatch(
+        /timeRange|startMs|endMs|recordScope|scopeRecord|Service noise finding/i,
+      );
+    });
+
+    it("leaves both in place when a saved filter is applied", async () => {
+      seed({ filterEventIds: "7036" });
+      render(<EvtxFilterBar nowEpoch={0} />);
+      const popover = await saveAs("Plain");
+      narrow();
+      const range = useEvtxStore.getState().timeRange;
+      const scope = useEvtxStore.getState().recordScope;
+
+      fireEvent.click(popover.getByRole("combobox", { name: "Saved filters" }));
+      fireEvent.click(await screen.findByRole("option", { name: "Plain" }));
+
+      expect(useEvtxStore.getState().timeRange).toBe(range);
+      expect(useEvtxStore.getState().recordScope).toBe(scope);
+    });
   });
 
   it("flags invalid ordinary and quick Event IDs in the Warning text color from the token map", async () => {

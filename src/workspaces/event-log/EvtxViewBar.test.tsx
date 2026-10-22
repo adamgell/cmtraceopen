@@ -113,27 +113,30 @@ describe("EvtxViewBar", () => {
     expect(useEvtxLayoutStore.getState().panels.channels).toBe(false);
   });
 
-  it("ships the Insights and Correlation dock toggles disabled, with the reason as a description", () => {
+  it("ships Insights as a normal toggle and the Correlation dock disabled, with the reason as a description", () => {
     seedChannels();
     render(<EvtxViewBar nowEpoch={0} />);
-    const cases: Array<[string, string]> = [
-      ["Insights", "Available when the Insights rail ships"],
-      ["Correlation dock", "Available when the correlation dock ships"],
-    ];
-    for (const [name, reason] of cases) {
-      const toggle = screen.getByRole("button", { name });
-      expect(toggle).toHaveAttribute("aria-pressed", "false");
-      expect(toggle).toHaveAttribute("aria-disabled", "true");
-      expect(toggle).not.toHaveAttribute("title");
-      expect(toggle).toHaveAccessibleDescription(reason);
-      // Once in the document: no hand-built duplicate for browse mode to read twice.
-      expect(screen.getAllByText(reason)).toHaveLength(1);
-      fireEvent.click(toggle);
-      expect(toggle).toHaveAttribute("aria-pressed", "false");
-    }
+    const insights = screen.getByRole("button", { name: "Insights" });
+    expect(insights).toHaveAttribute("aria-pressed", "true");
+    expect(insights).not.toHaveAttribute("aria-disabled");
+    expect(insights).not.toHaveAccessibleDescription();
+    fireEvent.click(insights);
+    expect(insights).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(insights);
+    expect(insights).toHaveAttribute("aria-pressed", "true");
+
+    const reason = "Available when the correlation dock ships";
+    const dock = screen.getByRole("button", { name: "Correlation dock" });
+    expect(dock).toHaveAttribute("aria-pressed", "false");
+    expect(dock).toHaveAttribute("aria-disabled", "true");
+    expect(dock).not.toHaveAttribute("title");
+    expect(dock).toHaveAccessibleDescription(reason);
+    expect(screen.getAllByText(reason)).toHaveLength(1);
+    fireEvent.click(dock);
+    expect(dock).toHaveAttribute("aria-pressed", "false");
     expect(useEvtxLayoutStore.getState().panels).toEqual({
       channels: true,
-      insights: false,
+      insights: true,
       dock: false,
     });
   });
@@ -290,6 +293,61 @@ describe("EvtxViewBar", () => {
       seedChannels();
       vi.mocked(save).mockReset().mockResolvedValue("/tmp/events.json");
       exportMock.stream.mockReset();
+    });
+
+    describe("with a transient time range or record scope", () => {
+      const timed = (id: number, timestampEpoch: number): EvtxRecord => ({
+        ...RECORD,
+        id,
+        eventRecordId: 100 + id,
+        timestampEpoch,
+      });
+      const exportedIds = () =>
+        (exportMock.stream.mock.calls[0][0] as { records: EvtxRecord[] }).records.map((r) => r.id);
+      const seedFour = () => {
+        const records = [timed(1, 1000), timed(2, 2000), timed(3, 3000), timed(4, 4000)];
+        useEvtxStore.setState({ records });
+        return records;
+      };
+
+      beforeEach(() => {
+        exportMock.stream.mockResolvedValue({ records: 0, bytes: 0 });
+      });
+
+      it("exports only the events in the time range, which is half open", async () => {
+        seedFour();
+        act(() => {
+          useEvtxStore.getState().setTimeRange({ startMs: 2000, endMs: 4000 });
+        });
+        render(<EvtxViewBar nowEpoch={0} />);
+        await exportJson();
+        await waitFor(() => expect(exportMock.stream).toHaveBeenCalledTimes(1));
+        expect(exportedIds()).toEqual([2, 3]);
+      });
+
+      it("exports only the scoped events", async () => {
+        const records = seedFour();
+        act(() => {
+          useEvtxStore.getState().setRecordScope({
+            kind: "finding",
+            title: "A finding",
+            records: new Set([records[0], records[3]]),
+            counts: { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false },
+          });
+        });
+        render(<EvtxViewBar nowEpoch={0} />);
+        await exportJson();
+        await waitFor(() => expect(exportMock.stream).toHaveBeenCalledTimes(1));
+        expect(exportedIds()).toEqual([1, 4]);
+      });
+
+      it("exports the whole view without either", async () => {
+        seedFour();
+        render(<EvtxViewBar nowEpoch={0} />);
+        await exportJson();
+        await waitFor(() => expect(exportMock.stream).toHaveBeenCalledTimes(1));
+        expect(exportedIds()).toEqual([1, 2, 3, 4]);
+      });
     });
 
     it("announces only the start and the final result for a multi-chunk export", async () => {

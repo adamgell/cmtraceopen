@@ -11,7 +11,7 @@
  * The Tauri bridge is mocked because the store imports it at module scope.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { EVTX_LEVELS, levelsFilteredAtSource } from "./evtx-filter";
+import { EVTX_LEVELS } from "./evtx-filter";
 import { deferred } from "../../test-utils/deferred";
 import type { EvtxLevel, EvtxRecord } from "./types";
 
@@ -85,17 +85,31 @@ describe("serverFilterKey", () => {
   });
 });
 
-describe("levelsFilteredAtSource and the request the store builds", () => {
+describe("the level numbers the store sends, for every level subset", () => {
+  // Written out here on purpose, apart from EVTX_RAW_LEVEL: this is the pin on the wire values the
+  // Event Log service filters on (Windows levels 1 to 5), so a change to the shared map or to the
+  // order of EVTX_LEVELS cannot move them unnoticed.
+  const WIRE: Record<EvtxLevel, number> = {
+    Critical: 1,
+    Error: 2,
+    Warning: 3,
+    Information: 4,
+    Verbose: 5,
+  };
   const SUBSETS = Array.from({ length: 2 ** EVTX_LEVELS.length }, (_, mask) =>
     levels(...EVTX_LEVELS.filter((_level, index) => (mask >> index) & 1)),
   );
 
-  it("agree on whether a level predicate is sent, for every level subset", () => {
-    // The store keeps its own copy of the rule (buildServerFilter); the filter row's unknown counts
-    // use this one. Until Phase 6a merges them, this pins the two together.
+  it("sends the level numbers of a strict subset without Information, and no level predicate otherwise", () => {
     for (const subset of SUBSETS) {
-      const sent = JSON.parse(serverFilterKey("all", "", subset)).filter.levels !== undefined;
-      expect(levelsFilteredAtSource(subset), [...subset].join(",") || "(none)").toBe(sent);
+      const label = [...subset].join(",") || "(none)";
+      const sent = JSON.parse(serverFilterKey("all", "", subset)).filter.levels as number[] | undefined;
+      const pushed = subset.size > 0 && subset.size < 5 && !subset.has("Information");
+      if (pushed) {
+        expect(sent, label).toEqual([...subset].map((level) => WIRE[level]).sort());
+      } else {
+        expect(sent, label).toBeUndefined();
+      }
     }
   });
 });
