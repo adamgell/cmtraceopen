@@ -76,7 +76,7 @@ import {
 } from "./evtx-correlation-origin-index";
 import type { ScopeDisclosureInput } from "./evtx-correlation-copy";
 import type { UnplacedEvidence } from "./evtx-correlation-view-model";
-import { timelineOriginId, type TimelineItem } from "./unified-timeline";
+import { timelineOriginId, type TimelineItem, type UnplacedItem } from "./unified-timeline";
 
 /** Wait before any IPC, so a session that is replaced inside it costs nothing. */
 export const CORRELATION_SETTLE_MS = 500;
@@ -111,6 +111,21 @@ export interface CorrelationEdgeState {
   error: string | null;
 }
 
+/**
+ * The engine's unplaced list as the session's first reply gave it, with that SAME reply's own count.
+ * The list is a bounded preview (at most 100 items, within a byte budget, with no pager), so the
+ * count is what says how many more there are. Both come from the page the model was built from.
+ */
+interface UnplacedListData {
+  /** The preview, in the engine's order. Each item is on the engine's unplaced list, so each is proven. */
+  items: readonly UnplacedItem[];
+  /**
+   * The page's own `totalUnplaced`, or null when it was not a trusted count (missing, negative,
+   * fractional, not a number). Never 0 for "not known": a count nobody gave is not an empty list.
+   */
+  total: number | null;
+}
+
 /** The counts-only model of the newest session, for a consumer that needs no items. */
 export interface CorrelationCounts {
   /** Built from edges alone: correct counts and row count, no titles, spans or positions. */
@@ -118,6 +133,11 @@ export interface CorrelationCounts {
   builtFor: string;
   edges: CorrelationEdgeState;
   linkPartners: ReadonlyMap<string, number>;
+  /**
+   * The newest session's unplaced list and count: a counts-only consumer (the Insights card)
+   * reads them here, never from the model-side field, which may belong to an earlier session.
+   */
+  unplacedList: UnplacedListData;
   /** An earlier session's counts, shown while the newest is loaded. */
   updating: boolean;
 }
@@ -163,6 +183,15 @@ export interface EvtxCorrelationData {
    * built from, never from a newer status that has not replaced it.
    */
   unplaced: UnplacedEvidence;
+  /**
+   * The unplaced list and count of the page `model` was built from (the Correlation view's "Not
+   * placed" pane). Read it only together with `model`; the newest session's is in `counts`.
+   *
+   * Null is NO RUN: there is no session, so nothing was counted. It is not the same as a run whose
+   * count was not trusted, `{ items: [], total: null }`, which may have unplaced items nobody
+   * counted and so is shown as unknown. The two are told apart by type, never by a value.
+   */
+  unplacedList: UnplacedListData | null;
   /** Distinct exact and candidate partners per origin id, from the uncapped pairs of `model`. */
   linkPartners: ReadonlyMap<string, number>;
   /** The newest session's counts-only model, or null. */
@@ -209,6 +238,7 @@ export const UNAVAILABLE_CORRELATION: EvtxCorrelationData = {
   scan: IDLE_SCAN,
   nextScan: null,
   unplaced: NO_UNPLACED,
+  unplacedList: null,
   linkPartners: NO_PARTNERS,
   counts: null,
   updating: false,
@@ -228,6 +258,7 @@ interface ModelState {
   scope: ScopeDisclosureInput | null;
   scan: CorrelationScanState;
   unplaced: UnplacedEvidence;
+  unplacedList: UnplacedListData;
   linkPartners: ReadonlyMap<string, number>;
 }
 
@@ -372,10 +403,17 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
       initialPage.coverageGapsPreview,
       knownTotal(initialPage.totalCoverageGaps),
     );
-    // From this run's own page and status, so the evidence belongs to the model it is stored with.
+    // From this run's own page, so the list, its count and the evidence belong to the model they
+    // are stored with. The count is the SAME page's own, through `knownTotal` like every other total
+    // here: an untrusted one is unknown, never 0, and an unknown count proves no list complete.
+    const unplacedList: UnplacedListData = {
+      items: initialPage.unplacedPreview,
+      total: knownTotal(initialPage.totalUnplaced),
+    };
     const unplacedEvidence = (scanComplete: boolean): UnplacedEvidence => ({
       scanComplete,
-      unplacedListComplete: initialPage.unplacedPreview.length === status.totalUnplaced,
+      unplacedListComplete:
+        unplacedList.total !== null && initialPage.unplacedPreview.length === unplacedList.total,
       unplacedIds: new Set(initialPage.unplacedPreview.map((entry) => timelineOriginId(entry.origin))),
     });
 
@@ -436,6 +474,7 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
             scope,
             scan: IDLE_SCAN,
             unplaced: unplacedEvidence(false),
+            unplacedList,
             linkPartners: linkPartnerCounts(model.linkedPairs),
           };
           cache.counts = counts;
@@ -498,6 +537,7 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
             error: scanned.error,
           },
           unplaced: unplacedEvidence(scanned.complete),
+          unplacedList,
           linkPartners: linkPartnerCounts(full.linkedPairs),
         };
         cache.detail = detail;
@@ -536,6 +576,7 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
       scan: primary?.scan ?? IDLE_SCAN,
       nextScan: run.nextScan,
       unplaced: primary?.unplaced ?? NO_UNPLACED,
+      unplacedList: primary?.unplacedList ?? null,
       linkPartners: primary?.linkPartners ?? NO_PARTNERS,
       counts:
         run.counts === null
@@ -545,6 +586,7 @@ export function useEvtxCorrelation(options: UseEvtxCorrelationOptions): EvtxCorr
               builtFor: run.counts.builtFor,
               edges: run.counts.edges,
               linkPartners: run.counts.linkPartners,
+              unplacedList: run.counts.unplacedList,
               updating: run.counts.builtFor !== key,
             },
       updating: primary !== null && primary.builtFor !== key,

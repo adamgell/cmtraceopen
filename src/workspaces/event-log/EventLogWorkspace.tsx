@@ -24,6 +24,7 @@ import { SourcePicker } from "./SourcePicker";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxFilterBar } from "./EvtxFilterBar";
 import { EvtxFilterChips } from "./EvtxFilterChips";
+import { EvtxHistogram } from "./EvtxHistogram";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
@@ -67,6 +68,8 @@ import { EvtxCorrelationProvider, useEvtxCorrelation } from "./useEvtxCorrelatio
 const EvtxCorrelationView = lazy(() => import("./EvtxCorrelationView"));
 
 const DIAGNOSIS_DEBOUNCE_MS = 75;
+
+const NO_EVENTS: EvtxRecord[] = [];
 
 const NOT_IMPLEMENTED = "Not implemented in this phase";
 
@@ -266,6 +269,10 @@ export function EventLogWorkspace() {
   const recordScope = useEvtxStore((s) => s.recordScope);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const columnOrder = useEvtxStore((s) => s.columnConfig.order);
+  // The clock a relative time window (1 h to 30 d) is measured from. It is read again when what the
+  // operator is looking at changes, and NOT when a transient criterion (a time range or a record
+  // scope) is set or cleared: brushing must not move the start of a "last 24 hours" window, or the
+  // histogram a brush selects from would shift under the brush.
   const nowEpoch = useMemo(
     () => Date.now(),
     [
@@ -275,16 +282,16 @@ export function EventLogWorkspace() {
       filterEventIds,
       filterSearch,
       quickFilter,
-      timeRange,
-      recordScope,
       columnOrder,
       timeZoneMode,
       timeWindow,
       isLoading,
     ],
   );
-  // One input for every pass over the records, so the chip row's count cannot read another set.
-  const visibleInput = useMemo<VisibleRecordsInput>(
+  // The criteria except the time range: what the histogram charts and the brush selects from
+  // (spec 8.5), so brushing never empties its own histogram. Its identity is stable while a range is
+  // set and cleared, so neither the histogram nor this pass reacts to the brush.
+  const contextInput = useMemo<VisibleRecordsInput>(
     () => ({
       records,
       selectedChannels,
@@ -296,7 +303,7 @@ export function EventLogWorkspace() {
       visibleColumns: columnOrder,
       timeZoneMode,
       timeWindow,
-      timeRange,
+      timeRange: null,
       scopeRecords: recordScope?.records ?? null,
     }),
     [
@@ -309,14 +316,25 @@ export function EventLogWorkspace() {
       columnOrder,
       timeZoneMode,
       timeWindow,
-      timeRange,
       recordScope,
       nowEpoch,
     ],
   );
+  // One input for every pass over the records, so the chip row's count cannot read another set.
+  const visibleInput = useMemo<VisibleRecordsInput>(
+    () => ({ ...contextInput, timeRange }),
+    [contextInput, timeRange],
+  );
+  const contextRecords = useMemo(
+    () => (isLoading ? NO_EVENTS : selectVisibleRecords(contextInput)),
+    [isLoading, contextInput],
+  );
+  // Without a range the visible set IS the context, so there is one pass and one array; with one it
+  // is a pass of its own, by the same selector the grid and the export use.
   const visibleRecords = useMemo(
-    () => (isLoading ? [] : selectVisibleRecords(visibleInput)),
-    [isLoading, visibleInput],
+    () =>
+      isLoading ? NO_EVENTS : timeRange === null ? contextRecords : selectVisibleRecords(visibleInput),
+    [isLoading, timeRange, contextRecords, visibleInput],
   );
   // Events a time range hides only because they carry no usable timestamp (spec 8.4 chip tooltip).
   const untimedHiddenCount = useMemo(
@@ -680,6 +698,8 @@ export function EventLogWorkspace() {
           loadedCount={records.length}
           untimedHiddenCount={untimedHiddenCount}
         />
+        {/* Spec 5.1 order: chip row, histogram, body. It charts the context, not the brushed set. */}
+        <EvtxHistogram records={contextRecords} loading={isLoading} />
         <EvtxCoverageBanner />
 
         {timelineError && (

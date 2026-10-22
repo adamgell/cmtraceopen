@@ -9,6 +9,7 @@ import { DETAIL_RENDER_CAP, OUTCOME_LABELS, EventDiagnosisPanel } from "./EventD
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { fixtureEdges, makeData, type DataOptions } from "./evtx-correlation-test-fixtures";
 import { useEvtxLayoutStore } from "./evtx-layout-store";
+import type { UnplacedItem } from "./unified-timeline";
 import {
   EvtxCorrelationProvider,
   UNAVAILABLE_CORRELATION,
@@ -633,7 +634,7 @@ describe("EventDiagnosisPanel", () => {
 
     beforeEach(() => {
       useEvtxLayoutStore.setState({ activeView: "table", railTab: "insights" });
-      useEvtxCorrelationStore.setState({ selectedChainId: null });
+      useEvtxCorrelationStore.setState({ selectedChainId: null, unplacedOpen: false });
     });
 
     it("counts chains by strength from the model, not from the diagnosis summary", () => {
@@ -718,6 +719,108 @@ describe("EventDiagnosisPanel", () => {
       cleanup();
       renderCard(counted());
       expect(card()).not.toHaveAttribute("aria-busy");
+    });
+
+    // ---- the unplaced line and "Review unplaced lines" (8.13 item 6, 8.11a; Phase 10b) --------------
+
+    const unplacedLog = (n: number): UnplacedItem => ({
+      reason: "missingTimestamp",
+      origin: {
+        kind: "log",
+        file: "C:\\Logs\\IntuneManagementExtension.log",
+        component: null,
+        line: n,
+        source: "writer.cpp",
+        machine: null,
+        bundle: null,
+        recordId: n,
+      },
+    });
+    const unplacedEvent = (n: number): UnplacedItem => ({
+      reason: "missingTimestamp",
+      origin: {
+        kind: "event",
+        stableId: `source4:Live|machine10:DESKTOP-01|channel6:System|record${n}`,
+        source: "Live",
+        machine: "DESKTOP-01",
+        bundle: null,
+        channel: "System",
+        provider: "P",
+        processId: null,
+        eventId: 7,
+        recordIdText: String(n),
+        recordId: n,
+      },
+    });
+    const unplacedLine = () => screen.queryByTestId("correlation-card-unplaced");
+    const reviewLink = () => within(card()).queryByRole("button", { name: "Review unplaced lines" });
+
+    it("says what could not be placed, with the kinds, for a complete list, and links to review it", () => {
+      renderCard(counted({ unplacedList: { items: [unplacedLog(1), unplacedLog(2), unplacedEvent(3)], total: 3 } }));
+      expect(unplacedLine()).toHaveTextContent("2 log lines and 1 event could not be placed: no timestamp");
+      expect(reviewLink()).not.toBeNull();
+    });
+
+    it("says the engine's count, not the preview's length, for a partial list", () => {
+      const items = Array.from({ length: 100 }, (_, i) => unplacedLog(i + 1));
+      renderCard(counted({ unplacedList: { items, total: 5_000 } }));
+      expect(unplacedLine()).toHaveTextContent("5,000 timeline items could not be placed: no timestamp");
+      expect(unplacedLine()!.textContent).not.toMatch(/\b100\b/);
+    });
+
+    it("says the number is not known, never 0, when the count is unknown, even with nothing listed, and still links", () => {
+      renderCard(counted({ unplacedList: { items: [], total: null } }));
+      expect(unplacedLine()).toHaveTextContent("The number of timeline items that could not be placed is not known");
+      expect(unplacedLine()!.textContent).not.toMatch(/\b0\b/);
+      expect(reviewLink()).not.toBeNull();
+      // An unknown number is drawn muted, where a counted one is a plain line.
+      const mutedColor = unplacedLine()!.style.color;
+      cleanup();
+      renderCard(counted({ unplacedList: { items: [unplacedLog(1)], total: 1 } }));
+      expect(unplacedLine()!.style.color).not.toBe(mutedColor);
+    });
+
+    it("says it is not known, and offers no link, while the counts are not in yet", () => {
+      renderCard({ ...UNAVAILABLE_CORRELATION, stage: "pending" });
+      expect(unplacedLine()).toHaveTextContent("The number of timeline items that could not be placed is not known");
+      expect(reviewLink()).toBeNull();
+      expect(card().textContent).not.toMatch(/\b0\b/);
+    });
+
+    it("says nothing, and has no link, for a session that counted none unplaced", () => {
+      renderCard(counted());
+      expect(unplacedLine()).toBeNull();
+      expect(reviewLink()).toBeNull();
+    });
+
+    it("reads the newest session's list from the counts, not the list of the model on show", () => {
+      const data = counted({ unplacedList: { items: [], total: 0 } });
+      const newest = { items: [unplacedLog(1)], total: 4 };
+      renderCard({ ...data, counts: { ...data.counts!, unplacedList: newest }, updating: true });
+      expect(unplacedLine()).toHaveTextContent("4 timeline items could not be placed: no timestamp");
+    });
+
+    it("keeps the card for a session that holds unplaced items and no edge, where the zero-edge rule hid it", () => {
+      renderCard(counted({ edges: [], totalEdges: 0, unplacedList: { items: [unplacedLog(1)], total: 1 } }));
+      expect(card()).toHaveTextContent("0 chains");
+      expect(unplacedLine()).toHaveTextContent("1 log line could not be placed: no timestamp");
+      expect(reviewLink()).not.toBeNull();
+    });
+
+    it("still hides the card for a session with no edge and nothing unplaced", () => {
+      renderCard(counted({ edges: [], totalEdges: 0, unplacedList: { items: [], total: 0 } }));
+      expect(screen.queryByRole("region", { name: "Correlations" })).toBeNull();
+    });
+
+    it("opens the Not placed list from its link, and leaves the rail tab and the chain selection alone", () => {
+      useEvtxLayoutStore.setState({ railTab: "insights", activeView: "table" });
+      useEvtxCorrelationStore.setState({ selectedChainId: "keep", unplacedOpen: false });
+      renderCard(counted({ unplacedList: { items: [unplacedLog(1)], total: 1 } }));
+      fireEvent.click(reviewLink()!);
+      expect(useEvtxLayoutStore.getState().activeView).toBe("correlation");
+      expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
+      expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(true);
+      expect(useEvtxCorrelationStore.getState().selectedChainId).toBe("keep");
     });
 
     it("builds no item to count: a model without items is enough", () => {

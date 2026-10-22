@@ -226,13 +226,15 @@ test.describe("event-logs screenshots", () => {
       },
     );
 
-    // The workspace reads the page clock once per load (`nowEpoch`, for the relative time windows,
-    // the timeline strip and what an export selects), and the fixture is dated 6 and 7 Oct 2026.
-    // `nowEpoch` only resolves the relative time windows, and opening files sets the window to
-    // "all" (`parseManifest`), so no capture here is known to change with the day it is taken; the
-    // pin keeps it that way. This is the instant the histogram captures (#835) pin, with the
-    // timers left running (the splash still goes). It must be set before the page loads and applies
-    // to every test here.
+    // One fixed clock, for two reasons, one from each lane. (1) Day labels name the year when the chart
+    // is not within the current one, and the fixture is dated 6 and 7 Oct 2026. Without a fixed clock
+    // the histogram figure's name, its axis ticks and the overview strip's ticks, and so the PNGs,
+    // would change on 1 Jan 2027. (2) The workspace reads the page clock once per load (`nowEpoch`,
+    // for the relative time windows, the timeline strip and what an export selects); `nowEpoch` only
+    // resolves the relative time windows, and opening files sets the window to "all"
+    // (`parseManifest`), so no capture here is known to change with the day it is taken, and the pin
+    // keeps it that way. The timers are left running (the splash still goes). It must be set before
+    // the page loads and applies to every test here, each of which reaches the histogram.
     //
     // Do not add a LIVE-stream capture to this block. A live query settles through a deadline
     // compared with Date.now(); under a fixed clock the time left never shrinks and the load
@@ -313,6 +315,28 @@ test.describe("event-logs screenshots", () => {
 
   test("event-logs table", async ({ page }) => {
     await expect(page.getByRole("region", { name: "Event log details" })).toHaveCount(0);
+    // The histogram (spec 5.1 and 8.5): between the chip row and the body, a 56 px bar area, an 84 px
+    // legend column and a 16 px axis, to within the spec's 2 px (section 2.2). The fixture spans 24
+    // hours, so it is 72 buckets of 20 minutes. Nothing here is brushed: a brush would hand the analysis
+    // pump a subset the captured engine replies cannot answer (see the stale-capture guard above).
+    const histogram = page.locator('[data-evtx-region="histogram"]');
+    await expect(histogram).toBeVisible();
+    // The store's default zone mode is local and this file pins the browser's zone to UTC, so the zone
+    // reads as the offset the app prints for local time, "UTC+00:00", not the word "UTC". The domain is
+    // in the page's fixed current year (2026), so no year is named.
+    await expect(histogram).toHaveAccessibleName(
+      /^Events per 20 minutes over Oct 6 10:20.Oct 7 10:20 \(UTC\+00:00\), stacked by level$/,
+    );
+    await expect(histogram.locator("[data-evtx-bucket]")).toHaveCount(72);
+    const plotBox = await histogram.getByRole("slider", { name: "Time range" }).boundingBox();
+    expect(Math.abs((plotBox?.height ?? 0) - 56)).toBeLessThanOrEqual(2);
+    const legendBox = await histogram.getByRole("list", { name: "Levels" }).boundingBox();
+    expect(Math.abs((legendBox?.width ?? 0) - 84)).toBeLessThanOrEqual(2);
+    const axisBox = await histogram.locator("[data-evtx-tick]").first().locator("..").boundingBox();
+    expect(Math.abs((axisBox?.height ?? 0) - 16)).toBeLessThanOrEqual(2);
+    const histogramBox = await histogram.boundingBox();
+    const mainBox = await page.locator('[data-evtx-region="main"]').boundingBox();
+    expect((histogramBox?.y ?? 0) + (histogramBox?.height ?? 0)).toBeLessThanOrEqual((mainBox?.y ?? 0) + 1);
     await assertNoHostPaths(page);
     await page.screenshot({
       path: outPath("event-logs-table.png"),
@@ -411,7 +435,14 @@ test.describe("event-logs screenshots", () => {
   test("event-logs correlation", async ({ page }) => {
     // The fixture's synthetic identity (event-log-data.ts, `assignCorrelationIdentity`) gives the
     // real engine seven edges, which the view reads as five chains: three Exact pairs, one
-    // Ambiguous group of three and one Coverage blocked pair.
+    // Ambiguous group of three and one Coverage blocked pair. Every one of them has a timeline
+    // position (all members are timed events), so the overview strip draws five bars.
+    //
+    // This capture is the Correlation overview capture (#840): the strip sits between the chain
+    // header and the lane plot. The fixture holds NO unplaced item (the replies' first page has
+    // totalUnplaced 0 and an empty preview), and the shared fixture is not changed for this view
+    // (R6), so the Not placed row and the pane are covered by component tests with engine-shaped
+    // items, and here the end of the test only asserts their ABSENCE.
     //
     // A brushed range is set first, so the Escape check below has something to protect. It covers
     // every record: a range that hid one would change the events the analysis is built from, and
@@ -449,6 +480,32 @@ test.describe("event-logs screenshots", () => {
     await expect(markers).toHaveCount(2);
     await expect(plot.locator('line[data-connector][data-strength="exact"]')).toHaveCount(1);
 
+    // The overview strip (spec 8.11): drawn above the lane plot, 48 px tall, one bar per chain with
+    // the selected chain's bar solid, five ticks, the sentence that its extent is only the chains
+    // shown, and a zoom band that is one named slider.
+    const overview = page.getByTestId("correlation-overview");
+    await expect(overview).toBeVisible();
+    const strip = overview.getByTestId("overview-box");
+    const stripBox = await strip.boundingBox();
+    expect(Math.round(stripBox?.height ?? 0)).toBe(48);
+    const plotBox = await plot.boundingBox();
+    expect((stripBox?.y ?? 0) + (stripBox?.height ?? 0)).toBeLessThanOrEqual((plotBox?.y ?? 0) + 1);
+    await expect(overview.locator("[data-bar]")).toHaveCount(5);
+    await expect(overview.getByTestId("overview-undrawn")).toHaveCount(0);
+    const selectedBar = overview.locator('[data-bar][data-selected="true"]');
+    await expect(selectedBar).toHaveCount(1);
+    await expect(selectedBar).toHaveAttribute("data-strength", "exact");
+    await expect(selectedBar).toHaveAttribute("data-bar", (await exact.getAttribute("data-chain-id")) ?? "");
+    await expect(overview.getByTestId("overview-caption")).toContainText(
+      "Spans the chains shown, not the whole session.",
+    );
+    await expect(overview.getByTestId("overview-axis").locator("span")).toHaveCount(5);
+    const band = overview.getByRole("slider", { name: "Zoom window of the lane plot" });
+    await expect(band).toBeVisible();
+    await expect(band).toHaveAttribute("aria-valuetext", /^.+ to .+, .+ wide$/);
+    // The handles and bars are not tab stops: the band is the strip's only one.
+    await expect(overview.locator("[tabindex]")).toHaveCount(1);
+
     // The view has two polite regions: the announcer and the reply to the operator's own action.
     await expect(page.getByTestId("correlation-view").getByRole("status")).toHaveCount(2);
     await assertNoHostPaths(page);
@@ -456,6 +513,23 @@ test.describe("event-logs screenshots", () => {
       path: outPath("event-logs-correlation.png"),
       animations: "disabled",
     });
+
+    // The band is the lane plot's window and nothing else: a key moves it, Home brings it back to the
+    // chain's default, and Escape on it belongs to the band, so the workspace's own Escape (which
+    // clears the time range) is unspent and the brushed range stays. This comes after the capture, so
+    // the keyboard focus ring is not in the picture, and before the next chain is chosen, which would
+    // start from that chain's own default window anyway.
+    const defaultBand = await band.getAttribute("aria-valuetext");
+    await band.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(band).not.toHaveAttribute("aria-valuetext", defaultBand ?? "");
+    await expect(brushed).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(band).toBeFocused();
+    await expect(brushed).toBeVisible();
+    await page.keyboard.press("Home");
+    await expect(band).toHaveAttribute("aria-valuetext", defaultBand ?? "");
+    await expect(brushed).toBeVisible();
 
     // The detail column scrolls when it is taller than the window, and the lane plot must keep its
     // height (up to its own cap) while it does. A scroll container's automatic minimum size is 0,
@@ -491,6 +565,9 @@ test.describe("event-logs screenshots", () => {
       expect(layout.markerTop).toBeGreaterThanOrEqual(layout.frameTop - 0.5);
       expect(layout.markerBottom).toBeLessThanOrEqual(layout.frameBottom + 0.5);
     }).toPass({ timeout: 5_000 });
+    // The overview strip sits in that same column, so it must keep its height in the short window too:
+    // its box is 48 px whatever the column does (a collapsed row would make it a sliver).
+    expect(Math.round((await strip.boundingBox())?.height ?? 0)).toBe(48);
     await page.setViewportSize(tallWindow as { width: number; height: number });
 
     // An Ambiguous group labels no link between its entries, so its plot draws no connector.
@@ -525,5 +602,18 @@ test.describe("event-logs screenshots", () => {
     // top covers every record) and that the afterEach fails the test if any replay guard tripped.
     await expect(page.getByTestId("correlation-card-headline")).toHaveText(/^4 chains$/);
     await expect(page.getByRole("alert")).toHaveCount(0);
+
+    // The fixture holds no unplaced item, and the card's counts are loaded (the headline above reads
+    // them), so a session that counted none shows nothing about them: no Not placed option in the
+    // chain list (whose name is exactly the one without the extra clause), no pane, no unplaced line
+    // on the Insights Correlations card, and no link to review them. Absence is the claim here: a
+    // card that read "0 items" or "not known" for this session would also fail the testid check.
+    // A string is matched whole here, so the name that gains ", and items that are not placed" fails.
+    await expect(list).toHaveAccessibleName("Correlation chains, strongest first");
+    await expect(page.getByRole("option", { name: /^Not placed/ })).toHaveCount(0);
+    await expect(page.locator("[data-unplaced-option]")).toHaveCount(0);
+    await expect(page.getByTestId("unplaced-pane")).toHaveCount(0);
+    await expect(page.getByTestId("correlation-card-unplaced")).toHaveCount(0);
+    await expect(page.getByText("Review unplaced lines")).toHaveCount(0);
   });
 });
