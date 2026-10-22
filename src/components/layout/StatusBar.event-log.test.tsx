@@ -3,15 +3,21 @@
  * counts, view and updated time, plus the Correlation view variant.
  *
  * The real stores are used, so a renamed field fails to compile instead of drifting from a hand
- * mock. Only the Tauri event bridge is mocked: the workspace stores register listeners at module
- * scope.
+ * mock. Only the Tauri bridge is mocked: the workspace stores register listeners at module scope
+ * (kept here so a test can deliver the backend's stream-complete marker), and the few tests that
+ * run a store load answer its `invoke` calls themselves.
  */
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { tokens } from "@fluentui/react-components";
+import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => undefined),
+  listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
+    listeners.set(name, handler);
+    return () => undefined;
+  }),
 }));
 
 import fixtureDocument from "../../workspaces/event-log/__fixtures__/correlation-edges.json";
@@ -42,6 +48,7 @@ import {
 } from "../../workspaces/event-log/unified-timeline";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
+import { deferred } from "../../test-utils/deferred";
 import {
   StatusBar,
   buildEvtxCorrelationSegments,
@@ -571,16 +578,21 @@ describe("StatusBar Event Logs content", () => {
     it("stamps Updated when a load finishes without a final change to the records", () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(new Date("2026-10-10T08:00:00Z"));
+      // A quiet channel: loaded, with no event in the window yet. The bar mounts before the load.
       useEvtxStore.setState({
-        isLoading: true,
         sourceMode: "live",
         timeZoneMode: "utc",
         loadedChannels: new Set(["System"]),
-        records: [record("Error")],
       });
       render(<StatusBar />);
+
+      // The load starts, and the event arrives while it runs: the bar sees the start, so it
+      // measures this load against what was loaded before it.
+      act(() => useEvtxStore.setState({ isLoading: true }));
+      act(() => useEvtxStore.setState({ records: [record("Error")] }));
       expect(right()).toHaveTextContent(/^1 events loaded\.\.\.$/);
 
+      // The final write changes nothing: the records were already published.
       vi.setSystemTime(new Date("2026-10-10T08:00:09Z"));
       act(() => useEvtxStore.setState({ isLoading: false }));
       publishRows(useEvtxStore.getState().records);
@@ -632,6 +644,188 @@ describe("StatusBar Event Logs content", () => {
       publishRows(useEvtxStore.getState().records);
 
       expect(right()).toHaveTextContent("Table view · Updated 14:32:05 UTC");
+    });
+
+    // These drive the real store actions with a stubbed backend reply, because the rule under test
+    // is about what a load wrote, and the store decides that: a retry of channels that were never
+    // read must not stamp "Updated" beside the System events an earlier load had read.
+    describe("a store load on a source that already has events on screen", () => {
+      const firstLoadAt = "2026-10-10T14:32:05Z";
+      const secondLoadAt = "2026-10-10T14:40:00Z";
+
+      /** What the backend replies for one channel when no record batch event was streamed. */
+      function channelReply(
+        channel: string,
+        records: EvtxRecord[],
+        coverageGaps: { source: string; kind: "cancelled"; reason: string }[] = [],
+      ) {
+        return {
+          records,
+          channels: [{ name: channel, eventCount: records.length, sourceType: "live" as const }],
+          totalRecords: records.length,
+          parseErrors: 0,
+          errorMessages: [],
+          coverageGaps,
+        };
+      }
+
+      /** A live source whose System channel was read, with "Updated" stamped at the first load. */
+      function showSystemReadAtFirstLoad() {
+        // The clock keeps running from the time it is set: the store waits out a 25 ms grace period
+        // for a channel's stream-complete marker by comparing Date.now() against a deadline.
+        vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
+        vi.setSystemTime(new Date(firstLoadAt));
+        render(<StatusBar />);
+        act(() => {
+          useEvtxStore.setState({
+            sourceMode: "live",
+            timeZoneMode: "utc",
+            channels: [channelInfo("System"), channelInfo("Application")],
+            loadedChannels: new Set(["System"]),
+            records: [record("Error", "System")],
+          });
+        });
+        publishRows(useEvtxStore.getState().records);
+        expect(right()).toHaveTextContent("Table view · Updated 14:32:05 UTC");
+      }
+
+      /**
+       * Runs a store load to its end at the second load's time. The backend's reply is held back
+       * until the bar has rendered the running load, so the bar sees the load start.
+       */
+      async function runLoad(
+        begin: () => Promise<void>,
+        reply: () => unknown,
+        whileRunning: () => void = () => undefined,
+      ) {
+        const gate = deferred<void>();
+        vi.mocked(invoke).mockImplementation(async (_command, rawArgs) => {
+          const { channels: [channel], requestId } = rawArgs as {
+            channels: string[];
+            requestId: string;
+          };
+          await gate.promise;
+          const answer = reply();
+          // The backend ends a channel's stream before it replies. Nothing was streamed here, so
+          // the whole answer rides in the reply.
+          listeners.get("evtx-record-stream-complete")?.({
+            payload: { requestId, channel, sequenceCount: 0, totalRecords: 0 },
+          });
+          return answer;
+        });
+        vi.setSystemTime(new Date(secondLoadAt));
+        let load: Promise<void> = Promise.resolve();
+        act(() => {
+          load = begin();
+        });
+        expect(useEvtxStore.getState().isLoading).toBe(true);
+        expect(right()).toHaveTextContent(/\.\.\.$/);
+        whileRunning();
+
+        await act(async () => {
+          gate.resolve(undefined);
+          await load;
+        });
+        expect(useEvtxStore.getState().isLoading).toBe(false);
+        publishRows(useEvtxStore.getState().records);
+      }
+
+      const queryChannels = (...channels: string[]) =>
+        () => useEvtxStore.getState().queryChannels(channels);
+
+      let warn: ReturnType<typeof vi.spyOn>;
+      beforeEach(() => {
+        warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      });
+      afterEach(() => {
+        warn.mockRestore();
+        vi.mocked(invoke).mockReset();
+      });
+
+      it("leaves Updated at the earlier load when every requested channel is refused", async () => {
+        showSystemReadAtFirstLoad();
+
+        await runLoad(queryChannels("Application"), () => {
+          throw new Error("The channel was refused");
+        });
+
+        expect(useEvtxStore.getState().loadedChannels).toEqual(new Set(["System"]));
+        expect(right()).toHaveTextContent("Table view · Updated 14:32:05 UTC");
+      });
+
+      it("leaves Updated at the earlier load when the load is cancelled before it streams anything", async () => {
+        showSystemReadAtFirstLoad();
+
+        await runLoad(queryChannels("Application"), () =>
+          channelReply("Application", [], [
+            {
+              source: "Application",
+              kind: "cancelled",
+              reason: "operator stopped the load after 0 events were fetched (the channel may hold more)",
+            },
+          ]),
+        );
+
+        // A cancelled read is partial: the channel does not count as loaded, and nothing came in.
+        expect(useEvtxStore.getState().loadedChannels).toEqual(new Set(["System"]));
+        expect(right()).toHaveTextContent("Table view · Updated 14:32:05 UTC");
+      });
+
+      it("stamps Updated when the load reads a channel that was not loaded", async () => {
+        showSystemReadAtFirstLoad();
+
+        await runLoad(queryChannels("Application"), () =>
+          channelReply("Application", [record("Warning", "Application")]),
+        );
+
+        expect(useEvtxStore.getState().loadedChannels).toEqual(new Set(["System", "Application"]));
+        expect(right()).toHaveTextContent("Table view · Updated 14:40:00 UTC");
+      });
+
+      it("stamps Updated when the load only adds a channel that holds no events in the window", async () => {
+        showSystemReadAtFirstLoad();
+        const recordCount = useEvtxStore.getState().records.length;
+
+        await runLoad(queryChannels("Application"), () => channelReply("Application", []));
+
+        // Only the loaded-channel set changed: the records are the same ones.
+        expect(useEvtxStore.getState().records).toHaveLength(recordCount);
+        expect(useEvtxStore.getState().loadedChannels).toEqual(new Set(["System", "Application"]));
+        expect(right()).toHaveTextContent("Table view · Updated 14:40:00 UTC");
+      });
+
+      it("stamps Updated when the load reads more events from a channel that was already loaded", async () => {
+        showSystemReadAtFirstLoad();
+
+        await runLoad(queryChannels("System"), () =>
+          channelReply("System", [record("Warning", "System")]),
+        );
+
+        // Only the records changed: the same channel set is written back as a fresh Set.
+        expect(useEvtxStore.getState().records).toHaveLength(2);
+        expect(useEvtxStore.getState().loadedChannels).toEqual(new Set(["System"]));
+        expect(right()).toHaveTextContent("Table view · Updated 14:40:00 UTC");
+      });
+
+      it("stamps Updated when a refresh re-reads exactly what was loaded before", async () => {
+        showSystemReadAtFirstLoad();
+        const [before] = useEvtxStore.getState().records;
+
+        // The refresh clears the records and the loaded channels in the set that raises isLoading,
+        // so the same event and the same channel come back as a change from nothing.
+        await runLoad(
+          () => useEvtxStore.getState().refreshLoadedChannels(),
+          () => channelReply("System", [{ ...before }]),
+          () => {
+            expect(useEvtxStore.getState().records).toHaveLength(0);
+            expect(useEvtxStore.getState().loadedChannels.size).toBe(0);
+          },
+        );
+
+        expect(useEvtxStore.getState().records).toHaveLength(1);
+        expect(useEvtxStore.getState().loadedChannels).toEqual(new Set(["System"]));
+        expect(right()).toHaveTextContent("Table view · Updated 14:40:00 UTC");
+      });
     });
 
     describe.each([

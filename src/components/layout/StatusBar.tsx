@@ -217,6 +217,28 @@ export function buildEvtxCorrelationSegments(
   ];
 }
 
+/** What an Event Logs load had loaded at one moment: how many records, and which channels. */
+interface LoadedSnapshot {
+  recordCount: number;
+  channels: ReadonlySet<string>;
+}
+
+/**
+ * Whether what is loaded now differs from `start`. The channels are compared by membership, not by
+ * reference: a load writes its channel set back as a new Set whether or not it changed anything.
+ */
+function loadedStateDiffers(
+  start: LoadedSnapshot,
+  recordCount: number,
+  channels: ReadonlySet<string>,
+): boolean {
+  if (recordCount !== start.recordCount || channels.size !== start.channels.size) return true;
+  for (const channel of channels) {
+    if (!start.channels.has(channel)) return true;
+  }
+  return false;
+}
+
 /** `HH:MM:SS` plus the zone label, in the clock the grid shows event times in. */
 export function formatEvtxUpdatedTime(
   epochMs: number,
@@ -336,7 +358,7 @@ export function StatusBar() {
   const evtxRecords = useEvtxStore((s) => s.records);
   const evtxSourceMode = useEvtxStore((s) => s.sourceMode);
   const evtxIsLoading = useEvtxStore((s) => s.isLoading);
-  const evtxLoadedChannelCount = useEvtxStore((s) => s.loadedChannels.size);
+  const evtxLoadedChannels = useEvtxStore((s) => s.loadedChannels);
   const evtxTimeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const evtxLoadGeneration = useEvtxStore((s) => s.loadGeneration);
   const evtxLayoutView = useEvtxLayoutStore((s) => s.activeView);
@@ -407,33 +429,49 @@ export function StatusBar() {
 
   // "Updated" is the last load or tail append the status bar observed. The store keeps no
   // wall-clock stamp. AppShell renders the bar unconditionally, so it stays mounted across
-  // workspace switches and sees every settled change to the loaded records. A load that read
-  // nothing is not an update, and neither is a shrinking record set (clearing a channel): only a
-  // finished load or a record set that grew counts. Records that were already loaded when the bar
-  // mounted get no stamp: that time was not observed, so it is left out rather than guessed. (A
-  // remount would restart the stamp the same way.)
+  // workspace switches and sees every settled change to the loaded records. A load counts when it
+  // left something different loaded than it found: the bar notes the record count and the loaded
+  // channels when the load starts, and stamps only if the load's end differs from that. A retry
+  // whose channels were all refused or cancelled before anything came in changes neither, so it is
+  // not an update, even while other channels' events are on screen. A reload clears both in the
+  // write that starts it, so the same events read back again still count. A shrinking record set
+  // (clearing a channel) is not a load, and a tail append counts when the records grew. Records
+  // that were already loaded when the bar mounted get no stamp: that time was not observed, so it
+  // is left out rather than guessed. (A remount would restart the stamp the same way.)
   const [evtxUpdatedAt, setEvtxUpdatedAt] = useState<number | null>(null);
   const observedRecordCountRef = useRef(evtxRecords.length);
   const wasLoadingRef = useRef(evtxIsLoading);
+  const loadStartRef = useRef<LoadedSnapshot>({
+    recordCount: evtxRecords.length,
+    channels: evtxLoadedChannels,
+  });
   useEffect(() => {
     const grew = evtxRecords.length > observedRecordCountRef.current;
+    const loadStarted = !wasLoadingRef.current && evtxIsLoading;
     const loadFinished = wasLoadingRef.current && !evtxIsLoading;
     observedRecordCountRef.current = evtxRecords.length;
     wasLoadingRef.current = evtxIsLoading;
-    if (evtxIsLoading || (!grew && !loadFinished)) return;
+    if (loadStarted) {
+      loadStartRef.current = { recordCount: evtxRecords.length, channels: evtxLoadedChannels };
+    }
+    if (evtxIsLoading) return;
+    const loadChangedWhatIsLoaded =
+      loadFinished &&
+      loadedStateDiffers(loadStartRef.current, evtxRecords.length, evtxLoadedChannels);
+    if (!grew && !loadChangedWhatIsLoaded) return;
     // Files whose records are all text logs did read something: the load finished and produced
     // them, even though no event record was read. Only a read of nothing is not an update.
     if (
       readStateFor({
         sourceMode: evtxSourceMode,
-        loadedChannelCount: evtxLoadedChannelCount,
+        loadedChannelCount: evtxLoadedChannels.size,
         records: evtxRecords,
       }) === "nothing"
     ) {
       return;
     }
     setEvtxUpdatedAt(Date.now());
-  }, [evtxRecords, evtxIsLoading, evtxSourceMode, evtxLoadedChannelCount]);
+  }, [evtxRecords, evtxIsLoading, evtxSourceMode, evtxLoadedChannels]);
 
   let elapsedText = "";
   if (activeView === "log" && selectedId !== null && entries.length > 0) {
