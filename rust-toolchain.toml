@@ -11,7 +11,7 @@
 # one side can see is not a gate.
 #
 # The MSRV floor is separate and deliberately lower: `src-tauri/Cargo.toml`
-# declares `rust-version = "1.88"`, and the MSRV job installs 1.88 explicitly
+# declares `rust-version = "1.89"`, and the MSRV job installs 1.89 explicitly
 # through a `toolchain:` input — which is why that one step keeps the
 # input-accepting `stable` ref rather than a version ref.
 [toolchain]

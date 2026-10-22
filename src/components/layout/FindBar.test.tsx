@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LogEntry } from "../../types/log";
 import { useLogStore } from "../../stores/log-store";
@@ -40,6 +40,40 @@ describe("FindBar (CHROME-007)", () => {
       "aria-pressed",
       "false",
     );
+  });
+
+  it("exposes a named find group and live result status without unrelated count text", () => {
+    useLogStore.setState({ findQuery: "error", findMatchIds: [1], findCurrentIndex: 0 });
+    render(<><span>1 of 1 unrelated</span><FindBar onClose={() => {}} /></>);
+    const group = screen.getByRole("group", { name: "Find bar" });
+    expect(within(group).getByPlaceholderText("Find...")).toHaveFocus();
+    expect(within(group).getAllByRole("button")).toHaveLength(5);
+    const status = within(group).getByRole("status", { name: "Find results" });
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(status).toHaveTextContent(/^1 of 1$/);
+    expect(within(group).queryByText("1 of 1 unrelated")).not.toBeInTheDocument();
+  });
+
+  it("updates the existing live region for the first query and keeps it when cleared", () => {
+    useLogStore.setState({
+      findQuery: "",
+      findMatchIds: [],
+      findCurrentIndex: -1,
+      findRegexError: null,
+      findUseRegex: false,
+    });
+    render(<FindBar onClose={() => {}} />);
+    const status = screen.getByRole("status", { name: "Find results" });
+    const input = screen.getByPlaceholderText("Find...");
+    expect(status).toBeEmptyDOMElement();
+
+    fireEvent.change(input, { target: { value: "missing" } });
+    expect(screen.getByRole("status", { name: "Find results" })).toBe(status);
+    expect(status).toHaveTextContent(/^No results$/);
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(screen.getByRole("status", { name: "Find results" })).toBe(status);
+    expect(status).toBeEmptyDOMElement();
   });
 
   it("shows match index, no-results, and invalid regex status", () => {
