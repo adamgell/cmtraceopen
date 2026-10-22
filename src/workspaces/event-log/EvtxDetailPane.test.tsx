@@ -362,7 +362,7 @@ describe("EvtxDetailPane rail extras", () => {
   const rec = (id: number, overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
     ...RECORD,
     id,
-    sourceLabel: "C:\\Users\\adam.gell\\Downloads\\Application.evtx",
+    sourceLabel: "C:\\Users\\examiner\\Downloads\\Application.evtx",
     eventRecordId: 500 + id,
     timestampEpoch: Date.parse("2026-08-22T12:00:00Z") + id * 60_000,
     ...overrides,

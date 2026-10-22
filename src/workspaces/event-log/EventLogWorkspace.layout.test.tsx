@@ -39,6 +39,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { DEFAULT_LOG_LIST_FONT_SIZE, getLogListMetrics } from "../../lib/log-accessibility";
 import { EventLogWorkspace, EvtxViewHost, type EvtxViewEntry } from "./EventLogWorkspace";
 import { EvtxViewBar } from "./EvtxViewBar";
+import { requireElement, stubLayout } from "./evtx-test-dom";
 import {
   EVTX_LAYOUT_STORAGE_KEY,
   EVTX_LAYOUT_VERSION,
@@ -69,6 +70,7 @@ const RECORD: EvtxRecord = {
 
 const region = (name: string) =>
   document.querySelector<HTMLElement>(`[data-evtx-region="${name}"]`);
+const requireRegion = (name: string) => requireElement(region(name), `the ${name} region`);
 
 describe("EventLogWorkspace three-column shell", () => {
   beforeEach(() => {
@@ -108,16 +110,115 @@ describe("EventLogWorkspace three-column shell", () => {
 
   it("caps the channel region and the rail on the body row's own children, not on a sized wrapper", () => {
     render(<EventLogWorkspace />);
-    const row = region("main")!.parentElement as HTMLElement;
+    const row = requireElement(requireRegion("main").parentElement, "the body row");
     // Both regions are direct children of the row, whose width is definite, so 40% is 40% of it.
     for (const name of ["channels", "rail"]) {
-      const el = region(name)!;
+      const el = requireRegion(name);
       expect(el.parentElement).toBe(row);
       expect(el).toHaveStyle({ maxWidth: "40%", minWidth: "0px" });
     }
     // The pane inside the channel region carries no percentage cap of its own.
-    const pane = region("channels")!.firstElementChild as HTMLElement;
+    const pane = requireElement(
+      requireRegion("channels").firstElementChild,
+      "the channel pane inside its region",
+    ) as HTMLElement;
     expect(pane.style.maxWidth).toBe("");
+  });
+
+  it("reports the rail's rendered width and caps its maximum when the row is narrow", () => {
+    // A 600 px row caps the rail at 240 px, below the 280 px minimum and the 340 px stored width.
+    const restore = stubLayout({ "evtx-insights-rail": 240 }, 600);
+    try {
+      render(<EventLogWorkspace />);
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      const handle = screen.getByRole("separator", { name: "Resize insights rail", hidden: true });
+      expect(handle).toHaveAttribute("aria-valuenow", "240");
+      expect(handle).toHaveAttribute("aria-valuemax", "240");
+      expect(handle).toHaveAttribute("aria-valuemin", "240");
+      // Neither a key step nor End changes the visible rail, so the requested 340 px survives.
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      fireEvent.keyDown(handle, { key: "End" });
+      expect(useEvtxLayoutStore.getState().railWidth).toBe(340);
+      expect(handle).toHaveAttribute("aria-valuenow", "240");
+      // The row widens: the rail returns to the requested width.
+      restore.set({ "evtx-insights-rail": 340 }, 1440);
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      expect(handle).toHaveAttribute("aria-valuenow", "340");
+      expect(handle).toHaveAttribute("aria-valuemax", "480");
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps the rail value in range on a fractional cap and never overwrites the stored width", () => {
+    useEvtxLayoutStore.getState().setRailWidth(480);
+    const restore = stubLayout({ "evtx-insights-rail": 401.6 }, 1004);
+    try {
+      render(<EventLogWorkspace />);
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      const handle = screen.getByRole("separator", { name: "Resize insights rail", hidden: true });
+      expect(Number(handle.getAttribute("aria-valuemax"))).toBe(401);
+      expect(Number(handle.getAttribute("aria-valuenow"))).toBeLessThanOrEqual(401);
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      fireEvent.keyDown(handle, { key: "End" });
+      // A leftward drag grows the rail; it cannot pass the cap either.
+      fireEvent.pointerDown(handle, { clientX: 700, button: 0, isPrimary: true, pointerId: 1 });
+      fireEvent.pointerMove(handle, { clientX: 500, buttons: 1, pointerId: 1 });
+      fireEvent.pointerUp(handle, { pointerId: 1 });
+      expect(useEvtxLayoutStore.getState().railWidth).toBe(480);
+    } finally {
+      restore();
+    }
+  });
+
+  it("measures the rail after the first-open path (source picker, then load)", () => {
+    // The rail ships unavailable; show it through the store, as Phase 4 will.
+    useEvtxLayoutStore.setState({ panels: { channels: true, insights: true, dock: false } });
+    useEvtxStore.setState({ records: [], channels: [], sourceMode: null, loadedChannels: new Set() });
+    const restore = stubLayout({ "evtx-insights-rail": 240 }, 600);
+    try {
+      render(<EventLogWorkspace />);
+      // Nothing loaded: the source picker renders and the rail does not exist yet.
+      expect(region("rail")).toBeNull();
+      act(() => {
+        useEvtxStore.setState({
+          records: [RECORD],
+          channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+          selectedChannels: new Set(["Application"]),
+          loadedChannels: new Set(["Application"]),
+          sourceMode: "files",
+        });
+      });
+      const handle = screen.getByRole("separator", { name: "Resize insights rail" });
+      expect(handle).toHaveAttribute("aria-valuenow", "240");
+      expect(handle).toHaveAttribute("aria-valuemax", "240");
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps stepping the rail with ArrowLeft when ResizeObserver is unavailable and a width is measured", () => {
+    expect(typeof ResizeObserver).toBe("undefined");
+    const restore = stubLayout({ "evtx-insights-rail": "style" }, 1440);
+    try {
+      render(<EventLogWorkspace />);
+      const handle = screen.getByRole("separator", { name: "Resize insights rail", hidden: true });
+      expect(handle).toHaveAttribute("aria-valuenow", "340");
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      expect(useEvtxLayoutStore.getState().railWidth).toBe(356);
+      expect(handle).toHaveAttribute("aria-valuenow", "356");
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      expect(useEvtxLayoutStore.getState().railWidth).toBe(372);
+      expect(handle).toHaveAttribute("aria-valuenow", "372");
+    } finally {
+      restore();
+    }
   });
 
   it("hides and shows the channel pane without discarding its state", () => {
@@ -137,7 +238,7 @@ describe("EventLogWorkspace three-column shell", () => {
   it("keeps the dock mounted and sizes it from the store, clamped to half the viewport", () => {
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
     render(<EventLogWorkspace />);
-    const dock = region("dock")!;
+    const dock = requireRegion("dock");
     expect(dock).toHaveStyle({ height: "210px" });
     act(() => useEvtxLayoutStore.getState().setDockHeight(5000));
     expect(region("dock")).toBe(dock);
@@ -316,6 +417,26 @@ describe("EventLogWorkspace three-column shell", () => {
       expect(chosen()).toBe(125);
       fireEvent.pointerUp(handle, { pointerId: 1 });
     });
+  });
+
+  it("keeps the stored dock height when the viewport caps it and a resize changes nothing", () => {
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 400 });
+    try {
+      render(<EventLogWorkspace />);
+      // 50vh of 400 px is 200 px: the stored 210 px renders as 200 px.
+      expect(requireRegion("dock")).toHaveStyle({ height: "200px" });
+      const handle = screen.getByRole("separator", { name: "Resize correlation dock", hidden: true });
+      fireEvent.keyDown(handle, { key: "ArrowUp" });
+      fireEvent.keyDown(handle, { key: "End" });
+      expect(useEvtxLayoutStore.getState().dockHeight).toBe(210);
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      expect(requireRegion("dock")).toHaveStyle({ height: "210px" });
+    } finally {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+    }
   });
 
   it("resizes the hidden rail from its separator, clamped to 280 through 480", () => {
