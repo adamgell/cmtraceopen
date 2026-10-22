@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   winget:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.diagnostic_only }}
+    if: ${{ (github.event_name == 'release' && !github.event.release.draft && !github.event.release.prerelease) || (github.event_name == 'workflow_dispatch' && !inputs.diagnostic_only) }}
     name: Update winget package
     runs-on: windows-latest
     environment: release
@@ -36,6 +36,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Validate published stable release
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name || inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/stable-release-guard.py
 
       - name: Install komac
         shell: pwsh
