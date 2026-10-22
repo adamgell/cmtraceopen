@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::dsregcmd::extended::unbraced_guid;
 use crate::dsregcmd::models::{
     DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdEvidenceSource,
     DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue, DsregcmdProxyEvidence,
@@ -232,46 +233,128 @@ pub fn load_proxy_evidence(bundle_path: &Path) -> Option<DsregcmdProxyEvidence> 
     Some(evidence)
 }
 
+/// Read the enrollments export.
+///
+/// The export is assessable only when it holds the Enrollments root key header
+/// itself, `[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments]` (any letter
+/// case); otherwise the evidence is not collected (`None`), never zero.
+///
+/// An enrollment is a GUID-shaped first path segment below that root, braced or
+/// unbraced (Windows writes it unbraced). Each distinct GUID counts once,
+/// whatever its values or its `EnrollmentState`:
+/// - Non-GUID children such as `Context`, `Status` or `Ownership` are not
+///   enrollments.
+/// - A deeper key (`<guid>\FirstSync`, `<guid>\DMClient\...`) is not an
+///   enrollment of its own, but it does show that its enrollment exists.
+/// - Braced and unbraced forms of one GUID, in any letter case, are one
+///   enrollment. It takes each value its keys agree on; a value they disagree
+///   on stays unknown, so the order of the keys never changes the evidence.
+///
+/// Enrollments are counted from the key headers, not from the parsed values,
+/// so an enrollment key with no named values (or only a default `@` value)
+/// still counts. Over-counting only makes the negative rarer; an undercount
+/// would read as "no enrollment" by mistake (#883).
 pub fn load_enrollment_evidence(bundle_path: &Path) -> Option<DsregcmdEnrollmentEvidence> {
     let path = registry_file_path(bundle_path, ENROLLMENTS_FILE);
-    let registry = load_registry_map(&path)?;
-
-    let mut enrollments = Vec::new();
-
-    for (key_path, values) in &registry {
-        let lower = key_path.to_ascii_lowercase();
-        // Each enrollment is under a GUID subkey: ...\Enrollments\{GUID}
-        if !lower.contains("\\enrollments\\{") {
-            continue;
-        }
-        // Skip deeper subkeys (e.g., ...\{GUID}\FirstSync)
-        let after_guid = key_path
-            .rfind('}')
-            .map(|pos| &key_path[pos + 1..])
-            .unwrap_or("");
-        if after_guid.contains('\\') {
-            continue;
-        }
-
-        let guid = key_path.rfind('{').and_then(|start| {
-            key_path
-                .rfind('}')
-                .map(|end| key_path[start..=end].to_string())
-        });
-
-        enrollments.push(DsregcmdEnrollmentEntry {
-            guid,
-            upn: extract_string_value(values, "UPN"),
-            provider_id: extract_string_value(values, "ProviderID"),
-            enrollment_state: extract_dword_value(values, "EnrollmentState"),
-        });
+    let content = read_registry_export(&path)?;
+    if !reg_key_headers(&content)
+        .any(|key_path| key_path.eq_ignore_ascii_case(ENROLLMENTS_ROOT_KEY))
+    {
+        return None;
     }
+    let registry = parse_reg_snapshot(&content);
+
+    // Each distinct GUID in file order, with its name as first written.
+    let mut seen = HashSet::new();
+    let mut guids = Vec::new();
+    for key_path in reg_key_headers(&content) {
+        if let Some((_, segment, guid)) = enrollment_key_of(key_path) {
+            let canonical = guid.to_ascii_lowercase();
+            if seen.insert(canonical.clone()) {
+                guids.push((canonical, segment));
+            }
+        }
+    }
+
+    // The named values of every first-level key of each GUID.
+    let mut values_by_guid: HashMap<String, Vec<&HashMap<String, RegistryValue>>> = HashMap::new();
+    for (key_path, values) in &registry {
+        if let Some((enrollment_key, _, guid)) = enrollment_key_of(key_path) {
+            if enrollment_key.len() == key_path.len() {
+                values_by_guid
+                    .entry(guid.to_ascii_lowercase())
+                    .or_default()
+                    .push(values);
+            }
+        }
+    }
+
+    let enrollments = guids
+        .into_iter()
+        .map(|(canonical, segment)| {
+            let values = values_by_guid
+                .get(&canonical)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            DsregcmdEnrollmentEntry {
+                guid: Some(segment.to_string()),
+                upn: agreed(values.iter().map(|v| extract_string_value(v, "UPN"))),
+                provider_id: agreed(values.iter().map(|v| extract_string_value(v, "ProviderID"))),
+                enrollment_state: agreed(
+                    values
+                        .iter()
+                        .map(|v| extract_dword_value(v, "EnrollmentState")),
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
 
     let enrollment_count = u32::try_from(enrollments.len()).unwrap_or(u32::MAX);
 
     Some(DsregcmdEnrollmentEvidence {
         enrollment_count,
         enrollments,
+    })
+}
+
+/// The one value every present value agrees on: `None` when there is none or
+/// when two of them differ, whatever their order.
+fn agreed<T: PartialEq>(values: impl Iterator<Item = Option<T>>) -> Option<T> {
+    let mut agreed = None;
+    for value in values.flatten() {
+        match &agreed {
+            None => agreed = Some(value),
+            Some(existing) if *existing == value => {}
+            Some(_) => return None,
+        }
+    }
+    agreed
+}
+
+const ENROLLMENTS_ROOT_KEY: &str = "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments";
+
+/// The enrollment a key path belongs to, for a key at or below a GUID-shaped
+/// first segment under the Enrollments root: the path of that first-level key,
+/// the segment as written, and its unbraced GUID. `None` for the root itself,
+/// a non-GUID child, or any key outside the root.
+fn enrollment_key_of(key_path: &str) -> Option<(&str, &str, &str)> {
+    let root_len = ENROLLMENTS_ROOT_KEY.len();
+    let below_root = key_path
+        .get(..root_len)
+        .filter(|root| root.eq_ignore_ascii_case(ENROLLMENTS_ROOT_KEY))
+        .and_then(|_| key_path[root_len..].strip_prefix('\\'))?;
+    let segment = below_root.split('\\').next()?;
+    let guid = unbraced_guid(segment)?;
+    Some((&key_path[..root_len + 1 + segment.len()], segment, guid))
+}
+
+/// Every `[...]` key header of a `.reg` export, in file order, including keys
+/// that hold no named values (which `parse_reg_snapshot` leaves out).
+fn reg_key_headers(content: &str) -> impl Iterator<Item = &str> {
+    content.lines().filter_map(|line| {
+        let line = line.trim();
+        (line.starts_with('[') && line.ends_with(']') && line.len() >= 2)
+            .then(|| line[1..line.len() - 1].trim())
     })
 }
 
@@ -344,6 +427,12 @@ fn registry_file_path(bundle_path: &Path, file_name: &str) -> PathBuf {
 /// keys carry no named values, which keeps "exported, nothing relevant inside"
 /// distinct from "not collected".
 fn load_registry_map(path: &Path) -> Option<RegistryKeyMap> {
+    read_registry_export(path).map(|content| parse_reg_snapshot(&content))
+}
+
+/// The decoded text of one `.reg` export, under the same "collected" rule as
+/// [`load_registry_map`]: `None` unless the content holds a key header.
+fn read_registry_export(path: &Path) -> Option<String> {
     if !path.is_file() {
         return None;
     }
@@ -354,14 +443,8 @@ fn load_registry_map(path: &Path) -> Option<RegistryKeyMap> {
             .and_then(|bytes| decode_reg_content(&bytes))
     })?;
 
-    has_key_header(&content).then(|| parse_reg_snapshot(&content))
-}
-
-fn has_key_header(content: &str) -> bool {
-    content.lines().any(|line| {
-        let line = line.trim();
-        line.starts_with('[') && line.ends_with(']')
-    })
+    let collected = reg_key_headers(&content).next().is_some();
+    collected.then_some(content)
 }
 
 /// Like [`load_registry_map`] for the WHFB policy lookups, which merge several
@@ -672,7 +755,9 @@ mod tests {
         load_os_version_evidence, load_proxy_evidence, load_whfb_policy_evidence,
         parse_reg_snapshot,
     };
-    use crate::dsregcmd::models::DsregcmdEvidenceSource;
+    use crate::dsregcmd::models::{
+        DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdEvidenceSource,
+    };
     use std::collections::HashMap;
 
     use super::{extract_dword_value, RegistryValue};
@@ -685,16 +770,59 @@ mod tests {
         temp_dir
     }
 
+    const ROOT: &str = r"[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments]";
+
+    fn export_with_root(body: &str) -> String {
+        format!("Windows Registry Editor Version 5.00\r\n\r\n{ROOT}\r\n\r\n{body}")
+    }
+
+    /// `reg export` writes UTF-16LE with a byte order mark and CRLF lines.
+    fn utf16le_export(text: &str) -> Vec<u8> {
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in text
+            .replace("\r\n", "\n")
+            .replace('\n', "\r\n")
+            .encode_utf16()
+        {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn collected(export: &str) -> DsregcmdEnrollmentEvidence {
+        let bundle = bundle_with_enrollments_export(export.as_bytes());
+        let evidence = load_enrollment_evidence(bundle.path()).expect("export was collected");
+        assert_eq!(
+            usize::try_from(evidence.enrollment_count).expect("count fits"),
+            evidence.enrollments.len(),
+            "the count and the list never disagree"
+        );
+        evidence
+    }
+
+    fn guids(evidence: &DsregcmdEnrollmentEvidence) -> Vec<&str> {
+        evidence
+            .enrollments
+            .iter()
+            .map(|entry| {
+                entry
+                    .guid
+                    .as_deref()
+                    .expect("every enrollment carries its GUID")
+            })
+            .collect()
+    }
+
     /// #883: a present export that yields no registry keys was not read, so it
     /// is a coverage gap (`None`), never "zero enrollments".
     #[test]
-    fn an_empty_enrollments_export_is_not_collected() {
+    fn enrollments_export_empty_is_not_collected() {
         let bundle = bundle_with_enrollments_export(b"");
         assert_eq!(load_enrollment_evidence(bundle.path()), None);
     }
 
     #[test]
-    fn an_undecodable_enrollments_export_is_not_collected() {
+    fn enrollments_export_undecodable_is_not_collected() {
         let bundle = bundle_with_enrollments_export(&[0xFF, 0xFE, 0x00, 0xD8, 0x01, 0x00, 0xFF]);
         assert_eq!(load_enrollment_evidence(bundle.path()), None);
 
@@ -704,12 +832,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn an_unreadable_enrollments_export_is_not_collected() {
+    fn enrollments_export_unreadable_is_not_collected() {
         use std::os::unix::fs::PermissionsExt;
 
-        let bundle = bundle_with_enrollments_export(
-            b"Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n",
-        );
+        let bundle = bundle_with_enrollments_export(export_with_root("").as_bytes());
         let file = bundle
             .path()
             .join("evidence")
@@ -724,26 +850,242 @@ mod tests {
         assert_eq!(load_enrollment_evidence(bundle.path()), None);
     }
 
-    /// A registry export with no enrollment subkeys is real registry evidence,
-    /// whatever shape a key without enrollments takes.
+    /// The root key header is what makes the export assessable. An export
+    /// that holds other keys, or only enrollment subkeys, is not collected.
     #[test]
-    fn a_valid_enrollments_export_without_subkeys_is_zero_enrollments() {
-        let header_only = "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n";
-        let container_subkeys = format!(
-            "{header_only}\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\Context]\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\Status]\r\n"
-        );
-        let default_value_only = format!("{header_only}@=\"\"\r\n");
-
+    fn enrollments_export_without_root_header_is_not_collected() {
         for export in [
-            header_only.to_string(),
-            container_subkeys,
-            default_value_only,
+            "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Provisioning]\r\n\"Value\"=dword:00000001\r\n",
+            "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB]\r\n\"EnrollmentState\"=dword:00000001\r\n",
+            "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Enrollments]\r\n",
         ] {
             let bundle = bundle_with_enrollments_export(export.as_bytes());
-            let evidence = load_enrollment_evidence(bundle.path()).expect("export was collected");
+            assert_eq!(load_enrollment_evidence(bundle.path()), None, "{export}");
+        }
+
+        // The root header matches in any letter case.
+        let lower_case_root = export_with_root("").to_ascii_lowercase();
+        assert_eq!(collected(&lower_case_root).enrollment_count, 0);
+    }
+
+    /// A root export with no GUID subkeys is real registry evidence, whatever
+    /// shape a key without enrollments takes.
+    #[test]
+    fn enrollments_export_root_without_guid_subkeys_is_zero() {
+        for export in [
+            export_with_root(""),
+            export_with_root(
+                "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\Context]\r\n\r\n[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\Status]\r\n",
+            ),
+            format!("Windows Registry Editor Version 5.00\r\n\r\n{ROOT}\r\n@=\"\"\r\n"),
+        ] {
+            let evidence = collected(&export);
             assert_eq!(evidence.enrollment_count, 0);
             assert!(evidence.enrollments.is_empty());
         }
+    }
+
+    /// Windows names the enrollment subkeys with the unbraced GUID (an enrolled
+    /// device recorded 2026-07-23, and the ESP corpus at
+    /// `crates/cmtraceopen-parser/tests/fixtures/esp/edge-cases.json`). The
+    /// GUIDs and values here are synthetic.
+    #[test]
+    fn enrollments_export_unbraced_guid_subkey_is_counted() {
+        let export = utf16le_export(&export_with_root(
+            r#"[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\Context]
+"LastLoggedOnUserSID"="S-1-5-21-0-0-0-1001"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\Ownership]
+"CorrelationID"="00000000-0000-0000-0000-000000000000"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\Status]
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB]
+"EnrollmentState"=dword:00000001
+"EnrollmentType"=dword:00000006
+"ProviderID"="MS DM Server"
+"UPN"="user@contoso.test"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\DMClient]
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\DMClient\MS DM Server]
+"EntDMID"="11111111-0000-0000-0000-000000000000"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\FirstSync]
+"SkipDeviceStatusPage"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\cccccccc-4444-5555-6666-dddddddddddd]
+"EnrollmentState"=dword:00000006
+"ProviderID"="MS DM Server"
+"#,
+        ));
+        let bundle = bundle_with_enrollments_export(&export);
+
+        let evidence = load_enrollment_evidence(bundle.path()).expect("export was collected");
+        assert_eq!(evidence.enrollment_count, 2);
+        assert_eq!(
+            evidence.enrollments,
+            [
+                DsregcmdEnrollmentEntry {
+                    guid: Some("AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB".to_string()),
+                    upn: Some("user@contoso.test".to_string()),
+                    provider_id: Some("MS DM Server".to_string()),
+                    enrollment_state: Some(1),
+                },
+                DsregcmdEnrollmentEntry {
+                    guid: Some("cccccccc-4444-5555-6666-dddddddddddd".to_string()),
+                    upn: None,
+                    provider_id: Some("MS DM Server".to_string()),
+                    enrollment_state: Some(6),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn enrollments_export_braced_and_unbraced_guid_subkeys_are_counted() {
+        let evidence = collected(&export_with_root(
+            r#"[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\{11111111-2222-3333-4444-555555555555}]
+"EnrollmentState"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\66666666-7777-8888-9999-AAAAAAAAAAAA]
+"EnrollmentState"=dword:00000001
+"#,
+        ));
+
+        assert_eq!(
+            guids(&evidence),
+            [
+                "{11111111-2222-3333-4444-555555555555}",
+                "66666666-7777-8888-9999-AAAAAAAAAAAA"
+            ]
+        );
+    }
+
+    /// An enrollment key with no named values, or only a default `@` value, is
+    /// still an enrollment, and so is one that only a deeper key header names.
+    /// Leaving any of them out would undercount toward "no enrollment".
+    #[test]
+    fn enrollments_export_guid_subkey_without_named_values_is_counted() {
+        let no_values = "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB]\r\n";
+        let default_only = "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB]\r\n@=\"\"\r\n";
+        let deeper_only = "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\\FirstSync]\r\n\"SkipDeviceStatusPage\"=dword:00000000\r\n";
+
+        for body in [no_values, default_only, deeper_only] {
+            let evidence = collected(&export_with_root(body));
+            assert_eq!(
+                evidence.enrollments,
+                [DsregcmdEnrollmentEntry {
+                    guid: Some("AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB".to_string()),
+                    upn: None,
+                    provider_id: None,
+                    enrollment_state: None,
+                }],
+                "{body}"
+            );
+        }
+    }
+
+    /// Braced and unbraced forms of one GUID, in any letter case, and its
+    /// deeper keys are one enrollment. It keeps the values its keys agree on
+    /// and leaves a value they disagree on unknown, so the order of the keys
+    /// never changes the evidence.
+    #[test]
+    fn enrollments_export_guid_variants_count_once() {
+        let unbraced_state_1 = "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB]\r\n\"EnrollmentState\"=dword:00000001\r\n\"ProviderID\"=\"MS DM Server\"\r\n\r\n";
+        let braced_state_6 = "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\{aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb}]\r\n\"EnrollmentState\"=dword:00000006\r\n\"ProviderID\"=\"MS DM Server\"\r\n\r\n";
+        let braced_no_values = "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\{aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb}]\r\n\r\n";
+        let lower_case_deeper = "[hkey_local_machine\\software\\microsoft\\enrollments\\aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb\\DMClient]\r\n\r\n";
+
+        // The keys disagree on EnrollmentState, so it is unknown in either order.
+        for body in [
+            format!("{unbraced_state_1}{braced_state_6}{lower_case_deeper}"),
+            format!("{lower_case_deeper}{braced_state_6}{unbraced_state_1}"),
+        ] {
+            let evidence = collected(&export_with_root(&body));
+            assert_eq!(evidence.enrollment_count, 1, "{body}");
+            assert_eq!(evidence.enrollments[0].enrollment_state, None, "{body}");
+            assert_eq!(
+                evidence.enrollments[0].provider_id.as_deref(),
+                Some("MS DM Server"),
+                "{body}"
+            );
+        }
+
+        // A key without the value does not disagree with one that has it.
+        for body in [
+            format!("{unbraced_state_1}{braced_no_values}"),
+            format!("{braced_no_values}{unbraced_state_1}"),
+        ] {
+            let evidence = collected(&export_with_root(&body));
+            assert_eq!(evidence.enrollment_count, 1, "{body}");
+            assert_eq!(evidence.enrollments[0].enrollment_state, Some(1), "{body}");
+        }
+    }
+
+    /// A deeper key's values are not its enrollment's values: only the
+    /// first-level GUID key supplies UPN, ProviderID and EnrollmentState.
+    #[test]
+    fn enrollments_export_deeper_key_values_are_not_the_enrollments() {
+        let evidence = collected(&export_with_root(
+            r#"[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB]
+"EnrollmentState"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB\DMClient\MS DM Server]
+"EnrollmentState"=dword:00000006
+"UPN"="deeper@contoso.test"
+"ProviderID"="Deeper Provider"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD\FirstSync]
+"EnrollmentState"=dword:00000001
+"UPN"="first-sync@contoso.test"
+"#,
+        ));
+
+        assert_eq!(
+            evidence.enrollments,
+            [
+                DsregcmdEnrollmentEntry {
+                    guid: Some("AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB".to_string()),
+                    upn: None,
+                    provider_id: None,
+                    enrollment_state: Some(1),
+                },
+                DsregcmdEnrollmentEntry {
+                    guid: Some("CCCCCCCC-4444-5555-6666-DDDDDDDDDDDD".to_string()),
+                    upn: None,
+                    provider_id: None,
+                    enrollment_state: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn enrollments_export_malformed_or_outside_keys_are_not_enrollments() {
+        let evidence = collected(&export_with_root(
+            r#"[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\{1234}]
+"EnrollmentState"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\AAAAAAAA-1111-2222-3333-BBBBBBBBBBB]
+"EnrollmentState"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\{AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB]
+"EnrollmentState"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\EnrollmentsBackup\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB]
+"EnrollmentState"=dword:00000001
+
+[HKEY_CURRENT_USER\SOFTWARE\Microsoft\Enrollments\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB]
+"EnrollmentState"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Provisioning\AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB]
+"EnrollmentState"=dword:00000001
+"#,
+        ));
+
+        assert_eq!(evidence.enrollment_count, 0);
+        assert!(evidence.enrollments.is_empty());
     }
 
     #[test]
@@ -962,7 +1304,7 @@ mod tests {
     }
 
     #[test]
-    fn loads_enrollment_evidence_from_bundle() {
+    fn enrollments_export_braced_guid_subkeys_are_counted() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let registry_dir = temp_dir.path().join("evidence").join("registry");
         std::fs::create_dir_all(&registry_dir).expect("create registry dir");
@@ -970,6 +1312,8 @@ mod tests {
         std::fs::write(
             registry_dir.join("enrollments.reg"),
             r#"Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments]
 
 [HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\{11111111-2222-3333-4444-555555555555}]
 "UPN"="user@contoso.com"

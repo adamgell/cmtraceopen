@@ -32,7 +32,10 @@ pub(super) fn derive_facts(
 ) -> DsregcmdDerived {
     let join_type = derive_join_type(facts);
     let join_type_label = join_type_label(join_type).to_string();
-    let mdm_enrolled = if facts.management_details.mdm_url.is_some()
+    // URL presence only. Microsoft Learn: the URLs do not prove the device is
+    // managed, so `mdm_enrolled` is left unknown here and is set only by
+    // `apply_enrollment_cross_reference` from the enrollments registry.
+    let mdm_urls_present = if facts.management_details.mdm_url.is_some()
         || facts.management_details.mdm_compliance_url.is_some()
     {
         Some(true)
@@ -126,7 +129,8 @@ pub(super) fn derive_facts(
         phase_summary,
         capture_confidence,
         capture_confidence_reason,
-        mdm_enrolled,
+        mdm_enrolled: None,
+        mdm_urls_present,
         missing_mdm,
         compliance_url_present,
         missing_compliance_url,

@@ -54,6 +54,13 @@ function policyValue(
   };
 }
 
+/** Synthetic values. The enrollment GUID is unbraced as Windows writes the
+ * Enrollments subkey; the task GUID is braced, which the parser still matches. */
+const MDM_URL = "https://enrollment.manage.microsoft.com/enrollmentserver/discovery.svc";
+const MDM_COMPLIANCE_URL = "https://portal.manage.microsoft.com/?portalAction=Compliance";
+const ENROLLMENT_GUID = "11111111-1111-1111-1111-111111111111";
+const TASK_GUID = "{11111111-1111-1111-1111-111111111111}";
+
 function fixtureFacts(): DsregcmdFacts {
   return {
     joinState: {
@@ -78,8 +85,8 @@ function fixtureFacts(): DsregcmdFacts {
       idp: null,
     },
     managementDetails: {
-      mdmUrl: null,
-      mdmComplianceUrl: null,
+      mdmUrl: MDM_URL,
+      mdmComplianceUrl: MDM_COMPLIANCE_URL,
       mdmTouUrl: null,
       settingsUrl: null,
       deviceManagementSrvVer: null,
@@ -238,6 +245,7 @@ function analysisResult(): DsregcmdAnalysisResult {
       captureConfidence: "high",
       captureConfidenceReason: "Live capture includes dsregcmd and registry evidence.",
       mdmEnrolled: true,
+      mdmUrlsPresent: true,
       missingMdm: false,
       complianceUrlPresent: true,
       missingComplianceUrl: false,
@@ -287,7 +295,7 @@ function analysisResult(): DsregcmdAnalysisResult {
       enrollmentCount: 1,
       enrollments: [
         {
-          guid: "11111111-1111-1111-1111-111111111111",
+          guid: ENROLLMENT_GUID,
           upn: "user@contoso.com",
           providerId: "MS DM Server",
           enrollmentState: 1,
@@ -314,7 +322,9 @@ function analysisResult(): DsregcmdAnalysisResult {
         error: null,
       },
     },
-    scheduledTaskEvidence: { enterpriseMgmtGuids: [] },
+    // The task GUID confirms the enrollment, which is what makes
+    // `mdmEnrolled: true` a value the parser can produce.
+    scheduledTaskEvidence: { enterpriseMgmtGuids: [TASK_GUID] },
     eventLogAnalysis: eventLogAnalysis(),
   };
 }
@@ -332,9 +342,55 @@ function sourceContext(): DsregcmdSourceContext {
   };
 }
 
-function seedReady(mdmEnrolled: boolean | null = true) {
+/**
+ * Seed an analysis in a state the parser can produce for the given MDM values:
+ * URL presence follows the reported URLs, a registry-confirmed enrollment
+ * carries its matching task GUID, and the registry negative on this joined
+ * device carries its warning.
+ */
+function seedReady(
+  mdmEnrolled: boolean | null = true,
+  mdmUrlsPresent: boolean | null = true,
+) {
   const result = analysisResult();
+  const urls = mdmUrlsPresent === true;
+  result.facts.managementDetails.mdmUrl = urls ? MDM_URL : null;
+  result.facts.managementDetails.mdmComplianceUrl = urls ? MDM_COMPLIANCE_URL : null;
+  result.derived.mdmUrlsPresent = urls ? true : null;
+  result.derived.missingMdm = urls ? false : null;
+  result.derived.complianceUrlPresent = urls ? true : null;
+  result.derived.missingComplianceUrl = urls ? false : null;
   result.derived.mdmEnrolled = mdmEnrolled;
+  if (mdmEnrolled === null) {
+    result.enrollmentEvidence = null;
+    result.scheduledTaskEvidence = null;
+  } else if (mdmEnrolled === false) {
+    result.enrollmentEvidence = { enrollmentCount: 0, enrollments: [] };
+    result.scheduledTaskEvidence = null;
+    result.diagnostics.push({
+      id: "enrollment-missing-on-joined",
+      severity: "Warning",
+      category: "configuration",
+      title: "No MDM enrollment found on a joined device",
+      summary: "The device is Entra ID joined but has no enrollment entries in the registry.",
+      evidence: ["EnrollmentCount: 0"],
+      nextChecks: [],
+      suggestedFixes: [],
+      relatedErrorCodes: [],
+    });
+  } else if (!urls) {
+    result.diagnostics.push({
+      id: "mdm-confirmed-via-registry",
+      severity: "Info",
+      category: "configuration",
+      title: "MDM enrollment confirmed via scheduled tasks and registry",
+      summary: "The registry enrollment matches an EnterpriseMgmt scheduled task.",
+      evidence: [],
+      nextChecks: [],
+      suggestedFixes: [],
+      relatedErrorCodes: [],
+    });
+  }
   useDsregcmdStore
     .getState()
     .setResults("AzureAdJoined : YES", result, sourceContext());
@@ -355,12 +411,14 @@ const NO_HEADER_BUTTONS = /^(Capture|Paste|Open (Text File|Evidence Folder))/;
 
 describe("DsregcmdWorkspace fixtures", () => {
   it.each([
-    { mdmEnrolled: false, label: "Not enrolled" },
-    { mdmEnrolled: null, label: "Unknown" },
+    { mdmEnrolled: false, mdmUrlsPresent: true, label: "Not enrolled" },
+    { mdmEnrolled: null, mdmUrlsPresent: true, label: "Present" },
+    { mdmEnrolled: true, mdmUrlsPresent: null, label: "Registry only" },
+    { mdmEnrolled: null, mdmUrlsPresent: null, label: "Unknown" },
   ])(
-    "shows $label on sidebar and MDM Signals card when mdmEnrolled is $mdmEnrolled",
-    ({ mdmEnrolled, label }) => {
-      seedReady(mdmEnrolled);
+    "shows $label on sidebar and MDM Signals card when mdmEnrolled is $mdmEnrolled and mdmUrlsPresent is $mdmUrlsPresent",
+    ({ mdmEnrolled, mdmUrlsPresent, label }) => {
+      seedReady(mdmEnrolled, mdmUrlsPresent);
       render(
         <>
           <DsregcmdSidebar />

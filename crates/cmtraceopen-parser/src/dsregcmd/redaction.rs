@@ -516,6 +516,7 @@ impl Projection {
             capture_confidence: derived.capture_confidence,
             capture_confidence_reason: self.text(&derived.capture_confidence_reason),
             mdm_enrolled: derived.mdm_enrolled,
+            mdm_urls_present: derived.mdm_urls_present,
             missing_mdm: derived.missing_mdm,
             compliance_url_present: derived.compliance_url_present,
             missing_compliance_url: derived.missing_compliance_url,

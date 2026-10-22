@@ -255,13 +255,13 @@ All names below are verified exports of the installed `@fluentui/react-icons` **
 
 | State | Rule | Chip label | Tone |
 |---|---|---|---|
-| Enrolled (registry) | The diagnostic `mdm-confirmed-via-registry` is present, or `enrollmentEvidence` has an entry with `enrollmentState === 1` whose GUID matches `scheduledTaskEvidence.enterpriseMgmtGuids` (the same rule as `apply_enrollment_cross_reference`) **[Verified]** | "Enrolled (registry)" | Pass |
+| Enrolled (registry) | `derived.mdmEnrolled === true` (registry-confirmed by `apply_enrollment_cross_reference`: an entry with `enrollmentState === 1` whose GUID matches `scheduledTaskEvidence.enterpriseMgmtGuids`), or the diagnostic `mdm-confirmed-via-registry` is present **[Verified]** | "Enrolled (registry)" | Pass |
 | No enrollment (registry) | The diagnostic `enrollment-missing-on-joined` is present **[Verified ID]** | "No enrollment (registry)" | Warn |
 | URLs present | `mdmUrl` and `mdmComplianceUrl` are both non-null | "URLs present" | Neutral. Microsoft Learn: URLs don't guarantee management. |
 | URLs partial | Exactly one of `mdmUrl` or `mdmComplianceUrl` is non-null | "URLs partial" | Neutral |
 | No URLs | Both are null | "No URLs" | Neutral. Tooltip: "Empty MDM URLs mean MDM isn't configured or this user isn't in MDM scope. They don't show whether the device is managed." |
 
-Today's "Present / Partial / Unknown" visibility label does not change. It is still used where today's copy reads "MDM visibility …". The Phase 0a fix in the companion spec stays valid.
+The "Present / Partial / Unknown" visibility label keeps its meaning and is still used where today's copy reads "MDM visibility …". After the #869 split it reads URL presence from `derived.mdmUrlsPresent`; `derived.mdmEnrolled === false` (enrollments registry read and empty) outranks it as "Not enrolled", and `mdmEnrolled === true` without URLs reads "Registry only". The Phase 0a fix in the companion spec stays valid.
 
 ### 8.5 Findings
 

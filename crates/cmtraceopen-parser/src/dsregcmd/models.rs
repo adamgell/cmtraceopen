@@ -236,7 +236,24 @@ pub struct DsregcmdDerived {
     pub phase_summary: String,
     pub capture_confidence: DsregcmdCaptureConfidence,
     pub capture_confidence_reason: String,
+    /// Registry-confirmed enrollment:
+    /// - `Some(true)` when an enrollment in `EnrollmentState` 1 has a GUID that
+    ///   matches an EnterpriseMgmt scheduled task GUID (ignoring braces and
+    ///   case).
+    /// - `Some(false)` only when the Enrollments export was read, holds no
+    ///   enrollment, and the EnterpriseMgmt task evidence is absent or lists
+    ///   no task.
+    /// - `None` otherwise: the export is missing, unreadable or lacks its root
+    ///   key; an enrollment exists that no task confirms; or an empty registry
+    ///   sits beside a listed task (conflicting evidence).
+    ///
+    /// URL presence never sets it; see `mdm_urls_present`.
     pub mdm_enrolled: Option<bool>,
+    /// Whether the dsregcmd capture shows an `MdmUrl` or `MdmComplianceUrl`.
+    /// `Some(true)` or `None`: `None` when the capture does not show the fields
+    /// or shows them empty, `-` or `n/a`. URL presence does not prove
+    /// enrollment; see `mdm_enrolled`.
+    pub mdm_urls_present: Option<bool>,
     pub missing_mdm: Option<bool>,
     pub compliance_url_present: Option<bool>,
     pub missing_compliance_url: Option<bool>,
@@ -310,6 +327,10 @@ pub struct DsregcmdEnrollmentEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DsregcmdEnrollmentEvidence {
+    /// Enrollment registry keys: distinct GUID keys under the Enrollments root,
+    /// whatever their values or state. It errs high on purpose and feeds only
+    /// the negative `mdm_enrolled`; positive claims use
+    /// `extended::active_enrollment_count`.
     pub enrollment_count: u32,
     #[serde(default)]
     pub enrollments: Vec<DsregcmdEnrollmentEntry>,

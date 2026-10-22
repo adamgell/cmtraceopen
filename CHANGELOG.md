@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **DsRegCmd splits MDM URL presence from registry-confirmed enrollment (#869)**: `DsregcmdDerived` gains `mdm_urls_present` (public field; struct literals need `mdm_urls_present: None`), and `mdm_enrolled` now means registry-confirmed enrollment: `Some(true)` on an enrollment confirmed by an EnterpriseMgmt task GUID, `Some(false)` only when the Enrollments export was read, holds no enrollment, and no EnterpriseMgmt task is listed, and `None` when the evidence is missing, unreadable or conflicting. `enrollment-missing-on-joined` fires exactly when `mdm_enrolled` is `Some(false)` on an Entra-joined device. See the [migration notes](crates/cmtraceopen-parser/README.md#versioning). In the DsRegCmd workspace:
+  - The MDM chip reads the registry-confirmed `mdmEnrolled` instead of repeating the registry and task cross-reference.
+  - The MDM visibility label reads URL presence from `mdmUrlsPresent`. Pending the owner's decision, `mdmEnrolled === false` reads "Not enrolled" (a warning only on an Entra-joined device, where the chip also warns), and a registry-confirmed enrollment without URLs reads "Registry only".
+
+### Fixed
+
+- **DsRegCmd enrollment evidence (#869)**: Count Enrollments subkeys whose GUID Windows writes without braces, which previously read as no enrollment on enrolled devices. Match enrollment and EnterpriseMgmt task GUIDs ignoring braces and case in the analyzer and the Facts panel. Treat a failed `reg export`, or an Enrollments export without its root key, as not collected rather than as an empty registry. Read EnterpriseMgmt task GUIDs from the task path on every line, so localized `schtasks` output is recognized, and write no task evidence when the query failed or its output was not recognized. `multiple-enrollments` now counts active enrollments (EnrollmentState 1) rather than registry keys, and the Facts panel shows "Enrollment registry keys" and "Active enrollments (EnrollmentState 1)" separately; the key count warns only where the missing-enrollment warning fires.
+
 ## [1.6.3] - 2026-10-20
 
 ### Removed
