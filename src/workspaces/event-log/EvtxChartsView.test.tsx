@@ -982,6 +982,59 @@ describe("the previous-period comparison", () => {
     });
   });
 
+  // The two nodes the other colour and size tests never render: the reason beside a disabled
+  // Compare, which needs the "off" state, and the notes, which need a complete comparison with
+  // tail events left out. Each is measured in its own state, at two font sizes.
+  describe("the disabled reason and the notes", () => {
+    const measure = (testId: string, node: HTMLElement) => ({
+      testId,
+      color: node.style.color,
+      fontSize: node.style.fontSize,
+    });
+
+    it.each([13, 20] as const)(
+      "colour them with the second foreground and size them from the font metrics at %i",
+      (size) => {
+        const metrics = getLogListMetrics(size);
+        const small = `${Math.max(10, metrics.fontSize - 2)}px`;
+
+        // Not compared, and the prior period cannot be defined: the reason sits beside Compare.
+        const off = view(
+          comparisonProps({ availability: { available: false, detail: "All time has no previous period." } }),
+          { metrics },
+        );
+        const reason = measure("comparison-disabled-reason", screen.getByTestId("comparison-disabled-reason"));
+        off.unmount();
+
+        // Complete, with a tail event left out: the notes list the count.
+        const complete = view(
+          comparisonProps({
+            state: settled(filesOutcome()),
+            countCurrent: () => ({ ...TALLY, tailExcluded: 2 }),
+          }),
+          { metrics },
+        );
+        const notes = measure("comparison-notes", screen.getByTestId("comparison-notes"));
+        complete.unmount();
+
+        for (const node of [reason, notes]) {
+          expect(node.color, `${node.testId} colour at ${size}`).toBe(css(tokens.colorNeutralForeground2));
+          expect(node.fontSize, `${node.testId} size at ${size}`).toBe(small);
+        }
+      },
+    );
+
+    it("measure up at 4.5:1 on the surface in all seven themes, as the second foreground does", () => {
+      for (const theme of themes) {
+        const surface = resolveToken(tokens.colorNeutralBackground1, theme);
+        expect(
+          contrastRatio(resolveToken(tokens.colorNeutralForeground2, theme), surface),
+          theme.id,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    });
+  });
+
   describe("the update throttle", () => {
     it("moves the tiles, the delta and the status together, from one snapshot", () => {
       vi.useFakeTimers();
