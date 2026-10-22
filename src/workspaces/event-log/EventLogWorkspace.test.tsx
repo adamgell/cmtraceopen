@@ -155,6 +155,10 @@ import {
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore } from "./evtx-store";
+import { useSavedFilterStore } from "./evtx-filter-store";
+import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
+import { ALL_LEVELS, sanitizeCriteria } from "./evtx-saved-filters";
+import { DEFAULT_QUICK_FILTER } from "./evtx-filter";
 import { defaultColumnConfig, visibleColumns } from "./evtx-columns";
 import { EventLogWorkspace } from "./EventLogWorkspace";
 import { ChannelPicker } from "./ChannelPicker";
@@ -1329,4 +1333,103 @@ describe("Event Log Viewer preview badge", () => {
 
     expect(screen.getByText("Preview")).toBeInTheDocument();
   });
+});
+
+// The filter bar offers the time window for live sources only, but a saved filter carries one, and
+// applying it sets the window for any source. That is how a window reaches a saved capture today.
+describe("a saved filter's window in files mode", () => {
+  const HOUR = 60 * 60 * 1000;
+  const END = Date.parse("2026-08-10T12:00:00.000Z");
+  const at = (id: number, epoch: number, level: EvtxRecord["level"] = "Information"): EvtxRecord => ({
+    ...RECORD,
+    id,
+    eventRecordId: 100 + id,
+    timestampEpoch: epoch,
+    timestamp: new Date(epoch).toISOString(),
+    level,
+  });
+
+  beforeEach(() => {
+    configureInvoke();
+    localStorage.clear();
+    useEvtxStore.getState().reset();
+    useSavedFilterStore.setState({ savedFilters: [] });
+    useEvtxLayoutStore.setState({ ...sanitizeLayout(undefined), activeView: "charts" });
+    resetVirtualizerState();
+    useUiStore.getState().resetLogAccessibilityPreferences();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useSavedFilterStore.setState({ savedFilters: [] });
+  });
+
+  it("reaches the comparison: Compare becomes available and is measured from the capture's end", async () => {
+    // A capture of one channel that spans the previous 24 h of its own end and reaches it, far from
+    // the clock now: a comparison measured from the clock could not cover it.
+    useEvtxStore.setState({
+      records: [
+        at(1, END - 48 * HOUR, "Error"),
+        at(2, END - 30 * HOUR),
+        at(3, END - 24 * HOUR - 1),
+        at(4, END - 2 * HOUR, "Error"),
+        at(5, END),
+      ],
+      channels: [{ name: "Application", eventCount: 5, sourceType: { file: { path: "sample.evtx" } } }],
+      selectedChannels: new Set(["Application"]),
+      loadedChannels: new Set<string>(),
+      sourceMode: "files",
+      timeWindow: "all",
+      timeZoneMode: "utc",
+      isLoading: false,
+    });
+    useSavedFilterStore.getState().save(
+      "Last day",
+      sanitizeCriteria({
+        beforeLoad: {
+          levels: [...ALL_LEVELS],
+          eventIds: "",
+          timeWindow: "24h",
+          selectedChannels: ["Application"],
+        },
+        onLoad: { search: "", quickFilter: DEFAULT_QUICK_FILTER },
+        afterLoad: { groupBy: [] },
+      }),
+    );
+    render(<EventLogWorkspace />);
+
+    // A fresh files load is at All time: Compare is offered, disabled, and the window control is
+    // not shown for a saved capture.
+    const compare = await screen.findByRole(
+      "button",
+      { name: "Compare with previous period" },
+      { timeout: 10_000 },
+    );
+    expect(compare).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByTestId("comparison-disabled-reason")).toHaveTextContent(
+      "All time has no previous period.",
+    );
+    expect(screen.queryByTitle(/coherent frozen snapshot/)).toBeNull();
+
+    // Apply the saved filter through the filter bar's own Saved list.
+    fireEvent.click(screen.getByRole("combobox", { name: "Apply a saved filter" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Last day" }));
+
+    await waitFor(() => expect(useEvtxStore.getState().timeWindow).toBe("24h"));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Compare with previous period" })).not.toHaveAttribute("aria-disabled", "true"),
+    );
+    // The window is still not offered as a control for a saved capture.
+    expect(screen.queryByTitle(/coherent frozen snapshot/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Compare with previous period" }));
+    // The previous 24 h before the capture's last 24 h, from the capture's end and not the clock.
+    expect(
+      await screen.findByText(
+        "Comparing with 2026-08-08 12:00:00.000 to 2026-08-09 11:59:59.999 (UTC)",
+        {},
+        { timeout: 10_000 },
+      ),
+    ).toBeInTheDocument();
+  }, 30_000);
 });
