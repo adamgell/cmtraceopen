@@ -43,9 +43,10 @@ impl ProviderMessageStage {
     }
 }
 
-/// Typed native context for a provider-description coverage gap.
+/// Typed native context for a provider-description coverage gap. It is read back from the app
+/// (inside [`EvtxCoverageGap`]), so a key it does not have is refused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderMessageCoverage {
     pub provider: String,
     pub stage: ProviderMessageStage,
@@ -60,8 +61,11 @@ pub enum EvtxOriginKind {
     Log,
 }
 
+/// A coverage gap. The app sends the gaps it holds back to the backend (diagnosis and the
+/// Markdown report), and every one of them was written by this type, so a key it does not have
+/// is refused instead of ignored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvtxCoverageGap {
     pub source: String,
     pub kind: EvtxCoverageGapKind,

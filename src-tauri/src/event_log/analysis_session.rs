@@ -3068,6 +3068,54 @@ mod tests {
         assert!(error.contains("does not hold"), "{error}");
     }
 
+    /// Every key an `EvtxCoverageGap` has, and the typed context a provider gap carries.
+    fn full_gap() -> serde_json::Value {
+        serde_json::json!({
+            "source": "Microsoft-Windows-Fixture/Operational",
+            "kind": "provider",
+            "reason": "provider message could not be rendered",
+            "chunkId": 4,
+            "eventRecordId": 77,
+            "eventRecordIdText": "77",
+            "providerMessage": {
+                "provider": "Fixture.Provider",
+                "stage": "formatMessage",
+                "errorCode": 15100
+            }
+        })
+    }
+
+    #[test]
+    fn a_coverage_gap_with_a_key_it_does_not_know_is_refused_by_both_commands_that_take_gaps() {
+        // `evtx_diagnose_analysis_session` takes `Option<Vec<EvtxCoverageGap>>` as its argument and
+        // `evtx_render_analysis_report` takes the gaps inside its request. Tauri reads each from
+        // the invoke JSON with serde, which is what these two calls do.
+        let diagnose_arg =
+            |gaps: serde_json::Value| serde_json::from_value::<Option<Vec<EvtxCoverageGap>>>(gaps);
+        let report_request = |gaps: serde_json::Value| {
+            let mut value = report_request_value("test-session", 1, 0);
+            value["coverageGaps"] = gaps;
+            serde_json::from_value::<EventLogAnalysisReportRequest>(value)
+        };
+        // Every key the type has is accepted, so the refusals below are about the extra key.
+        let known = serde_json::json!([full_gap()]);
+        assert!(diagnose_arg(known.clone()).is_ok());
+        assert!(report_request(known).is_ok());
+
+        let mut extra_on_gap = full_gap();
+        extra_on_gap["eventRecordID"] = serde_json::json!(1);
+        let mut extra_on_provider_message = full_gap();
+        extra_on_provider_message["providerMessage"]["errorText"] = serde_json::json!("x");
+        for (name, gap) in [
+            ("a key on the gap", extra_on_gap),
+            ("a key on its provider message", extra_on_provider_message),
+        ] {
+            let gaps = serde_json::json!([gap]);
+            assert!(diagnose_arg(gaps.clone()).is_err(), "{name}: diagnose");
+            assert!(report_request(gaps).is_err(), "{name}: report");
+        }
+    }
+
     #[test]
     fn the_report_command_is_registered_with_the_handler() {
         let lib = include_str!("../lib.rs");
