@@ -61,7 +61,7 @@ const SESSION_NOT_FOUND: &str = "event-log analysis session was not found";
 /// Said when the session a report was asked for is gone or has moved on. A rebuild closes the old
 /// session, and under a live tail that happens every few hundred milliseconds, so the operator is
 /// told why running the report again is the answer.
-pub(crate) const REPORT_SESSION_CHANGED: &str = "The event-log analysis changed while the report was being made, for example because new events arrived or a filter changed. Run the report again.";
+const REPORT_SESSION_CHANGED: &str = "The event-log analysis changed while the report was being made, for example because new events arrived or a filter changed. Run the report again.";
 const MAX_ANALYSIS_SESSIONS: usize = 16;
 const ANALYSIS_SESSION_IDLE_TTL: Duration = Duration::from_secs(60 * 60);
 
@@ -3114,6 +3114,38 @@ mod tests {
             assert!(diagnose_arg(gaps.clone()).is_err(), "{name}: diagnose");
             assert!(report_request(gaps).is_err(), "{name}: report");
         }
+    }
+
+    #[test]
+    fn each_refusal_of_a_report_has_its_own_message() {
+        // A stale revision and a missing session ask for the report to be run again. A chain row
+        // that does not match the session's links says so, and does not ask for a rerun.
+        let session = finalized_session(vec![record(1, 1, "m"), record(2, 2, "m")]);
+        let revision = session.revision;
+        let sessions = registry_with(session);
+        let links_mismatch =
+            "The report request does not match this analysis session's links, so no report \
+             was written.";
+        let mut value = report_request_value("test-session", revision, 2);
+        value["chains"] = serde_json::json!({
+            "loadedEdgeCount": 0,
+            "correlationGaps": {"global": false, "previewCut": false},
+            "counts": {"exact": 1, "candidate": 0, "ambiguous": 0, "coverageBlocked": 0},
+            "rows": [{"strength": "exact", "memberCount": 0, "memberIds": [], "pairs": []}]
+        });
+        let request: EventLogAnalysisReportRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            render_report_in(&sessions, &request).expect_err("refused"),
+            links_mismatch
+        );
+
+        let stale = report_request("test-session", revision + 1, 2);
+        let error = render_report_in(&sessions, &stale).expect_err("stale revision");
+        assert_eq!(error, REPORT_SESSION_CHANGED);
+        let gone = report_request("closed-session", revision, 2);
+        let error = render_report_in(&sessions, &gone).expect_err("no such session");
+        assert_eq!(error, REPORT_SESSION_CHANGED);
+        assert_ne!(REPORT_SESSION_CHANGED, links_mismatch);
     }
 
     #[test]

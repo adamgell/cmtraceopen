@@ -40,8 +40,7 @@ use self::safe::{
     file_name, Doc, Projected, ProjectedText, Redactor, Safe, Within, MIN_SUBSTITUTED_MACHINE_CHARS,
 };
 use super::analysis_session::{
-    EventLogAnalysisSessionStatus, REPORT_SESSION_CHANGED, TIMELINE_GAP_SOURCE_PREFIX,
-    TIMELINE_TRANSPORT_PROJECTION_SOURCE,
+    EventLogAnalysisSessionStatus, TIMELINE_GAP_SOURCE_PREFIX, TIMELINE_TRANSPORT_PROJECTION_SOURCE,
 };
 use super::models::{EvtxCoverageGap, EvtxLevel};
 use super::timeline::{
@@ -463,6 +462,12 @@ const NOT_A_LINK: &str =
 const WEAKER_THAN_EXACT: &str =
     "an Exact report chain rests on a relation the engine does not label Exact";
 const MEMBER_COUNT_BELOW_LISTED: &str = "report chains: a chain lists more members than it has";
+/// What a chain row that does not match the session's links is refused with: a row without a
+/// pair, a member no pair of its row ends at, a member listed twice, or counts of none against a
+/// link the session holds. It names no id. It is not the message of a stale revision or a missing
+/// session, which asks for the report to be run again: running this one again changes nothing.
+const LINKS_MISMATCH: &str =
+    "The report request does not match this analysis session's links, so no report was written.";
 
 fn ordered<'a>(left: &'a str, right: &'a str) -> (&'a str, &'a str) {
     if left <= right {
@@ -529,10 +534,10 @@ fn collect_chains(
 /// member it lists, once, must be the end of one of them. The pairs themselves are confirmed
 /// against the session's edges before this runs, so an unknown pair is refused for being unknown.
 /// A row that fails this is a builder bug, or a model the session has moved past, so it is
-/// refused with the run-again message and names no id.
+/// refused with [`LINKS_MISMATCH`] and names no id.
 fn confirm_members(row: &ReportChainRow) -> Result<(), String> {
     if row.pairs.is_empty() {
-        return Err(REPORT_SESSION_CHANGED.to_owned());
+        return Err(LINKS_MISMATCH.to_owned());
     }
     let ends: HashSet<&str> = row
         .pairs
@@ -542,7 +547,7 @@ fn confirm_members(row: &ReportChainRow) -> Result<(), String> {
     let mut listed: HashSet<&str> = HashSet::with_capacity(row.member_ids.len());
     for id in &row.member_ids {
         if !ends.contains(id.as_str()) || !listed.insert(id.as_str()) {
-            return Err(REPORT_SESSION_CHANGED.to_owned());
+            return Err(LINKS_MISMATCH.to_owned());
         }
     }
     Ok(())
@@ -1373,7 +1378,7 @@ fn render_chains(
     // sentence below would say what the engine did not. Whether the app loaded every edge does
     // not change that, so neither does it change this.
     if linking == 0 && snapshot.holds_link {
-        return Err(REPORT_SESSION_CHANGED.to_owned());
+        return Err(LINKS_MISMATCH.to_owned());
     }
 
     doc.lit(

@@ -2034,7 +2034,7 @@ fn counts_of_none_are_refused_when_the_session_holds_a_link() {
         for loaded in [1, 0] {
             let chains = chains_value(loaded, (0, 0, 0, 0), Vec::new());
             let error = chain_report_for(&timeline, chains).expect_err(name);
-            assert!(error.contains(RUN_AGAIN), "{name}: {error}");
+            assert_links_mismatch(&error, name);
             for leaked in ["HOST-0005", "CASE-0002", "machine9", GUID_A] {
                 assert!(!error.contains(leaked), "{name}: {leaked} in {error}");
             }
@@ -2136,7 +2136,18 @@ fn chain_of(count: u64) -> (UnifiedTimeline, Vec<String>, Vec<serde_json::Value>
     (timeline_of(items, edges), ids, pairs)
 }
 
-const RUN_AGAIN: &str = "Run the report again.";
+/// What a chain row that does not match the session's links is refused with. It is not the
+/// message of a stale revision or a missing session, which asks for the report to be run again.
+const LINKS_MISMATCH: &str =
+    "The report request does not match this analysis session's links, so no report was written.";
+
+fn assert_links_mismatch(error: &str, context: &str) {
+    assert_eq!(error, LINKS_MISMATCH, "{context}");
+    assert!(
+        !error.contains("Run the report again"),
+        "{context}: {error}"
+    );
+}
 
 #[test]
 fn a_capped_chain_lists_only_confirmed_members_and_attributes_the_full_count() {
@@ -2185,7 +2196,7 @@ fn a_chain_row_without_a_pair_confirms_nothing_and_is_refused() {
     for members in [vec![a, b], Vec::new()] {
         let chains = chains_value(1, (1, 0, 0, 0), vec![row("exact", &members, json!([]))]);
         let error = chain_report_for(&timeline, chains).expect_err("refused");
-        assert!(error.contains(RUN_AGAIN), "{error}");
+        assert_links_mismatch(&error, "a row without a pair");
         for name in ["HOST-0005", "CASE-0002", "machine9", GUID_A] {
             assert!(!error.contains(name), "{name} in {error}");
         }
@@ -2227,7 +2238,7 @@ fn a_member_no_pair_of_its_row_touches_is_refused() {
             vec![row("exact", &members, one_pair.clone())],
         );
         let error = chain_report_for(&timeline, chains).expect_err(name);
-        assert!(error.contains(RUN_AGAIN), "{name}: {error}");
+        assert_links_mismatch(&error, name);
         for leaked in ["HOST-0005", "CASE-0002", "record3", "record4"] {
             assert!(!error.contains(leaked), "{name}: {leaked} in {error}");
         }
