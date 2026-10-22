@@ -1374,10 +1374,11 @@ fn render_chains(
     let complete = edges_complete && gaps_clear;
     let counts = chains.counts;
     let linking = counts.exact.saturating_add(counts.candidate);
-    // Counts of none against a session that holds a link: the app's model is stale, and the
-    // sentence below would say what the engine did not. Whether the app loaded every edge does
-    // not change that, so neither does it change this.
-    if linking == 0 && snapshot.holds_link {
+    // The app says it loaded every edge and counts no chain, while the session holds a link: the
+    // app's model is stale, and the sentence below would say what the engine did not. A partial
+    // load is not a contradiction: its counts of none are true of the edges it read, and the
+    // wording below says so ("at least", never "no link").
+    if edges_complete && linking == 0 && snapshot.holds_link {
         return Err(LINKS_MISMATCH.to_owned());
     }
 

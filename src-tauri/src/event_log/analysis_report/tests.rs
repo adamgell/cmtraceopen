@@ -2010,9 +2010,11 @@ fn the_ladder_says_what_the_chain_list_can_and_cannot_support() {
 const NO_LINK_SENTENCE: &str = "The engine produced no Exact or Candidate link";
 
 #[test]
-fn counts_of_none_are_refused_when_the_session_holds_a_link() {
-    // The app's counts say there is no chain, the session's own edges say there is a link. The
-    // app's model is stale, so the report would be saying what the engine did not.
+fn counts_of_none_are_refused_when_the_app_says_it_loaded_every_edge_and_the_session_holds_a_link()
+{
+    // The app says it read every edge and its counts say there is no chain, while the session's
+    // own edges say there is a link. The app's model is stale, so the report would be saying
+    // what the engine did not.
     let (a, b) = (stable(1), stable(2));
     let items = vec![chain_item(1, 76, 0, "m"), chain_item(2, 77, 9, "m")];
     let covered = |strength: TimelineCorrelationStrength| {
@@ -2030,9 +2032,12 @@ fn counts_of_none_are_refused_when_the_session_holds_a_link() {
         ("a Candidate link", TimelineCorrelationStrength::Candidate),
     ] {
         let timeline = timeline_of(items.clone(), vec![covered(strength)]);
-        // Every edge loaded, and only some of them: the counts are still the app's claim.
-        for loaded in [1, 0] {
-            let chains = chains_value(loaded, (0, 0, 0, 0), Vec::new());
+        // Every edge loaded (1 of 1), with and without the engine's own correlation gaps.
+        for gap in [None, Some("global"), Some("previewCut")] {
+            let mut chains = chains_value(1, (0, 0, 0, 0), Vec::new());
+            if let Some(gap) = gap {
+                chains["correlationGaps"][gap] = json!(true);
+            }
             let error = chain_report_for(&timeline, chains).expect_err(name);
             assert_links_mismatch(&error, name);
             for leaked in ["HOST-0005", "CASE-0002", "machine9", GUID_A] {
@@ -2059,6 +2064,52 @@ fn counts_of_none_are_refused_when_the_session_holds_a_link() {
             .expect("a listed chain renders");
         assert!(!report.contains(NO_LINK_SENTENCE), "{report}");
     }
+}
+
+#[test]
+fn a_partial_edge_load_renders_with_at_least_wording_and_never_says_no_link() {
+    // The app loaded fewer edges than the session holds, so its counts of none are true of what
+    // it read. The report says so, and never says the engine produced no link.
+    let (a, b) = (stable(1), stable(2));
+    let items = vec![chain_item(1, 76, 0, "m"), chain_item(2, 77, 9, "m")];
+    for strength in [
+        TimelineCorrelationStrength::Exact,
+        TimelineCorrelationStrength::Candidate,
+    ] {
+        let linked = edge(
+            &a,
+            &b,
+            TimelineCorrelationKeyKind::ActivityId,
+            "activityId",
+            GUID_A,
+            strength,
+        );
+        let timeline = timeline_of(items.clone(), vec![linked]);
+        let report = chain_report_for(&timeline, chains_value(0, (0, 0, 0, 0), Vec::new()))
+            .expect("a partial load is not a stale model");
+        let chains = section(&report, "## Correlation chains");
+        assert!(
+            chains.contains(
+                "- Built from 0 of 1 correlation edges (1 not loaded), so more chains may exist."
+            ),
+            "{chains}"
+        );
+        assert!(
+            chains.contains(
+                "- No Exact or Candidate chain is listed. The correlation input is incomplete, \
+                 so this does not show that none exist."
+            ),
+            "{chains}"
+        );
+        assert!(chains.contains("(counts only, at least)"), "{chains}");
+        assert!(!report.contains(NO_LINK_SENTENCE), "{report}");
+    }
+    // More edges loaded than the session holds is not a complete load either.
+    let timeline = timeline_of(items, vec![exact_edge(&a, &b, GUID_A)]);
+    let report = chain_report_for(&timeline, chains_value(2, (0, 0, 0, 0), Vec::new()))
+        .expect("a load that disagrees with the session is not a stale model either");
+    assert!(report.contains("so this list cannot be trusted as complete."));
+    assert!(!report.contains(NO_LINK_SENTENCE), "{report}");
 }
 
 #[test]
