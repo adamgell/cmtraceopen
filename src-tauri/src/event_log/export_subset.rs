@@ -3615,15 +3615,18 @@ mod tests {
 ///     cargo test --features event-log windows_lab -- --ignored
 ///
 /// The fake-backend tests above cover everything around the two API calls; these cover the calls
-/// themselves: the flags, the XPath and structured queries the service accepts, the `file://`
-/// Select path, the Computer term in the forms production sends (`Computer='X'` for a channel and
-/// a file, `Computer="X"` for a name with an apostrophe in the no-match test, one machine or two,
-/// within the per-Select budget), the Channel term that a file source always carries, the archive
-/// step, and the code the service returns for an existing target. Production names the computer
-/// and the channel, so every request here does too, taken from the events themselves.
+/// themselves, and only what they run: the flags; a plain XPath with `Computer='X'` for a live
+/// channel and with `Computer='X' and Channel='Y'` for a file; structured queries of one group,
+/// including the `file://` Select path; the 20-comparison boundary for both kinds; two groups in
+/// one plain XPath, the second naming a machine no event carries (once as `Computer='X'`, once as
+/// `Computer="X"` for a name with an apostrophe); the archive step and the rule that recognises an
+/// entry in `LocaleMetaData` (lab item (i)); and the code the service returns for an existing
+/// target. A structured query of several groups is covered by the fake-backend tests only. Every
+/// request carries the computer and the channel the way production sends them, taken from the
+/// events themselves.
 ///
-/// Two more need a collector: `forwarded_event` lab items (g) and (h) run against a
-/// ForwardedEvents log that holds events, and say what is missing when it does not.
+/// Two more need a collector that holds events in ForwardedEvents (lab items (g) and (h)); they say
+/// what is missing when it does not.
 #[cfg(all(test, target_os = "windows"))]
 mod windows_lab_tests {
     use std::collections::BTreeSet;
