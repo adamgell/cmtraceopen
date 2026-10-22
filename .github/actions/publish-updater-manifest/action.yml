@@ -32,79 +32,55 @@ runs:
       run: |
         set -euo pipefail
 
-        # Enumerate the release once per attempt. A download is skipped only
-        # when the asset genuinely is not published yet; anything else, an auth
-        # failure or a network blip, has to fail the job. Treating those as "no
-        # assets" would publish an empty manifest over a valid one.
-        download_release_state() {
-          local assets
-          assets="$(gh release view "$TAG_NAME" --json assets --jq '.assets[].name')"
+        # The tag endpoint excludes drafts. Enumerate every page, reject an
+        # ambiguous tag, then bind all polling to that immutable release ID.
+        gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > release-pages.json
+        release_id="$(jq -er --arg tag "$TAG_NAME" '
+          [.[][] | select(.tag_name == $tag)] |
+          if length == 1 and (.[0].id | type == "number" and . > 0 and floor == .)
+          then .[0].id else error("Expected exactly one release ID for tag") end
+        ' release-pages.json)"
+        release_created_at=""
 
-          rm -rf "$1" && mkdir -p "$1/signatures"
-
-          if printf '%s\n' "$assets" | grep -q '\.sig$'; then
-            gh release download "$TAG_NAME" --pattern '*.sig' --dir "$1/signatures" --clobber
-          fi
-
-          if printf '%s\n' "$assets" | grep -qx 'latest.json'; then
-            gh release download "$TAG_NAME" --pattern latest.json --dir "$1" --clobber
-          fi
-        }
-
-        # Both release workflows run this. The manifest is derived from the
-        # release's assets rather than from the platform this job happens to
-        # have built, so whichever workflow finishes last sees everything and
-        # publishes a complete file.
-        for attempt in 1 2 3; do
-          download_release_state state
-
-          published_manifest=""
-          if [ -f state/latest.json ]; then
-            published_manifest="state/latest.json"
-          fi
-
-          PUBLISHED_MANIFEST="$published_manifest" \
-          SIGNATURE_DIR=state/signatures \
-          OUTPUT_PATH=latest.json \
-            node .github/scripts/updater-manifest.mjs
-
-          # Every publisher runs after its own platform's signatures are
-          # uploaded, so an empty result means the release state was misread
-          # rather than that there is nothing to publish.
-          if [ "$(jq '.platforms | length' latest.json)" -eq 0 ]; then
-            echo "::error::Refusing to publish a manifest with no platform entries."
+        # Both independent builders may still be uploading. Wait at most 40
+        # minutes without publishing any partial updater manifest. API errors
+        # and malformed identity fail immediately; only missing assets retry.
+        for attempt in $(seq 1 40); do
+          gh api "repos/$GH_REPO/releases/$release_id" > release-state.json
+          jq -e --arg tag "$TAG_NAME" --argjson id "$release_id" '
+            .id == $id and .tag_name == $tag and .prerelease == false and
+            (.draft | type == "boolean") and (.assets | type == "array") and
+            (.created_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+          ' release-state.json > /dev/null
+          created_at="$(jq -r '.created_at' release-state.json)"
+          if [ -n "$release_created_at" ] && [ "$release_created_at" != "$created_at" ]; then
+            echo "::error::Release creation identity changed."
             exit 1
           fi
-
-          gh release upload "$TAG_NAME" latest.json --clobber
-
-          # Verify against what the release can support *now*, not against what
-          # this run built. Only one publisher can be blind to the other's
-          # signatures, but that blind one may still upload last and overwrite a
-          # more complete manifest. Comparing against its own build would happily
-          # confirm the truncated file it just wrote.
-          download_release_state verify
-
-          SIGNATURE_DIR=verify/signatures \
-          OUTPUT_PATH=verify/expected.json \
-            node .github/scripts/updater-manifest.mjs > /dev/null
-
-          dropped="$(jq -r -n \
-            --slurpfile expected verify/expected.json \
-            --slurpfile actual verify/latest.json \
-            '(($expected[0].platforms | keys) - ($actual[0].platforms | keys)) | join(", ")')"
-
-          if [ -z "$dropped" ]; then
-            {
-              echo "### Updater manifest"
-              echo ""
-              jq -r '.platforms | keys[] | "- `\(.)`"' verify/latest.json
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          release_created_at="$created_at"
+          jq '.assets' release-state.json > release-assets.json
+          ready=0
+          RELEASE_ASSETS=release-assets.json node .github/scripts/updater-manifest.mjs --check-assets || ready=$?
+          if [ "$ready" -eq 0 ]; then break; fi
+          if [ "$ready" -ne 2 ] || [ "$attempt" -eq 40 ]; then
+            echo "::error::Complete updater assets are unavailable; latest.json was not uploaded."
+            exit 1
           fi
-
-          echo "::warning::Published manifest is missing ${dropped} that the release's signatures support; merging again (attempt ${attempt})."
+          sleep 60
         done
 
-        echo "::error::Could not publish a stable latest.json after 3 attempts."
-        exit 1
+        mkdir signatures
+        gh release download "$TAG_NAME" --pattern '*.sig' --dir signatures
+        # Use assets and creation date from the very same validated snapshot.
+        jq '{version: .tag_name, pub_date: .created_at}' release-state.json > release-date.json
+        RELEASE_ASSETS=release-assets.json PUBLISHED_MANIFEST=release-date.json \
+          node .github/scripts/updater-manifest.mjs
+        gh release upload "$TAG_NAME" latest.json --clobber
+        mkdir verify
+        gh release download "$TAG_NAME" --pattern latest.json --dir verify
+        jq -e -n --slurpfile expected latest.json --slurpfile actual verify/latest.json \
+          '$expected[0].version == $actual[0].version and $expected[0].platforms == $actual[0].platforms' > /dev/null
+        {
+          echo "### Complete updater manifest"
+          jq -r '.platforms | keys[] | "- `\(.)`"' verify/latest.json
+        } >> "$GITHUB_STEP_SUMMARY"

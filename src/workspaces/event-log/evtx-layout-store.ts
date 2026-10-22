@@ -74,10 +74,10 @@ export const MAX_DOCK_HEIGHT_RATIO = 0.5;
  * Which panels have content to show. A panel that has none (a phase that has not built it yet) has
  * its toggle disabled, and a persisted `true` is forced back to `false` on rehydration. The phase
  * that enables a panel that defaults ON must flip it here AND in `DEFAULT_PANELS`, and must bump the
- * persist `version`: an envelope written under an older version is discarded, so the stored layout
- * resets to the defaults and a user who holds `false` still sees the new panel. There is
- * deliberately no `migrate`: no released build wrote the older versions. Phase 4 did this for
- * Insights (version 2).
+ * persist `version`. It adds NO `migrate` function (AGENTS.md rules out compatibility migrations):
+ * an envelope written under an older version is discarded, so the stored layout resets to the
+ * defaults and nobody stays on a persisted `false` for the new panel. Phase 4 did this for Insights
+ * (version 2).
  *
  * The correlation dock (Phase 11) is available but defaults OFF (R4: it takes 210 px of the main
  * column, and the Table grid keeps its floor of five rows whether it is open or not, so the dock

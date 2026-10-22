@@ -22,23 +22,7 @@ function assetUrl(repository, tagName, fileName) {
   return `https://github.com/${repository}/releases/download/${tagName}/${encodeURIComponent(fileName)}`;
 }
 
-/**
- * Build the stable updater manifest from whatever the release already carries.
- *
- * Two properties matter, and both come from deriving entries out of the
- * release's own assets rather than out of the job that happens to be running:
- *
- * - Convergent. Each release workflow sees the same assets, so the manifest
- *   they compute for a given set of uploads is identical. Two publishers racing
- *   is no longer a lost update, because they write the same bytes.
- * - Monotonic. Entries already published are carried forward when this run
- *   cannot see their artifact yet, so a publisher that runs before the other
- *   platform has uploaded can only ever add keys, never remove them.
- *
- * `missing` is reported rather than thrown: the first workflow to finish is
- * legitimately incomplete, and an entry that never arrives means its build job
- * failed, which is already red.
- */
+/** Build entries only from this release's current signature assets. */
 export function buildUpdaterManifest({
   version,
   tagName,
@@ -47,7 +31,7 @@ export function buildUpdaterManifest({
   publishedManifest = null,
   pubDate,
 }) {
-  const platforms = { ...(publishedManifest?.platforms ?? {}) };
+  const platforms = {};
   const missing = [];
   const resolved = [];
 
@@ -56,7 +40,7 @@ export function buildUpdaterManifest({
     const signature = signatures.get(`${artifact}.sig`);
 
     if (signature === undefined) {
-      if (!platforms[target.key]) missing.push(target.key);
+      missing.push(target.key);
       continue;
     }
 
@@ -73,12 +57,45 @@ export function buildUpdaterManifest({
       version: tagName,
       notes: `CMTrace Open ${tagName}`,
       // Preserved so a later publisher does not restamp the release date.
-      pub_date: publishedManifest?.pub_date ?? pubDate,
+      pub_date: publishedManifest?.version === tagName ? publishedManifest.pub_date ?? pubDate : pubDate,
       platforms,
     },
     missing,
     resolved,
   };
+}
+
+export function missingUpdaterAssets({ version, tagName, assets }) {
+  if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version) || ![version, `v${version}`].includes(tagName)) {
+    throw new Error("Invalid stable updater version/tag identity");
+  }
+  if (!Array.isArray(assets)) throw new Error("Release assets must be an array");
+  const names = assets.map(asset => asset?.name);
+  if (names.some(name => typeof name !== "string") || new Set(names).size !== names.length) {
+    throw new Error("Invalid or duplicate release asset names");
+  }
+  const uploaded = new Set(assets.filter(asset => asset.state === "uploaded").map(asset => asset.name));
+  const required = [...new Set(UPDATER_TARGETS.map(target => target.artifact(version)))];
+  return required.flatMap(name => [name, `${name}.sig`]).filter(name => !uploaded.has(name));
+}
+
+export function assertCompleteUpdaterManifest({ manifest, version, tagName, repository, signatures, assets }) {
+  const missing = missingUpdaterAssets({ version, tagName, assets });
+  if (missing.length) throw new Error(`Incomplete updater asset coverage: ${missing.join(", ")}`);
+  const keys = Object.keys(manifest.platforms ?? {}).sort();
+  const expectedKeys = UPDATER_TARGETS.map(target => target.key).sort();
+  if (manifest.version !== tagName || JSON.stringify(keys) !== JSON.stringify(expectedKeys)) {
+    throw new Error("Incomplete or unexpected updater platform coverage");
+  }
+  for (const target of UPDATER_TARGETS) {
+    const artifact = target.artifact(version);
+    const signature = signatures.get(`${artifact}.sig`);
+    if (typeof signature !== "string" || !signature.trim()) throw new Error(`Missing updater signature: ${artifact}`);
+    const entry = manifest.platforms[target.key];
+    if (entry.version !== tagName || entry.url !== assetUrl(repository, tagName, artifact) || entry.signature !== signature) {
+      throw new Error(`Updater entry does not match current release assets: ${target.key}`);
+    }
+  }
 }
 
 /**
@@ -117,32 +134,28 @@ async function main() {
   const publishedPath = process.env.PUBLISHED_MANIFEST ?? "";
   const outputPath = process.env.OUTPUT_PATH ?? MANIFEST_FILENAME;
 
+  const version = requireValue("VERSION", process.env.VERSION);
+  const tagName = requireValue("TAG_NAME", process.env.TAG_NAME);
+  const repository = requireValue("GITHUB_REPOSITORY", process.env.GITHUB_REPOSITORY);
+  const assets = JSON.parse(await readFile(requireValue("RELEASE_ASSETS", process.env.RELEASE_ASSETS), "utf8"));
+  const missing = missingUpdaterAssets({ version, tagName, assets });
+  if (process.argv.includes("--check-assets")) {
+    if (missing.length) {
+      console.log(`Waiting for updater assets: ${missing.join(", ")}`);
+      process.exitCode = 2;
+    }
+    return;
+  }
   const { readdir } = await import("node:fs/promises");
-  const entries = await readdir(signatureDir);
-
-  const { manifest, missing, resolved } = buildUpdaterManifest({
-    version: requireValue("VERSION", process.env.VERSION),
-    tagName: requireValue("TAG_NAME", process.env.TAG_NAME),
-    repository: requireValue("GITHUB_REPOSITORY", process.env.GITHUB_REPOSITORY),
-    signatures: await readSignatures(signatureDir, entries),
+  const signatures = await readSignatures(signatureDir, await readdir(signatureDir));
+  const { manifest } = buildUpdaterManifest({
+    version, tagName, repository, signatures,
     publishedManifest: publishedPath ? await readJsonIfPresent(publishedPath) : null,
     pubDate: new Date().toISOString(),
   });
-
+  assertCompleteUpdaterManifest({ manifest, version, tagName, repository, signatures, assets });
   await writeFile(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);
-
-  console.log(`resolved: ${resolved.join(", ") || "none"}`);
-  console.log(`missing: ${missing.join(", ") || "none"}`);
-
-  if (missing.length > 0) {
-    // A warning rather than a failure. The workflow that finishes first has
-    // legitimately not seen the other platform's uploads yet, and a target that
-    // never arrives means its build job failed and is already reporting red.
-    console.log(
-      `::warning::Updater manifest is missing ${missing.join(", ")}. ` +
-        "This is expected until every platform has uploaded; if it persists, a build job failed.",
-    );
-  }
+  console.log(`Complete updater coverage: ${Object.keys(manifest.platforms).join(", ")}`);
 }
 
 export function isMainModule(importMetaUrl, argvPath = process.argv[1]) {

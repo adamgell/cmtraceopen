@@ -7,11 +7,11 @@ use quick_xml::events::{BytesDecl, BytesRef, BytesStart, Event};
 use quick_xml::name::QName;
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 use std::sync::OnceLock;
 
 #[cfg(target_os = "windows")]
@@ -107,7 +107,7 @@ const LIVE_EVENT_CHANNELS: &[&str] = &[
     "Microsoft-Windows-User Device Registration/Admin",
 ];
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn provider_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -115,26 +115,26 @@ fn provider_re() -> &'static Regex {
             .expect("provider regex must compile")
     })
 }
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn channel_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(r"<Channel>(.*?)</Channel>").expect("channel regex must compile")
     })
 }
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn event_id_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(r"<EventID(?:\s[^>]*)?>(\d+)</EventID>").expect("event id regex must compile")
     })
 }
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn level_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| Regex::new(r"<Level>(\d+)</Level>").expect("level regex must compile"))
 }
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn time_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -142,14 +142,14 @@ fn time_re() -> &'static Regex {
             .expect("time regex must compile")
     })
 }
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn computer_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(r"<Computer>(.*?)</Computer>").expect("computer regex must compile")
     })
 }
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn activity_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -157,7 +157,7 @@ fn activity_re() -> &'static Regex {
             .expect("activity regex must compile")
     })
 }
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn message_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -1044,7 +1044,7 @@ pub fn parse_live_event_logs() -> Option<EventLogAnalysis> {
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn live_channel_outcome(
+pub(crate) fn live_channel_outcome(
     entry_count: u32,
     partial_detail: Option<&str>,
     parse_failure_count: usize,
@@ -1128,7 +1128,7 @@ pub(crate) fn build_event_log_analysis(
     })
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn parse_live_event_record(
     xml: &str,
     source_file: &str,
@@ -1173,7 +1173,7 @@ pub(crate) fn parse_live_event_record(
     })
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn extract_regex_value(text: &str, regex: &Regex) -> Option<String> {
     regex
         .captures(text)
@@ -1191,7 +1191,7 @@ fn sanitize_channel_name(channel: &str) -> String {
         .collect()
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn decode_xml_text(value: &str) -> String {
     value
         .replace("&#13;", "\r")
@@ -2092,7 +2092,6 @@ mod tests {
         assert!(detail.contains("could not be parsed"));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn parse_live_event_record_extracts_rendered_xml_fields() {
         let xml = r#"<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><Provider Name='Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider'/><EventID>813</EventID><Level>2</Level><TimeCreated SystemTime='2026-03-12T16:01:23.456Z'/><Channel>Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin</Channel><Computer>CONTOSO-01</Computer><Correlation ActivityID='{123}'/></System><RenderingInfo Culture='en-US'><Message>Enrollment failed &amp; needs attention</Message></RenderingInfo></Event>"#;
