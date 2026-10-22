@@ -11,10 +11,13 @@
  *   `src-tauri/src/event_log/timeline.rs`): a non-zero epoch, or text that
  *   parses as RFC 3339 (the date and time may be separated by "T", "t" or a
  *   space, and the offset may use the U+2212 minus sign, as chrono accepts) or
- *   as `%Y-%m-%dT%H:%M:%S%.f` read as UTC. Hours are 00 to 23 in both, as in
- *   chrono (`T24:00:00` stays unplaced). One deliberate narrowing: second 60 (a
- *   leap second, which chrono accepts) stays unplaced, because JavaScript
- *   cannot represent it. Display text such as
+ *   as `%Y-%m-%dT%H:%M:%S%.f` read as UTC. The ranges are enforced here, as in
+ *   chrono, so no field is left to `Date.parse`: hour 00 to 23 (`T24:00:00`
+ *   stays unplaced), minute and second 00 to 59, an offset of +HH:MM or -HH:MM
+ *   with HH 00 to 23 and MM 00 to 59 (`+24:00` and `+05:60` stay unplaced), and
+ *   a day that exists in its month. One deliberate narrowing: second 60 (a leap
+ *   second, which chrono accepts) stays unplaced on every engine, because
+ *   JavaScript cannot represent it. Display text such as
  *   "2026-11-01 01:30:00.000" is never guessed at.
  * - Archived text-log lines (`originKind: "log"`) are not Windows events. They
  *   count toward the visible total and the level counts and hours, which
@@ -223,9 +226,11 @@ function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
+// The minute, second and offset ranges are enforced here, with the hour (and the day, in
+// `dayExists`), so no field's range is left to `Date.parse`.
 const RFC3339 =
-  /^\d{4}-\d{2}-\d{2}[Tt ](?:[01]\d|2[0-3]):\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
-const NAIVE_ISO = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):\d{2}:\d{2}(?:\.\d+)?$/;
+  /^\d{4}-\d{2}-\d{2}[Tt ](?:[01]\d|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.\d+)?(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$/;
+const NAIVE_ISO = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.\d+)?$/;
 
 /** False when the date part names a day its month does not have (leap years included). */
 function dayExists(text: string): boolean {
@@ -242,10 +247,11 @@ function dayExists(text: string): boolean {
  * The event time in epoch milliseconds, or null when the engine would call it
  * missing. Mirrors `parsed_timestamp_epoch`: a non-zero epoch is taken as is;
  * a zero epoch falls back to the text, which must be RFC 3339 (separator "T",
- * "t" or a space; a U+2212 minus sign in the offset is read as "-"; hours 00 to
- * 23) or a zone-less `T` ISO form read as UTC. Second 60 stays unplaced (see the
- * module header). A day beyond its month's length is rejected before parsing,
- * as chrono does. Never `Date.parse` on a display string.
+ * "t" or a space; a U+2212 minus sign in the offset is read as "-") or a
+ * zone-less `T` ISO form read as UTC. Hour, minute, second and offset are
+ * range-checked by the patterns and the day by `dayExists`, all before parsing,
+ * as chrono does; second 60 stays unplaced (see the module header). Never
+ * `Date.parse` on a display string.
  */
 export function placedEpochMs(
   record: Pick<EvtxChartRecord, "timestamp" | "timestampEpoch">,

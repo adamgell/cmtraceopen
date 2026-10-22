@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildEvtxChartData,
   buildHideRuleQualifier,
@@ -8,6 +8,7 @@ import {
   CHANNEL_ROW_LIMIT,
   heatStepIndex,
   hourOfDay,
+  placedEpochMs,
   TOP_EVENT_ID_LIMIT,
   type EvtxChartChainSummary,
   type EvtxChartInput,
@@ -644,6 +645,65 @@ describe("RFC 3339 text for a zero epoch", () => {
   it("still rejects a space without an offset, and leap seconds", () => {
     expect(hourOfDay(zero("2026-11-01 01:30:00.000"), "utc")).toBeNull();
     expect(hourOfDay(zero("2026-06-30T23:59:60Z"), "utc")).toBeNull();
+  });
+});
+
+describe("timestamp fields are range-checked before Date.parse sees the text", () => {
+  const zero = (timestamp: string) => ({ timestamp, timestampEpoch: 0 });
+  // A parser that accepts everything makes any text that reaches it look placed (epoch 0), so
+  // these cases fail on any engine that would be lenient, not only on the one the tests run in.
+  let parse: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    parse = vi.spyOn(Date, "parse").mockReturnValue(0);
+  });
+  afterEach(() => {
+    parse.mockRestore();
+  });
+
+  it.each([
+    ["minute 75, RFC 3339", "2026-11-01T01:75:00Z"],
+    ["second 75, RFC 3339", "2026-11-01T01:30:75Z"],
+    ["second 60, RFC 3339", "2026-11-01T01:30:60Z"],
+    ["minute 60, RFC 3339, space separator", "2026-11-01 01:60:00Z"],
+    ["offset +24:00", "2026-11-01T01:30:00+24:00"],
+    ["offset -24:00", "2026-11-01T01:30:00-24:00"],
+    ["offset +05:60", "2026-11-01T01:30:00+05:60"],
+    ["offset -05:60", "2026-11-01T01:30:00-05:60"],
+    ["offset +99:00", "2026-11-01T01:30:00+99:00"],
+    ["offset with U+2212 and hour 24", "2026-11-01T01:30:00\u221224:00"],
+    ["offset with U+2212 and minute 60", "2026-11-01T01:30:00\u221205:60"],
+    ["minute 75, zone-less", "2026-11-01T01:75:00"],
+    ["second 75, zone-less", "2026-11-01T01:30:75"],
+    ["second 60, zone-less", "2026-11-01T01:30:60"],
+    ["minute 60, zone-less, fraction", "2026-11-01T01:60:00.5"],
+  ])("%s is not placed and never reaches Date.parse", (_name, text) => {
+    expect(placedEpochMs(zero(text))).toBeNull();
+    expect(hourOfDay(zero(text), "utc")).toBeNull();
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it("does not call Date.parse for a non-zero epoch or for text that is not a timestamp", () => {
+    expect(placedEpochMs({ timestamp: "2026-11-01T01:75:00Z", timestampEpoch: 5 })).toBe(5);
+    expect(placedEpochMs(zero("not a time"))).toBeNull();
+    expect(parse).not.toHaveBeenCalled();
+  });
+});
+
+describe("the largest valid minute, second and offset still place", () => {
+  const zero = (timestamp: string) => ({ timestamp, timestampEpoch: 0 });
+
+  it("places minute 59, second 59 and offsets up to 23:59, with the real parser", () => {
+    expect(hourOfDay(zero("2026-11-01T01:59:59Z"), "utc")).toBe(1);
+    expect(hourOfDay(zero("2026-11-01 01:59:59Z"), "utc")).toBe(1);
+    expect(hourOfDay(zero("2026-11-01T01:59:59.999"), "utc")).toBe(1);
+    // 23:30 at +23:59 is 23:31 the day before.
+    expect(hourOfDay(zero("2026-11-01T23:30:00+23:59"), "utc")).toBe(23);
+    // 00:30 at -00:59 is 01:29 the same day.
+    expect(hourOfDay(zero("2026-11-01T00:30:00-00:59"), "utc")).toBe(1);
+    // 01:00 at +05:59 is 19:01 the day before.
+    expect(hourOfDay(zero("2026-11-01T01:00:00+05:59"), "utc")).toBe(19);
+    expect(hourOfDay(zero("2026-11-01T01:00:00\u221219:59"), "utc")).toBe(20);
+    expect(hourOfDay(zero("2026-11-01T01:00:00+00:00"), "utc")).toBe(1);
   });
 });
 
