@@ -432,7 +432,9 @@ pub(crate) struct ReportSnapshot {
     pub machines: BTreeSet<String>,
     /// What the engine recorded about shortening what it holds.
     pub engine_notes: EngineNotes,
-    /// Whether the session holds a covered Exact or Candidate edge between two of its entries.
+    /// Whether the session's edges hold a covered Exact or Candidate relation that ends at an
+    /// entry (`to_id` is set). The engine builds its edges over the session's own entries, so no
+    /// membership lookup is made; an edge to a text-log line counts like one to an event.
     pub holds_link: bool,
     /// The entries the chains name, by origin id: members and the origins of evidence rows.
     pub entries: HashMap<String, Entry>,

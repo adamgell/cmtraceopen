@@ -260,6 +260,37 @@ fn an_invisible_character_cannot_hide_an_identifier_from_the_text_redaction() {
 }
 
 #[test]
+fn an_invisible_character_in_an_event_row_cannot_hide_an_identifier_from_the_report() {
+    // The same text through the events table, where the message and the channel cell are
+    // session text: the whole report is the clean report, and the clean report is redacted.
+    let report_with = |mark: &str| {
+        let item = event_item(
+            FIXTURE_NOW_MS,
+            TimelineSeverity::Error,
+            1001,
+            &format!("Microsoft-Windows-Fixture/HOST{mark}-0002"),
+            "Fixture.Provider",
+            Some("HOST-0002"),
+            1,
+            &format!(
+                "Sync with HOST{mark}-0002 failed for \
+                 S-1-5-21-1000000001-1000000002-1000000003-{mark}1001"
+            ),
+        );
+        render(&base_request(), &snapshot_of(vec![item], 1))
+    };
+    let clean = report_with("");
+    assert!(!leaks(&clean, "HOST-0002"), "{clean}");
+    assert!(!clean.contains("1000000001"), "{clean}");
+    assert!(clean.contains("[sid:"), "{clean}");
+    // The machine's token is in the channel cell and in the message, besides the header.
+    assert_eq!(clean.matches(&host("HOST-0002")).count(), 3, "{clean}");
+    for (name, mark) in INVISIBLE_SAMPLES {
+        assert_eq!(report_with(&mark.to_string()), clean, "{name}");
+    }
+}
+
+#[test]
 fn an_invisible_character_cannot_hide_an_identifier_from_the_diagnosis_projection() {
     // HOST-0007 is named only by the evidence's machine field, so only the projection knows it:
     // the report's own machine list is empty. The character is also inside that field.
