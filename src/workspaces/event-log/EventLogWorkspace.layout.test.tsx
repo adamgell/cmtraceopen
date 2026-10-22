@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { lazy } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,8 +23,13 @@ vi.mock("./EvtxCoverageBanner", () => ({ EvtxCoverageBanner: () => null }));
 vi.mock("./EvtxTimeline", () => ({
   EvtxTimeline: () => <div data-testid="records-table">records</div>,
 }));
-vi.mock("./EvtxDetailPane", () => ({ EvtxDetailPane: () => null }));
-vi.mock("./EventDiagnosisPanel", () => ({ EventDiagnosisPanel: () => null }));
+vi.mock("./EvtxDetailPane", () => ({
+  EvtxDetailPane: () => <div role="region" aria-label="Event log details" />,
+}));
+vi.mock("./EventDiagnosisPanel", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./EventDiagnosisPanel")>()),
+  EventDiagnosisPanel: () => <section aria-label="Operational diagnosis" />,
+}));
 vi.mock("./UnifiedTimelineView", () => ({
   UnifiedTimelineView: () => <div data-testid="unified-timeline" />,
 }));
@@ -35,9 +40,12 @@ import { EvtxViewBar } from "./EvtxViewBar";
 import { requireElement, stubLayout } from "./evtx-test-dom";
 import {
   EVTX_LAYOUT_STORAGE_KEY,
+  EVTX_LAYOUT_VERSION,
+  EVTX_VIEW_PANEL_ID,
   sanitizeLayout,
   useEvtxLayoutStore,
 } from "./evtx-layout-store";
+import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
 import type { EvtxRecord } from "./types";
 
@@ -80,14 +88,14 @@ describe("EventLogWorkspace three-column shell", () => {
 
   afterEach(cleanup);
 
-  it("renders the view bar, channel pane and main view, with the rail and dock hidden", () => {
+  it("renders the view bar, channel pane, main view and the Insights rail, with the dock hidden", () => {
     render(<EventLogWorkspace />);
     expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
     expect(screen.getByTestId("channel-picker")).toBeVisible();
-    expect(screen.getByRole("tabpanel")).toContainElement(screen.getByTestId("records-table"));
-    // The regions exist so Phase 4 and 11 only enable the toggle, but nothing shows by default.
-    expect(region("rail")).not.toBeNull();
-    expect(region("rail")).not.toBeVisible();
+    expect(screen.getByRole("tabpanel", { name: "Table" })).toContainElement(
+      screen.getByTestId("records-table"),
+    );
+    expect(region("rail")).toBeVisible();
     expect(region("rail")).toHaveStyle({ width: "340px" });
     expect(region("dock")).not.toBeNull();
     expect(region("dock")).not.toBeVisible();
@@ -268,7 +276,7 @@ describe("EventLogWorkspace three-column shell", () => {
     localStorage.setItem(
       EVTX_LAYOUT_STORAGE_KEY,
       JSON.stringify({
-        version: 1,
+        version: EVTX_LAYOUT_VERSION,
         state: {
           activeView: "charts",
           panels: { channels: false, insights: true, dock: true },
@@ -285,14 +293,14 @@ describe("EventLogWorkspace three-column shell", () => {
     expect(region("channels")).not.toBeVisible();
     expect(region("rail")).toHaveStyle({ width: "400px" });
     expect(region("dock")).toHaveStyle({ height: "250px" });
-    // Panels with no content yet stay off even if storage says otherwise.
-    expect(region("rail")).not.toBeVisible();
+    // The dock has no content yet, so it stays hidden whatever the envelope says.
+    expect(region("rail")).toBeVisible();
     expect(region("dock")).not.toBeVisible();
   });
 
   it("links the layout tabs and the tabpanel in both directions", () => {
     render(<EventLogWorkspace />);
-    const panel = screen.getByRole("tabpanel");
+    const panel = document.getElementById(EVTX_VIEW_PANEL_ID) as HTMLElement;
     for (const name of ["Table", "Charts"]) {
       fireEvent.click(screen.getByRole("tab", { name }));
       const tab = screen.getByRole("tab", { name });
@@ -323,6 +331,36 @@ describe("EventLogWorkspace three-column shell", () => {
     expect(useEvtxStore.getState().filterSearch).toBe("kept");
     expect(screen.getByTestId("records-table")).toBe(table);
     expect(table).toBeVisible();
+  });
+
+  it("mounts the Insights rail in the rail region and no longer renders the old card or bottom pane", () => {
+    render(<EventLogWorkspace />);
+
+    const rail = region("rail");
+    expect(rail).not.toBeNull();
+    expect(within(rail as HTMLElement).getByRole("tablist", { name: "Rail tabs" })).toBeInTheDocument();
+    // The diagnosis lives in the rail only: once, and not above the body.
+    const diagnosis = screen.getAllByLabelText("Operational diagnosis");
+    expect(diagnosis).toHaveLength(1);
+    expect(rail).toContainElement(diagnosis[0]);
+    // No selection, no details pane; with one, the pane is in the rail and not under the grid.
+    expect(screen.queryByRole("region", { name: "Event log details" })).toBeNull();
+    act(() => selectRecordAndShowDetails(RECORD.id));
+    const detail = screen.getByRole("region", { name: "Event log details" });
+    expect(rail).toContainElement(detail);
+    expect(region("main")).not.toContainElement(detail);
+  });
+
+  it("selecting a record switches the rail to Details and shows a hidden rail", () => {
+    useEvtxLayoutStore.setState({ panels: { channels: true, insights: false, dock: false } });
+    render(<EventLogWorkspace />);
+    expect(region("rail")).not.toBeVisible();
+
+    act(() => selectRecordAndShowDetails(RECORD.id));
+
+    expect(region("rail")).toBeVisible();
+    expect(useEvtxLayoutStore.getState().railTab).toBe("details");
+    expect(screen.getByRole("tab", { name: "Event 42" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("shows the Loading view fallback inside the tabpanel while a lazy view loads, with the tablist mounted", async () => {

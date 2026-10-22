@@ -3,6 +3,7 @@ import {
   DEFAULT_DOCK_HEIGHT,
   DEFAULT_RAIL_WIDTH,
   EVTX_LAYOUT_STORAGE_KEY,
+  EVTX_LAYOUT_VERSION,
   MAX_RAIL_WIDTH,
   MIN_DOCK_HEIGHT,
   MIN_RAIL_WIDTH,
@@ -18,10 +19,10 @@ function reset() {
   useEvtxLayoutStore.setState(sanitizeLayout(undefined));
 }
 
-async function rehydrateFrom(stored: unknown) {
+async function rehydrateFrom(stored: unknown, version = EVTX_LAYOUT_VERSION) {
   localStorage.setItem(
     EVTX_LAYOUT_STORAGE_KEY,
-    JSON.stringify({ state: stored, version: 1 }),
+    JSON.stringify({ state: stored, version }),
   );
   await useEvtxLayoutStore.persist.rehydrate();
 }
@@ -29,10 +30,10 @@ async function rehydrateFrom(stored: unknown) {
 describe("evtx-layout-store", () => {
   beforeEach(reset);
 
-  it("starts on the table with only the channel pane shown", () => {
+  it("starts on the table with the channel pane and the Insights rail shown", () => {
     const state = useEvtxLayoutStore.getState();
     expect(state.activeView).toBe("table");
-    expect(state.panels).toEqual({ channels: true, insights: false, dock: false });
+    expect(state.panels).toEqual({ channels: true, insights: true, dock: false });
     expect(state.railTab).toBe("insights");
     expect(state.railWidth).toBe(DEFAULT_RAIL_WIDTH);
     expect(state.dockHeight).toBe(DEFAULT_DOCK_HEIGHT);
@@ -46,17 +47,18 @@ describe("evtx-layout-store", () => {
     const state = useEvtxLayoutStore.getState();
     expect(state.activeView).toBe("correlation");
     expect(state.railTab).toBe("details");
-    expect(state.panels).toEqual({ channels: false, insights: false, dock: false });
+    expect(state.panels).toEqual({ channels: false, insights: true, dock: false });
   });
 
   it("refuses to show a panel that has no content yet", () => {
     const store = useEvtxLayoutStore.getState();
-    store.setPanel("insights", true);
     store.setPanel("dock", true);
     store.togglePanel("dock");
+    store.togglePanel("insights");
+    store.togglePanel("insights");
     expect(useEvtxLayoutStore.getState().panels).toEqual({
       channels: true,
-      insights: false,
+      insights: true,
       dock: false,
     });
   });
@@ -103,7 +105,7 @@ describe("evtx-layout-store", () => {
   it("persists exactly the five layout keys and nothing else", () => {
     useEvtxLayoutStore.getState().setPanel("channels", false);
     const stored = JSON.parse(localStorage.getItem(EVTX_LAYOUT_STORAGE_KEY) ?? "{}");
-    expect(stored.version).toBe(1);
+    expect(stored.version).toBe(2);
     expect(Object.keys(stored.state).sort()).toEqual(
       ["activeView", "dockHeight", "panels", "railTab", "railWidth"],
     );
@@ -120,8 +122,8 @@ describe("evtx-layout-store", () => {
     });
     const state = useEvtxLayoutStore.getState();
     expect(state.activeView).toBe("charts");
-    // Insights and the dock have no content yet, so a persisted true is forced back to false.
-    expect(state.panels).toEqual({ channels: false, insights: false, dock: false });
+    // The dock has no content yet, so a persisted true is forced back to false.
+    expect(state.panels).toEqual({ channels: false, insights: true, dock: false });
     expect(state.railTab).toBe("chains");
     expect(state.railWidth).toBe(400);
     expect(state.dockHeight).toBe(250);
@@ -130,7 +132,7 @@ describe("evtx-layout-store", () => {
   it("sanitizes bad persisted values and drops unknown keys", async () => {
     await rehydrateFrom({
       activeView: "heatmap",
-      panels: { channels: "yes", insights: false, dock: 1, extra: true },
+      panels: { channels: "yes", insights: "no", dock: 1, extra: true },
       railTab: 7,
       railWidth: 99999,
       dockHeight: -4,
@@ -138,7 +140,7 @@ describe("evtx-layout-store", () => {
     });
     const state = useEvtxLayoutStore.getState() as unknown as Record<string, unknown>;
     expect(state.activeView).toBe("table");
-    expect(state.panels).toEqual({ channels: true, insights: false, dock: false });
+    expect(state.panels).toEqual({ channels: true, insights: true, dock: false });
     expect(state.railTab).toBe("insights");
     expect(state.railWidth).toBe(MAX_RAIL_WIDTH);
     expect(state.dockHeight).toBe(MIN_DOCK_HEIGHT);
@@ -151,19 +153,69 @@ describe("evtx-layout-store", () => {
     expect(useEvtxLayoutStore.getState().railWidth).toBe(DEFAULT_RAIL_WIDTH);
   });
 
-  // Guard for the ship-a-panel rule (see EVTX_PANELS_AVAILABLE): flip the availability and the
-  // default together and bump the persist version, with no migrate. A version-1 envelope holding
-  // `false` must then resolve to the current default. If a phase flips a default without bumping
-  // the version, the stored `false` survives and this fails; with the bump, the old envelope is
-  // dropped and this passes.
-  it("resolves a stored version-1 false to the current default for every panel", async () => {
-    await rehydrateFrom({
-      panels: { channels: true, insights: false, dock: false },
+  describe("persist version 2", () => {
+    const stored = (insights: boolean, dock = false) => ({
+      activeView: "grouped",
+      panels: { channels: false, insights, dock },
+      railTab: "details",
+      railWidth: 400,
+      dockHeight: 250,
     });
-    const defaults = sanitizeLayout(undefined).panels;
-    const panels = useEvtxLayoutStore.getState().panels;
-    expect(panels.insights).toBe(defaults.insights);
-    expect(panels.dock).toBe(defaults.dock);
-    expect(panels).toEqual(defaults);
+
+    it("discards a version 1 envelope: the layout resets to the defaults, Insights on", async () => {
+      await rehydrateFrom(stored(false), 1);
+      const state = useEvtxLayoutStore.getState();
+      expect(state.panels).toEqual({ channels: true, insights: true, dock: false });
+      expect(state.activeView).toBe("table");
+      expect(state.railWidth).toBe(DEFAULT_RAIL_WIDTH);
+    });
+
+    it("keeps a version 2 Insights false, which is the user's own choice", async () => {
+      await rehydrateFrom(stored(false), 2);
+      expect(useEvtxLayoutStore.getState().panels.insights).toBe(false);
+      expect(useEvtxLayoutStore.getState().activeView).toBe("grouped");
+    });
+
+    it("keeps the dock unavailable, whatever the envelope says", async () => {
+      await rehydrateFrom(stored(true, true), 2);
+      expect(useEvtxLayoutStore.getState().panels.dock).toBe(false);
+      await rehydrateFrom(stored(true, true), 1);
+      expect(useEvtxLayoutStore.getState().panels.dock).toBe(false);
+    });
+  });
+
+  // Guard for the ship-a-panel rule (see EVTX_PANELS_AVAILABLE): the phase that ships a panel flips
+  // its availability and its default together AND bumps EVTX_LAYOUT_VERSION, with no migrate. The
+  // bump is what makes a stored layout forget the old `false`. This writes an envelope at the
+  // CURRENT version that holds `false` for the one panel not shipped yet (dock). The store accepts
+  // that envelope, so it reaches `merge` and must come back as the current default. If a phase
+  // flips the dock's two flags without the bump, `false` is still a valid stored choice and
+  // survives, which fails here.
+  //
+  // `activeView` and `channels` are the positive control. Neither equals its default, so they
+  // prove the envelope was applied and not dropped. `dock: false` alone proves nothing: it equals
+  // today's default, which is how an envelope at version 1 (dropped by a version 2 store) once let
+  // this test compare the defaults with themselves.
+  //
+  // When the dock ships, aim this case at the next unshipped panel, or remove it, in the same
+  // change that edits the pin below.
+  it("resolves a current-version stored false to the current default for a panel not yet shipped", async () => {
+    await rehydrateFrom({
+      activeView: "grouped",
+      panels: { channels: false, insights: true, dock: false },
+    });
+    const state = useEvtxLayoutStore.getState();
+    expect(state.activeView).toBe("grouped");
+    expect(state.panels.channels).toBe(false);
+    expect(state.panels.dock).toBe(sanitizeLayout(undefined).panels.dock);
+  });
+
+  // Written out in full on purpose, not read from the store: flipping a default or the version has
+  // to be an edit to this line, beside the other half of the pair.
+  it("pins the persist version together with the default panels", () => {
+    expect([EVTX_LAYOUT_VERSION, sanitizeLayout(undefined).panels]).toEqual([
+      2,
+      { channels: true, insights: true, dock: false },
+    ]);
   });
 });

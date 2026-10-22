@@ -28,8 +28,7 @@ vi.mock("./EvtxFilterBar", () => ({ EvtxFilterBar: () => null }));
 vi.mock("./EvtxViewBar", () => ({ EvtxViewBar: () => null }));
 vi.mock("./EvtxCoverageBanner", () => ({ EvtxCoverageBanner: () => null }));
 vi.mock("./EvtxTimeline", () => ({ EvtxTimeline: () => null }));
-vi.mock("./EvtxDetailPane", () => ({ EvtxDetailPane: () => null }));
-vi.mock("./EventDiagnosisPanel", () => ({ EventDiagnosisPanel: () => null }));
+vi.mock("./EvtxInsightsRail", () => ({ EvtxInsightsRail: () => null }));
 vi.mock("./UnifiedTimelineView", () => ({ UnifiedTimelineView: () => null }));
 
 import { useLogStore } from "../../stores/log-store";

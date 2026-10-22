@@ -113,27 +113,30 @@ describe("EvtxViewBar", () => {
     expect(useEvtxLayoutStore.getState().panels.channels).toBe(false);
   });
 
-  it("ships the Insights and Correlation dock toggles disabled, with the reason as a description", () => {
+  it("ships Insights as a normal toggle and the Correlation dock disabled, with the reason as a description", () => {
     seedChannels();
     render(<EvtxViewBar nowEpoch={0} />);
-    const cases: Array<[string, string]> = [
-      ["Insights", "Available when the Insights rail ships"],
-      ["Correlation dock", "Available when the correlation dock ships"],
-    ];
-    for (const [name, reason] of cases) {
-      const toggle = screen.getByRole("button", { name });
-      expect(toggle).toHaveAttribute("aria-pressed", "false");
-      expect(toggle).toHaveAttribute("aria-disabled", "true");
-      expect(toggle).not.toHaveAttribute("title");
-      expect(toggle).toHaveAccessibleDescription(reason);
-      // Once in the document: no hand-built duplicate for browse mode to read twice.
-      expect(screen.getAllByText(reason)).toHaveLength(1);
-      fireEvent.click(toggle);
-      expect(toggle).toHaveAttribute("aria-pressed", "false");
-    }
+    const insights = screen.getByRole("button", { name: "Insights" });
+    expect(insights).toHaveAttribute("aria-pressed", "true");
+    expect(insights).not.toHaveAttribute("aria-disabled");
+    expect(insights).not.toHaveAccessibleDescription();
+    fireEvent.click(insights);
+    expect(insights).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(insights);
+    expect(insights).toHaveAttribute("aria-pressed", "true");
+
+    const reason = "Available when the correlation dock ships";
+    const dock = screen.getByRole("button", { name: "Correlation dock" });
+    expect(dock).toHaveAttribute("aria-pressed", "false");
+    expect(dock).toHaveAttribute("aria-disabled", "true");
+    expect(dock).not.toHaveAttribute("title");
+    expect(dock).toHaveAccessibleDescription(reason);
+    expect(screen.getAllByText(reason)).toHaveLength(1);
+    fireEvent.click(dock);
+    expect(dock).toHaveAttribute("aria-pressed", "false");
     expect(useEvtxLayoutStore.getState().panels).toEqual({
       channels: true,
-      insights: false,
+      insights: true,
       dock: false,
     });
   });

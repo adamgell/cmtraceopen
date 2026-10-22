@@ -15,53 +15,20 @@ import {
   toggleEvtxBookmark,
   toggleEvtxTag,
 } from "./evtx-marker-adapter";
-import { useEvtxStore, type EvtxSortField } from "./evtx-store";
+import { useEvtxStore } from "./evtx-store";
 import {
   selectVisibleRecords,
   buildGroupedRows,
   matchesQuickFilter,
   type EvtxRow,
 } from "./evtx-filter";
-import type { EvtxRecord, EvtxLevel } from "./types";
+import type { EvtxRecord } from "./types";
 import { visibleColumns } from "./evtx-columns";
 import { EvtxTimelineRow } from "./EvtxTimelineRow";
-
-const LEVEL_ORDER: Record<EvtxLevel, number> = {
-  Critical: 0,
-  Error: 1,
-  Warning: 2,
-  Information: 3,
-  Verbose: 4,
-};
+import { selectRecordAndShowDetails } from "./evtx-select-record";
+import { sortForGrid } from "./evtx-row-order";
 
 const evtxRecordRowKeyCache = new WeakMap<EvtxRecord, string>();
-
-function compareRecords(
-  a: EvtxRecord,
-  b: EvtxRecord,
-  field: EvtxSortField,
-  direction: "asc" | "desc"
-): number {
-  let cmp = 0;
-  switch (field) {
-    case "time":
-      cmp = a.timestampEpoch - b.timestampEpoch;
-      break;
-    case "eventId":
-      cmp = a.eventId - b.eventId;
-      break;
-    case "level":
-      cmp = LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level];
-      break;
-    case "provider":
-      cmp = a.provider.localeCompare(b.provider);
-      break;
-    case "channel":
-      cmp = a.channel.localeCompare(b.channel);
-      break;
-  }
-  return direction === "asc" ? cmp : -cmp;
-}
 
 function cachedEventRowKey(record: EvtxRecord): string {
   const cached = evtxRecordRowKeyCache.get(record);
@@ -149,9 +116,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
   );
 
   const sortedRecords = useMemo(() => {
-    return [...filteredRecords].sort((a, b) =>
-      compareRecords(a, b, sortField, sortDirection)
-    );
+    return sortForGrid(filteredRecords, sortField, sortDirection);
   }, [filteredRecords, sortField, sortDirection]);
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -296,6 +261,23 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     previousUiRowKeysRef.current = uiRowKeys;
   }, [measureConnectedRow, uiRowKeys]);
 
+  // A selection made outside the grid (Details previous and next, spec section 9) keeps its row in
+  // view. `align: "auto"` leaves a row that is already visible where it is. The effect is keyed on
+  // the record's identity, not its id: a merge renumbers every id, and a live-tail batch must not
+  // scroll the grid when only the numbering changed.
+  const lastScrolledRowKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (selectedRecordId === null) return;
+    const selectedRowIndex = rowIndexByRecordId.get(selectedRecordId);
+    if (selectedRowIndex === undefined) return;
+    const row = rows[selectedRowIndex];
+    if (row?.kind !== "record") return;
+    const key = cachedEventRowKey(row.record);
+    if (lastScrolledRowKeyRef.current === key) return;
+    lastScrolledRowKeyRef.current = key;
+    virtualizer.scrollToIndex(selectedRowIndex, { align: "auto" });
+  }, [rowIndexByRecordId, rows, selectedRecordId, virtualizer]);
+
   const virtualRows = virtualizer.getVirtualItems();
 
   const fontSize = metrics.fontSize;
@@ -364,6 +346,8 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
 
       setActiveRowIndex(nextIndex);
       const row = rows[nextIndex];
+      // A selection move, not a row click: Details follows if it is the active tab, but the rail
+      // is neither switched nor reopened (spec section 9).
       if (row?.kind === "record") setSelectedRecordId(row.record.id);
       focusRow(nextIndex);
     },
@@ -522,7 +506,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                 columnConfig={columnConfig}
                 columns={columns}
                 timeZoneMode={timeZoneMode}
-                onSelect={setSelectedRecordId}
+                onSelect={selectRecordAndShowDetails}
                 marker={marker}
                 quickFilter={quickFilter}
                 quickFilterMatch={quickFilterMatch}

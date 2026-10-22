@@ -155,6 +155,7 @@ import {
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore } from "./evtx-store";
+import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { defaultColumnConfig, visibleColumns } from "./evtx-columns";
 import { EventLogWorkspace } from "./EventLogWorkspace";
 import { ChannelPicker } from "./ChannelPicker";
@@ -408,11 +409,9 @@ describe("event-viewer shared font metrics", () => {
     const detail = render(<EvtxDetailPane />);
     const detailRoot = detail.container.firstElementChild as HTMLElement;
     expect(detailRoot.style.fontSize).toBe(`${MIN_LOG_DETAILS_FONT_SIZE}px`);
-    expect(detailRoot.style.overflow).toBe("auto");
+    // The root no longer scrolls; the body under the fixed header does.
+    expect((detailRoot.lastElementChild as HTMLElement).style.overflow).toBe("auto");
     expect(detailRoot.style.lineHeight).toBe(`${smallDetailLineHeight}px`);
-    expect(screen.getByRole("button", { name: "Show Raw XML" }).style.fontSize).toBe(
-      `${MIN_LOG_DETAILS_FONT_SIZE}px`
-    );
     detail.unmount();
 
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
@@ -474,17 +473,14 @@ describe("event-viewer shared font metrics", () => {
     const detailRootLarge = detailLarge.container.firstElementChild as HTMLElement;
     expect(detailRootLarge.style.fontSize).toBe(`${MIN_LOG_DETAILS_FONT_SIZE}px`);
     expect(detailRootLarge.style.lineHeight).toBe(`${smallDetailLineHeight}px`);
-    expect(detailRootLarge.style.overflow).toBe("auto");
+    expect((detailRootLarge.lastElementChild as HTMLElement).style.overflow).toBe("auto");
 
     setDetailsFontSize(MAX_LOG_DETAILS_FONT_SIZE);
     expect(detailRootLarge.style.fontSize).toBe(`${MAX_LOG_DETAILS_FONT_SIZE}px`);
     expect(detailRootLarge.style.lineHeight).toBe(
       `${getLogDetailsLineHeight(MAX_LOG_DETAILS_FONT_SIZE)}px`
     );
-    expect(detailRootLarge.style.overflow).toBe("auto");
-    expect(screen.getByRole("button", { name: "Show Raw XML" }).style.fontSize).toBe(
-      `${MAX_LOG_DETAILS_FONT_SIZE}px`
-    );
+    expect((detailRootLarge.lastElementChild as HTMLElement).style.overflow).toBe("auto");
     detailLarge.unmount();
 
     expect(useUiStore.getState().logListFontSize).toBe(MAX_LOG_LIST_FONT_SIZE);
@@ -799,6 +795,7 @@ describe("EventLogWorkspace fixtures", () => {
     invoke.mockReset();
     configureInvoke();
     useEvtxStore.getState().reset();
+    useEvtxLayoutStore.setState(sanitizeLayout(undefined));
     resetVirtualizerState();
   });
 
@@ -1116,7 +1113,7 @@ describe("EventLogWorkspace fixtures", () => {
     );
   });
 
-  it("shows event detail, Event Data, and Show/Hide Raw XML", () => {
+  it("shows event detail and Event Data in the rail, with the XML on its own sub-tab", () => {
     seedFixtureEvents();
     render(<EventLogWorkspace />);
 
@@ -1124,17 +1121,102 @@ describe("EventLogWorkspace fixtures", () => {
     expect(eventRow).toBeDefined();
     fireEvent.click(eventRow!);
 
-    expect(screen.getByText("Event 1000")).toBeInTheDocument();
+    // A row click switches the rail to Details; the tab now reads "Event {id}".
+    expect(screen.getByRole("tab", { name: "Event 1000" })).toHaveAttribute("aria-selected", "true");
+    const detail = screen.getByRole("region", { name: "Event log details" });
+    expect(within(detail).getByText("Event 1000")).toBeInTheDocument();
     expect(
-      screen.getAllByText("Faulting application name: setup.exe").length
+      within(detail).getAllByText("Faulting application name: setup.exe").length
     ).toBeGreaterThan(0);
-    expect(screen.getByText("Event Data")).toBeInTheDocument();
-    expect(screen.getByText("AppName")).toBeInTheDocument();
-    expect(screen.getAllByText("Application Error").length).toBeGreaterThan(0);
+    expect(within(detail).getByText("Event Data")).toBeInTheDocument();
+    expect(within(detail).getByText("AppName")).toBeInTheDocument();
+    expect(within(detail).getAllByText("Application Error").length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole("button", { name: "Show Raw XML" }));
-    expect(screen.getByRole("button", { name: "Hide Raw XML" })).toBeInTheDocument();
+    fireEvent.click(within(detail).getByRole("tab", { name: "XML" }));
     expect(screen.getByText(/<EventID>1000<\/EventID>/)).toBeInTheDocument();
+  });
+
+  it("reopens a hidden rail on Details when a row is clicked, even from the Insights tab", () => {
+    seedFixtureEvents();
+    useEvtxLayoutStore.setState({ panels: { channels: true, insights: false, dock: false } });
+    render(<EventLogWorkspace />);
+    const rail = document.querySelector<HTMLElement>('[data-evtx-region="rail"]');
+    expect(rail).not.toBeVisible();
+
+    fireEvent.click(recordGridRows(document.body)[0]!);
+
+    expect(rail).toBeVisible();
+    expect(useEvtxLayoutStore.getState().railTab).toBe("details");
+  });
+
+  it("re-clicking the selected row keeps it selected and brings Details back, from Insights and from a hidden rail", () => {
+    seedFixtureEvents();
+    render(<EventLogWorkspace />);
+    const rail = document.querySelector<HTMLElement>('[data-evtx-region="rail"]');
+    const firstRow = () => recordGridRows(document.body)[0]!;
+
+    fireEvent.click(firstRow());
+    const selectedId = useEvtxStore.getState().selectedRecordId;
+    expect(selectedId).not.toBeNull();
+
+    act(() => useEvtxLayoutStore.getState().setRailTab("insights"));
+    fireEvent.click(firstRow());
+    expect(useEvtxStore.getState().selectedRecordId).toBe(selectedId);
+    expect(useEvtxLayoutStore.getState().railTab).toBe("details");
+
+    act(() => {
+      useEvtxLayoutStore.getState().setRailTab("insights");
+      useEvtxLayoutStore.getState().setPanel("insights", false);
+    });
+    expect(rail).not.toBeVisible();
+    fireEvent.keyDown(firstRow(), { key: "Enter" });
+    expect(useEvtxStore.getState().selectedRecordId).toBe(selectedId);
+    expect(useEvtxLayoutStore.getState().railTab).toBe("details");
+    expect(rail).toBeVisible();
+  });
+
+  it("moves the selection with the arrow keys without switching the rail tab or reopening a hidden rail", () => {
+    seedFixtureEvents();
+    const [only] = useEvtxStore.getState().records;
+    useEvtxStore.setState({
+      records: [only, { ...only, id: only.id + 1, eventRecordId: only.eventRecordId + 1 }],
+    });
+    render(<EventLogWorkspace />);
+    fireEvent.click(recordGridRows(document.body)[0]!);
+    const first = useEvtxStore.getState().selectedRecordId;
+    act(() => {
+      useEvtxLayoutStore.getState().setRailTab("insights");
+      useEvtxLayoutStore.getState().setPanel("insights", false);
+    });
+
+    const row = recordGridRows(document.body)[0]!;
+    row.focus();
+    fireEvent.keyDown(row, { key: "ArrowDown" });
+
+    expect(useEvtxStore.getState().selectedRecordId).not.toBe(first);
+    expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
+    expect(useEvtxLayoutStore.getState().panels.insights).toBe(false);
+  });
+
+  it("scrolls a selection made outside the grid into view, but not when a live-tail renumber only changes the ids", () => {
+    seedFixtureEvents();
+    const [only] = useEvtxStore.getState().records;
+    const two = [only, { ...only, id: only.id + 1, eventRecordId: only.eventRecordId + 1 }];
+    useEvtxStore.setState({ records: two, selectedRecordId: null });
+    render(<EventLogWorkspace />);
+
+    // Previous and Next select from outside the grid: the row is brought into view.
+    virtualizerState.scrollToIndex.mockClear();
+    act(() => useEvtxStore.getState().setSelectedRecordId(1));
+    expect(virtualizerState.scrollToIndex).toHaveBeenCalledTimes(1);
+
+    // A tail batch with an older record renumbers every id; the selected record is the same
+    // record at a new id, so nothing scrolls.
+    virtualizerState.scrollToIndex.mockClear();
+    const older = { ...only, eventRecordId: only.eventRecordId - 10, timestampEpoch: only.timestampEpoch - 1000 };
+    const renumbered = [older, only, two[1]].map((record, index) => ({ ...record, id: index }));
+    act(() => useEvtxStore.setState({ records: renumbered, selectedRecordId: 2 }));
+    expect(virtualizerState.scrollToIndex).not.toHaveBeenCalled();
   });
 
   // The export control has two asynchronous phases before an abort controller exists: the save

@@ -226,7 +226,8 @@ export interface EvtxTimelineRowProps {
   columns: EvtxColumnSpec[];
   /** Passed rather than read from the store, so a memoized row re-renders when the clock changes. */
   timeZoneMode: EvtxTimeZoneMode;
-  onSelect: (id: number | null) => void;
+  /** A row click or Enter/Space. Never a toggle: re-selecting the selected row keeps it selected. */
+  onSelect: (id: number) => void;
   marker?: Marker | null;
   quickFilter?: EvtxQuickFilter;
   quickFilterMatch?: boolean;
@@ -294,7 +295,7 @@ export const EvtxTimelineRow = memo(
         data-evtx-filter-match={filterMatch ? "true" : "false"}
         data-evtx-visual-state={visualState}
         ref={ref}
-        onClick={() => onSelect(isSelected ? null : record.id)}
+        onClick={() => onSelect(record.id)}
         onFocus={onFocus}
         role="row"
         aria-rowindex={dataIndex + 1}
@@ -308,7 +309,7 @@ export const EvtxTimelineRow = memo(
             e.ctrlKey || e.altKey || e.shiftKey || e.metaKey;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            onSelect(isSelected ? null : record.id);
+            onSelect(record.id);
           } else if (
             !hasShortcutModifier &&
             e.key.toLowerCase() === "t" &&

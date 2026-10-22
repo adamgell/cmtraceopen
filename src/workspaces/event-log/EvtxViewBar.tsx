@@ -90,11 +90,7 @@ const PANEL_TOGGLES: ReadonlyArray<{
   unavailableReason: string;
 }> = [
   { id: "channels", label: "Channels", unavailableReason: "No event log channels loaded" },
-  {
-    id: "insights",
-    label: "Insights",
-    unavailableReason: "Available when the Insights rail ships",
-  },
+  { id: "insights", label: "Insights", unavailableReason: "" },
   {
     id: "dock",
     label: "Correlation dock",

@@ -34,6 +34,10 @@ export const EVTX_VIEW_LABELS: Record<EvtxViewId, string> = {
 export const EVTX_VIEW_PANEL_ID = "evtx-view-panel";
 export const evtxViewTabId = (view: EvtxViewId) => `evtx-view-tab-${view}`;
 
+/** Ids that link each rail tab to its panel. */
+export const evtxRailTabId = (tab: "insights" | "chains" | "details") => `evtx-rail-tab-${tab}`;
+export const evtxRailPanelId = (tab: "insights" | "chains" | "details") => `evtx-rail-panel-${tab}`;
+
 /** Tab ids of the Insights rail (spec section 8.13: Insights, Chains, Details). */
 export const EVTX_RAIL_TAB_IDS = ["insights", "chains", "details"] as const;
 export type EvtxRailTabId = (typeof EVTX_RAIL_TAB_IDS)[number];
@@ -52,20 +56,23 @@ export const MIN_DOCK_HEIGHT = 160;
 export const MAX_DOCK_HEIGHT_RATIO = 0.5;
 
 /**
- * Which panels have content to show. The Insights rail (Phase 4) and the correlation dock
- * (Phase 11) are not built yet, so their toggles are disabled and a persisted `true` is forced
- * back to `false` on rehydration. The phase that ships a panel flips it here AND in
- * `DEFAULT_PANELS` and bumps the persist `version`. It adds NO `migrate` function (AGENTS.md
- * rules out compatibility migrations): a stored layout from the older version is dropped and the
- * user gets the new defaults, so nobody stays on a persisted `false` for the new panel.
+ * Which panels have content to show. The correlation dock (Phase 11) is not built yet, so its
+ * toggle is disabled and a persisted `true` is forced back to `false` on rehydration. The phase
+ * that ships a panel flips it here AND in `DEFAULT_PANELS` and bumps the persist `version`. It
+ * adds NO `migrate` function (AGENTS.md rules out compatibility migrations): an envelope written
+ * under an older version is discarded, so the stored layout resets to the defaults and nobody
+ * stays on a persisted `false` for the new panel. Phase 4 did this for Insights (version 2).
  */
 export const EVTX_PANELS_AVAILABLE: EvtxPanels = {
   channels: true,
-  insights: false,
+  insights: true,
   dock: false,
 };
 
-const DEFAULT_PANELS: EvtxPanels = { channels: true, insights: false, dock: false };
+const DEFAULT_PANELS: EvtxPanels = { channels: true, insights: true, dock: false };
+
+/** Persist version of the layout envelope. 2: the Insights rail shipped and defaults on. */
+export const EVTX_LAYOUT_VERSION = 2;
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
   const number = typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -157,7 +164,7 @@ export const useEvtxLayoutStore = create<EvtxLayoutState>()(
     }),
     {
       name: EVTX_LAYOUT_STORAGE_KEY,
-      version: 1,
+      version: EVTX_LAYOUT_VERSION,
       partialize: (state): EvtxPersistedLayout => ({
         activeView: state.activeView,
         panels: state.panels,
