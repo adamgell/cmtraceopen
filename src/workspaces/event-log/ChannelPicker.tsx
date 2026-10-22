@@ -1,23 +1,9 @@
 import { Fragment, memo, useMemo, useRef, useState, useEffect, useCallback } from "react";
-import {
-  Button,
-  Dialog,
-  DialogActions,
-  DialogBody,
-  DialogContent,
-  DialogSurface,
-  DialogTitle,
-  Input,
-  Link,
-  Select,
-  makeStyles,
-  tokens,
-} from "@fluentui/react-components";
+import { Button, Input, Link, makeStyles, tokens } from "@fluentui/react-components";
 import { ChevronDown12Regular, ChevronRight12Regular } from "@fluentui/react-icons";
 import { contrastRatio } from "../../lib/color-contrast";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { getThemeById } from "../../lib/themes";
-import { useModalOwnership } from "../../hooks/use-modal-ownership";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import { cancelActiveLoad, channelCanHoldEvents, useEvtxStore } from "./evtx-store";
@@ -41,9 +27,11 @@ import {
   type TextLogRowModel,
 } from "./evtx-channel-stats";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
+import { ChannelClearControls, ChannelClearDialog } from "./ChannelClearControls";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
 import { effectiveResizeRange, proposeResize, useRowCappedSize } from "./use-row-capped-size";
 import { scopeLogEntries } from "./unified-timeline";
+import { useChannelClear } from "./use-channel-clear";
 import type { EvtxChannelInfo, EvtxTimeWindow } from "./types";
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -204,25 +192,7 @@ export function ChannelPicker() {
   const startLiveTail = useEvtxStore((s) => s.startLiveTail);
   const stopLiveTail = useEvtxStore((s) => s.stopLiveTail);
   const clearChannel = useEvtxStore((s) => s.clearChannel);
-  const [clearTarget, setClearTarget] = useState<string | null>(null);
-  const clearTargetRef = useRef<string | null>(null);
-  const clearInFlightRef = useRef<string | null>(null);
-  const clearSelectRef = useRef<HTMLSelectElement | null>(null);
-  const clearStatusRef = useRef<HTMLDivElement | null>(null);
-  const clearAlertRef = useRef<HTMLDivElement | null>(null);
   const channelFilterRef = useRef<HTMLInputElement | null>(null);
-  const restoreClearFocusRef = useRef(false);
-  const clearWorkflowOwnsFocusRef = useRef(false);
-  const clearExternalFocusTargetRef = useRef<HTMLElement | null>(null);
-  const clearDialogWasOpenRef = useRef(false);
-  const clearDialogSubmittedRef = useRef(false);
-  const [clearingChannel, setClearingChannel] = useState<string | null>(null);
-  const [confirmClear, setConfirmClear] = useState(false);
-  const ownsClearConfirmation = useModalOwnership(
-    "eventLogChannelClear",
-    confirmClear,
-  );
-  const [clearError, setClearError] = useState<string | null>(null);
   const channels = useEvtxStore((s) => s.channels);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
   const toggleChannel = useEvtxStore((s) => s.toggleChannel);
@@ -273,69 +243,8 @@ export function ChannelPicker() {
     paneMeasure,
   );
 
-  useEffect(() => {
-    if (clearingChannel !== null) {
-      clearStatusRef.current?.focus();
-      return;
-    }
-    if (!restoreClearFocusRef.current) return;
-    restoreClearFocusRef.current = false;
-    clearExternalFocusTargetRef.current = null;
-    if (clearError !== null) {
-      clearAlertRef.current?.focus();
-    } else {
-      (clearSelectRef.current ?? channelFilterRef.current)?.focus();
-    }
-  }, [clearingChannel, clearError]);
-
-  useEffect(() => {
-    if (clearingChannel === null) {
-      const previousTarget = clearExternalFocusTargetRef.current;
-      clearExternalFocusTargetRef.current = null;
-      if (
-        previousTarget !== null &&
-        !previousTarget.isConnected &&
-        document.activeElement === document.body &&
-        useUiStore.getState().modalOwner === null
-      ) {
-        channelFilterRef.current?.focus();
-      }
-      return;
-    }
-
-    const rememberExternalFocus = (event: FocusEvent) => {
-      if (
-        event.target instanceof HTMLElement &&
-        event.target !== clearStatusRef.current
-      ) {
-        clearExternalFocusTargetRef.current = event.target;
-      }
-    };
-    document.addEventListener("focusin", rememberExternalFocus);
-    return () => document.removeEventListener("focusin", rememberExternalFocus);
-  }, [clearingChannel]);
-
-  useEffect(() => {
-    if (confirmClear) {
-      clearDialogWasOpenRef.current = true;
-      return;
-    }
-    if (!clearDialogWasOpenRef.current) return;
-    clearDialogWasOpenRef.current = false;
-    if (!clearDialogSubmittedRef.current) {
-      (clearSelectRef.current ?? channelFilterRef.current)?.focus();
-    }
-    clearDialogSubmittedRef.current = false;
-  }, [confirmClear]);
-
-  useEffect(() => {
-    if (clearingChannel !== null) return;
-    const target = clearTargetRef.current;
-    if (target === null || loadedChannels.has(target)) return;
-    clearTargetRef.current = null;
-    setClearTarget(null);
-    setClearError(null);
-  }, [clearingChannel, loadedChannels]);
+  // Its effects run before the pane's own (the throttle below): keep the call ahead of them.
+  const clearWorkflow = useChannelClear({ clearChannel, loadedChannels, channelFilterRef });
 
   // The numbers follow the records while a live tail is running, but no faster than once per
   // interval, so a busy tail does not recompute the pane on every batch.
@@ -601,141 +510,16 @@ export function ChannelPicker() {
             </div>
           )}
           {sourceMode === "live" && loadedChannels.size > 0 && (
-            <>
-              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                <Select
-                  ref={clearSelectRef}
-                  aria-label="Channel to clear"
-                  value={clearTarget ?? ""}
-                  disabled={clearingChannel !== null}
-                  onChange={(_, data) => {
-                    const channel = data.value || null;
-                    clearTargetRef.current = channel;
-                    setClearTarget(channel);
-                    setClearError(null);
-                  }}
-                  style={{ flex: 1, minWidth: 0, fontSize: `${metrics.fontSize}px` }}
-                >
-                  <option value="">Select channel to clear…</option>
-                  {[...loadedChannels].sort().map((channel) => (
-                    <option key={channel} value={channel}>
-                      {channel}
-                    </option>
-                  ))}
-                </Select>
-                <Button
-                  disabled={!clearTarget || isLoading || clearingChannel !== null}
-                  onClick={() => {
-                    if (!clearTarget) return;
-                    clearDialogSubmittedRef.current = false;
-                    setClearError(null);
-                    setConfirmClear(true);
-                  }}
-                  style={{ fontSize: `${metrics.fontSize}px` }}
-                >
-                  Clear
-                </Button>
-              </div>
-              {clearingChannel !== null && (
-                <div
-                  ref={clearStatusRef}
-                  role="status"
-                  tabIndex={-1}
-                  onFocus={() => {
-                    clearWorkflowOwnsFocusRef.current = true;
-                  }}
-                  onBlur={() => {
-                    clearWorkflowOwnsFocusRef.current = false;
-                  }}
-                  style={{ fontSize: `${smallFontSize}px` }}
-                >
-                  Clearing {clearingChannel}…
-                </div>
-              )}
-              {clearError && (
-                <div
-                  ref={clearAlertRef}
-                  role="alert"
-                  tabIndex={-1}
-                  style={{
-                    color: tokens.colorPaletteRedForeground1,
-                    fontSize: `${smallFontSize}px`,
-                  }}
-                >
-                  {clearError}
-                </div>
-              )}
-            </>
+            <ChannelClearControls
+              workflow={clearWorkflow}
+              loadedChannels={loadedChannels}
+              isLoading={isLoading}
+              fontSize={metrics.fontSize}
+              smallFontSize={smallFontSize}
+            />
           )}
         </div>
-        <Dialog
-          open={ownsClearConfirmation}
-          onOpenChange={(_, data) => {
-            setConfirmClear(data.open);
-            if (data.open) setClearError(null);
-          }}
-        >
-          <DialogSurface>
-            <DialogBody>
-              <DialogTitle>Clear event channel?</DialogTitle>
-              <DialogContent>
-                This permanently removes every event currently stored in{" "}
-                <strong>{clearingChannel ?? clearTarget}</strong>. The action requires an
-                already elevated application and cannot be undone.
-              </DialogContent>
-              <DialogActions>
-                <Button appearance="secondary" onClick={() => setConfirmClear(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  appearance="primary"
-                  onClick={() => {
-                    if (!clearTarget || clearInFlightRef.current !== null) return;
-                    const channel = clearTarget;
-                    clearDialogSubmittedRef.current = true;
-                    clearWorkflowOwnsFocusRef.current = true;
-                    clearExternalFocusTargetRef.current = null;
-                    clearInFlightRef.current = channel;
-                    setClearingChannel(channel);
-                    setClearError(null);
-                    setConfirmClear(false);
-                    const releasePendingClear = () => {
-                      if (clearInFlightRef.current !== channel) return false;
-                      restoreClearFocusRef.current = clearWorkflowOwnsFocusRef.current;
-                      clearWorkflowOwnsFocusRef.current = false;
-                      clearInFlightRef.current = null;
-                      setClearingChannel(null);
-                      return clearTargetRef.current === channel;
-                    };
-                    void clearChannel(channel, true)
-                      .then((result) => {
-                        if (!releasePendingClear()) return;
-                        if (result.status === "cleared") {
-                          clearTargetRef.current = null;
-                          setClearTarget(null);
-                          setClearError(null);
-                        } else if ("detail" in result) {
-                          setClearError(result.detail);
-                        } else {
-                          setClearError(
-                            result.status === "cancelled"
-                              ? "Clear was cancelled."
-                              : `${channel} is already empty.`
-                          );
-                        }
-                      })
-                      .catch((error: unknown) => {
-                        if (!releasePendingClear()) return;
-                        setClearError(error instanceof Error ? error.message : String(error));
-                      });
-                  }}
-                >
-                  Clear channel
-                </Button>
-              </DialogActions>
-            </DialogBody>
-          </DialogSurface>
-        </Dialog>
+        <ChannelClearDialog workflow={clearWorkflow} />
 
         {/* Tree */}
         <div
