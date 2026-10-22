@@ -7,7 +7,8 @@
  *
  * What the scan sees: a strength word, a plus, an optional dotted or `?.` path, and another strength
  * word, in either order and with the path on either side (`x.exact + x.ambiguous`, `x?.candidate +
- * x?.exact`, or a destructured `exact + candidate`). What it does not see: a sum spelled through a
+ * x?.exact`, or a destructured `exact + candidate`), each term optionally parenthesised and given a
+ * nullish default (`(x?.exact ?? 0) + (x?.candidate ?? 0)`). What it does not see: a sum spelled through a
  * bracket index (`counts["exact"]`) or through an alias of the strength word, which is a deliberate
  * evasion and not a natural spelling.
  */
@@ -25,10 +26,15 @@ const sources = Object.fromEntries(
 const STRENGTH_WORDS = ["exact", "candidate", "ambiguous", "coverageBlocked"] as const;
 const ANY_STRENGTH = STRENGTH_WORDS.join("|");
 
+/**
+ * One term of such a sum: a strength word with an optional dotted or `?.` path before it, an optional
+ * nullish or logical default after it (`?? 0`, `|| 0`), and parentheses around either, which is how a
+ * count that may be missing is naturally written: `(c?.exact ?? 0) + (c?.candidate ?? 0)`.
+ */
+const SUM_TERM = String.raw`\(?\s*(?:\w+(?:\??\.\w+)*\??\.)?\b(?:${ANY_STRENGTH})\b(?:\s*(?:\?\?|\|\|)\s*\w+)?\s*\)?`;
+
 /** The sum of two strengths of a row-count record, written out, in any order. */
-const HAND_WRITTEN_SUM = new RegExp(
-  String.raw`\b(?:${ANY_STRENGTH})\b\s*\+\s*(?:\w+(?:\??\.\w+)*\??\.)?\b(?:${ANY_STRENGTH})\b`,
-);
+const HAND_WRITTEN_SUM = new RegExp(String.raw`${SUM_TERM}\s*\+\s*${SUM_TERM}`);
 
 /** The one module that may write the sum: it is the definition. */
 const THE_DEFINITION = "evtx-correlation-chains.ts";
@@ -59,6 +65,23 @@ describe("the chain count has one definition", () => {
       expect(HAND_WRITTEN_SUM.test(`rows.${first} +\n  rows.${second}`)).toBe(true);
     });
 
+    it.each(ordered)("%s then %s, each term with a nullish or logical default and in parentheses (review L3)", (first, second) => {
+      for (const text of [
+        `(rows.${first} ?? 0) + (rows.${second} ?? 0)`,
+        `(rows?.${first} ?? 0) + (rows?.${second} ?? 0)`,
+        `(c?.model?.counts?.${first} ?? 0)+(c?.model?.counts?.${second} ?? 0)`,
+        `(${first} ?? 0) + (${second} ?? 0)`,
+        `(rows.${first} || 0) + (rows.${second} || 0)`,
+        `rows?.${first} ?? 0 + rows?.${second}`,
+        `(rows?.${first} ?? 0) + rows?.${second}`,
+        `rows?.${first} + (rows?.${second} ?? 0)`,
+        `(\n  rows?.${first} ?? 0\n) +\n(\n  rows?.${second} ?? 0\n)`,
+        `(rows.${first}) + (rows.${second})`,
+      ]) {
+        expect(HAND_WRITTEN_SUM.test(text), text).toBe(true);
+      }
+    });
+
     it("sees the full sum in every one of its six orderings", () => {
       const three = ["exact", "candidate", "ambiguous"] as const;
       const orderings = three.flatMap((a) =>
@@ -80,6 +103,12 @@ describe("the chain count has one definition", () => {
         "exactCount + candidateCount",
         "rows.exacts + rows.candidates",
         "const total = a + b;",
+        "(rows.exact ?? 0) + 1",
+        "1 + (rows.candidate ?? 0)",
+        "(rows.exact ?? 0) - (rows.candidate ?? 0)",
+        "(rows.exact ?? 0) * (rows.candidate ?? 0)",
+        "(exactCount ?? 0) + (candidateCount ?? 0)",
+        "(a ?? 0) + (b ?? 0)",
       ]) {
         expect(HAND_WRITTEN_SUM.test(text), text).toBe(false);
       }
@@ -99,5 +128,15 @@ describe("the chain count has one definition", () => {
 
   it.each(COUNTING_SURFACES)("is called by %s", (file) => {
     expect(sources[file], file).toMatch(/\bcorrelationChainCount\(/);
+  });
+
+  // The number is stated only where the engine's gaps leave it proven (review L1): one rule, so the
+  // card, the announcement and the tab never disagree on whether to state one.
+  it.each(COUNTING_SURFACES)("states it through chainCountForGaps, the rule the Chains tab asks: %s", (file) => {
+    expect(sources[file], file).toMatch(/\bchainCountForGaps\(/);
+  });
+
+  it("has the Chains tab's number ask the same rule", () => {
+    expect(sources[THE_DEFINITION]).toMatch(/export function chainsTabCount\([\s\S]*?\bchainCountForGaps\(/);
   });
 });

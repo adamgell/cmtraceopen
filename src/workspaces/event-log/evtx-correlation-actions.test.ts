@@ -241,14 +241,41 @@ describe("one definition of opening and focusing a view tab", () => {
     expect(sources[file], file).toMatch(call);
   });
 
-  it("is the only way in: no component calls the store's openers, which do not move focus", () => {
+  describe("is the only way in: nothing but the actions module reaches the store's openers, which do not move focus", () => {
     // `openCorrelationView` and `openUnplacedList` switch the view and nothing else; every Open in the
-    // workspace goes through the actions module, which also moves focus to the Correlation tab.
-    const callers = Object.entries(sources)
-      .filter(([file]) => file !== "evtx-correlation-store.ts" && file !== "evtx-correlation-actions.ts")
-      .filter(([, source]) => /\b(?:openCorrelationView|openUnplacedList)\(/.test(source))
-      .map(([file]) => file);
-    expect(callers).toEqual([]);
+    // workspace goes through the actions module, which also moves focus to the Correlation tab. The
+    // openers are module functions, so a component reaches one by naming it: in a call, as a handler
+    // reference (`onClick={openUnplacedList}`, which a call-only pattern misses), in an import under
+    // an alias, or as a member of the module. Comments that name them say nothing and are left out.
+    const OPENER = /\b(?:openCorrelationView|openUnplacedList)\b/;
+    const withoutComments = (source: string) =>
+      source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const reachesAnOpener = (source: string) => OPENER.test(withoutComments(source));
+
+    it("sees every spelling of a reach, and not a comment or the actions that wrap them", () => {
+      expect(reachesAnOpener("openCorrelationView(id);")).toBe(true);
+      expect(reachesAnOpener("<Link onClick={openUnplacedList}>Review</Link>")).toBe(true);
+      expect(reachesAnOpener("const open = openCorrelationView;")).toBe(true);
+      expect(reachesAnOpener('import { openUnplacedList } from "./evtx-correlation-store";')).toBe(true);
+      expect(reachesAnOpener('import {\n  openCorrelationView as open,\n} from "./evtx-correlation-store";')).toBe(true);
+      expect(reachesAnOpener("store.openUnplacedList()")).toBe(true);
+      expect(reachesAnOpener("onClick={useCallback(openUnplacedList, [])}")).toBe(true);
+      expect(reachesAnOpener("// openUnplacedList opens the list")).toBe(false);
+      expect(reachesAnOpener("/** `openCorrelationView` switches the view. */\nconst x = 1;")).toBe(false);
+      expect(reachesAnOpener("openChainInCorrelationView(id); openUnplacedInCorrelationView();")).toBe(false);
+      expect(reachesAnOpener('const url = "http://x"; const y = openUnplacedList;')).toBe(true);
+    });
+
+    it("is reached by no source of the workspace but the store and the actions module", () => {
+      const reaching = Object.entries(sources)
+        .filter(([file]) => file !== "evtx-correlation-store.ts" && file !== "evtx-correlation-actions.ts")
+        .filter(([, source]) => reachesAnOpener(source))
+        .map(([file]) => file);
+      expect(reaching).toEqual([]);
+      // And the actions module does reach them, or this would pass over a workspace that moved on.
+      expect(reachesAnOpener(sources["evtx-correlation-actions.ts"]!)).toBe(true);
+      expect(reachesAnOpener(sources["evtx-correlation-store.ts"]!)).toBe(true);
+    });
   });
 
   it("is not imported from the lazy view by anything", () => {
