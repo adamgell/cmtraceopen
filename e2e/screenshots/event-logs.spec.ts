@@ -188,6 +188,11 @@ test.describe("event-logs screenshots", () => {
       },
     );
 
+    // Day labels name the year when the chart is not within the current one, and the fixture is dated
+    // 6 and 7 Oct 2026. Without a fixed clock the figure's name, the axis ticks and so the PNGs would
+    // change on 1 Jan 2027. A fixed time keeps the timers running (the splash still goes). It must be
+    // set before the page loads, and it applies to every test here, each of which reaches the histogram.
+    await page.clock.setFixedTime(new Date("2026-10-16T12:00:00.000Z"));
     await page.goto("/");
     await dismissSplash(page);
 
@@ -246,6 +251,28 @@ test.describe("event-logs screenshots", () => {
 
   test("event-logs table", async ({ page }) => {
     await expect(page.getByRole("region", { name: "Event log details" })).toHaveCount(0);
+    // The histogram (spec 5.1 and 8.5): between the chip row and the body, a 56 px bar area, an 84 px
+    // legend column and a 16 px axis, to within the spec's 2 px (section 2.2). The fixture spans 24
+    // hours, so it is 72 buckets of 20 minutes. Nothing here is brushed: a brush would hand the analysis
+    // pump a subset the captured engine replies cannot answer (see the stale-capture guard above).
+    const histogram = page.locator('[data-evtx-region="histogram"]');
+    await expect(histogram).toBeVisible();
+    // The store's default zone mode is local and this file pins the browser's zone to UTC, so the zone
+    // reads as the offset the app prints for local time, "UTC+00:00", not the word "UTC". The domain is
+    // in the page's fixed current year (2026), so no year is named.
+    await expect(histogram).toHaveAccessibleName(
+      /^Events per 20 minutes over Oct 6 10:20.Oct 7 10:20 \(UTC\+00:00\), stacked by level$/,
+    );
+    await expect(histogram.locator("[data-evtx-bucket]")).toHaveCount(72);
+    const plotBox = await histogram.getByRole("slider", { name: "Time range" }).boundingBox();
+    expect(Math.abs((plotBox?.height ?? 0) - 56)).toBeLessThanOrEqual(2);
+    const legendBox = await histogram.getByRole("list", { name: "Levels" }).boundingBox();
+    expect(Math.abs((legendBox?.width ?? 0) - 84)).toBeLessThanOrEqual(2);
+    const axisBox = await histogram.locator("[data-evtx-tick]").first().locator("..").boundingBox();
+    expect(Math.abs((axisBox?.height ?? 0) - 16)).toBeLessThanOrEqual(2);
+    const histogramBox = await histogram.boundingBox();
+    const mainBox = await page.locator('[data-evtx-region="main"]').boundingBox();
+    expect((histogramBox?.y ?? 0) + (histogramBox?.height ?? 0)).toBeLessThanOrEqual((mainBox?.y ?? 0) + 1);
     await assertNoHostPaths(page);
     await page.screenshot({
       path: outPath("event-logs-table.png"),

@@ -25,6 +25,7 @@ import { useEvtxStore } from "./evtx-store";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import type { EvtxRecord } from "./types";
 import { useUiStore } from "../../stores/ui-store";
+import { LONDON_2026, modelZone } from "./__fixtures__/model-zone";
 
 const input = (overrides: Partial<EvtxFilterChipInput> = {}): EvtxFilterChipInput => ({
   filterEventIds: "",
@@ -189,6 +190,124 @@ describe("buildFilterChips, the transient criteria", () => {
     expect(short.label).toBe(`Time: brushed 09:00:10${SEP}09:01:05`);
   });
 
+  describe("the year", () => {
+    const NOW = Date.UTC(2026, 9, 16, 12, 0);
+    const timeChip = (startMs: number, endMs: number, nowMs = NOW) =>
+      buildFilterChips(input({ timeRange: { startMs, endMs }, timeZoneMode: "utc", nowMs }))[0];
+
+    it("leaves the year out of a range inside the current year", () => {
+      const chip = timeChip(Date.UTC(2026, 0, 15, 11), Date.UTC(2026, 0, 15, 13));
+      expect(chip.label).toBe(`Time: brushed 11:00${SEP}13:00`);
+      expect(timeChip(Date.UTC(2026, 2, 3), Date.UTC(2026, 3, 2)).label).toBe(
+        `Time: brushed Mar 3 00:00${SEP}Apr 2 00:00`,
+      );
+    });
+
+    it("names the year of a range in a past year, in the label, the tooltip and the remove name", () => {
+      const chip = timeChip(Date.UTC(2024, 2, 3), Date.UTC(2024, 3, 2));
+      expect(chip.label).toBe(`Time: brushed Mar 3 2024 00:00${SEP}Apr 2 2024 00:00`);
+      expect(chip.title).toBe(`${chip.label} (UTC)`);
+    });
+
+    it("names the year of a range across New Year", () => {
+      const chip = timeChip(Date.UTC(2025, 11, 31, 22), Date.UTC(2026, 0, 1, 3));
+      expect(chip.label).toBe(`Time: brushed Dec 31 2025 22:00${SEP}Jan 1 2026 03:00`);
+    });
+
+    it("names the year of a range of 365 days, which would otherwise read with its start equal to its end", () => {
+      const chip = timeChip(Date.UTC(2026, 1, 14), Date.UTC(2027, 1, 14));
+      expect(chip.label).toBe(`Time: brushed Feb 14 2026 00:00${SEP}Feb 14 2027 00:00`);
+    });
+
+    it("never writes a range with its ends alike across a DST fall-back, in the host's own zone", () => {
+      // Run under TZ=Europe/London or TZ=America/New_York to cover a repeated hour; under UTC this
+      // checks only that nothing reads alike. Each hour of 2025, as the current year and as a past one.
+      const from = Date.UTC(2025, 0, 1);
+      let checked = 0;
+      for (const nowMs of [Date.UTC(2025, 5, 1), Date.UTC(2026, 9, 16)]) {
+        for (let at = from; at < from + 365 * 24 * 3600_000; at += 3600_000) {
+          for (const span of [20 * 60_000, 3600_000]) {
+            const chip = buildFilterChips(
+              input({ timeRange: { startMs: at, endMs: at + span }, timeZoneMode: "local", nowMs }),
+            )[0];
+            const [start, end] = chip.label.replace("Time: brushed ", "").split(SEP);
+            if (start === end) throw new Error(`${new Date(at).toISOString()} + ${span}: ${chip.label}`);
+            checked += 1;
+          }
+        }
+      }
+      expect(checked).toBe(2 * 365 * 24 * 2);
+    });
+
+    it("names the dates of a range from one midnight to the next, which is not 00:00 to 00:00", () => {
+      // The last instant inside such a range is on its first day, so a clock-only label read alike.
+      const chip = timeChip(Date.UTC(2026, 9, 6), Date.UTC(2026, 9, 7));
+      expect(chip.label).toBe(`Time: brushed Oct 6 00:00${SEP}Oct 7 00:00`);
+      const span = (a: number, b: number) => timeChip(a, b).label.replace("Time: brushed ", "").split(SEP);
+      // The 23 hour and the 25 hour days of a modelled London year, midnight to midnight in the zone.
+      const restore = modelZone(LONDON_2026);
+      try {
+        const local = (a: number, b: number) =>
+          buildFilterChips(input({ timeRange: { startMs: a, endMs: b }, timeZoneMode: "local", nowMs: PINNED_NOW }))[0]
+            .label.replace("Time: brushed ", "")
+            .split(SEP);
+        expect(local(Date.UTC(2026, 2, 29, 0), Date.UTC(2026, 2, 29, 23))).toEqual(["Mar 29 00:00", "Mar 30 00:00"]);
+        expect(local(Date.UTC(2026, 9, 24, 23), Date.UTC(2026, 9, 26, 0))).toEqual(["Oct 25 00:00", "Oct 26 00:00"]);
+      } finally {
+        restore();
+      }
+      expect(span(Date.UTC(2026, 0, 1), Date.UTC(2026, 0, 2))[0]).not.toBe(span(Date.UTC(2026, 0, 1), Date.UTC(2026, 0, 2))[1]);
+    });
+
+    it("never writes a midnight-to-midnight day with its ends alike, for every day of the current year in the host's zone", () => {
+      // Run under TZ=Europe/London or America/New_York to include the 23 and 25 hour days.
+      let checked = 0;
+      for (let day = 0; day < 365; day += 1) {
+        const startMs = new Date(2026, 0, 1 + day).getTime();
+        const endMs = new Date(2026, 0, 2 + day).getTime();
+        for (const mode of ["local", "utc"] as const) {
+          const chip = buildFilterChips(
+            input({ timeRange: { startMs, endMs }, timeZoneMode: mode, nowMs: PINNED_NOW }),
+          )[0];
+          const [start, end] = chip.label.replace("Time: brushed ", "").split(SEP);
+          if (start === end) throw new Error(`${mode} ${new Date(startMs).toISOString()}: ${chip.label}`);
+          checked += 1;
+        }
+      }
+      expect(checked).toBe(730);
+    });
+
+    it("compares with the clock it is given, not the real one", () => {
+      const march2026 = [Date.UTC(2026, 2, 3), Date.UTC(2026, 3, 2)] as const;
+      // The file pins the real clock to 2026, so only the given clock can make 2026 a past year.
+      expect(timeChip(...march2026, Date.UTC(2026, 9, 16)).label).toBe(`Time: brushed Mar 3 00:00${SEP}Apr 2 00:00`);
+      expect(timeChip(...march2026, Date.UTC(2030, 0, 1)).label).toBe(
+        `Time: brushed Mar 3 2026 00:00${SEP}Apr 2 2026 00:00`,
+      );
+    });
+
+    it("reads the current year from the clock when no time is given", () => {
+      const chip = buildFilterChips(
+        input({
+          timeRange: { startMs: Date.UTC(2024, 2, 3), endMs: Date.UTC(2024, 3, 2) },
+          timeZoneMode: "utc",
+        }),
+      )[0];
+      expect(chip.label).toMatch(/ 2024 /);
+    });
+
+    it("never writes a range with its start text equal to its end text", () => {
+      const starts = [Date.UTC(2026, 9, 16, 9), Date.UTC(2024, 0, 1), Date.UTC(2025, 11, 31, 23, 59, 59, 500)];
+      for (const start of starts) {
+        for (const span of [500, 1000, 90_000, 3_600_000, 86_400_000, 364 * 86_400_000, 365 * 86_400_000, 800 * 86_400_000]) {
+          const label = timeChip(start, start + span).label.replace("Time: brushed ", "");
+          const [from, to] = label.split(SEP);
+          expect(from, `${start} + ${span}`).not.toBe(to);
+        }
+      }
+    });
+  });
+
   it("says in the tooltip how many events the range hides for want of a timestamp, and leaves the line out at zero", () => {
     const tooltip = (untimedHiddenCount: number) =>
       buildFilterChips(input({ timeRange: RANGE, timeZoneMode: "utc", untimedHiddenCount }))[0].title;
@@ -309,12 +428,23 @@ function rulesText(element: Element): string {
   return out.join("\n");
 }
 
+/**
+ * The Time chip names the year of a range that is not in the current one, so the labels pinned below
+ * would change on 1 January. Only Date is faked: timers stay real.
+ */
+const PINNED_NOW = Date.UTC(2026, 9, 16, 12, 0);
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(PINNED_NOW);
   localStorage.clear();
   useUiStore.setState(useUiStore.getInitialState(), true);
   useEvtxStore.getState().reset();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe("EvtxFilterChips", () => {
   it("renders nothing, readout included, when no criterion is active", () => {
@@ -782,6 +912,20 @@ describe("EvtxFilterChips with the transient criteria", () => {
     ]);
     expect(screen.getByRole("button", { name: `Remove Time: brushed 09:00${SEP}09:45` })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove Finding: MDM enrollment failed" })).toBeInTheDocument();
+  });
+
+  it("names the year in the Time chip and its remove button for a range in a past year", () => {
+    seedWithTransient(
+      {
+        timeRange: { startMs: Date.UTC(2024, 2, 3), endMs: Date.UTC(2024, 3, 2) },
+        recordScope: null,
+      },
+      { timeZoneMode: "utc", selectedChannels: new Set(["System", "Application"]) },
+    );
+    render(<EvtxFilterChips visibleCount={3} loadedCount={9} />);
+    const label = `Time: brushed Mar 3 2024 00:00${SEP}Apr 2 2024 00:00`;
+    expect(screen.getByText(label)).toHaveAttribute("title", `${label} (UTC)`);
+    expect(screen.getByRole("button", { name: `Remove ${label}` })).toBeInTheDocument();
   });
 
   it("draws the Time chip in the selection colors and no other chip", () => {
