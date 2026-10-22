@@ -396,7 +396,7 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
     window.complete && othersInWindow.length === 0
       ? emptyWindowText({
           halfWidthMs: window.halfWidthMs,
-          narrowed: read.scopeNarrowed,
+          scopeNarrowed: read.scopeNarrowed,
           unreadSources,
           updating,
           unplacedTotal: read.unplacedTotal,

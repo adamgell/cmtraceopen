@@ -748,10 +748,10 @@ describe("no string claims an entry is unplaced without proof", () => {
       windowNotice({ ...partial, stoppedBy: "budget" }) ?? "",
       windowNotice({ ...partial, stoppedBy: "error", error: "timeline down" }) ?? "",
       windowNotice({ ...partial, windowItems: null, omittedItems: null, items: [], stoppedBy: "error", error: "x" }) ?? "",
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: false, updating: false, unplacedTotal: 0 }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: true, unreadSources: false, updating: false, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
       outsideWindowNote(1, 3) ?? "",
       outsideWindowNote(3, 5) ?? "",
       sharedOriginNote(1) ?? "",
@@ -762,10 +762,10 @@ describe("no string claims an entry is unplaced without proof", () => {
       partialChainTitle(5, 2, false),
       moreText(3, true) ?? "",
       moreText(3, false) ?? "",
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: true, unplacedTotal: 0 }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: false, unplacedTotal: null }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 1 }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 12 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: false, updating: true, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: null }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: 1 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: 12 }).text,
       ...(["notLinked", "noLoadedLink", "inAnotherChain", "linkUnknownToEvent", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const).map((reason) => nearbyReason(reason)),
       dockOmissionNotice({ omittedMarkers: 2, omittedNearby: 3, omittedConnectors: 1, omittedSources: 2, omittedSourceEntries: 9 }) ?? "",
       dockOmissionNotice({ omittedMarkers: 1, omittedNearby: 1, omittedConnectors: 0, omittedSources: 1, omittedSourceEntries: 1 }) ?? "",
@@ -1098,14 +1098,14 @@ describe("the dock's words (spec 8.12, #842)", () => {
     const width = 75_000;
 
     it("makes the spec's claim only when nothing is narrowed and no source went unread", () => {
-      expect(emptyWindowText({ halfWidthMs: width, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 })).toEqual({
+      expect(emptyWindowText({ halfWidthMs: width, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 })).toEqual({
         text: "No other sources have entries within \u00b175 s.",
         absolute: true,
       });
     });
 
     it("says what it looked in, and what it did not, when narrowed", () => {
-      const { text, absolute } = emptyWindowText({ halfWidthMs: width, narrowed: true, unreadSources: false, updating: false, unplacedTotal: 0 });
+      const { text, absolute } = emptyWindowText({ halfWidthMs: width, scopeNarrowed: true, unreadSources: false, updating: false, unplacedTotal: 0 });
       expect(absolute).toBe(false);
       expect(text).toBe(
         "No other visible sources have entries within \u00b175 s. Events hidden by the current filters or time range are not searched.",
@@ -1113,7 +1113,7 @@ describe("the dock's words (spec 8.12, #842)", () => {
     });
 
     it("says it when a source went unread", () => {
-      const { text, absolute } = emptyWindowText({ halfWidthMs: width, narrowed: false, unreadSources: true, updating: false, unplacedTotal: 0 });
+      const { text, absolute } = emptyWindowText({ halfWidthMs: width, scopeNarrowed: false, unreadSources: true, updating: false, unplacedTotal: 0 });
       expect(absolute).toBe(false);
       expect(text).toBe(
         "No other visible sources have entries within \u00b175 s. Some sources were not fully read, so entries may be missing.",
@@ -1121,13 +1121,13 @@ describe("the dock's words (spec 8.12, #842)", () => {
     });
 
     it("withdraws the claim while the pair is an earlier session's, and says the timeline is being rebuilt", () => {
-      const { text, absolute } = emptyWindowText({ halfWidthMs: width, narrowed: false, unreadSources: false, updating: true, unplacedTotal: 0 });
+      const { text, absolute } = emptyWindowText({ halfWidthMs: width, scopeNarrowed: false, unreadSources: false, updating: true, unplacedTotal: 0 });
       expect(absolute).toBe(false);
       expect(text).toBe("No other visible sources have entries within \u00b175 s. The timeline is being rebuilt, so this may change.");
     });
 
     describe("entries the engine could not place are in no window, so a window cannot speak for them (#842, review A1)", () => {
-      const clear = { halfWidthMs: width, narrowed: false, unreadSources: false, updating: false };
+      const clear = { halfWidthMs: width, scopeNarrowed: false, unreadSources: false, updating: false };
 
       it("makes the claim only for a KNOWN count of zero", () => {
         expect(emptyWindowText({ ...clear, unplacedTotal: 0 }).absolute).toBe(true);
@@ -1151,13 +1151,13 @@ describe("the dock's words (spec 8.12, #842)", () => {
 
       it("says nothing about unplaced entries when the claim is made, and adds it to the other qualifiers when it is not", () => {
         expect(emptyWindowText({ ...clear, unplacedTotal: 0 }).text).not.toMatch(/usable time/);
-        const all = emptyWindowText({ halfWidthMs: width, narrowed: true, unreadSources: true, updating: true, unplacedTotal: 3 }).text;
+        const all = emptyWindowText({ halfWidthMs: width, scopeNarrowed: true, unreadSources: true, updating: true, unplacedTotal: 3 }).text;
         expect(all).toMatch(/not searched\..*not fully read.*being rebuilt.*3 entries have no usable time/);
       });
     });
 
     it("says both when both hold, and follows the chosen width", () => {
-      const { text } = emptyWindowText({ halfWidthMs: 300_000, narrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 });
+      const { text } = emptyWindowText({ halfWidthMs: 300_000, scopeNarrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 });
       expect(text).toContain("within \u00b15 min.");
       expect(text).toContain("not searched.");
       expect(text).toContain("not fully read");
@@ -1314,8 +1314,8 @@ describe("the dock's words (spec 8.12, #842)", () => {
       NO_SESSION_TEXT,
       READING_WINDOW_TEXT,
       UNREAD_SOURCES_NOTE,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 }).text,
       ...(["notLinked", "noLoadedLink", "inAnotherChain", "linkUnknownToEvent", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const).map((r) => nearbyReason(r)),
     ];
     for (const text of strings) expect(text).not.toMatch(causal);
@@ -1329,7 +1329,7 @@ describe("the dock's words (spec 8.12, #842)", () => {
  */
 describe("the notes shared by the dock and the Details context list", () => {
   const WIDTH = 300_000;
-  const whole = { halfWidthMs: WIDTH, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 };
+  const whole = { halfWidthMs: WIDTH, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 };
 
   describe("emptyWindowText with a subject", () => {
     it("says 'sources' by default and when asked, exactly as before", () => {
@@ -1341,7 +1341,7 @@ describe("the notes shared by the dock and the Details context list", () => {
       const list = { ...whole, subject: "entries" as const };
       expect(emptyWindowText(list)).toEqual({ text: "No other entries within \u00b15 min.", absolute: true });
       for (const [why, change] of [
-        ["a narrowed scope", { narrowed: true }],
+        ["a narrowed scope", { scopeNarrowed: true }],
         ["an unread source", { unreadSources: true }],
         ["an earlier session's pair", { updating: true }],
         ["an unknown unplaced count", { unplacedTotal: null }],
@@ -1354,8 +1354,8 @@ describe("the notes shared by the dock and the Details context list", () => {
     });
 
     it("keeps the qualifiers of the dock's sentence for either subject", () => {
-      const dock = emptyWindowText({ ...whole, narrowed: true, unreadSources: true, updating: true, unplacedTotal: 2 });
-      const list = emptyWindowText({ ...whole, narrowed: true, unreadSources: true, updating: true, unplacedTotal: 2, subject: "entries" });
+      const dock = emptyWindowText({ ...whole, scopeNarrowed: true, unreadSources: true, updating: true, unplacedTotal: 2 });
+      const list = emptyWindowText({ ...whole, scopeNarrowed: true, unreadSources: true, updating: true, unplacedTotal: 2, subject: "entries" });
       const tail = (text: string) => text.slice(text.indexOf("\u00b15 min.") + "\u00b15 min.".length);
       expect(tail(list.text)).toBe(tail(dock.text));
       expect(list.text).not.toMatch(NO_UNPROVEN_CLAIM);

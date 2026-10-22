@@ -616,7 +616,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
     window.complete && !hasOtherSource
       ? emptyWindowText({
           halfWidthMs: window.halfWidthMs,
-          narrowed: scopeNarrowed,
+          scopeNarrowed,
           unreadSources: input.unreadSources,
           updating,
           // The same run's own count, from the paired counts only; unpaired is not known.

@@ -656,7 +656,7 @@ export function windowNotice(
 interface EmptyWindowInput {
   halfWidthMs: number;
   /** The session was built from fewer events than are loaded, or from a scope that is not known. */
-  narrowed: boolean;
+  scopeNarrowed: boolean;
   /** A source was not fully read (a channel needs elevation, a file failed): entries may be missing. */
   unreadSources: boolean;
   /**
@@ -689,7 +689,7 @@ interface EmptyWindowInput {
 export function emptyWindowText(input: EmptyWindowInput): { text: string; absolute: boolean } {
   const width = windowWidthLabel(input.halfWidthMs);
   const entries = input.subject === "entries";
-  if (!input.narrowed && !input.unreadSources && !input.updating && input.unplacedTotal === 0) {
+  if (!input.scopeNarrowed && !input.unreadSources && !input.updating && input.unplacedTotal === 0) {
     return {
       text: entries ? `No other entries within ${width}.` : `No other sources have entries within ${width}.`,
       absolute: true,
@@ -700,7 +700,7 @@ export function emptyWindowText(input: EmptyWindowInput): { text: string; absolu
       ? `No other visible entries within ${width}.`
       : `No other visible sources have entries within ${width}.`,
   ];
-  if (input.narrowed) parts.push("Events hidden by the current filters or time range are not searched.");
+  if (input.scopeNarrowed) parts.push("Events hidden by the current filters or time range are not searched.");
   if (input.unreadSources) parts.push("Some sources were not fully read, so entries may be missing.");
   if (input.updating) parts.push("The timeline is being rebuilt, so this may change.");
   if (input.unplacedTotal === null) {
