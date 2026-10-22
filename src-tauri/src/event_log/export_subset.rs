@@ -1051,6 +1051,9 @@ mod engine {
         pub(super) exported: u64,
         pub(super) missing: EvtxSubsetIdDifference,
         pub(super) unrequested: EvtxSubsetIdDifference,
+        /// How many of each requested group's events are missing, in the order of the groups, so a
+        /// group that came back empty can be told from one that came back short.
+        pub(super) missing_by_group: Vec<u64>,
     }
 
     /// Compares what the file holds with what was asked for, event by event (computer, source
@@ -1082,7 +1085,9 @@ mod engine {
 
         let mut missing_count = 0u64;
         let mut missing_sample = Vec::new();
+        let mut missing_by_group = Vec::with_capacity(expected.len());
         for (group, seen) in expected.iter().zip(&present) {
+            let before = missing_count;
             for range in &group.ranges {
                 for id in range.start..=range.end {
                     if !seen.contains(&id) {
@@ -1093,6 +1098,7 @@ mod engine {
                     }
                 }
             }
+            missing_by_group.push(missing_count - before);
         }
 
         unrequested.sort();
@@ -1111,6 +1117,7 @@ mod engine {
                 count: unrequested.len() as u64,
                 sample: unrequested_sample,
             },
+            missing_by_group,
         }
     }
 
@@ -1134,35 +1141,69 @@ mod engine {
         }
     }
 
-    /// Why requested events are not in the file, worded for what is known. A file that holds some of
-    /// them is short, and the log wrapping or being cleared explains a shortfall. A file that holds
-    /// none of them says the query selected none, because a query that names the computer can also
-    /// match nothing when that name is not the one stored in the events.
-    fn missing_warning(export: &PlannedExport, missing: &EvtxSubsetIdDifference) -> String {
-        let listed = sample_text(missing);
-        if missing.count < export.requested {
-            return format!(
-                "{} requested {} not in the file ({listed}); the log may have wrapped or been \
-                 cleared since they were loaded",
-                missing.count,
-                event_noun(missing.count)
-            );
-        }
-        let computer_cause = if export
-            .groups
-            .iter()
-            .any(|group| group.origin.computer.is_some())
-        {
-            ", or the computer name in the query does not match the one stored in the events"
-        } else {
-            ""
+    /// The other way the query may have gone wrong for a group that came back empty: it names a
+    /// computer or a channel, and the name it used may not be the one the events carry. `None` for
+    /// a group the query names nothing for, which has no such cause.
+    fn unmatched_group_clause(export: &PlannedExport, group: &EventGroup) -> Option<String> {
+        let computer = group.origin.computer.as_deref();
+        let channel = group
+            .origin
+            .channel
+            .as_deref()
+            .filter(|name| names_channel_in_query(export.kind, &export.source_path, name));
+        let (who, which) = match (computer, channel) {
+            (None, None) => return None,
+            (Some(computer), None) => (format!("from {computer}"), "computer"),
+            (None, Some(channel)) => (format!("in {channel}"), "channel"),
+            (Some(computer), Some(channel)) => (
+                format!("from {computer} in {channel}"),
+                "computer or channel",
+            ),
         };
-        format!(
-            "the query matched none of the {} requested {} ({listed}); the log may have wrapped or \
-             been cleared since they were loaded{computer_cause}",
-            missing.count,
-            event_noun(missing.count)
-        )
+        Some(format!(
+            "no event {who} matched, so the {which} name in the query may differ from the one \
+             stored in the events"
+        ))
+    }
+
+    /// Why requested events are not in the file, worded for what is known.
+    ///
+    /// The shortfall itself is explained by what the source is: a live log can wrap or be cleared
+    /// after the events were loaded, a file can only have been changed. A file that holds none of
+    /// the requested events says the query selected none. Then each group that came back wholly
+    /// empty says so on its own, because a query that names a computer or a channel can also match
+    /// nothing for one group when that name is not the one stored in the events, while another group
+    /// of the same query matched.
+    fn missing_warning(export: &PlannedExport, comparison: &ReadBackComparison) -> String {
+        let missing = &comparison.missing;
+        let listed = sample_text(missing);
+        let noun = event_noun(missing.count);
+        let cause = match export.kind {
+            EvtxSubsetSourceKind::Channel => {
+                "the log may have wrapped or been cleared since they were loaded"
+            }
+            EvtxSubsetSourceKind::File => "the file may have changed since it was loaded",
+        };
+        let mut warning = if missing.count < export.requested {
+            format!(
+                "{} requested {noun} not in the file ({listed}); {cause}",
+                missing.count
+            )
+        } else {
+            format!(
+                "the query matched none of the {} requested {noun} ({listed}); {cause}",
+                missing.count
+            )
+        };
+        for (group, &group_missing) in export.groups.iter().zip(&comparison.missing_by_group) {
+            if group_missing == group.distinct_records() {
+                if let Some(clause) = unmatched_group_clause(export, group) {
+                    warning.push_str("; ");
+                    warning.push_str(&clause);
+                }
+            }
+        }
+        warning
     }
 
     fn remove_partial_output(export: &PlannedExport) -> Option<String> {
@@ -1287,9 +1328,7 @@ mod engine {
                 let comparison = compare_read_back(&export.groups, &actual);
                 result.exported_records = Some(comparison.exported);
                 if comparison.missing.count > 0 {
-                    result
-                        .warnings
-                        .push(missing_warning(export, &comparison.missing));
+                    result.warnings.push(missing_warning(export, &comparison));
                 }
                 if comparison.unrequested.count > 0 {
                     result.warnings.push(format!(
@@ -3012,7 +3051,10 @@ mod tests {
         );
         assert!(warning.contains("wrapped or been cleared"), "{warning}");
         assert!(
-            warning.contains("computer name in the query does not match"),
+            warning.contains(
+                "no event from HOST-A matched, so the computer name in the query may differ from \
+                 the one stored in the events"
+            ),
             "{warning}"
         );
         assert_eq!(named.missing.as_ref().unwrap().count, 3);
@@ -3038,6 +3080,145 @@ mod tests {
         assert!(!warning.contains("matched none"), "{warning}");
         assert!(!warning.contains("computer name"), "{warning}");
         assert!(warning.contains("wrapped or been cleared"), "{warning}");
+    }
+
+    #[test]
+    fn a_machine_none_of_whose_events_matched_is_named_beside_the_one_that_did() {
+        // HOST-A came back whole and HOST-B not at all, from the same log in the same query. That
+        // points at the name the query used for HOST-B, not at HOST-A, which is not blamed.
+        let file = exported_file(
+            &[channel_with(
+                "ForwardedEvents",
+                vec![
+                    group(Some("HOST-A"), &[1, 2]),
+                    group(Some("HOST-B"), &[7, 8]),
+                ],
+            )],
+            Ok(found_on("HOST-A", &[1, 2])),
+        );
+        let warning = file.warnings.join(" | ");
+        assert!(
+            warning.contains(
+                "2 requested events not in the file (EventRecordID 7 on HOST-B, \
+                 EventRecordID 8 on HOST-B)"
+            ),
+            "{warning}"
+        );
+        assert!(
+            warning.contains(
+                "no event from HOST-B matched, so the computer name in the query may differ from \
+                 the one stored in the events"
+            ),
+            "{warning}"
+        );
+        assert!(!warning.contains("no event from HOST-A"), "{warning}");
+        // The log may still have wrapped, so the shortfall explanation stays.
+        assert!(warning.contains("wrapped or been cleared"), "{warning}");
+        assert!(!warning.contains("matched none"), "{warning}");
+    }
+
+    #[test]
+    fn a_machine_that_lost_only_some_events_is_not_blamed_on_its_name() {
+        let file = exported_file(
+            &[channel_with(
+                "ForwardedEvents",
+                vec![
+                    group(Some("HOST-A"), &[1, 2, 3]),
+                    group(Some("HOST-B"), &[7, 8]),
+                ],
+            )],
+            Ok([found_on("HOST-A", &[1, 3]), found_on("HOST-B", &[7, 8])].concat()),
+        );
+        let warning = file.warnings.join(" | ");
+        assert!(
+            warning.contains("1 requested event not in the file"),
+            "{warning}"
+        );
+        assert!(!warning.contains("no event from"), "{warning}");
+        assert!(!warning.contains("computer name"), "{warning}");
+    }
+
+    #[test]
+    fn a_group_that_names_a_channel_in_the_query_can_blame_the_channel_name() {
+        // Naming the channel is a second way for a query to match nothing, so the warning does not
+        // pin it all on the computer.
+        let collector = exported_file(
+            &[channel_with(
+                "ForwardedEvents",
+                vec![group_in("HOST-A", "Security", &[1, 2])],
+            )],
+            found(&[]),
+        );
+        let warning = collector.warnings.join(" | ");
+        assert!(
+            warning.contains(
+                "no event from HOST-A in Security matched, so the computer or channel name in \
+                 the query may differ from the one stored in the events"
+            ),
+            "{warning}"
+        );
+        let channel_only = exported_file(
+            &[channel_with(
+                "ForwardedEvents",
+                vec![group_of(None, Some("Security"), &[1])],
+            )],
+            found(&[]),
+        );
+        let warning = channel_only.warnings.join(" | ");
+        assert!(
+            warning.contains(
+                "no event in Security matched, so the channel name in the query may differ"
+            ),
+            "{warning}"
+        );
+        assert!(!warning.contains("computer"), "{warning}");
+        // The log being queried is not named in its own query, so its name cannot be the cause.
+        let own_log = exported_file(
+            &[channel_with(
+                "System",
+                vec![group_in("HOST-A", "System", &[1])],
+            )],
+            found(&[]),
+        );
+        let warning = own_log.warnings.join(" | ");
+        assert!(
+            warning.contains("no event from HOST-A matched"),
+            "{warning}"
+        );
+        assert!(!warning.contains("channel name"), "{warning}");
+    }
+
+    #[test]
+    fn a_shortfall_is_explained_by_what_the_source_is() {
+        let channel = exported_file(&[channel("System", &[1, 2, 3])], found(&[1, 3]));
+        let warning = channel.warnings.join(" | ");
+        assert!(
+            warning.contains("the log may have wrapped or been cleared since they were loaded"),
+            "{warning}"
+        );
+        // A file does not wrap or get cleared; it may have been replaced or edited.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("Setup.evtx");
+        fs::write(&log, b"evtx").unwrap();
+        let file = exported_file(&[file_source(&log, &[1, 2, 3])], found(&[1, 3]));
+        let warning = file.warnings.join(" | ");
+        assert!(
+            warning.contains("the file may have changed since it was loaded"),
+            "{warning}"
+        );
+        assert!(!warning.contains("wrapped"), "{warning}");
+        assert!(!warning.contains("cleared"), "{warning}");
+        let none = exported_file(&[file_source(&log, &[1, 2])], found(&[]));
+        let warning = none.warnings.join(" | ");
+        assert!(
+            warning.contains("the query matched none of the 2 requested events"),
+            "{warning}"
+        );
+        assert!(
+            warning.contains("the file may have changed since it was loaded"),
+            "{warning}"
+        );
+        assert!(!warning.contains("wrapped"), "{warning}");
     }
 
     #[test]
@@ -3271,6 +3452,9 @@ mod tests {
             .expect("the fixture reads back without unreadable records");
         assert!(!records.is_empty(), "the fixture holds no events");
         assert!(records.iter().all(|record| record.id > 0));
+        // The identity is read from the same System block as the id: a real log names a channel on
+        // every event, so a read-back that lost it would compare every event as unrequested.
+        assert!(records.iter().all(|record| record.origin.channel.is_some()));
         // Required, like the fixture itself: a comparison that can be skipped can pass without
         // having compared anything.
         let known: usize = std::env::var("CMTRACE_EVTX_FIXTURE_RECORDS")
