@@ -946,6 +946,48 @@ describe("the previous-period comparison", () => {
         unmount();
       }
     });
+
+    // The three actions (Compare, Compare again, Refresh and compare again) share one button, and
+    // Clear comparison is another. Each is rendered in a state that shows it, at two sizes.
+    it("sets the text of the action button and of Clear from the font metrics, at two sizes", () => {
+      const outcome = filesOutcome();
+      if (outcome.status !== "complete") throw new Error("expected complete");
+      const live: ComparisonOutcome = {
+        status: "complete",
+        result: { ...outcome.result, mode: "live" },
+      };
+      const states: Array<[string, Partial<ComparisonPresentationInput>, string[]]> = [
+        ["not compared", {}, ["Compare with previous period"]],
+        [
+          "refused",
+          { state: settled({ status: "unavailable", reason: "queryFailed", detail: "x" }) },
+          ["Compare with previous period", "Clear comparison"],
+        ],
+        [
+          "out of date, files",
+          { state: settled(outcome), snapshotEpoch: ANCHOR + 3 * HOUR },
+          ["Compare again", "Clear comparison"],
+        ],
+        [
+          "out of date, live",
+          { state: settled(live), snapshotEpoch: ANCHOR + 3 * HOUR },
+          ["Refresh and compare again", "Clear comparison"],
+        ],
+        ["complete", { state: settled(outcome) }, ["Clear comparison"]],
+      ];
+      for (const size of [13, 20] as const) {
+        const metrics = getLogListMetrics(size);
+        const expected = `${Math.max(11, metrics.fontSize - 1)}px`;
+        for (const [name, overrides, buttons] of states) {
+          const { unmount } = view(comparisonProps(overrides), { metrics });
+          for (const label of buttons) {
+            const button = screen.getByRole("button", { name: label });
+            expect(button.style.fontSize, `${label} (${name}) at ${size}`).toBe(expected);
+          }
+          unmount();
+        }
+      }
+    });
   });
 
   describe("contrast, in all seven themes", () => {
