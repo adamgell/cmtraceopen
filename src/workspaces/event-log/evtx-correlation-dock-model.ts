@@ -33,6 +33,7 @@ import {
   compareStrings,
   derivedTitle,
   messageHead,
+  strongestRowOf,
   type CorrelationChain,
 } from "./evtx-correlation-chains";
 import {
@@ -48,6 +49,7 @@ import {
   emptyWindowText,
   keyKindLabel,
   nearbyReason,
+  nearbyReasonOfLabel,
   outsideWindowNote,
   partialChainTitle,
   scopeDisclosure,
@@ -65,12 +67,10 @@ import {
   isUnmatchableEvent,
   itemsByOriginId,
   logOriginNamesRecord,
+  originsNaming,
   resolveOriginRecords,
 } from "./evtx-correlation-origin-index";
 import {
-  IN_ANOTHER_CHAIN_LABEL,
-  LINK_TO_EVENT_UNKNOWN_LABEL,
-  NOT_LINKED_LABEL,
   buildChainPlot,
   describeLanes,
   keyHeader,
@@ -248,38 +248,6 @@ function isLinking(strength: CorrelationChain["strength"]): boolean {
   return strength === "exact" || strength === "candidate";
 }
 
-/** The words for a context marker's label, which `buildChainPlot` decided. */
-function reasonOfLabel(label: string | null): NearbyReason {
-  if (label === NOT_LINKED_LABEL) return "notLinked";
-  if (label === IN_ANOTHER_CHAIN_LABEL) return "inAnotherChain";
-  if (label === LINK_TO_EVENT_UNKNOWN_LABEL) return "linkUnknownToEvent";
-  return "noLoadedLink";
-}
-
-/**
- * The origin ids of the window's items that name `record`, found with the origin join's own
- * matchers: an event record against an index of that one record, an archive text row (`originKind`
- * "log") with the strict log matcher. Never a rebuilt stable id.
- */
-function originsNaming(record: EvtxRecord, items: readonly TimelineItem[]): Set<string> {
-  const found = new Set<string>();
-  if (record.originKind === "log") {
-    for (const item of items) {
-      if (logOriginNamesRecord(item.origin, record)) found.add(timelineOriginId(item.origin));
-    }
-    return found;
-  }
-  const index = buildEvidenceIndex([record]);
-  for (const item of items) {
-    if (item.origin.kind !== "event") continue;
-    const resolution = resolveOriginRecords(item.origin, index);
-    if (resolution.kind === "matches" && resolution.records.includes(record)) {
-      found.add(timelineOriginId(item.origin));
-    }
-  }
-  return found;
-}
-
 /**
  * Why "Open in Correlation view" has no row to open. What is known of the selected event comes
  * first: it is true whether or not the links are in. Only an identified event waits for them.
@@ -358,12 +326,6 @@ export interface WindowRead {
   usable: TimelineItem[];
   /** The scope is narrower than what is loaded, or is not known. Unpaired counts cannot speak for it. */
   scopeNarrowed: boolean;
-  /**
-   * "Not linked" is a claim that no event missing from the session could carry the link. The scope
-   * says events were left out of it; an unread source is records that never reached it; and a pair
-   * that an earlier session left behind is being replaced because events were added or reloaded.
-   */
-  narrowed: boolean;
   /** The session's own count of entries it could not place in time, from the paired counts only. */
   unplacedTotal: number | null;
 }
@@ -429,7 +391,6 @@ export function readWindowFacts(input: DockModelInput): WindowFacts {
     identified: selected.status === "found" || selected.status === "notInTimeline",
     usable,
     scopeNarrowed,
-    narrowed: scopeNarrowed || input.unreadSources || updating,
     unplacedTotal: pairedCounts === null ? null : pairedCounts.unplacedList.total,
   };
 }
@@ -451,16 +412,13 @@ export function buildDockModel(input: DockModelInput): DockModel {
     identified,
     usable: drawItems,
     scopeNarrowed,
-    narrowed,
     unplacedTotal,
   } = windowRead;
 
   // ---- its rows, from the uncapped index of the SAME session ----
-  const rows =
-    pairedCounts !== null && originId !== null
-      ? (pairedCounts.model.rowsByMember.get(originId) ?? [])
-      : [];
-  const row = rows[0] ?? null;
+  const rowsByMember = pairedCounts === null ? null : pairedCounts.model.rowsByMember;
+  const rows = rowsByMember !== null && originId !== null ? (rowsByMember.get(originId) ?? []) : [];
+  const row = rowsByMember !== null && originId !== null ? strongestRowOf(rowsByMember, originId) : null;
   const rowMembers =
     row === null
       ? []
@@ -517,7 +475,12 @@ export function buildDockModel(input: DockModelInput): DockModel {
     chain: part,
     itemsById: drawableById,
     edgeInputComplete: pairedCounts === null ? false : pairedCounts.model.edgeInputComplete,
-    narrowed,
+    // "Not linked" claims that no event missing from the session could carry the link. The scope says
+    // events were left out of it; an unread source is records that never reached it; and a pair an
+    // earlier session left behind is being replaced. Three inputs, each of which withdraws the claim.
+    scopeNarrowed,
+    unreadSources: input.unreadSources,
+    updating,
     gaps: pairedCounts === null ? UNKNOWN_CORRELATION_GAPS : pairedCounts.gaps,
     window: { startMs: window.startMs, endMs: window.endMs },
     nearby: drawnContext,
@@ -536,7 +499,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
     }
   }
   const reasonFor = (marker: PlotMarker): NearbyReason =>
-    annotations.get(marker.id) ?? reasonOfLabel(marker.linkLabel);
+    annotations.get(marker.id) ?? nearbyReasonOfLabel(marker.linkLabel);
 
   const nearby: DockNearbyEntry[] = [...plot.nearby]
     .sort(compareByDistance<PlotMarker>(record.timestampEpoch, (marker) => marker.id))
@@ -653,7 +616,7 @@ export function buildDockModel(input: DockModelInput): DockModel {
     window.complete && !hasOtherSource
       ? emptyWindowText({
           halfWidthMs: window.halfWidthMs,
-          narrowed: scopeNarrowed,
+          scopeNarrowed,
           unreadSources: input.unreadSources,
           updating,
           // The same run's own count, from the paired counts only; unpaired is not known.

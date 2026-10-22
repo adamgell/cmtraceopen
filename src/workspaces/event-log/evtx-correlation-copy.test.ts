@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import dockSource from "./EvtxCorrelationDock.tsx?raw";
 import viewSource from "./EvtxCorrelationView.tsx?raw";
+import copySource from "./evtx-correlation-copy.ts?raw";
 import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import {
   buildCorrelationChains,
@@ -17,16 +18,35 @@ import {
   NOT_IN_TIMELINE_NOTE,
   NOT_READ_NOTE,
   ANALYSIS_BUILDING_TEXT,
+  CHAIN_COUNT_NOT_KNOWN_TEXT,
+  CHAIN_ENTRIES_BEING_READ_TEXT,
+  CHAIN_STEPS_NOT_READ_TEXT,
+  CONTAINS_SELECTED_EVENT_SUFFIX,
+  NO_ANALYSIS_TEXT,
+  NO_CHAINS_QUALIFIED_TEXT,
+  NO_ENTRY_POSITION_TEXT,
+  NO_LINKED_EVENTS_TEXT,
+  NO_POSITION_TEXT,
   NO_SELECTION_TEXT,
   NO_SESSION_TEXT,
+  READING_EDGES_TEXT,
   READING_WINDOW_TEXT,
+  SAME_TIME_NOTE,
   SCOPE_NOT_KNOWN_NOTICE,
+  SEQUENCE_HEADING,
+  SEQUENCE_ORDER_NOTE,
   STRENGTH_LABELS,
+  UNREAD_SOURCES_CHAINS_NOTE,
   UNREAD_SOURCES_NOTE,
+  WAIT_FOR_ENTRIES_REASON,
   UNTIMED_TEXT,
   UPDATING_CORRELATION_TEXT,
   ambiguousEventNote,
+  chainActionAvailability,
   chainCopyText,
+  chainRowName,
+  correlationFailureText,
+  correlationNotices,
   coverageGapNotice,
   dockOmissionNotice,
   dockSubtitle,
@@ -35,6 +55,11 @@ import {
   emptyWindowText,
   keyKindLabel,
   nearbyReason,
+  nearbyHeading,
+  nearbyReasonOfLabel,
+  noChainsFoundText,
+  noLinkedChainsText,
+  noLinkingChainsLine,
   openDisabledText,
   moreText,
   notReadNote,
@@ -47,8 +72,11 @@ import {
   sharedOriginNote,
   scopeDisclosure,
   sourcesText,
+  timelineReadingText,
+  uncorrelatedOriginsNotice,
   unmatchableNote,
   unresolvedNotice,
+  unresolvedStepsNotice,
   whyHeading,
   whyStatement,
   windowFailureText,
@@ -57,9 +85,11 @@ import {
   type ChainCopyInput,
   type UnplacedEvidence,
 } from "./evtx-correlation-copy";
+import { WAIT_FOR_UPDATE_REASON } from "./evtx-unplaced";
 import * as copyExports from "./evtx-correlation-copy";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import * as viewModelExports from "./evtx-correlation-view-model";
+import { COMPLETE_VIEW } from "./evtx-correlation-test-fixtures";
 import {
   IN_ANOTHER_CHAIN_LABEL,
   LINK_TO_EVENT_UNKNOWN_LABEL,
@@ -356,6 +386,59 @@ describe("coverageGapNotice", () => {
   });
 });
 
+describe("uncorrelatedOriginsNotice, what a gap that names an origin means for every claim of absence (#841, review M1)", () => {
+  const origins = (preview: { source: string; reason: string }[], total: number | null = preview.length) =>
+    classifyCoverageGaps(preview, total);
+  const gapOf = (n: number, reason = "identity conflict") => ({ source: rid(n), reason });
+
+  it("says nothing when the engine left no origin uncorrelated, whatever else is cut or limited", () => {
+    expect(uncorrelatedOriginsNotice(origins([]))).toBeNull();
+    expect(uncorrelatedOriginsNotice({ originIds: new Set(), global: true, previewCut: true })).toBeNull();
+    // A display gap is list-view compaction, not an origin the engine left out.
+    expect(uncorrelatedOriginsNotice(origins([{ source: "timeline-item-projection", reason: "compaction" }]))).toBeNull();
+  });
+
+  it("says how many events could not be fully correlated, in the singular and the plural", () => {
+    expect(uncorrelatedOriginsNotice(origins([gapOf(1)]))).toBe(
+      "1 event could not be fully correlated, so links involving it may be missing.",
+    );
+    expect(uncorrelatedOriginsNotice(origins([gapOf(1), gapOf(2)]))).toBe(
+      "2 events could not be fully correlated, so links involving them may be missing.",
+    );
+  });
+
+  it("says 'At least' when the gap preview is cut: the gaps that are not shown may name more origins", () => {
+    expect(uncorrelatedOriginsNotice(origins([gapOf(1), gapOf(2)], 9))).toBe(
+      "At least 2 events could not be fully correlated, so links involving them may be missing.",
+    );
+    expect(uncorrelatedOriginsNotice(origins([gapOf(1)], null))).toBe(
+      "At least 1 event could not be fully correlated, so links involving it may be missing.",
+    );
+  });
+
+  it("counts distinct origins: a gap stated twice, a global gap and a display gap are not more origins", () => {
+    const gaps = origins([
+      gapOf(1),
+      gapOf(1, "process start identity"),
+      gapOf(2, "machine identity unavailable"),
+      { source: "correlation", reason: "limit" },
+      { source: "timeline-item-projection", reason: "compaction" },
+    ]);
+    expect(uncorrelatedOriginsNotice(gaps)).toBe(
+      "2 events could not be fully correlated, so links involving them may be missing.",
+    );
+  });
+
+  it("is a coverage state, never a claim about links", () => {
+    for (const text of [
+      uncorrelatedOriginsNotice(origins([gapOf(1)])),
+      uncorrelatedOriginsNotice(origins([gapOf(1), gapOf(2)], 9)),
+    ]) {
+      expect(text).not.toMatch(/no link|not linked|no linked/i);
+    }
+  });
+});
+
 describe("scanNotice and edgeErrorNotice", () => {
   it("say nothing unless reading the timeline stopped early", () => {
     for (const state of ["idle", "running", "complete"] as const) {
@@ -552,15 +635,33 @@ describe("no string claims an entry is unplaced without proof", () => {
     "NOT_IN_TIMELINE_NOTE",
     "NOT_READ_NOTE",
     "ANALYSIS_BUILDING_TEXT",
+    "CHAIN_COUNT_NOT_KNOWN_TEXT",
+    "CHAIN_ENTRIES_BEING_READ_TEXT",
+    "CHAIN_STEPS_NOT_READ_TEXT",
+    "CONTAINS_SELECTED_EVENT_SUFFIX",
+    "NO_ANALYSIS_TEXT",
+    "NO_CHAINS_QUALIFIED_TEXT",
+    "NO_ENTRY_POSITION_TEXT",
+    "NO_LINKED_EVENTS_TEXT",
+    "NO_POSITION_TEXT",
     "NO_SELECTION_TEXT",
     "NO_SESSION_TEXT",
+    "READING_EDGES_TEXT",
     "READING_WINDOW_TEXT",
+    "SAME_TIME_NOTE",
     "SCOPE_NOT_KNOWN_NOTICE",
+    "SEQUENCE_HEADING",
+    "SEQUENCE_ORDER_NOTE",
     "STRENGTH_LABELS",
+    "UNREAD_SOURCES_CHAINS_NOTE",
     "UNREAD_SOURCES_NOTE",
     "UPDATING_CORRELATION_TEXT",
+    "WAIT_FOR_ENTRIES_REASON",
     "ambiguousEventNote",
     "chainCopyText",
+    "chainRowName",
+    "correlationFailureText",
+    "correlationNotices",
     "coverageGapNotice",
     "dockOmissionNotice",
     "dockSubtitle",
@@ -568,7 +669,11 @@ describe("no string claims an entry is unplaced without proof", () => {
     "edgeInputNotice",
     "emptyWindowText",
     "keyKindLabel",
+    "nearbyHeading",
     "nearbyReason",
+    "noChainsFoundText",
+    "noLinkedChainsText",
+    "noLinkingChainsLine",
     "openDisabledText",
     "moreText",
     "notReadNote",
@@ -581,8 +686,11 @@ describe("no string claims an entry is unplaced without proof", () => {
     "scopeDisclosure",
     "sharedOriginNote",
     "sourcesText",
+    "timelineReadingText",
+    "uncorrelatedOriginsNotice",
     "unmatchableNote",
     "unresolvedNotice",
+    "unresolvedStepsNotice",
     "whyHeading",
     "whyStatement",
     "windowFailureText",
@@ -633,11 +741,18 @@ describe("no string claims an entry is unplaced without proof", () => {
     "levelOfSeverity",
     "listedRows",
     "memberLinkSummary",
+    // A rule that returns one of the two wait reasons, which the audit prints; it writes no text.
+    "chainActionAvailability",
+    // They pick one of the label constants above, which the audit prints; they write no text.
+    "nearbyLinkLabel",
+    "nearbyReasonOfLabel",
+    "notLinkedLegendLabel",
     "partitionUnplaced",
     "placeInWindow",
     "reconcileSelection",
-    // A predicate over the plot's inputs: it produces no text.
+    // Predicates over the plot's inputs: they produce no text.
     "sessionSpeaksForAbsence",
+    "sessionSpeaksForAbsenceOverall",
   ]);
 
   it("names every runtime export of both modules in one of the two sets", () => {
@@ -691,10 +806,10 @@ describe("no string claims an entry is unplaced without proof", () => {
       windowNotice({ ...partial, stoppedBy: "budget" }) ?? "",
       windowNotice({ ...partial, stoppedBy: "error", error: "timeline down" }) ?? "",
       windowNotice({ ...partial, windowItems: null, omittedItems: null, items: [], stoppedBy: "error", error: "x" }) ?? "",
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: false, updating: false, unplacedTotal: 0 }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: true, unreadSources: false, updating: false, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
       outsideWindowNote(1, 3) ?? "",
       outsideWindowNote(3, 5) ?? "",
       sharedOriginNote(1) ?? "",
@@ -705,10 +820,10 @@ describe("no string claims an entry is unplaced without proof", () => {
       partialChainTitle(5, 2, false),
       moreText(3, true) ?? "",
       moreText(3, false) ?? "",
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: true, unplacedTotal: 0 }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: false, unplacedTotal: null }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 1 }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 12 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: false, updating: true, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: null }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: 1 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: 12 }).text,
       ...(["notLinked", "noLoadedLink", "inAnotherChain", "linkUnknownToEvent", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const).map((reason) => nearbyReason(reason)),
       dockOmissionNotice({ omittedMarkers: 2, omittedNearby: 3, omittedConnectors: 1, omittedSources: 2, omittedSourceEntries: 9 }) ?? "",
       dockOmissionNotice({ omittedMarkers: 1, omittedNearby: 1, omittedConnectors: 0, omittedSources: 1, omittedSourceEntries: 1 }) ?? "",
@@ -716,14 +831,75 @@ describe("no string claims an entry is unplaced without proof", () => {
     ];
   }
 
+  /** Every string the Correlation view and the Chains tab share (#841), over the states that change their words. */
+  function sharedStrings(chain: CorrelationChain): string[] {
+    const gaps = classifyCoverageGaps([], 0);
+    return [
+      NO_ANALYSIS_TEXT,
+      READING_EDGES_TEXT,
+      NO_POSITION_TEXT,
+      WAIT_FOR_ENTRIES_REASON,
+      SEQUENCE_ORDER_NOTE,
+      SAME_TIME_NOTE,
+      correlationFailureText("edges down", "built"),
+      correlationFailureText("edges down", "updated"),
+      timelineReadingText(null),
+      timelineReadingText({ scannedItems: 1_200, totalItems: 5_000 }),
+      noChainsFoundText(true),
+      noChainsFoundText(false),
+      chainRowName(chain),
+      CHAIN_COUNT_NOT_KNOWN_TEXT,
+      CHAIN_ENTRIES_BEING_READ_TEXT,
+      CHAIN_STEPS_NOT_READ_TEXT,
+      CONTAINS_SELECTED_EVENT_SUFFIX,
+      NO_CHAINS_QUALIFIED_TEXT,
+      NO_ENTRY_POSITION_TEXT,
+      NO_LINKED_EVENTS_TEXT,
+      SEQUENCE_HEADING,
+      UNREAD_SOURCES_CHAINS_NOTE,
+      noLinkedChainsText({ speaks: true, edgeInputComplete: true }),
+      noLinkedChainsText({ speaks: false, edgeInputComplete: true }),
+      noLinkedChainsText({ speaks: false, edgeInputComplete: false }),
+      noLinkingChainsLine(true),
+      noLinkingChainsLine(false),
+      nearbyHeading("Not linked", 3),
+      nearbyHeading("No loaded link", 1),
+      nearbyHeading("Not in this chain", 2),
+      uncorrelatedOriginsNotice({ originIds: new Set([rid(1)]), global: false, previewCut: false }) ?? "",
+      uncorrelatedOriginsNotice({ originIds: new Set([rid(1), rid(2)]), global: false, previewCut: false }) ?? "",
+      uncorrelatedOriginsNotice({ originIds: new Set([rid(1), rid(2)]), global: false, previewCut: true }) ?? "",
+      unresolvedStepsNotice(chain, PROVEN) ?? "",
+      unresolvedStepsNotice(chain, { scanComplete: false, unplacedListComplete: false, unplacedIds: new Set() }) ?? "",
+      ...correlationNotices({
+        edgeInput: { edgeInputComplete: false, unloadedEdgeCount: 4 },
+        edgeError: "edges down",
+        gaps: { originIds: new Set([rid(1), rid(2)]), global: true, previewCut: true },
+        scan: { state: "incomplete", stoppedBy: "budget", error: null },
+        selectionLoss: null,
+        scope: scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 }),
+        cap: { shown: 100, totalCount: 120, omittedCount: 20 },
+        pastCapShown: 100,
+      }),
+      ...correlationNotices({
+        edgeInput: COMPLETE,
+        edgeError: null,
+        gaps,
+        scan: { state: "complete", stoppedBy: null, error: null },
+        selectionLoss: null,
+        scope: null,
+        cap: { shown: 3, totalCount: 3, omittedCount: 0 },
+        pastCapShown: null,
+      }),
+    ];
+  }
+
   function everyString(chain: CorrelationChain, read: TimelineItem[], evidence: UnplacedEvidence): string[] {
     const itemsById = mapOf(read);
     const narrowed = scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 });
     const incomplete = { edgeInputComplete: false, unloadedEdgeCount: 9 };
-    const view = { edgeInputComplete: true, narrowed: false, gaps: classifyCoverageGaps([], 0) };
-    const plot = buildChainPlot({ chain, itemsById, ...view });
+    const plot = buildChainPlot({ chain, itemsById, ...COMPLETE_VIEW });
     // An explicit window that leaves every member outside it, so the pinned labels are built.
-    const pinned = buildChainPlot({ chain, itemsById, ...view, window: { startMs: T0 + 1, endMs: T0 + 2 } });
+    const pinned = buildChainPlot({ chain, itemsById, ...COMPLETE_VIEW, window: { startMs: T0 + 1, endMs: T0 + 2 } });
     const logLine: TimelineItem = {
       timestampMs: T0,
       severity: "warning",
@@ -769,6 +945,7 @@ describe("no string claims an entry is unplaced without proof", () => {
       edgeInputNotice({ edgeInputComplete: false, unloadedEdgeCount: 0 }) ?? "",
       renderCapNotice({ shown: 100, totalCount: 120, omittedCount: 20 }) ?? "",
       pastCapNotice(100),
+      ...sharedStrings(chain),
       ...dockStrings(),
       plotOmissionNotice({ omittedMarkers: 4, omittedConnectors: 2 }) ?? "",
       coverageGapNotice({ originIds: new Set(), global: true, previewCut: true }) ?? "",
@@ -802,12 +979,11 @@ describe("no string claims an entry is unplaced without proof", () => {
   }
 
   it("builds pinned labels for the audit, so shortEntryId and the pin text are really run", () => {
-    const view = { edgeInputComplete: true, narrowed: false, gaps: classifyCoverageGaps([], 0) };
     const chain = chainFor("exactPair", items);
     const pinned = buildChainPlot({
       chain,
       itemsById: mapOf(items),
-      ...view,
+      ...COMPLETE_VIEW,
       window: { startMs: T0 + 1, endMs: T0 + 2 },
     });
     expect(pinned.members.map((marker) => marker.pinLabel)).toEqual(["72 \u00b7 1 ms earlier", "76 \u00b7 6 s later"]);
@@ -821,7 +997,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     // never called here fails. Only UNPLACED_ENTRY is left out: it is the one string that may say
     // "not placed", and only with proof, so the audit cannot print it without defeating its own
     // purpose.
-    const called = everyString.toString() + dockStrings.toString();
+    const called = everyString.toString() + dockStrings.toString() + sharedStrings.toString();
     const producers = [...STRING_EXPORTS].filter((name) => name !== "UNPLACED_ENTRY");
     expect(producers.length).toBeGreaterThan(20);
     for (const name of producers) {
@@ -984,14 +1160,14 @@ describe("the dock's words (spec 8.12, #842)", () => {
     const width = 75_000;
 
     it("makes the spec's claim only when nothing is narrowed and no source went unread", () => {
-      expect(emptyWindowText({ halfWidthMs: width, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 })).toEqual({
+      expect(emptyWindowText({ halfWidthMs: width, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 })).toEqual({
         text: "No other sources have entries within \u00b175 s.",
         absolute: true,
       });
     });
 
     it("says what it looked in, and what it did not, when narrowed", () => {
-      const { text, absolute } = emptyWindowText({ halfWidthMs: width, narrowed: true, unreadSources: false, updating: false, unplacedTotal: 0 });
+      const { text, absolute } = emptyWindowText({ halfWidthMs: width, scopeNarrowed: true, unreadSources: false, updating: false, unplacedTotal: 0 });
       expect(absolute).toBe(false);
       expect(text).toBe(
         "No other visible sources have entries within \u00b175 s. Events hidden by the current filters or time range are not searched.",
@@ -999,7 +1175,7 @@ describe("the dock's words (spec 8.12, #842)", () => {
     });
 
     it("says it when a source went unread", () => {
-      const { text, absolute } = emptyWindowText({ halfWidthMs: width, narrowed: false, unreadSources: true, updating: false, unplacedTotal: 0 });
+      const { text, absolute } = emptyWindowText({ halfWidthMs: width, scopeNarrowed: false, unreadSources: true, updating: false, unplacedTotal: 0 });
       expect(absolute).toBe(false);
       expect(text).toBe(
         "No other visible sources have entries within \u00b175 s. Some sources were not fully read, so entries may be missing.",
@@ -1007,13 +1183,13 @@ describe("the dock's words (spec 8.12, #842)", () => {
     });
 
     it("withdraws the claim while the pair is an earlier session's, and says the timeline is being rebuilt", () => {
-      const { text, absolute } = emptyWindowText({ halfWidthMs: width, narrowed: false, unreadSources: false, updating: true, unplacedTotal: 0 });
+      const { text, absolute } = emptyWindowText({ halfWidthMs: width, scopeNarrowed: false, unreadSources: false, updating: true, unplacedTotal: 0 });
       expect(absolute).toBe(false);
       expect(text).toBe("No other visible sources have entries within \u00b175 s. The timeline is being rebuilt, so this may change.");
     });
 
     describe("entries the engine could not place are in no window, so a window cannot speak for them (#842, review A1)", () => {
-      const clear = { halfWidthMs: width, narrowed: false, unreadSources: false, updating: false };
+      const clear = { halfWidthMs: width, scopeNarrowed: false, unreadSources: false, updating: false };
 
       it("makes the claim only for a KNOWN count of zero", () => {
         expect(emptyWindowText({ ...clear, unplacedTotal: 0 }).absolute).toBe(true);
@@ -1037,13 +1213,13 @@ describe("the dock's words (spec 8.12, #842)", () => {
 
       it("says nothing about unplaced entries when the claim is made, and adds it to the other qualifiers when it is not", () => {
         expect(emptyWindowText({ ...clear, unplacedTotal: 0 }).text).not.toMatch(/usable time/);
-        const all = emptyWindowText({ halfWidthMs: width, narrowed: true, unreadSources: true, updating: true, unplacedTotal: 3 }).text;
+        const all = emptyWindowText({ halfWidthMs: width, scopeNarrowed: true, unreadSources: true, updating: true, unplacedTotal: 3 }).text;
         expect(all).toMatch(/not searched\..*not fully read.*being rebuilt.*3 entries have no usable time/);
       });
     });
 
     it("says both when both hold, and follows the chosen width", () => {
-      const { text } = emptyWindowText({ halfWidthMs: 300_000, narrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 });
+      const { text } = emptyWindowText({ halfWidthMs: 300_000, scopeNarrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 });
       expect(text).toContain("within \u00b15 min.");
       expect(text).toContain("not searched.");
       expect(text).toContain("not fully read");
@@ -1200,8 +1376,8 @@ describe("the dock's words (spec 8.12, #842)", () => {
       NO_SESSION_TEXT,
       READING_WINDOW_TEXT,
       UNREAD_SOURCES_NOTE,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
-      emptyWindowText({ halfWidthMs: 75_000, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: true, unreadSources: true, updating: false, unplacedTotal: 0 }).text,
+      emptyWindowText({ halfWidthMs: 75_000, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 }).text,
       ...(["notLinked", "noLoadedLink", "inAnotherChain", "linkUnknownToEvent", "ambiguousWithEvent", "coverageBlockedWithEvent"] as const).map((r) => nearbyReason(r)),
     ];
     for (const text of strings) expect(text).not.toMatch(causal);
@@ -1215,7 +1391,7 @@ describe("the dock's words (spec 8.12, #842)", () => {
  */
 describe("the notes shared by the dock and the Details context list", () => {
   const WIDTH = 300_000;
-  const whole = { halfWidthMs: WIDTH, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 };
+  const whole = { halfWidthMs: WIDTH, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: 0 };
 
   describe("emptyWindowText with a subject", () => {
     it("says 'sources' by default and when asked, exactly as before", () => {
@@ -1227,7 +1403,7 @@ describe("the notes shared by the dock and the Details context list", () => {
       const list = { ...whole, subject: "entries" as const };
       expect(emptyWindowText(list)).toEqual({ text: "No other entries within \u00b15 min.", absolute: true });
       for (const [why, change] of [
-        ["a narrowed scope", { narrowed: true }],
+        ["a narrowed scope", { scopeNarrowed: true }],
         ["an unread source", { unreadSources: true }],
         ["an earlier session's pair", { updating: true }],
         ["an unknown unplaced count", { unplacedTotal: null }],
@@ -1240,8 +1416,8 @@ describe("the notes shared by the dock and the Details context list", () => {
     });
 
     it("keeps the qualifiers of the dock's sentence for either subject", () => {
-      const dock = emptyWindowText({ ...whole, narrowed: true, unreadSources: true, updating: true, unplacedTotal: 2 });
-      const list = emptyWindowText({ ...whole, narrowed: true, unreadSources: true, updating: true, unplacedTotal: 2, subject: "entries" });
+      const dock = emptyWindowText({ ...whole, scopeNarrowed: true, unreadSources: true, updating: true, unplacedTotal: 2 });
+      const list = emptyWindowText({ ...whole, scopeNarrowed: true, unreadSources: true, updating: true, unplacedTotal: 2, subject: "entries" });
       const tail = (text: string) => text.slice(text.indexOf("\u00b15 min.") + "\u00b15 min.".length);
       expect(tail(list.text)).toBe(tail(dock.text));
       expect(list.text).not.toMatch(NO_UNPROVEN_CLAIM);
@@ -1322,5 +1498,356 @@ describe("the words for a correlation that is being rebuilt (#843)", () => {
       expect(source).toContain("UPDATING_CORRELATION_TEXT");
       expect(source).not.toMatch(/Updating correlation/);
     }
+  });
+});
+
+describe("the words the Correlation view and the Chains tab share (#841)", () => {
+  const items = [eventItem(1, T0, "error", "first failed", 72), eventItem(2, T0 + 6_000, "info", "second ok", 76)];
+
+  it("keeps the two no-model sentences the view said, word for word", () => {
+    expect(NO_ANALYSIS_TEXT).toBe("No event analysis is available. Load events to see correlation.");
+    expect(READING_EDGES_TEXT).toBe("Reading correlation edges...");
+  });
+
+  it("says a failure of the build and of the update in their own words, with the error", () => {
+    expect(correlationFailureText("boom", "built")).toBe("Correlation could not be built: boom");
+    expect(correlationFailureText("boom", "updated")).toBe("Correlation could not be updated: boom");
+  });
+
+  it("says how far reading the timeline has got, and not a number when it does not know", () => {
+    expect(timelineReadingText(null)).toBe("Reading the timeline...");
+    expect(timelineReadingText({ scannedItems: 1_200, totalItems: 5_000 })).toBe(
+      "Reading 1,200 of 5,000 timeline items...",
+    );
+    expect(timelineReadingText(null)).not.toMatch(/\d/);
+  });
+
+  it("says no chain was found in the session only when every edge was loaded", () => {
+    expect(noChainsFoundText(true)).toBe("No correlation chains were found in this session.");
+    expect(noChainsFoundText(false)).toBe("No chains were found among the edges that were loaded.");
+  });
+
+  it("keeps the fixed sentences of the view's rows and Sequence", () => {
+    expect(NO_POSITION_TEXT).toBe("No loaded timeline position");
+    expect(WAIT_FOR_ENTRIES_REASON).toBe("Wait for the entries of this chain to be read.");
+    expect(SEQUENCE_ORDER_NOTE).toBe("Ordered by recorded time. Order is not evidence of cause.");
+    expect(SAME_TIME_NOTE).toBe("(same timestamp as the entry above; their order is not established)");
+  });
+
+  describe("chainRowName", () => {
+    it("names a titled row by strength, title and entry count", () => {
+      const chain = chainFor("exactPair", items);
+      expect(chainRowName(chain)).toBe("Exact, 72 \u00b7 first failed, 2 entries");
+    });
+
+    it("keeps the id of an untitled row, so two of them are told apart, and says when it is partial", () => {
+      const chain = chainFor("exactPair", []);
+      expect(chain.title).toBeNull();
+      expect(chainRowName(chain)).toBe(`Exact, Untitled chain ${chain.id}, 2 entries, partial`);
+    });
+
+    it("names an ambiguous row by its own strength word", () => {
+      expect(chainRowName(chainFor("group3", items))).toMatch(/^Ambiguous, /);
+    });
+  });
+
+  describe("correlationNotices", () => {
+    const base = {
+      edgeInput: { edgeInputComplete: false, unloadedEdgeCount: 4 },
+      edgeError: "edges down",
+      gaps: { originIds: new Set<string>(), global: true, previewCut: false },
+      scan: { state: "incomplete", stoppedBy: "budget", error: null } as const,
+      selectionLoss: "The chain that was selected is no longer present.",
+      scope: scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 }),
+      cap: { shown: 100, totalCount: 120, omittedCount: 20 },
+      pastCapShown: 100,
+    };
+
+    it("lists the notices in the view's order, with the lost selection after the scan and before the scope", () => {
+      const scope = scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 })!;
+      expect(correlationNotices(base)).toEqual([
+        edgeInputNotice(base.edgeInput),
+        edgeErrorNotice("edges down"),
+        coverageGapNotice(base.gaps),
+        scanNotice(base.scan),
+        "The chain that was selected is no longer present.",
+        scope.strengthNote,
+        scope.textLogNote,
+        renderCapNotice(base.cap),
+        pastCapNotice(100),
+      ]);
+    });
+
+    it("drops what has nothing to say, and the lost-selection slot of a surface that holds no selection", () => {
+      expect(
+        correlationNotices({
+          edgeInput: COMPLETE,
+          edgeError: null,
+          gaps: classifyCoverageGaps([], 0),
+          scan: { state: "complete", stoppedBy: null, error: null },
+          selectionLoss: null,
+          scope: null,
+          cap: { shown: 3, totalCount: 3, omittedCount: 0 },
+          pastCapShown: null,
+        }),
+      ).toEqual([]);
+    });
+
+    it("says the origins the engine left uncorrelated after the coverage note, even when no gap is global (#841, review M1)", () => {
+      const originOnly = classifyCoverageGaps([{ source: rid(1), reason: "identity conflict" }], 1);
+      const complete = {
+        edgeInput: COMPLETE,
+        edgeError: null,
+        scan: { state: "complete", stoppedBy: null, error: null } as const,
+        selectionLoss: null,
+        scope: null,
+        cap: { shown: 3, totalCount: 3, omittedCount: 0 },
+        pastCapShown: null,
+      };
+      // coverageGapNotice has nothing to say for a gap that names an origin: this note is what does.
+      expect(coverageGapNotice(originOnly)).toBeNull();
+      expect(correlationNotices({ ...complete, gaps: originOnly })).toEqual([uncorrelatedOriginsNotice(originOnly)]);
+      const both = classifyCoverageGaps(
+        [
+          { source: "correlation", reason: "limit" },
+          { source: rid(1), reason: "identity conflict" },
+        ],
+        2,
+      );
+      const notices = correlationNotices({ ...complete, gaps: both });
+      expect(notices).toEqual([coverageGapNotice(both), uncorrelatedOriginsNotice(both)]);
+    });
+
+    it("says the past-cap line only when the selected row is listed past the rows the cap kept", () => {
+      expect(correlationNotices({ ...base, pastCapShown: null })).not.toContain(pastCapNotice(100));
+      expect(correlationNotices({ ...base, pastCapShown: 100 })).toContain(pastCapNotice(100));
+    });
+  });
+
+  describe("are said by this module alone", () => {
+    /** Every source of the workspace that is not a test, a test helper or a fixture. */
+    const workspaceSources = Object.fromEntries(
+      Object.entries(
+        import.meta.glob("./**/*.{ts,tsx}", { query: "?raw", import: "default", eager: true }) as Record<string, string>,
+      )
+        .filter(([path]) => !/\.test\.tsx?$|-test-helpers\.|-test-fixtures\.|\/__fixtures__\//.test(path))
+        .map(([path, source]) => [path.replace(/^\.\//, ""), source]),
+    );
+
+    const PHRASES = [
+      "No event analysis is available",
+      "Reading correlation edges",
+      "Correlation could not be",
+      "No loaded timeline position",
+      "Wait for the entries of this chain",
+      "Order is not evidence of cause",
+      "their order is not established",
+      "No correlation chains were found",
+      "No chains were found",
+      "Reading the timeline",
+      "timeline items...",
+      "The entries of this chain are being read",
+      "No entry has a loaded timeline position",
+      "same timestamp as the entry above",
+      "The chain count is not known",
+    ];
+
+    /**
+     * A file that holds a phrase for a reason of its own: a comment, not a sentence anything says. A
+     * generic phrase would force entries for other sentences ("Diagnosis could not be built.") that
+     * hide a real re-spelling in those files, which is why the failure phrase is the distinctive
+     * "Correlation could not be" and not "could not be built".
+     */
+    const ALLOWED: Record<string, Record<string, string>> = {
+      "evtx-correlation-view-model.ts": {
+        "their order is not established": "a doc comment on SequenceEntry.sameTimeAsPrevious, not a sentence anything says",
+      },
+    };
+
+    it("is read from every source of the workspace, including the view and this module", () => {
+      expect(Object.keys(workspaceSources).length).toBeGreaterThan(50);
+      expect(workspaceSources["EvtxCorrelationView.tsx"]).toBeDefined();
+      expect(workspaceSources["evtx-correlation-copy.ts"]).toContain("Reading correlation edges");
+    });
+
+    it("is spelled by no other source of the workspace than this module, the allow-list apart", () => {
+      const spelled = Object.entries(workspaceSources)
+        .filter(([file]) => file !== "evtx-correlation-copy.ts")
+        .flatMap(([file, source]) =>
+          PHRASES.filter((phrase) => source.includes(phrase) && ALLOWED[file]?.[phrase] === undefined).map(
+            (phrase) => `${file}: ${phrase}`,
+          ),
+        );
+      expect(spelled).toEqual([]);
+    });
+
+    it("lists only phrases this module holds, so a phrase that is reworded cannot leave the guard empty", () => {
+      for (const phrase of PHRASES) expect(workspaceSources["evtx-correlation-copy.ts"], phrase).toContain(phrase);
+    });
+
+    it("keeps its allow-list live: every entry still holds its phrase", () => {
+      for (const [file, phrases] of Object.entries(ALLOWED)) {
+        for (const phrase of Object.keys(phrases)) expect(workspaceSources[file], `${file}: ${phrase}`).toContain(phrase);
+      }
+    });
+
+    it("says each shared sentence once inside this module too, for the list and the copied text alike", () => {
+      for (const phrase of [
+        "their order is not established",
+        "No entry has a loaded timeline position",
+        "The entries of this chain are being read",
+        "No loaded timeline position",
+        "Reading correlation edges",
+        "No event analysis is available. Load events to see correlation",
+      ]) {
+        expect(workspaceSources["evtx-correlation-copy.ts"]!.split(phrase), phrase).toHaveLength(2);
+      }
+    });
+  });
+});
+
+describe("nearbyReasonOfLabel, the reason beside a context entry for the label the plot gave it (#841)", () => {
+  it.each([
+    [NOT_LINKED_LABEL, "notLinked", "time only, not linked"],
+    [IN_ANOTHER_CHAIN_LABEL, "inAnotherChain", "time only; in another chain"],
+    [LINK_TO_EVENT_UNKNOWN_LABEL, "linkUnknownToEvent", "linked, but its link to this event is not known"],
+    [NO_LOADED_LINK_LABEL, "noLoadedLink", "time only, no loaded link"],
+  ] as const)("reads %s as %s", (label, reason, text) => {
+    expect(nearbyReasonOfLabel(label)).toBe(reason);
+    expect(nearbyReason(nearbyReasonOfLabel(label))).toBe(text);
+  });
+
+  it("reads a label it does not know, and no label, as the weakest claim: no loaded link", () => {
+    expect(nearbyReasonOfLabel(null)).toBe("noLoadedLink");
+    expect(nearbyReasonOfLabel(NOT_IN_THIS_CHAIN_LABEL)).toBe("noLoadedLink");
+    expect(nearbyReasonOfLabel("anything else")).toBe("noLoadedLink");
+  });
+
+  it("never reads 'No loaded link' as 'not linked'", () => {
+    expect(nearbyReason(nearbyReasonOfLabel(NO_LOADED_LINK_LABEL))).not.toMatch(/not linked/);
+  });
+});
+
+describe("the words of the rail's Chains tab (#841)", () => {
+  const items = [eventItem(1, T0, "error", "first failed", 72), eventItem(2, T0 + 6_000, "info", "second ok", 76)];
+
+  it("says the spec's empty state only when the session can speak for an absence of links", () => {
+    expect(NO_LINKED_EVENTS_TEXT).toBe(
+      "No linked events. Correlation requires a shared identifier; time proximity alone is not a link.",
+    );
+    expect(noLinkedChainsText({ speaks: true, edgeInputComplete: true })).toBe(NO_LINKED_EVENTS_TEXT);
+  });
+
+  it("says only what was looked at when the session cannot speak, in the view's words for missing edges", () => {
+    expect(noLinkedChainsText({ speaks: false, edgeInputComplete: false })).toBe(noChainsFoundText(false));
+    expect(noLinkedChainsText({ speaks: false, edgeInputComplete: true })).toBe(NO_CHAINS_QUALIFIED_TEXT);
+    expect(NO_CHAINS_QUALIFIED_TEXT).toBe(
+      "No chains were found, but the notes above say what was not covered, so this does not show that none exist.",
+    );
+    for (const text of [NO_CHAINS_QUALIFIED_TEXT, noChainsFoundText(false)]) {
+      expect(text).not.toMatch(/no linked events/i);
+    }
+  });
+
+  it("qualifies the line above rows that are not links the same way", () => {
+    expect(noLinkingChainsLine(true)).toBe("No exact or candidate chains were found.");
+    expect(noLinkingChainsLine(false)).toBe("No exact or candidate chains were found among what was loaded.");
+  });
+
+  it("names the nearby group by the one word its entries may carry, with the number of entries", () => {
+    expect(nearbyHeading("Not linked", 3)).toBe("Nearby, not linked (3)");
+    expect(nearbyHeading("No loaded link", 1)).toBe("Nearby, no loaded link (1)");
+    expect(nearbyHeading("Not in this chain", 1_204)).toBe("Nearby, not in this chain (1,204)");
+  });
+
+  it("explains a chain whose entries are not listed, and says no more", () => {
+    expect(CHAIN_ENTRIES_BEING_READ_TEXT).toBe("The entries of this chain are being read.");
+    // Said in place of a chain number the engine's gaps leave unproven: it states no number, never a 0.
+    expect(CHAIN_COUNT_NOT_KNOWN_TEXT).toBe("The chain count is not known");
+    expect(CHAIN_COUNT_NOT_KNOWN_TEXT).not.toMatch(/\d/);
+    expect(CHAIN_STEPS_NOT_READ_TEXT).toBe("The entries of this chain were not read, so there are no steps to show.");
+    expect(NO_ENTRY_POSITION_TEXT).toBe("No entry has a loaded timeline position.");
+  });
+
+  it("says that sources not fully read may hide entries and links", () => {
+    expect(UNREAD_SOURCES_CHAINS_NOTE).toBe(
+      "Some sources were not fully read, so entries and links may be missing from these chains.",
+    );
+    expect(UNREAD_SOURCES_CHAINS_NOTE).not.toBe(UNREAD_SOURCES_NOTE);
+  });
+
+  it("names the selected event's chain in its accessible name", () => {
+    expect(CONTAINS_SELECTED_EVENT_SUFFIX).toBe(", contains the selected event");
+  });
+
+  describe("unresolvedStepsNotice", () => {
+    const two = chainFor("exactPair", [eventItem(1, T0)]);
+    const proof = { scanComplete: true, unplacedListComplete: true, unplacedIds: new Set([rid(2)]) };
+
+    it("says no timestamp only when the engine's complete unplaced list proves it, and then of steps", () => {
+      expect(unresolvedStepsNotice(two, proof)).toBe("1 of 2 entries carry no timestamp, so they are not listed as steps.");
+    });
+
+    it("otherwise says only that no position was loaded", () => {
+      for (const weak of [
+        { ...proof, scanComplete: false },
+        { ...proof, unplacedListComplete: false },
+        { ...proof, unplacedIds: new Set<string>() },
+      ]) {
+        expect(unresolvedStepsNotice(two, weak)).toBe(
+          "1 of 2 entries have no loaded timeline position, so they are not listed as steps.",
+        );
+      }
+    });
+
+    it("is silent for a chain whose members all have an item, and never mentions a plot", () => {
+      expect(unresolvedStepsNotice(chainFor("exactPair", items), proof)).toBeNull();
+      expect(unresolvedStepsNotice(two, proof)).not.toMatch(/plot/);
+    });
+  });
+
+  describe("the copied Sequence heading", () => {
+    it("is the order note's two sentences, joined, and says them nowhere else", () => {
+      expect(SEQUENCE_HEADING).toBe("Sequence (ordered by recorded time; order is not evidence of cause)");
+      expect(SEQUENCE_HEADING).toBe(
+        `Sequence (${SEQUENCE_ORDER_NOTE.replace(/\.$/, "").split(". ").map((part) => part[0]!.toLowerCase() + part.slice(1)).join("; ")})`,
+      );
+      expect(copySource.split("evidence of cause")).toHaveLength(2);
+    });
+
+    it("heads the copied text", () => {
+      const chain = chainFor("exactPair", items);
+      expect(chainCopyText(copyInput(chain, items))).toContain(`\n${SEQUENCE_HEADING}\n`);
+    });
+  });
+});
+
+describe("chainActionAvailability, whether an action on the model on show may act", () => {
+  it("allows the actions only on a chain whose entries were read, in a model that is not being rebuilt", () => {
+    expect(chainActionAvailability({ hasItems: true, updating: false, hasChain: true })).toEqual({
+      canAct: true,
+      reason: undefined,
+    });
+  });
+
+  it("waits for the update first, then for the entries", () => {
+    expect(chainActionAvailability({ hasItems: true, updating: true, hasChain: true })).toEqual({
+      canAct: false,
+      reason: WAIT_FOR_UPDATE_REASON,
+    });
+    expect(chainActionAvailability({ hasItems: false, updating: true, hasChain: true }).reason).toBe(
+      WAIT_FOR_UPDATE_REASON,
+    );
+    expect(chainActionAvailability({ hasItems: false, updating: false, hasChain: true })).toEqual({
+      canAct: false,
+      reason: WAIT_FOR_ENTRIES_REASON,
+    });
+  });
+
+  it("cannot act on no chain, and says to wait for the entries", () => {
+    expect(chainActionAvailability({ hasItems: true, updating: false, hasChain: false })).toEqual({
+      canAct: false,
+      reason: WAIT_FOR_ENTRIES_REASON,
+    });
   });
 });

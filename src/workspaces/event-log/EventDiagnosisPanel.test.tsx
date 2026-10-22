@@ -1,14 +1,22 @@
 import { tokens } from "@fluentui/react-components";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The card's links go through the actions module, which imports the event-log store, which subscribes to
+// Tauri events when it is first loaded.
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => undefined),
+}));
 import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes, getThemeById } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import { DETAIL_RENDER_CAP, OUTCOME_LABELS, EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
-import { fixtureEdges, makeData, type DataOptions } from "./evtx-correlation-test-fixtures";
-import { useEvtxLayoutStore } from "./evtx-layout-store";
+import { classifyCoverageGaps } from "./evtx-correlation-gaps";
+import { fixtureEdges, makeData, rid, type DataOptions } from "./evtx-correlation-test-fixtures";
+import panelSource from "./EventDiagnosisPanel.tsx?raw";
+import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
 import type { UnplacedItem } from "./unified-timeline";
 import {
   EvtxCorrelationProvider,
@@ -679,6 +687,48 @@ describe("EventDiagnosisPanel", () => {
       expect(card()).not.toHaveTextContent("exact");
     });
 
+    describe("states no chain number the engine's gaps leave unproven, as the Chains tab does (#841, review L1)", () => {
+      const limit = classifyCoverageGaps([{ source: "correlation", reason: "limit" }], 1);
+      // 100 origin gaps shown of 101: `global` is read from the preview, so a cut one can hide a limit.
+      const cut = classifyCoverageGaps(
+        Array.from({ length: 100 }, (_, i) => ({ source: rid(500 + i), reason: "x" })),
+        101,
+      );
+
+      it.each([
+        ["a limit or truncation gap", limit, "The engine limited correlation, so some entries may not have been correlated"],
+        ["a gap preview that is cut", cut, "More coverage gaps may exist than are listed"],
+      ])("reads 'unknown', with the sub-lines gone and the reason said, under %s", (_why, gaps, reason) => {
+        renderCard(counted({ gaps }));
+        expect(screen.getByTestId("correlation-card-headline")).toHaveTextContent("unknown");
+        expect(card()).toHaveTextContent(reason);
+        expect(card().textContent).not.toMatch(/\d+ chains?|exact|candidate|ambiguous|coverage blocked/);
+      });
+
+      it("states the chains that were found when only an origin is uncorrelated, with the note saying so", () => {
+        renderCard(counted({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "alias conflict" }], 1) }));
+        expect(screen.getByTestId("correlation-card-headline")).toHaveTextContent("2 chains");
+        expect(card()).toHaveTextContent("1 event could not be fully correlated, so links involving it may be missing.");
+      });
+
+      it("never states 0 chains while an origin is uncorrelated: that would say the session has none", () => {
+        renderCard(counted({ edges: fixtureEdges("gappedPair"), gaps: classifyCoverageGaps([{ source: rid(900), reason: "x" }], 1) }));
+        expect(screen.getByTestId("correlation-card-headline")).toHaveTextContent("unknown");
+        expect(card().textContent).not.toMatch(/\b0 chains/);
+        expect(card()).toHaveTextContent("1 event could not be fully correlated");
+      });
+
+      it("says 'At least' when the gap preview that names the origins is cut", () => {
+        renderCard(counted({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "x" }, { source: rid(2), reason: "x" }], 40) }));
+        expect(card()).toHaveTextContent("At least 2 events could not be fully correlated, so links involving them may be missing.");
+      });
+
+      it("asks the rule the Chains tab asks, and does not count the chains itself", () => {
+        expect(panelSource).toMatch(/\bchainCountForGaps\(/);
+        expect(panelSource).not.toMatch(/const correlations = rows === undefined \? 0/);
+      });
+    });
+
     it("has no card without a session, nor for a session known to hold no edge", () => {
       renderCard(UNAVAILABLE_CORRELATION);
       expect(screen.queryByRole("region", { name: "Correlations" })).toBeNull();
@@ -701,6 +751,18 @@ describe("EventDiagnosisPanel", () => {
       expect(useEvtxLayoutStore.getState().activeView).toBe("correlation");
       expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
       expect(useEvtxCorrelationStore.getState().selectedChainId).toBe("keep");
+    });
+
+    it("moves focus to the Correlation tab when the Correlation view is opened, as every Open does", () => {
+      const tab = document.createElement("button");
+      tab.id = evtxViewTabId("correlation");
+      document.body.appendChild(tab);
+      renderCard(counted());
+      fireEvent.click(within(card()).getByRole("button", { name: "Open correlation view" }));
+      expect(tab).toHaveFocus();
+      // It opens no chain, so the view's lost-selection record is not dropped by it.
+      expect(useEvtxCorrelationStore.getState().openedCount).toBe(0);
+      tab.remove();
     });
 
     it("keeps the link in an unknown state, where the view says what is being read", () => {
@@ -821,6 +883,17 @@ describe("EventDiagnosisPanel", () => {
       expect(useEvtxLayoutStore.getState().railTab).toBe("insights");
       expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(true);
       expect(useEvtxCorrelationStore.getState().selectedChainId).toBe("keep");
+    });
+
+    it("moves focus to the Correlation tab when the Not placed list is opened, like the other Open", () => {
+      const tab = document.createElement("button");
+      tab.id = evtxViewTabId("correlation");
+      document.body.appendChild(tab);
+      useEvtxLayoutStore.setState({ activeView: "table" });
+      renderCard(counted({ unplacedList: { items: [unplacedLog(1)], total: 1 } }));
+      fireEvent.click(reviewLink()!);
+      expect(tab).toHaveFocus();
+      tab.remove();
     });
 
     it("builds no item to count: a model without items is enough", () => {

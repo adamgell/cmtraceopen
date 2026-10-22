@@ -3,11 +3,16 @@ import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import {
   CORRELATION_CHAIN_RENDER_LIMIT,
   buildCorrelationChains,
+  chainCountForGaps,
+  chainsTabCount,
+  correlationChainCount,
   derivedTitle,
+  strongestRowOf,
   type CorrelationChain,
   type CorrelationChainInput,
   type CorrelationChainModel,
 } from "./evtx-correlation-chains";
+import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import type { DiagnosisFindingClass } from "./types";
 import type {
   TimelineCorrelationEdge,
@@ -1726,5 +1731,170 @@ describe("the exported D19 title (#842)", () => {
 
   it("is null when no member has an item", () => {
     expect(derivedTitle(["a", "b"], new Map())).toBeNull();
+  });
+});
+
+describe("the chain count (#841)", () => {
+  it("counts exact, candidate and ambiguous rows, and leaves coverage blocked apart", () => {
+    expect(correlationChainCount({ exact: 3, candidate: 2, ambiguous: 1, coverageBlocked: 5 })).toBe(6);
+  });
+
+  it("is 0 only when no row of the three kinds exists, whatever the blocked count", () => {
+    expect(correlationChainCount({ exact: 0, candidate: 0, ambiguous: 0, coverageBlocked: 4 })).toBe(0);
+  });
+
+  it("reads the model's own counts: a blocked row is a row of the model and not a chain", () => {
+    const items = [
+      eventItem("a", 1000),
+      eventItem("b", 2000),
+      eventItem("c", 3000),
+      eventItem("d", 4000),
+    ];
+    const model = build({
+      items,
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact"),
+        { ...tEdge("e2", "c", "d", "exact"), coverage: { state: "gap", gap: { source: "s", reason: "r" } } },
+      ],
+    });
+    expect(model.totalCount).toBe(2);
+    expect(model.counts.coverageBlocked).toBe(1);
+    expect(correlationChainCount(model.counts)).toBe(1);
+  });
+});
+
+describe("strongestRowOf, the row a member is shown under (#841)", () => {
+  it("is the strongest row the member is in: the model lists them strongest first", () => {
+    const model = build({
+      timelineEdges: [tEdge("e1", "a", "b", "exact"), ...ambiguousGroup("g", ["a", "x", "y"])],
+    });
+    expect(model.rowsByMember.get("a")?.map((row) => row.strength)).toEqual(["exact", "ambiguous"]);
+    expect(strongestRowOf(model.rowsByMember, "a")?.strength).toBe("exact");
+    expect(strongestRowOf(model.rowsByMember, "a")).toBe(model.rowsByMember.get("a")?.[0]);
+    expect(strongestRowOf(model.rowsByMember, "x")?.strength).toBe("ambiguous");
+  });
+
+  it("is the first row it is given, and does not sort", () => {
+    const model = build({
+      timelineEdges: [tEdge("e1", "a", "b", "exact"), ...ambiguousGroup("g", ["a", "x", "y"])],
+    });
+    const [exact, ambiguous] = model.rowsByMember.get("a")!;
+    expect(strongestRowOf(new Map([["a", [ambiguous!, exact!]]]), "a")).toBe(ambiguous);
+  });
+
+  it("finds a row the 100-row render cap dropped", () => {
+    const model = build({
+      timelineEdges: Array.from({ length: 130 }, (_, i) => tEdge(`e${i}`, `l${i}`, `r${i}`, "exact")),
+    });
+    const shown = new Set(model.chains.flatMap((chain) => [...chain.memberIds, ...chain.unresolvedMemberIds]));
+    const past = Array.from({ length: 130 }, (_, i) => `l${i}`).find((id) => !shown.has(id)) as string;
+    const row = strongestRowOf(model.rowsByMember, past);
+    expect(row).not.toBeNull();
+    expect(model.chains).not.toContain(row);
+  });
+
+  it("is null for an id no row names, and for an empty list, never a made-up row", () => {
+    const model = build({ timelineEdges: [tEdge("e1", "a", "b", "exact")] });
+    expect(strongestRowOf(model.rowsByMember, "zzz")).toBeNull();
+    expect(strongestRowOf(new Map([["a", []]]), "a")).toBeNull();
+  });
+});
+
+describe("chainCountForGaps, the number a surface may state for the gaps the engine reported (#841, review L1)", () => {
+  const clear = classifyCoverageGaps([], 0);
+  const originGap = classifyCoverageGaps([{ source: "source4:Live|machine10:HOST|channel3:App|record5", reason: "x" }], 1);
+
+  it("is the count when no gap says chains may be missing, a 0 included", () => {
+    expect(chainCountForGaps(3, clear)).toBe(3);
+    expect(chainCountForGaps(0, clear)).toBe(0);
+  });
+
+  it("is no number under a limit or truncation gap: chains may be missing, whatever the count", () => {
+    const limit = classifyCoverageGaps([{ source: "correlation", reason: "limit" }], 1);
+    expect(limit.global).toBe(true);
+    expect(chainCountForGaps(3, limit)).toBeNull();
+    expect(chainCountForGaps(0, limit)).toBeNull();
+  });
+
+  it("is no number when the gap preview is cut: a gap that is not shown may be the limit", () => {
+    // 100 origin gaps shown of 101: `global` is read from the preview, so it cannot tell.
+    const shown = Array.from({ length: 100 }, (_, i) => ({ source: `origin-${i}`, reason: "x" }));
+    const cut = classifyCoverageGaps(shown, 101);
+    expect(cut.global).toBe(false);
+    expect(cut.previewCut).toBe(true);
+    expect(chainCountForGaps(3, cut)).toBeNull();
+    expect(chainCountForGaps(0, cut)).toBeNull();
+    expect(chainCountForGaps(3, classifyCoverageGaps([], null))).toBeNull();
+  });
+
+  it("states chains that were found when only an origin is uncorrelated, but never a 0: an absence is unproven", () => {
+    expect(chainCountForGaps(3, originGap)).toBe(3);
+    expect(chainCountForGaps(0, originGap)).toBeNull();
+  });
+});
+
+describe("chainsTabCount, the number the Chains tab shows (#841)", () => {
+  const countsOf = (model: CorrelationChainModel, updating = false, gaps = classifyCoverageGaps([], 0)) => ({
+    model,
+    updating,
+    gaps,
+  });
+  const mixed = () =>
+    build({
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact"),
+        tEdge("e2", "c", "d", "candidate"),
+        ...ambiguousGroup("g", ["x", "y", "z"]),
+        gappedExact("e3", "m", "n"),
+      ],
+    });
+
+  it("is the chain count of the card: exact, candidate and ambiguous, with a blocked row apart", () => {
+    const model = mixed();
+    expect(model.counts).toEqual({ exact: 1, candidate: 1, ambiguous: 1, coverageBlocked: 1 });
+    expect(chainsTabCount(countsOf(model))).toBe(3);
+    expect(chainsTabCount(countsOf(model))).toBe(correlationChainCount(model.counts));
+  });
+
+  it("is a known 0 for a session whose every edge was loaded and holds none, never null", () => {
+    expect(chainsTabCount(countsOf(build({})))).toBe(0);
+  });
+
+  it("is no number when there are no counts yet: unknown is not 0", () => {
+    expect(chainsTabCount(null)).toBeNull();
+  });
+
+  it("is no number while the counts are an earlier session's", () => {
+    expect(chainsTabCount(countsOf(mixed(), true))).toBeNull();
+  });
+
+  it("is no number when edges were not all loaded: the loaded count is neither a lower nor an upper bound", () => {
+    const partial = build({ timelineEdges: [tEdge("e1", "a", "b", "exact")], totalTimelineEdges: 9 });
+    expect(partial.edgeInputComplete).toBe(false);
+    expect(chainsTabCount(countsOf(partial))).toBeNull();
+  });
+
+  it.each([Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY])("is no number when the edge total is not trusted (%s)", (total) => {
+    const model = build({ timelineEdges: [tEdge("e1", "a", "b", "exact")], totalTimelineEdges: total });
+    expect(chainsTabCount(countsOf(model))).toBeNull();
+  });
+
+  it("is no number when the engine limited correlation: chains may be missing (review L1)", () => {
+    const limit = classifyCoverageGaps([{ source: "correlation", reason: "limit" }], 1);
+    expect(chainsTabCount(countsOf(mixed(), false, limit))).toBeNull();
+    expect(chainsTabCount(countsOf(build({}), false, limit))).toBeNull();
+  });
+
+  it("is no number when the gap preview is cut, because a limit that is not shown cannot be ruled out", () => {
+    const shown = Array.from({ length: 100 }, (_, i) => ({ source: `origin-${i}`, reason: "x" }));
+    const cut = classifyCoverageGaps(shown, 101);
+    expect(cut.global).toBe(false);
+    expect(chainsTabCount(countsOf(mixed(), false, cut))).toBeNull();
+  });
+
+  it("states the chains found when an origin is uncorrelated, and no 0 (that would claim an absence)", () => {
+    const originGap = classifyCoverageGaps([{ source: "source4:Live|machine10:HOST|channel3:App|record5", reason: "x" }], 1);
+    expect(chainsTabCount(countsOf(mixed(), false, originGap))).toBe(3);
+    expect(chainsTabCount(countsOf(build({}), false, originGap))).toBeNull();
   });
 });

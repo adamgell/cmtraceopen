@@ -26,6 +26,19 @@ import {
 export const rid = (n: number) => `source4:Live|machine10:DESKTOP-01|channel6:System|record${n}`;
 export const T0 = Date.UTC(2026, 9, 6, 10, 20, 0);
 export const CLEAR_GAPS = classifyCoverageGaps([], 0);
+/**
+ * The inputs the plot's absence rule reads when none of them withholds the claim: edges complete,
+ * the scope not narrowed, every source read, no rebuild under way, no coverage gap. It is the only
+ * state in which "Not linked" may be said, so a plot test spreads it and overrides the one thing
+ * the test is about.
+ */
+export const COMPLETE_VIEW = {
+  edgeInputComplete: true,
+  scopeNarrowed: false,
+  unreadSources: false,
+  updating: false,
+  gaps: CLEAR_GAPS,
+};
 
 export function fixtureEdges(name: string, offset = 0): TimelineCorrelationEdge[] {
   const scenarios = fixtureDocument.scenarios as unknown as Record<

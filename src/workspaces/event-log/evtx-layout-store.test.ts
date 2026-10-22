@@ -4,12 +4,16 @@ import {
   DEFAULT_RAIL_WIDTH,
   EVTX_DOCK_WINDOW_OPTIONS_MS,
   EVTX_PANELS_AVAILABLE,
+  EVTX_RAIL_TAB_IDS,
+  EVTX_VIEW_IDS,
   EVTX_LAYOUT_STORAGE_KEY,
   EVTX_LAYOUT_VERSION,
   MAX_RAIL_WIDTH,
   MIN_DOCK_HEIGHT,
   MIN_RAIL_WIDTH,
+  chainsTabShown,
   clampDockHeight,
+  correlationItemsNeeded,
   evtxPanelToggleId,
   maxDockHeightFor,
   sanitizeLayout,
@@ -324,5 +328,38 @@ describe("evtx-layout-store", () => {
     expect(panels.insights).toBe(defaults.insights);
     expect(panels.dock).toBe(defaults.dock);
     expect(panels).toEqual(defaults);
+  });
+});
+
+describe("when the Chains tab is shown, and when the correlation entries must be read (#841)", () => {
+  const rail = (insights: boolean, railTab: (typeof EVTX_RAIL_TAB_IDS)[number]) => ({
+    panels: { channels: true, insights, dock: false },
+    railTab,
+  });
+
+  it("shows the Chains tab only when the rail is visible and on that tab", () => {
+    expect(chainsTabShown(rail(true, "chains"))).toBe(true);
+    expect(chainsTabShown(rail(false, "chains"))).toBe(false);
+    expect(chainsTabShown(rail(true, "insights"))).toBe(false);
+    expect(chainsTabShown(rail(true, "details"))).toBe(false);
+  });
+
+  it.each(EVTX_VIEW_IDS)("needs the entries on the %s view only when it is Correlation, with the Chains tab not shown", (view) => {
+    expect(correlationItemsNeeded({ activeView: view, ...rail(true, "insights") })).toBe(view === "correlation");
+  });
+
+  it.each(EVTX_VIEW_IDS)("needs the entries on the %s view when the Chains tab is shown", (view) => {
+    expect(correlationItemsNeeded({ activeView: view, ...rail(true, "chains") })).toBe(true);
+  });
+
+  it.each(EVTX_VIEW_IDS)("does not need them on the %s view when the rail is hidden, unless that is Correlation", (view) => {
+    expect(correlationItemsNeeded({ activeView: view, ...rail(false, "chains") })).toBe(view === "correlation");
+  });
+
+  it("reads the live store through a selector", () => {
+    useEvtxLayoutStore.setState({ activeView: "table", railTab: "chains", panels: { channels: true, insights: true, dock: false } });
+    expect(correlationItemsNeeded(useEvtxLayoutStore.getState())).toBe(true);
+    useEvtxLayoutStore.getState().setPanel("insights", false);
+    expect(correlationItemsNeeded(useEvtxLayoutStore.getState())).toBe(false);
   });
 });

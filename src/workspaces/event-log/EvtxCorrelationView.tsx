@@ -23,27 +23,34 @@ import { correlationSizes, type CorrelationSizes } from "./evtx-correlation-size
 import { EvtxCorrelationOverview } from "./EvtxCorrelationOverview";
 import { EvtxUnplacedList } from "./EvtxUnplacedList";
 import {
-  STRENGTH_LABELS,
+  CHAIN_COUNT_NOT_KNOWN_TEXT,
+  CHAIN_ENTRIES_BEING_READ_TEXT,
+  NO_ANALYSIS_TEXT,
+  NO_ENTRY_POSITION_TEXT,
+  NO_POSITION_TEXT,
+  READING_EDGES_TEXT,
+  SAME_TIME_NOTE,
+  SEQUENCE_ORDER_NOTE,
+  chainActionAvailability,
   chainCopyText,
-  coverageGapNotice,
-  edgeErrorNotice,
-  edgeInputNotice,
+  chainRowName,
+  correlationFailureText,
+  correlationNotices,
   keyKindLabel,
-  pastCapNotice,
+  noChainsFoundText,
   plotOmissionNotice,
-  renderCapNotice,
-  scanNotice,
   scopeDisclosure,
+  timelineReadingText,
   unresolvedNotice,
   whyHeading,
   whyStatement,
   UPDATING_CORRELATION_TEXT,
 } from "./evtx-correlation-copy";
-import type { CorrelationChain } from "./evtx-correlation-chains";
+import { chainCountForGaps, correlationChainCount, type CorrelationChain } from "./evtx-correlation-chains";
 import {
   resolveOriginRecords,
-  scopeForChain,
 } from "./evtx-correlation-origin-index";
+import { filterTableToChain, loadedEvidenceIndex } from "./evtx-correlation-actions";
 import { resolveMarkerClick } from "./evtx-correlation-dock-model";
 import { zoomWindowFor, type ZoomState } from "./evtx-correlation-overview";
 import {
@@ -58,7 +65,6 @@ import {
 } from "./evtx-correlation-selection-loss";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import {
-  WAIT_FOR_UPDATE_REASON,
   describeUnplaced,
   notPlacedCaption,
   notPlacedLabel,
@@ -78,6 +84,7 @@ import {
   listedRows,
   memberLinkSummary,
   reconcileSelection,
+  sessionSpeaksForAbsenceOverall,
   spanText,
   whyRows,
   type ListedRows,
@@ -85,9 +92,7 @@ import {
   type TimeWindow,
 } from "./evtx-correlation-view-model";
 import { useEvtxCorrelationData } from "./useEvtxCorrelation";
-import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
-import type { EvtxRecordScopeCounts } from "./evtx-filter";
-import { buildEvidenceIndex, describeScopeCounts, type EvidenceIndex } from "./evtx-insights-data";
+import { useUnreadSources } from "./useUnreadSources";
 import { useRailTextColors } from "./evtx-rail-text";
 import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
@@ -100,8 +105,6 @@ import type { TimelineItem } from "./unified-timeline";
 /** Spec 10: a polite announcement at most once every 5 s. */
 export const CORRELATION_ANNOUNCE_MS = 5_000;
 const LIST_WIDTH_PX = 250;
-const NO_ANALYSIS_TEXT = "No event analysis is available. Load events to see correlation.";
-const READING_EDGES_TEXT = "Reading correlation edges...";
 
 /** A reply to something the operator did, or the failure of it (a failure is announced as an alert). */
 interface ActionMessage {
@@ -145,31 +148,6 @@ const LOG_ENTRY_NO_SELECTION: Record<Extract<ReturnType<typeof resolveMarkerClic
   noIdentity: "This entry has no usable record identity, so no record is selected.",
 };
 
-/**
- * The index of the records loaded NOW, built when a click needs it and not before. Loaded records
- * change with every live-tail batch while this view is open, and nothing reads the index until a
- * marker is clicked or the table is filtered, so a memo over the records would rebuild it (tens of
- * milliseconds at 100,000 events) for nothing, on every batch.
- */
-function loadedEvidenceIndex(): EvidenceIndex {
-  return buildEvidenceIndex(useEvtxStore.getState().records);
-}
-
-/**
- * Why the table was not filtered when `setRecordScope` returned false. It never says "no loaded
- * events" while an entry could not be looked for (`unresolved`): an absence is claimed only for
- * what was found absent by looking, and the counts say which is which.
- */
-export function scopeFailureText(counts: EvtxRecordScopeCounts, eventsLoading: boolean): string {
-  if (eventsLoading) {
-    return "The table was not filtered: events are still loading. Try again when loading has finished.";
-  }
-  const reasons = describeScopeCounts(counts, "chain");
-  return reasons.length > 0
-    ? `The table was not filtered: this chain names no event it can show. ${reasons.join(" ")}`
-    : "The table was not filtered: this chain names no event it can show.";
-}
-
 interface Palette {
   sizes: CorrelationSizes;
   visuals: EvtxVisualTokens;
@@ -207,7 +185,7 @@ function ChainRow({
       id={id}
       // Named from the title, or from the id when there is none, so two untitled rows (the
       // counts-only stage, or members whose items were not read) are still told apart.
-      aria-label={`${STRENGTH_LABELS[chain.strength]}, ${chainAccessibleName(chain)}, ${entriesText(chain.memberCount)}${partial ? ", partial" : ""}`}
+      aria-label={chainRowName(chain)}
       aria-selected={selected}
       data-chain-id={chain.id}
       className={styles.option}
@@ -257,7 +235,7 @@ function ChainRow({
           color: secondary,
         }}
       >
-        {span ?? "No loaded timeline position"}
+        {span ?? NO_POSITION_TEXT}
       </div>
     </div>
   );
@@ -483,7 +461,10 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
   // never a newer session's. A scope that is not known is disclosed as such and reads as narrowed:
   // "Not linked" is never said without it.
   const scope = scopeDisclosure(data.scope);
-  const narrowed = scope !== null;
+  const scopeNarrowed = scope !== null;
+  // A source that was not fully read is events that never reached the session; both it and a rebuild
+  // under way withdraw "Not linked" as the narrowed scope does, as the dock and the rail say.
+  const unreadSources = useUnreadSources();
 
   // The zoom band's window is view-local and belongs to its chain: another chain starts from its own
   // default. It reaches the plot as `undefined` for that default (null would mean no window at all)
@@ -513,13 +494,15 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
             chain,
             itemsById,
             edgeInputComplete: model.edgeInputComplete,
-            narrowed,
+            scopeNarrowed,
+            unreadSources,
+            updating: data.updating,
             gaps,
             nearby,
             window: zoomWindow ?? undefined,
           })
         : null,
-    [chain, model, hasItems, showPane, itemsById, narrowed, gaps, nearby, zoomWindow],
+    [chain, model, hasItems, showPane, itemsById, scopeNarrowed, unreadSources, data.updating, gaps, nearby, zoomWindow],
   );
   const sequence = useMemo(
     () => (chain !== null && hasItems ? chainSequence(chain, itemsById) : null),
@@ -567,15 +550,22 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
       if (data.error !== null) return "";
       return data.stage === "unavailable" ? NO_ANALYSIS_TEXT : READING_EDGES_TEXT;
     }
+    // The chain count the Insights card and the Chains tab state, by the rule they ask: a coverage
+    // blocked row is a coverage state and is said apart, never counted as a chain, and a number the
+    // engine's gaps leave unproven is not said at all.
+    const chainCount = chainCountForGaps(correlationChainCount(model.counts), gaps);
+    const blocked = model.counts.coverageBlocked;
     return [
-      `${model.totalCount.toLocaleString()} ${model.totalCount === 1 ? "chain" : "chains"}`,
+      chainCount === null
+        ? CHAIN_COUNT_NOT_KNOWN_TEXT
+        : `${chainCount.toLocaleString()} ${chainCount === 1 ? "chain" : "chains"}${blocked > 0 ? `, ${blocked.toLocaleString()} coverage blocked` : ""}`,
       model.edgeInputComplete ? null : "Correlation edges are partial",
       lossSentence,
       data.updating ? "Updating" : null,
     ]
       .filter((part): part is string => part !== null)
       .join(". ");
-  }, [model, lossSentence, data.updating, data.error, data.stage]);
+  }, [model, gaps, lossSentence, data.updating, data.error, data.stage]);
   const spoken = useThrottledValue(announcement, CORRELATION_ANNOUNCE_MS);
   // The publications of the throttle, counted here because the throttle does not report them (it is
   // shared and stays as it is): the region's text changes exactly when it publishes.
@@ -683,24 +673,13 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
 
   const filterToChain = () => {
     if (chain === null || model === null || !hasItems) return;
-    const chainScope = scopeForChain(chain, origins, loadedEvidenceIndex(), {
-      edgeInputComplete: model.edgeInputComplete,
-    });
-    const applied = useEvtxStore.getState().setRecordScope({
-      kind: "chain",
-      title: chainTitle(chain),
-      records: new Set(chainScope.records),
-      references: chainScope.references,
-      counts: chainScope.counts,
-    });
-    if (!applied) {
-      fail(scopeFailureText(chainScope.counts, useEvtxStore.getState().isLoading));
+    // The button that was pressed unmounts with this view, so focus goes to the Table tab first.
+    const result = filterTableToChain({ chain, origins, edgeInputComplete: model.edgeInputComplete });
+    if (!result.applied) {
+      fail(result.text);
       return;
     }
     setActionMessage(null);
-    // The button that was pressed unmounts with this view, so focus goes to the Table tab first.
-    useEvtxLayoutStore.getState().setActiveView("table");
-    document.getElementById(evtxViewTabId("table"))?.focus();
   };
 
   const copyChain = async () => {
@@ -773,7 +752,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
             role="alert"
             style={{ padding: "12px", fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground1 }}
           >
-            {`Correlation could not be built: ${data.error}`}
+            {correlationFailureText(data.error, "built")}
           </div>
         ) : (
           plain(data.stage === "unavailable" ? NO_ANALYSIS_TEXT : READING_EDGES_TEXT)
@@ -785,31 +764,35 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
 
   const reading = data.nextScan?.state === "running" || data.stage === "scanning";
   const progress = data.nextScan?.progress ?? scan.progress;
-  const notices = [
-    edgeInputNotice({ edgeInputComplete: model.edgeInputComplete, unloadedEdgeCount: model.unloadedEdgeCount }),
-    edgeErrorNotice(edges.error),
-    coverageGapNotice(gaps),
-    scanNotice(scan),
-    visibleLoss(loss, lossFacts),
-    ...(scope === null ? [] : [scope.strengthNote, scope.textLogNote]),
-    renderCapNotice({
-      shown: model.chains.length,
-      totalCount: model.totalCount,
-      omittedCount: model.omittedCount,
-    }),
-    listed.pastCapId === null ? null : pastCapNotice(model.chains.length),
-  ].filter((text): text is string => text !== null);
+  // "No correlation chains in this session" is a claim about the whole session: the rail's rule, with
+  // every origin gap a member, and the edges only one of its inputs.
+  const speaksForAbsence = sessionSpeaksForAbsenceOverall({
+    edgeInputComplete: model.edgeInputComplete,
+    scopeNarrowed,
+    unreadSources,
+    updating: data.updating,
+    gaps,
+  });
+  const notices = correlationNotices({
+    edgeInput: { edgeInputComplete: model.edgeInputComplete, unloadedEdgeCount: model.unloadedEdgeCount },
+    edgeError: edges.error,
+    gaps,
+    scan,
+    selectionLoss: visibleLoss(loss, lossFacts),
+    scope,
+    cap: { shown: model.chains.length, totalCount: model.totalCount, omittedCount: model.omittedCount },
+    pastCapShown: listed.pastCapId === null ? null : model.chains.length,
+  });
   const selectedIndex = showPane ? listed.rows.length : listed.rows.findIndex((row) => row.id === chain?.id);
   const header = chain === null ? null : keyHeader(chain.keys);
   const visibleSequence = sequence === null ? [] : showAllSequence ? sequence.entries : sequence.entries.slice(0, CORRELATION_SEQUENCE_INITIAL);
   const visibleWhy = showAllWhy ? why : why.slice(0, CORRELATION_SEQUENCE_INITIAL);
   const plotNotice = plot === null ? null : plotOmissionNotice(plot);
-  const canAct = hasItems && !data.updating && chain !== null;
-  const actReason = canAct
-    ? undefined
-    : data.updating
-      ? WAIT_FOR_UPDATE_REASON
-      : "Wait for the entries of this chain to be read.";
+  const { canAct, reason: actReason } = chainActionAvailability({
+    hasItems,
+    updating: data.updating,
+    hasChain: chain !== null,
+  });
 
   return (
     <div data-testid="correlation-view" aria-busy={data.updating || reading || undefined} style={rootStyle}>
@@ -839,9 +822,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
         </div>
         {model.chains.length === 0 && (
           <div style={{ padding: "8px 12px", fontSize: `${sizes.lane}px`, color: palette.listPrimary }}>
-            {model.edgeInputComplete
-              ? "No correlation chains were found in this session."
-              : "No chains were found among the edges that were loaded."}
+            {noChainsFoundText(speaksForAbsence)}
           </div>
         )}
         {(model.chains.length > 0 || unplacedPresent) && (
@@ -888,11 +869,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
           // per page. The announcer says "Updating" once, throttled.
           <div data-testid="correlation-updating" style={{ fontSize: `${sizes.lane}px`, color: palette.caption }}>
             {data.updating ? `${UPDATING_CORRELATION_TEXT} ` : ""}
-            {reading
-              ? progress === null
-                ? "Reading the timeline..."
-                : `Reading ${progress.scannedItems.toLocaleString()} of ${progress.totalItems.toLocaleString()} timeline items...`
-              : ""}
+            {reading ? timelineReadingText(progress) : ""}
           </div>
         )}
         {notices.length > 0 && (
@@ -914,7 +891,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
         )}
         {data.error !== null && (
           <div role="alert" style={{ fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground1 }}>
-            {`Correlation could not be updated: ${data.error}`}
+            {correlationFailureText(data.error, "updated")}
           </div>
         )}
         {showPane ? (
@@ -998,7 +975,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
             ) : (
               <div style={{ fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground2 }}>
                 {reading
-                  ? "The entries of this chain are being read."
+                  ? CHAIN_ENTRIES_BEING_READ_TEXT
                   : "The entries of this chain were not read, so there is no plot or evidence table."}
               </div>
             )}
@@ -1066,11 +1043,11 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
                   <CardHeading palette={palette}>Sequence</CardHeading>
                 </div>
                 <div style={{ fontSize: `${sizes.label}px`, color: palette.caption }}>
-                  Ordered by recorded time. Order is not evidence of cause.
+                  {SEQUENCE_ORDER_NOTE}
                 </div>
                 {sequence !== null && sequence.entries.length === 0 && (
                   <div style={{ fontSize: `${sizes.lane}px`, color: tokens.colorNeutralForeground2 }}>
-                    No entry has a loaded timeline position.
+                    {NO_ENTRY_POSITION_TEXT}
                   </div>
                 )}
                 <ol style={{ margin: 0, paddingLeft: "22px", display: "grid", gap: "4px", fontSize: `${sizes.lane}px` }}>
@@ -1096,7 +1073,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
                         <span style={{ color: palette.caption }}>[{entry.laneLabel}]</span>{" "}
                         <span style={{ color: tokens.colorNeutralForeground2 }}>{head(entry.message)}</span>
                         {entry.sameTimeAsPrevious && (
-                          <span style={{ color: palette.caption }}> (same timestamp as the entry above; their order is not established)</span>
+                          <span style={{ color: palette.caption }}> {SAME_TIME_NOTE}</span>
                         )}
                       </li>
                     );

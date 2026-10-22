@@ -27,6 +27,7 @@ import {
   type CorrelationEvidenceRow,
 } from "./evtx-correlation-chains";
 import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
+import { chipForOriginKind, type KindChip } from "./evtx-kind-chip-value";
 import {
   eventDateKey,
   formatClock,
@@ -343,9 +344,12 @@ export function evidenceForEdge(
 // ---- the plot -----------------------------------------------------------------------------------
 
 /**
- * What a context marker and the legend say when the session can speak for the entry: every edge is
- * loaded, nothing is narrowed, no correlation limit or truncation gap exists, and no gap names the
- * entry's own origin.
+ * What a context marker and the legend say when the session can speak for the entry
+ * (`sessionSpeaksForAbsence`): every edge is loaded, the scope is not narrowed, every source was
+ * read, no rebuild is under way, no correlation limit or truncation gap exists and every gap is
+ * shown, no gap names a member of the row the entry is compared with, and no gap names the entry's
+ * own origin. A list that is compared with no row (the rail's) asks for the whole session, where a
+ * gap that names any origin withdraws it (`sessionSpeaksForAbsenceOverall`).
  */
 export const NOT_LINKED_LABEL = "Not linked";
 /**
@@ -451,6 +455,50 @@ export type PlotChain = Pick<
   "memberIds" | "unresolvedMemberIds" | "edges" | "evidence" | "startMs" | "endMs"
 >;
 
+/**
+ * What decides the word for an entry that is not in the row it is compared with: whether the
+ * session can speak for an absence of a link, the engine's coverage gaps, and the entries that have
+ * a loaded partner.
+ */
+export interface NearbyLabelRule {
+  /**
+   * `sessionSpeaksForAbsence` over the members of the row the entry is compared with. A list that
+   * is compared with no row (the rail's, which is session-level) asks `sessionSpeaksForAbsenceOverall`.
+   */
+  chainClear: boolean;
+  /** A gap that names the entry's own origin withdraws "Not linked" for it alone. */
+  gaps: Pick<CorrelationGaps, "originIds">;
+  /** Distinct exact and candidate partners per origin id (`linkPartnerCounts`). */
+  linkPartners?: ReadonlyMap<string, number>;
+  /** See `ChainPlotInput.selectionIdentified`. Defaults to true. */
+  selectionIdentified?: boolean;
+}
+
+/**
+ * The word for ONE entry that is not a member of the row: "In another chain" (or, when the plot's
+ * selected entry is not identified, `LINK_TO_EVENT_UNKNOWN_LABEL`) for an entry with a loaded
+ * partner, a fact whatever else is incomplete; "Not linked" only when the session can speak for an
+ * absence and no gap names the entry; otherwise "No loaded link".
+ */
+export function nearbyLinkLabel(originId: string, rule: NearbyLabelRule): string {
+  if ((rule.linkPartners?.get(originId) ?? 0) > 0) {
+    return rule.selectionIdentified === false ? LINK_TO_EVENT_UNKNOWN_LABEL : IN_ANOTHER_CHAIN_LABEL;
+  }
+  return rule.chainClear && !rule.gaps.originIds.has(originId) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
+}
+
+/**
+ * The ONE legend word for the dotted entry: it says "Not linked" only if every entry it stands for
+ * may be called that and the session speaks. It drops to "Not in this chain" when any of them is
+ * linked elsewhere, which is all they then have in common, and says the link to the event is not
+ * known when any of them is. With no entry it is what the session can say about an absence.
+ */
+export function notLinkedLegendLabel(labels: readonly (string | null)[], chainClear: boolean): string {
+  if (labels.some((label) => label === LINK_TO_EVENT_UNKNOWN_LABEL)) return LINK_TO_EVENT_UNKNOWN_LABEL;
+  if (labels.some((label) => label === IN_ANOTHER_CHAIN_LABEL)) return NOT_IN_THIS_CHAIN_LABEL;
+  return chainClear && labels.every((label) => label === NOT_LINKED_LABEL) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
+}
+
 export interface ChainPlotInput {
   chain: PlotChain;
   itemsById: ReadonlyMap<string, TimelineItem>;
@@ -460,10 +508,20 @@ export interface ChainPlotInput {
    */
   edgeInputComplete: boolean;
   /**
-   * The view is narrowed (visible events fewer than loaded events), so an event outside it may
-   * link an entry shown here. Required for the same reason.
+   * The view is narrowed (visible events fewer than loaded events, or a scope that is not known), so
+   * an event outside it may link an entry shown here. Required for the same reason.
    */
-  narrowed: boolean;
+  scopeNarrowed: boolean;
+  /**
+   * Some source's records were not (all) loaded (`useUnreadSources`), so an event that never reached
+   * the session may link an entry shown here. Required for the same reason.
+   */
+  unreadSources: boolean;
+  /**
+   * The model on show is an earlier session's and a newer one is being built, so a negative claim
+   * from it is unproven. Required for the same reason.
+   */
+  updating: boolean;
   /**
    * The engine's correlation coverage gaps (`classifyCoverageGaps`). Required: a limit or
    * truncation gap, a preview that does not show every gap, a gap naming an entry's own origin,
@@ -503,8 +561,12 @@ function isLinkingStrength(strength: CorrelationChainStrength): strength is "exa
 interface AbsenceInput {
   /** Every timeline edge of the session was loaded. */
   edgeInputComplete: boolean;
-  /** The view is narrowed (see `ChainPlotInput.narrowed`). */
-  narrowed: boolean;
+  /** See `ChainPlotInput.scopeNarrowed`. */
+  scopeNarrowed: boolean;
+  /** See `ChainPlotInput.unreadSources`. */
+  unreadSources: boolean;
+  /** See `ChainPlotInput.updating`. */
+  updating: boolean;
   gaps: CorrelationGaps;
   /** Every member of the row the entry is compared with, placed or not. */
   memberIds: Iterable<string>;
@@ -512,41 +574,56 @@ interface AbsenceInput {
 
 /**
  * Whether the session can speak for the ABSENCE of a link: "Not linked" is a claim about the whole
- * session, so it needs every edge, every event and every origin correlated. A gap that names an
- * entry's own origin withdraws it for that entry alone (a per-entry check the caller makes with
- * `gaps.originIds`). A gap that names a MEMBER of the row withdraws it for every entry and the
- * legend: some gaps are specific to one observation (an identity alias conflict, an invalid process
- * start), and for such a member the key it would share with a context entry was never computed.
- * Every member counts, not only the drawn ones, because the key was lost whether or not the member
- * is drawn.
+ * session, so it needs every edge, every event and every origin correlated. Three caveats say events
+ * may be missing or superseded: the scope is narrowed, a source was not fully read, or a rebuild is
+ * under way. They are separate inputs, never one folded flag, and any one of them withdraws the
+ * claim. A gap that names an entry's own origin withdraws it for that entry alone (a per-entry
+ * check the caller makes with `gaps.originIds`). A gap that names a MEMBER of the row withdraws it
+ * for every entry and the legend: some gaps are specific to one observation (an identity alias
+ * conflict, an invalid process start), and for such a member the key it would share with a context
+ * entry was never computed. Every member counts, not only the drawn ones, because the key was lost
+ * whether or not the member is drawn.
  *
  * The plot's labels read it, and so does the Details context list, which decides with it whether a
  * missing link icon needs a caveat: one rule for "no link was found, and that means something".
  */
 export function sessionSpeaksForAbsence(input: AbsenceInput): boolean {
-  if (!input.edgeInputComplete || input.narrowed || gapsClearCompleteness(input.gaps)) return false;
+  if (!input.edgeInputComplete || gapsClearCompleteness(input.gaps)) return false;
+  if (input.scopeNarrowed || input.unreadSources || input.updating) return false;
   for (const id of input.memberIds) {
     if (input.gaps.originIds.has(id)) return false;
   }
   return true;
 }
 
+/**
+ * `sessionSpeaksForAbsence` for a claim about the WHOLE session: no linked events, no chains, an
+ * entry that is linked to nothing. There is no row whose members to ask about, so the members are
+ * every origin the engine left uncorrelated (`gaps.originIds`), and a gap that names any origin
+ * withdraws the claim: an origin the engine did not correlate may hold the link, whichever entry
+ * the claim is about. A session-level surface asks this, and never spells the member list itself.
+ */
+export function sessionSpeaksForAbsenceOverall(input: Omit<AbsenceInput, "memberIds">): boolean {
+  return sessionSpeaksForAbsence({ ...input, memberIds: input.gaps.originIds });
+}
+
 export function buildChainPlot(input: ChainPlotInput): ChainPlot {
   const { chain, itemsById } = input;
-  // A gap that names an entry's own origin withdraws "Not linked" for that entry alone (`labelFor`);
-  // the rest of the rule is `sessionSpeaksForAbsence`.
+  // A gap that names an entry's own origin withdraws "Not linked" for that entry alone
+  // (`nearbyLinkLabel`); the rest of the rule is `sessionSpeaksForAbsence`.
   const chainClear = sessionSpeaksForAbsence({
     edgeInputComplete: input.edgeInputComplete,
-    narrowed: input.narrowed,
+    scopeNarrowed: input.scopeNarrowed,
+    unreadSources: input.unreadSources,
+    updating: input.updating,
     gaps: input.gaps,
     memberIds: [...chain.memberIds, ...chain.unresolvedMemberIds],
   });
-  const labelFor = (originId: string) => {
-    // A loaded partner is a fact, whatever else is incomplete: say it first.
-    if ((input.linkPartners?.get(originId) ?? 0) > 0) {
-      return input.selectionIdentified === false ? LINK_TO_EVENT_UNKNOWN_LABEL : IN_ANOTHER_CHAIN_LABEL;
-    }
-    return chainClear && !input.gaps.originIds.has(originId) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
+  const labelRule: NearbyLabelRule = {
+    chainClear,
+    gaps: input.gaps,
+    linkPartners: input.linkPartners,
+    selectionIdentified: input.selectionIdentified,
   };
   const markerCap = input.markerCap ?? CORRELATION_MARKER_CAP;
   const connectorCap = input.connectorCap ?? CORRELATION_CONNECTOR_CAP;
@@ -575,7 +652,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     omittedConnectors: 0,
     membersWithoutItem,
     showsNotLinkedLegend: false,
-    notLinkedLabel: chainClear ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL,
+    notLinkedLabel: notLinkedLegendLabel([], chainClear),
   };
   if (window === null) return empty;
 
@@ -618,7 +695,7 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
           ? null
           : `${shortEntryId(item, lane)} · ${formatDelta(placement.outsideMs)} ${placement.pinned === "before" ? "earlier" : "later"}`,
       sequenceIndex,
-      linkLabel: role === "nearby" ? labelFor(id) : null,
+      linkLabel: role === "nearby" ? nearbyLinkLabel(id, labelRule) : null,
     };
   };
 
@@ -673,16 +750,11 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     omittedConnectors,
     membersWithoutItem,
     showsNotLinkedLegend: nearby.length > 0,
-    // One legend entry for the dotted marker: it says "Not linked" only if every marker it stands
-    // for may be called that, and it drops to "Not in this chain" when any of them is linked
-    // elsewhere, which is all that they then have in common.
-    notLinkedLabel: nearby.some((marker) => marker.linkLabel === LINK_TO_EVENT_UNKNOWN_LABEL)
-      ? LINK_TO_EVENT_UNKNOWN_LABEL
-      : nearby.some((marker) => marker.linkLabel === IN_ANOTHER_CHAIN_LABEL)
-        ? NOT_IN_THIS_CHAIN_LABEL
-        : chainClear && nearby.every((marker) => marker.linkLabel === NOT_LINKED_LABEL)
-          ? NOT_LINKED_LABEL
-          : NO_LOADED_LINK_LABEL,
+    // One legend entry for the dotted marker, in the one word every marker it stands for may carry.
+    notLinkedLabel: notLinkedLegendLabel(
+      nearby.map((marker) => marker.linkLabel),
+      chainClear,
+    ),
   };
 }
 
@@ -795,6 +867,8 @@ export interface SequenceEntry {
   sameTimeAsPrevious: boolean;
   /** The member the title is drawn from (D19): highest severity, then earliest, then id. */
   highestSeverity: boolean;
+  /** `EVT` for a Windows event, `LOG` for a text-log line: the chip's one rule, `chipForOriginKind`. */
+  chip: KindChip;
 }
 
 export interface ChainSequence {
@@ -847,6 +921,7 @@ export function chainSequence(
       sameTimeAsPrevious:
         index > 0 && placed[index - 1]!.item.timestampMs === item.timestampMs,
       highestSeverity: index === best,
+      chip: chipForOriginKind(item.origin.kind),
     };
   });
   return {

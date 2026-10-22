@@ -1,15 +1,19 @@
 /**
  * The right-hand rail of the Event Logs workbench (spec sections 5.2 and 8.13).
  *
- * Tabs: Insights, and Details, which reads "Event {id}" while a record is selected. The Chains tab
- * id already exists in the layout store (Phase 10c builds it); `RAIL_TABS` is the one list to add
- * it to, and a persisted `chains` selection shows Insights until then.
+ * Tabs: Insights, Chains and Details, the layout store's `EVTX_RAIL_TAB_IDS` in its order. Details
+ * reads "Event {id}" while a record is selected, and Chains reads "Chains {n}" when the number is
+ * known, current and complete for edges (`chainsTabCount`), else "Chains".
  *
- * The Insights panel stays mounted (hidden) while Details is active, so a row click does not reset
- * its disclosures or its scroll position, and a finding card can be focused from the Details
- * callout. The Details body mounts on demand and scrolls itself under its fixed header.
+ * The Insights panel stays mounted (hidden) while another tab is active, so a row click does not
+ * reset its disclosures or its scroll position, and a finding card can be focused from the Details
+ * callout. The Details and Chains bodies mount on demand. Details scrolls itself under its fixed
+ * header; the Chains body is loaded lazily and scrolls in its panel, and is not mounted at all while
+ * the rail is hidden (the same rule that decides whether the workspace reads the entries it lists).
  */
 import {
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -25,11 +29,15 @@ import { parseEventIdSelectors, type EvtxQuickFilter } from "./evtx-filter";
 import type { FindingScope } from "./evtx-insights-data";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import {
+  EVTX_RAIL_TAB_IDS,
+  chainsTabShown,
   evtxRailPanelId,
   evtxRailTabId,
   useEvtxLayoutStore,
   type EvtxRailTabId,
 } from "./evtx-layout-store";
+import { chainsTabCount } from "./evtx-correlation-chains";
+import { useEvtxCorrelationData } from "./useEvtxCorrelation";
 import { findRecordById, formatCount } from "./evtx-insights-data";
 import { useRailTextColors } from "./evtx-rail-text";
 import { useEvtxStore } from "./evtx-store";
@@ -53,8 +61,9 @@ interface EvtxInsightsRailProps {
   scope?: ScopeDisclosureInput | null;
 }
 
-/** Tabs the rail can show today, in order. Phase 10c adds "chains" between the two. */
-const RAIL_TABS: readonly EvtxRailTabId[] = ["insights", "details"];
+// The Chains body is loaded when the tab is first shown: the model, the copy and the cards stay out of
+// the entry chunk until then. Nothing is announced meanwhile (no fallback, no live region).
+const EvtxRailChains = lazy(() => import("./EvtxRailChains"));
 
 /**
  * The one event ID a quick filter is showing, or null: the applied filter is in Event IDs mode, shows
@@ -102,6 +111,29 @@ function Count({ value, size, color }: { value: number; size: number; color: str
   );
 }
 
+/**
+ * The Chains tab's label. It reads the shared correlation data itself, so a scan's progress, which
+ * replaces that data many times, re-renders this label and not the rail around it. The number is the
+ * NEWEST counts' (never the model on show, which can be an earlier session's), and is left out when it
+ * is not known, not current or not complete for edges.
+ */
+function ChainsTabLabel({ size, color }: { size: number; color: string }) {
+  const { counts } = useEvtxCorrelationData();
+  const count = chainsTabCount(counts);
+  return (
+    <>
+      Chains
+      {count !== null && (
+        // The space keeps the accessible name "Chains 3" rather than "Chains3".
+        <>
+          {" "}
+          <Count value={count} size={size} color={color} />
+        </>
+      )}
+    </>
+  );
+}
+
 export function EvtxInsightsRail({
   summary,
   records,
@@ -138,7 +170,8 @@ export function EvtxInsightsRail({
     }
   }, [railTab, setRailTab]);
 
-  const activeTab: EvtxRailTabId = RAIL_TABS.includes(railTab) ? railTab : "insights";
+  const activeTab: EvtxRailTabId = railTab;
+  const chainsShown = useEvtxLayoutStore(chainsTabShown);
 
   // The diagnosis is cleared while it rebuilds. Keep showing the previous build, marked as
   // updating, so the reader's place survives a live-tail batch; drop it on failure or no input.
@@ -226,7 +259,7 @@ export function EvtxInsightsRail({
         )}
       </>
     ),
-    chains: "Chains",
+    chains: <ChainsTabLabel size={countSize} color={railText.secondary} />,
     details: selectedEventId !== null ? `Event ${selectedEventId}` : "Details",
   };
 
@@ -243,7 +276,7 @@ export function EvtxInsightsRail({
           flexShrink: 0,
         }}
       >
-        {RAIL_TABS.map((tab) => (
+        {EVTX_RAIL_TAB_IDS.map((tab) => (
           <Tab
             key={tab}
             id={evtxRailTabId(tab)}
@@ -286,6 +319,24 @@ export function EvtxInsightsRail({
           activeEventId={activeEventId}
         />
       </div>
+      {chainsShown && (
+        <div
+          role="tabpanel"
+          id={evtxRailPanelId("chains")}
+          aria-labelledby={evtxRailTabId("chains")}
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowX: "hidden",
+            overflowY: "auto",
+            padding: "12px",
+          }}
+        >
+          <Suspense fallback={null}>
+            <EvtxRailChains />
+          </Suspense>
+        </div>
+      )}
       {activeTab === "details" && (
         <div
           role="tabpanel"

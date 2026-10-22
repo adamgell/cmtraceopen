@@ -41,7 +41,7 @@ vi.mock("./evtx-correlation-view-model", async (importOriginal) => {
 import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
-import EvtxCorrelationView, { CORRELATION_ANNOUNCE_MS, scopeFailureText } from "./EvtxCorrelationView";
+import EvtxCorrelationView, { CORRELATION_ANNOUNCE_MS } from "./EvtxCorrelationView";
 import viewSource from "./EvtxCorrelationView.tsx?raw";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import { openCorrelationView, openUnplacedList, useEvtxCorrelationStore } from "./evtx-correlation-store";
@@ -406,6 +406,49 @@ describe("the chain list (spec 8.11)", () => {
     expect(screen.getAllByText("No correlation chains were found in this session.").length).toBe(1);
   });
 
+  describe("says the session has no chains only when the session can speak for an absence (#841, review M1)", () => {
+    const ABSOLUTE = "No correlation chains were found in this session.";
+    const QUALIFIED = "No chains were found among the edges that were loaded.";
+    const none = (extra: Partial<DataOptions> = {}) => makeData({ items: [], edges: [], totalEdges: 0, ...extra });
+
+    it("says it when every edge is loaded and nothing withdraws it", () => {
+      show(none());
+      expect(screen.getByText(ABSOLUTE)).toBeInTheDocument();
+      expect(screen.queryByText(QUALIFIED)).toBeNull();
+    });
+
+    it.each([
+      ["the view is narrowed", () => none({ scope: { visibleCount: 3, loadedCount: 9, textLogCount: 0 } })],
+      ["the scope of the model is not known", () => none({ scope: null })],
+      ["a rebuild is under way", () => none({ updating: true })],
+      ["the engine limited correlation", () => none({ gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) })],
+      ["the gap preview is cut", () => none({ gaps: classifyCoverageGaps([], 4) })],
+      ["a gap names an origin", () => none({ gaps: classifyCoverageGaps([{ source: rid(5), reason: "alias conflict" }], 1) })],
+    ])("says only what was looked at when %s", (_why, makeDataFor) => {
+      show(makeDataFor());
+      expect(screen.getByText(QUALIFIED)).toBeInTheDocument();
+      expect(screen.queryByText(ABSOLUTE)).toBeNull();
+    });
+
+    it("says only what was looked at while a source was not fully read", () => {
+      seedStore();
+      act(() =>
+        useEvtxStore.setState({
+          coverageDetails: [{ source: "Security", kind: "accessDenied", reason: "needs elevation" }],
+        }),
+      );
+      show(none());
+      expect(screen.getByText(QUALIFIED)).toBeInTheDocument();
+      expect(screen.queryByText(ABSOLUTE)).toBeNull();
+    });
+
+    it("asks the session's rule for it, with the edges as one of its inputs and not as the whole rule", () => {
+      expect(viewSource).toMatch(/\bsessionSpeaksForAbsenceOverall\(/);
+      expect(viewSource).toMatch(/\bnoChainsFoundText\(speaksForAbsence\)/);
+      expect(viewSource).not.toMatch(/\bnoChainsFoundText\(model\.edgeInputComplete\)/);
+    });
+  });
+
   it("marks a partial chain and counts its entries from every member (acceptance 11)", () => {
     // Member 2's item was never read: it is unresolved, not absent.
     const edges = fixtureEdges("exactPair");
@@ -530,6 +573,7 @@ describe("a 'Not linked' context marker through the view (decision A on #838, ac
     ["edges were not all loaded", () => data({ totalEdges: 8 })],
     ["the view is narrowed", () => data({ scope: { visibleCount: 3, loadedCount: 9, textLogCount: 0 } })],
     ["the scope of the model is not known", () => data({ scope: null })],
+    ["a rebuild is under way and the model on show is an earlier session's", () => data({ updating: true })],
     ["the engine limited correlation", () => data({ gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) })],
     ["a gap names the entry's own origin", () => data({ gaps: classifyCoverageGaps([{ source: rid(9), reason: "x" }], 1) })],
     ["a gap names a member of the chain", () => data({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "alias" }], 1) })],
@@ -538,6 +582,27 @@ describe("a 'Not linked' context marker through the view (decision A on #838, ac
     expect(strayName()).toContain("No loaded link");
     expect(strayName()).not.toContain("Not linked");
     expect(screen.getByRole("group", { name: "Legend" })).toHaveTextContent("no loaded link (no line)");
+  });
+
+  it("says 'No loaded link' instead while a source was not fully read: its events never reached the session", () => {
+    seedStore();
+    act(() =>
+      useEvtxStore.setState({
+        coverageDetails: [{ source: "Security", kind: "accessDenied", reason: "needs elevation" }],
+      }),
+    );
+    show(data(), [stray()]);
+    expect(strayName()).toContain("No loaded link");
+    expect(strayName()).not.toContain("Not linked");
+    expect(screen.getByRole("group", { name: "Legend" })).toHaveTextContent("no loaded link (no line)");
+  });
+
+  it("takes the unread sources from the store's one producer and the rebuild from the shared data", () => {
+    expect(viewSource).toMatch(/\buseUnreadSources\(\)/);
+    expect(viewSource).toMatch(/\bunreadSources,/);
+    expect(viewSource).toMatch(/\bupdating: data\.updating\b/);
+    // And folds none of the three into one flag.
+    expect(viewSource).not.toMatch(/\bnarrowed\b[^\n]*[:=][^\n]*\|\|/);
   });
 
   it("draws none by default, which is what the workspace passes", () => {
@@ -579,8 +644,21 @@ describe("the notices", () => {
     show(pairData({ gaps: classifyCoverageGaps([], 40) }));
     expect(screen.getByTestId("correlation-notices")).toHaveTextContent("More coverage gaps may exist than are listed");
     cleanup();
-    show(pairData({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "alias conflict" }], 1) }));
+    show(pairData({ gaps: classifyCoverageGaps([], 0) }));
     expect(screen.queryByTestId("correlation-notices")).toBeNull();
+  });
+
+  it("says how many events could not be fully correlated when a gap names an origin, though the gaps clear nothing (#841, review M1)", () => {
+    show(pairData({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "alias conflict" }], 1) }));
+    const notices = screen.getByTestId("correlation-notices");
+    expect(notices).toHaveTextContent("1 event could not be fully correlated, so links involving it may be missing.");
+    // The gaps clear no completeness, so the coverage-gap notice stays out: this is the only note.
+    expect(notices).not.toHaveTextContent("The engine limited correlation");
+    cleanup();
+    show(pairData({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "alias conflict" }], 40) }));
+    expect(screen.getByTestId("correlation-notices")).toHaveTextContent(
+      "At least 1 event could not be fully correlated, so links involving it may be missing.",
+    );
   });
 
   it("shows a stopped read and an edge failure, each with a Retry that calls the hook's retry", () => {
@@ -792,25 +870,6 @@ describe("Filter table to chain (acceptance 6 to 8)", () => {
     show(pairData({ updating: true }));
     expect(screen.getByRole("button", { name: "Filter table to chain" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("button", { name: "Copy as text" })).toHaveAttribute("aria-disabled", "true");
-  });
-
-  describe("scopeFailureText", () => {
-    const counts = { notLoaded: 0, noUsableIdentity: 0, ambiguous: 0, bounded: false };
-    it("never says 'no loaded events' for any counts", () => {
-      for (const unresolved of [0, 1, 4]) {
-        for (const notLoaded of [0, 2]) {
-          const text = scopeFailureText({ ...counts, unresolved, notLoaded }, false);
-          expect(text).not.toMatch(/no loaded events?/i);
-        }
-      }
-    });
-    it("keeps unresolved apart from not loaded", () => {
-      expect(scopeFailureText({ ...counts, unresolved: 2 }, false)).not.toMatch(/not loaded/);
-      expect(scopeFailureText({ ...counts, notLoaded: 2 }, false)).toMatch(/not loaded/);
-    });
-    it("has a reason even when every count is 0", () => {
-      expect(scopeFailureText(counts, false)).toBe("The table was not filtered: this chain names no event it can show.");
-    });
   });
 });
 
@@ -1128,12 +1187,71 @@ describe("the live region (acceptance 22)", () => {
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(announcer().textContent).toMatch(/^4 chains/);
+    expect(announcer().textContent).toMatch(/^3 chains, 1 coverage blocked/);
+  });
+
+  it("counts chains as the Insights card does and says a coverage blocked row apart (#841 R1)", () => {
+    // mixedData holds an exact pair, an ambiguous group, a candidate pair and a blocked pair: four
+    // rows, three chains. The card says "3 chains" and "1 coverage blocked"; so does the announcer.
+    const data = mixedData();
+    expect(data.model!.totalCount).toBe(4);
+    show(data);
+    expect(screen.getByTestId("correlation-announcer").textContent).toBe("3 chains, 1 coverage blocked");
+  });
+
+  it("names no coverage blocked count when there is none, and never calls a blocked row a chain", () => {
+    show(pairData());
+    expect(screen.getByTestId("correlation-announcer").textContent).toBe("1 chain");
+    cleanup();
+    // Only a blocked pair: no chain, one blocked row.
+    const blockedOnly = makeData({
+      items: [eventItem(21, T0), eventItem(22, T0 + 1_000)],
+      edges: fixtureEdges("gappedPair", 20),
+    });
+    show(blockedOnly);
+    expect(screen.getByTestId("correlation-announcer").textContent).toBe("0 chains, 1 coverage blocked");
   });
 
   it("says when the edges are partial", () => {
     show(pairData({ totalEdges: 9 }));
     expect(screen.getByTestId("correlation-announcer")).toHaveTextContent("1 chain. Correlation edges are partial");
+  });
+
+  describe("announces no chain number the engine's gaps leave unproven, as the tab and the card state none (#841, review L1)", () => {
+    const limit = classifyCoverageGaps([{ source: "correlation", reason: "limit" }], 1);
+    // 100 origin gaps shown of 101: `global` is read from the preview, so a cut one can hide a limit.
+    const cut = classifyCoverageGaps(
+      Array.from({ length: 100 }, (_, i) => ({ source: rid(500 + i), reason: "x" })),
+      101,
+    );
+    const originOnly = classifyCoverageGaps([{ source: rid(900), reason: "alias conflict" }], 1);
+
+    it.each([
+      ["a limit or truncation gap", limit],
+      ["a gap preview that is cut", cut],
+    ])("says the count is not known, and no blocked count either, under %s", (_why, gaps) => {
+      show(mixedData({ gaps }));
+      expect(screen.getByTestId("correlation-announcer").textContent).toBe("The chain count is not known");
+    });
+
+    it("keeps the other parts of the announcement beside it", () => {
+      show(pairData({ gaps: limit, totalEdges: 9, updating: true }));
+      expect(screen.getByTestId("correlation-announcer").textContent).toBe(
+        "The chain count is not known. Correlation edges are partial. Updating",
+      );
+    });
+
+    it("announces the chains that were found when only an origin is uncorrelated, but never a 0", () => {
+      show(pairData({ gaps: originOnly }));
+      expect(screen.getByTestId("correlation-announcer").textContent).toBe("1 chain");
+      cleanup();
+      show(makeData({ items: [], edges: [], totalEdges: 0, gaps: originOnly }));
+      expect(screen.getByTestId("correlation-announcer").textContent).toBe("The chain count is not known");
+    });
+
+    it("asks the rule the Chains tab and the Insights card ask, and counts no chain itself", () => {
+      expect(viewSource).toMatch(/\bchainCountForGaps\(correlationChainCount\(model\.counts\), gaps\)/);
+    });
   });
 });
 
@@ -1750,6 +1868,8 @@ describe("a lost selection is an event, said once and by what exists (the sticky
   });
 
   describe("the receipt: said by a publication made after the record, never by an earlier one", () => {
+    // mixedData holds three chains and one coverage blocked row (#841 R1).
+    const MIXED_COUNT = "3 chains, 1 coverage blocked";
     const ZERO = "The selected chain is no longer present";
     const SHOWN = `${ZERO}, showing another`;
     /** Time passes in quarter seconds; every distinct text the region holds is kept, in order. */
@@ -1786,7 +1906,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       const view = show(mixedData());
       hear();
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard[heard.length - 1]).toBe(`4 chains. ${SHOWN}`);
+      expect(heard[heard.length - 1]).toBe(`${MIXED_COUNT}. ${SHOWN}`);
       // The next tail rebuild drops the chain the operator was moved to, before the first publication is replaced.
       view.update(secondaryOnly({ builtFor: "session:2" }));
       advance(CORRELATION_ANNOUNCE_MS + 100);
@@ -1807,7 +1927,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       const view = show(mixedData());
       hear();
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard[heard.length - 1]).toBe(`4 chains. ${SHOWN}`);
+      expect(heard[heard.length - 1]).toBe(`${MIXED_COUNT}. ${SHOWN}`);
       // The operator's selection goes again, and now there is no chain at all.
       act(() => {
         useEvtxCorrelationStore.setState({ selectedChainId: "gone-2" });
@@ -1833,7 +1953,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
         view.update(mixedData({ builtFor: "session:2" }));
       });
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard).toContain(`4 chains. ${SHOWN}`);
+      expect(heard).toContain(`${MIXED_COUNT}. ${SHOWN}`);
       expect(saidCount(SHOWN)).toBe(1);
     });
 
@@ -1845,7 +1965,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       view.update(mixedData({ unplacedList: { items: [], total: 0 }, builtFor: "session:2" }));
       hear();
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard[heard.length - 1]).toBe(`4 chains. ${NOTHING}`);
+      expect(heard[heard.length - 1]).toBe(`${MIXED_COUNT}. ${NOTHING}`);
       // Items are listed again and the operator opens the pane from the rail; then they go again.
       view.update(mixedData({ unplacedList: { items: unplacedItems(2), total: 2 }, builtFor: "session:3" }));
       act(() => openUnplacedList());
@@ -1862,7 +1982,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       const view = show(mixedData());
       hear();
       advance(CORRELATION_ANNOUNCE_MS - 250);
-      expect(announcer().textContent).toBe("4 chains");
+      expect(announcer().textContent).toBe(MIXED_COUNT);
       // The timer fires and the data starts updating in one step, so the announcement composed with the
       // sentence is no longer the text that was published. The publication still said it.
       act(() => {
@@ -1870,7 +1990,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
         view.update(mixedData({ builtFor: "session:2", updating: true }));
       });
       hear();
-      expect(heard).toContain(`4 chains. ${SHOWN}`);
+      expect(heard).toContain(`${MIXED_COUNT}. ${SHOWN}`);
       advance(3 * (CORRELATION_ANNOUNCE_MS + 100));
       expect(saidCount(SHOWN)).toBe(1);
     });
@@ -1900,7 +2020,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       // A session returns with the replacement shown. No new loss is recorded: the first is still unsaid.
       view.update(mixedData({ builtFor: "session:2" }));
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard).toContain(`4 chains. ${SHOWN}`);
+      expect(heard).toContain(`${MIXED_COUNT}. ${SHOWN}`);
       expect(saidCount(SHOWN)).toBe(1);
       // Said once: nothing later says it again.
       view.update(mixedData({ builtFor: "session:3", updating: true }));
@@ -1922,7 +2042,7 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       expect(heard.filter((text) => text.includes(NOTHING))).toHaveLength(0);
       view.update(mixedData({ unplacedList: { items: [], total: 0 }, builtFor: "session:3" }));
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard).toContain(`4 chains. ${NOTHING}`);
+      expect(heard).toContain(`${MIXED_COUNT}. ${NOTHING}`);
       expect(heard.filter((text) => text.includes(NOTHING))).toHaveLength(1);
     });
 
@@ -1932,15 +2052,15 @@ describe("a lost selection is an event, said once and by what exists (the sticky
       show(mixedData());
       hear();
       advance(CORRELATION_ANNOUNCE_MS + 100);
-      expect(heard[heard.length - 1]).toBe(`4 chains. ${SHOWN}`);
+      expect(heard[heard.length - 1]).toBe(`${MIXED_COUNT}. ${SHOWN}`);
       // A second loss of the same kind in the same model composes exactly the text the region holds.
       act(() => useEvtxCorrelationStore.setState({ selectedChainId: "gone-2" }));
       hear();
-      expect(announcer().textContent).toBe(`4 chains. ${SHOWN}`);
+      expect(announcer().textContent).toBe(`${MIXED_COUNT}. ${SHOWN}`);
       advance(2 * (CORRELATION_ANNOUNCE_MS + 100));
       // The region held the sentence once, then dropped it. It did not stay in every later announcement,
       // and it was not published a second time.
-      expect(heard).toEqual(["4 chains", `4 chains. ${SHOWN}`, "4 chains"]);
+      expect(heard).toEqual([MIXED_COUNT, `${MIXED_COUNT}. ${SHOWN}`, MIXED_COUNT]);
     });
   });
 

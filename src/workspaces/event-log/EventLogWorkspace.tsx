@@ -48,6 +48,7 @@ import {
   MAX_RAIL_WIDTH,
   MIN_DOCK_HEIGHT,
   MIN_RAIL_WIDTH,
+  correlationItemsNeeded,
   maxDockHeightFor,
   useEvtxLayoutStore,
   type EvtxViewId,
@@ -435,6 +436,8 @@ export function EventLogWorkspace() {
 
   const activeView = useEvtxLayoutStore((s) => s.activeView);
   const panels = useEvtxLayoutStore((s) => s.panels);
+  // The entries are read only for a surface that lists them: the layout store's one rule.
+  const correlationEntriesNeeded = useEvtxLayoutStore(correlationItemsNeeded);
   const railWidth = useEvtxLayoutStore((s) => s.railWidth);
   const dockHeight = useEvtxLayoutStore((s) => s.dockHeight);
   const dockCollapsed = useEvtxLayoutStore((s) => s.dockCollapsed);
@@ -627,17 +630,17 @@ export function EventLogWorkspace() {
     isLoading,
   ]);
 
-  // One shared correlation model for the Correlation view, the Insights card and the later chains
-  // tab, charts tile and status bar. `initialPage` is the STATE value: one object for the life of a
+  // One shared correlation model for the Correlation view, the Insights card, the Chains tab and the
+  // later charts tile and status bar. `initialPage` is the STATE value: one object for the life of a
   // session, because the hook keys what it has loaded on it (a fresh object per render would
-  // restart it every time). Items are scanned only while the Correlation view is the one shown;
-  // counts-only consumers never cause a scan.
+  // restart it every time). Items are scanned only while the Correlation view is the one shown or
+  // the Chains tab is the one the visible rail shows; counts-only consumers never cause a scan.
   const correlation = useEvtxCorrelation({
     status: analysisStatus,
     initialPage: initialTimelinePage,
     pending: timelinePending,
     scope: analysisScope,
-    needItems: activeView === "correlation",
+    needItems: correlationEntriesNeeded,
   });
 
   const loadTimelinePage = useCallback(

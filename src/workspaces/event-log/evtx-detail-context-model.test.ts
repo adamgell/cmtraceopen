@@ -963,7 +963,7 @@ describe("an empty list, and the absence claim", () => {
 
   it("says there are no other entries only under all five conditions", () => {
     expect(empty()).toEqual(
-      emptyWindowText({ halfWidthMs: FIVE_MIN, narrowed: false, unreadSources: false, updating: false, unplacedTotal: 0, subject: "entries" }),
+      emptyWindowText({ halfWidthMs: FIVE_MIN, scopeNarrowed: false, unreadSources: false, updating: false, unplacedTotal: 0, subject: "entries" }),
     );
     expect(empty()).toEqual({ text: "No other entries within ±5 min.", absolute: true });
   });

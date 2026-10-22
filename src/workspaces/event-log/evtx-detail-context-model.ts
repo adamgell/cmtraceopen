@@ -380,7 +380,9 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
       pairedCounts !== null &&
       sessionSpeaksForAbsence({
         edgeInputComplete: pairedCounts.model.edgeInputComplete,
-        narrowed: read.narrowed,
+        scopeNarrowed: read.scopeNarrowed,
+        unreadSources,
+        updating: read.updating,
         gaps: pairedCounts.gaps,
         memberIds: [originId as string, ...rowsOfEvent.flatMap((row) => [...row.memberIds, ...row.unresolvedMemberIds])],
       }) &&
@@ -394,7 +396,7 @@ function buildReady(read: WindowRead, unreadSources: boolean): DetailContextRead
     window.complete && othersInWindow.length === 0
       ? emptyWindowText({
           halfWidthMs: window.halfWidthMs,
-          narrowed: read.scopeNarrowed,
+          scopeNarrowed: read.scopeNarrowed,
           unreadSources,
           updating,
           unplacedTotal: read.unplacedTotal,

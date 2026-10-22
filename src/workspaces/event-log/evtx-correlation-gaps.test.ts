@@ -126,6 +126,21 @@ describe("classifyCoverageGaps", () => {
     expect(gapsClearCompleteness(classified)).toBe(true);
   });
 
+  it("reads a global gap from the preview alone, so a cut preview can hide one (#841, review L1)", () => {
+    // The first 100 gaps of a session that holds 101: the one not shown may be the engine's own limit.
+    const shown = fixtureGaps("fanOut").slice(0, 100);
+    const hidden = classifyCoverageGaps(shown, 101);
+    expect(hidden.global).toBe(false);
+    expect(hidden.previewCut).toBe(true);
+    // The same session read whole says it.
+    const whole = classifyCoverageGaps([...shown, { source: "correlation", reason: "gap limit" }], 101);
+    expect(whole.global).toBe(true);
+    expect(whole.previewCut).toBe(false);
+    // So a number or an absence the gaps can make unprovable reads both flags, not `global` alone.
+    expect(gapsClearCompleteness(hidden)).toBe(true);
+    expect(gapsClearCompleteness(whole)).toBe(true);
+  });
+
   it("is cut when the count is not known, and when it contradicts the preview", () => {
     const one = [{ source: ORIGIN, reason: "r" }];
     expect(classifyCoverageGaps(one, null).previewCut).toBe(true);

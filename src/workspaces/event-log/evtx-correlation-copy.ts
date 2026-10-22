@@ -16,16 +16,22 @@ import type {
 } from "./evtx-correlation-chains";
 import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
 import {
+  IN_ANOTHER_CHAIN_LABEL,
+  LINK_TO_EVENT_UNKNOWN_LABEL,
+  NOT_LINKED_LABEL,
+  chainAccessibleName,
   chainSequence,
   chainTitle,
   entriesText,
   formatDelta,
+  isPartialChain,
   isProvenUnplaced,
   partitionUnplaced,
   whyRows,
   type UnplacedEvidence,
 } from "./evtx-correlation-view-model";
 import { formatEventTime, timeZoneLabel, type EvtxTimeZoneMode } from "./evtx-time";
+import { WAIT_FOR_UPDATE_REASON } from "./evtx-unplaced";
 import type { TimelineItem } from "./unified-timeline";
 import type { LoadedCorrelationWindow } from "./evtx-correlation-window";
 
@@ -135,6 +141,22 @@ export function coverageGapNotice(gaps: CorrelationGaps): string | null {
   return `More coverage gaps may exist than are listed, ${tail}`;
 }
 
+/**
+ * The notice for the origins the engine left uncorrelated (`gaps.originIds`), or null when it left
+ * none. A gap that names an origin means that origin's records were never fully correlated, so a
+ * link involving them can be missing, and so an absence of links anywhere in the session is
+ * unproven. `coverageGapNotice` says nothing for such a gap (it is not global and cuts nothing), so
+ * without this note a surface that withdrew its absence claim would point at no note at all. The
+ * number is the distinct origins the preview names; when the preview is cut, the gaps that are not
+ * shown may name more, so it is a lower bound and the sentence says so.
+ */
+export function uncorrelatedOriginsNotice(gaps: CorrelationGaps): string | null {
+  const n = gaps.originIds.size;
+  if (n === 0) return null;
+  const sentence = `${events(n)} could not be fully correlated, so links involving ${n === 1 ? "it" : "them"} may be missing.`;
+  return gaps.previewCut ? `At least ${sentence}` : sentence;
+}
+
 export interface ScanNoticeInput {
   state: "idle" | "running" | "complete" | "incomplete";
   stoppedBy: "budget" | "error" | null;
@@ -180,6 +202,186 @@ export function pastCapNotice(shown: number): string {
   return `The selected chain is past the first ${count(shown)} rows, so it is listed after them.`;
 }
 
+// ---- the words the Correlation view and the Chains tab say alike ---------------------------------
+
+/** Said when no analysis session exists and none is on the way. */
+export const NO_ANALYSIS_TEXT = "No event analysis is available. Load events to see correlation.";
+
+/** Said while a session is built or its edges are read and there is no model yet: never "no chains". */
+export const READING_EDGES_TEXT = "Reading correlation edges...";
+
+/** A row whose members have no loaded position says so, and nothing about why. */
+export const NO_POSITION_TEXT = "No loaded timeline position";
+
+/** Why an action on a chain's entries waits: the entries have not been read yet. */
+export const WAIT_FOR_ENTRIES_REASON = "Wait for the entries of this chain to be read.";
+
+/**
+ * Whether an action on the model on show (filter the table, copy, open) may act. It waits for a
+ * rebuild first, then for the entries to be read: the model on show can be an earlier session's,
+ * and a chain whose entries were not read has no records to name.
+ */
+export function chainActionAvailability(input: {
+  hasItems: boolean;
+  updating: boolean;
+  hasChain: boolean;
+}): { canAct: boolean; reason: string | undefined } {
+  const canAct = input.hasItems && !input.updating && input.hasChain;
+  return {
+    canAct,
+    reason: canAct ? undefined : input.updating ? WAIT_FOR_UPDATE_REASON : WAIT_FOR_ENTRIES_REASON,
+  };
+}
+
+/** Said once above a list of entries in time order: a sequence is not a cause. */
+export const SEQUENCE_ORDER_NOTE = "Ordered by recorded time. Order is not evidence of cause.";
+
+/**
+ * The heading of the copied text's sequence: the order note's two sentences as one parenthesised clause
+ * (the first word of each lower-cased, a semicolon between), so the copied text and the list say it in
+ * the one set of words.
+ */
+export const SEQUENCE_HEADING = `Sequence (${SEQUENCE_ORDER_NOTE.replace(/\.$/, "")
+  .split(". ")
+  .map((part) => part.charAt(0).toLowerCase() + part.slice(1))
+  .join("; ")})`;
+
+/** The sentence said of an entry whose timestamp equals the entry above it: time does not order the two. */
+const SAME_TIME_SENTENCE = "same timestamp as the entry above; their order is not established";
+
+/** `SAME_TIME_SENTENCE` as the note beside an entry in a list. */
+export const SAME_TIME_NOTE = `(${SAME_TIME_SENTENCE})`;
+
+/** A failure that is not a load result: the model could not be built, or could not be updated. */
+export function correlationFailureText(error: string, phase: "built" | "updated"): string {
+  return `Correlation could not be ${phase}: ${error}`;
+}
+
+/**
+ * How far reading the timeline has got, in words that are not a live region's. With no progress it
+ * prints no number at all: a count that is not known is not 0.
+ */
+export function timelineReadingText(
+  progress: { scannedItems: number; totalItems: number } | null,
+): string {
+  return progress === null
+    ? "Reading the timeline..."
+    : `Reading ${count(progress.scannedItems)} of ${count(progress.totalItems)} timeline items...`;
+}
+
+/**
+ * The line for a model that holds no chain. The absolute sentence says the session has none, so it
+ * is said only when the session can speak for an absence (`sessionSpeaksForAbsenceOverall`: every
+ * edge loaded, nothing narrowed or unread, no rebuild under way, no gap); otherwise it says only
+ * what was looked at.
+ */
+export function noChainsFoundText(speaks: boolean): string {
+  return speaks
+    ? "No correlation chains were found in this session."
+    : "No chains were found among the edges that were loaded.";
+}
+
+/**
+ * Said in place of "{n} chains" where the engine's gaps leave the number unproven
+ * (`chainCountForGaps`): a number that is not known is never given, and never 0.
+ */
+export const CHAIN_COUNT_NOT_KNOWN_TEXT = "The chain count is not known";
+
+/** Said in place of a chain's entries while they are read. */
+export const CHAIN_ENTRIES_BEING_READ_TEXT = "The entries of this chain are being read.";
+
+/** Said in place of a chain's steps when the read of its entries did not reach them. */
+export const CHAIN_STEPS_NOT_READ_TEXT = "The entries of this chain were not read, so there are no steps to show.";
+
+/** Said of a chain none of whose entries has a loaded position (the entries were read). */
+export const NO_ENTRY_POSITION_TEXT = "No entry has a loaded timeline position.";
+
+/** Added to the name of the chain row that holds the selected event. */
+export const CONTAINS_SELECTED_EVENT_SUFFIX = ", contains the selected event";
+
+/** The spec's empty state (8.13). An absence of links is claimed here, so it needs `noLinkedChainsText`. */
+export const NO_LINKED_EVENTS_TEXT =
+  "No linked events. Correlation requires a shared identifier; time proximity alone is not a link.";
+
+/** Said when no chain was found and the session cannot speak for an absence: the notes say why. */
+export const NO_CHAINS_QUALIFIED_TEXT =
+  "No chains were found, but the notes above say what was not covered, so this does not show that none exist.";
+
+/**
+ * The line for a model that holds no row at all. The spec's sentence says there are no linked events,
+ * which is a claim about the whole session: it is said only when `speaks` (every edge loaded, nothing
+ * narrowed, no gap that clears completeness, no unread source, no rebuild under way). Without that it
+ * says only what was looked at.
+ */
+export function noLinkedChainsText(input: { speaks: boolean; edgeInputComplete: boolean }): string {
+  if (input.speaks) return NO_LINKED_EVENTS_TEXT;
+  return input.edgeInputComplete ? NO_CHAINS_QUALIFIED_TEXT : noChainsFoundText(false);
+}
+
+/** The line above rows that establish no link (ambiguous, coverage blocked) when there is no chain. */
+export function noLinkingChainsLine(speaks: boolean): string {
+  return speaks
+    ? "No exact or candidate chains were found."
+    : "No exact or candidate chains were found among what was loaded.";
+}
+
+/** Said when sources were not fully read: what the chains hold can be missing entries and links. */
+export const UNREAD_SOURCES_CHAINS_NOTE =
+  "Some sources were not fully read, so entries and links may be missing from these chains.";
+
+/** The heading of the nearby group: the one word its entries may carry, and how many they are. */
+export function nearbyHeading(word: string, entries: number): string {
+  return `Nearby, ${word.toLowerCase()} (${count(entries)})`;
+}
+
+/**
+ * The name a screen reader gives a chain row: its strength, its title (or "Untitled chain" and its
+ * id, so two untitled rows are told apart), its entry count from ALL members, and "partial" when
+ * members have no loaded position.
+ */
+export function chainRowName(
+  chain: Pick<CorrelationChain, "strength" | "title" | "id" | "memberCount" | "unresolvedMemberIds">,
+): string {
+  return `${STRENGTH_LABELS[chain.strength]}, ${chainAccessibleName(chain)}, ${entriesText(chain.memberCount)}${isPartialChain(chain) ? ", partial" : ""}`;
+}
+
+export interface CorrelationNoticesInput {
+  edgeInput: EdgeInputState;
+  edgeError: string | null;
+  gaps: CorrelationGaps;
+  scan: ScanNoticeInput;
+  /**
+   * The Correlation view's own notice that the chain it had selected is gone, placed after the scan
+   * notice. A surface that holds no selection (the Chains tab) passes null.
+   */
+  selectionLoss: string | null;
+  scope: ScopeDisclosure | null;
+  /** The 100-row cap: rows listed, rows before the cap, rows it dropped. */
+  cap: { shown: number; totalCount: number; omittedCount: number };
+  /** The number of rows the cap kept when the selected row is listed past them; null otherwise. */
+  pastCapShown: number | null;
+}
+
+/**
+ * Everything the model says about what it did not cover, in one order, for every surface that lists
+ * its chains: the edges that were not all loaded, a failed edge page, the engine's coverage gaps and
+ * the origins it left uncorrelated, an unfinished timeline read, a narrowed view, and the render
+ * cap. A notice with nothing to say is left out.
+ */
+export function correlationNotices(input: CorrelationNoticesInput): string[] {
+  return [
+    edgeInputNotice(input.edgeInput),
+    edgeErrorNotice(input.edgeError),
+    coverageGapNotice(input.gaps),
+    uncorrelatedOriginsNotice(input.gaps),
+    scanNotice(input.scan),
+    input.selectionLoss,
+    ...(input.scope === null ? [] : [input.scope.strengthNote, input.scope.textLogNote]),
+    renderCapNotice(input.cap),
+    input.pastCapShown === null ? null : pastCapNotice(input.pastCapShown),
+  ].filter((text): text is string => text !== null);
+}
+
 /**
  * Why a chain has members that are not on the plot, or null when all are. "No timestamp" is said
  * only when it is PROVEN for every one of them (`isProvenUnplaced`). Otherwise the sentence says
@@ -195,6 +397,23 @@ export function unresolvedNotice(
   return proven
     ? `${count(missing)} of ${count(chain.memberCount)} entries carry no timestamp, so they are not placed on the plot.`
     : `${count(missing)} of ${count(chain.memberCount)} entries have no loaded timeline position, so they are not drawn on the plot.`;
+}
+
+/**
+ * Why a chain has members that are not listed as steps, or null when all are. Like `unresolvedNotice`,
+ * "no timestamp" is said only when it is PROVEN for every one of them (`isProvenUnplaced`); otherwise
+ * it says only that no position was loaded. It speaks of steps, not of a plot.
+ */
+export function unresolvedStepsNotice(
+  chain: Pick<CorrelationChain, "unresolvedMemberIds" | "memberCount">,
+  evidence: UnplacedEvidence,
+): string | null {
+  const missing = chain.unresolvedMemberIds.length;
+  if (missing === 0) return null;
+  const proven = chain.unresolvedMemberIds.every((id) => isProvenUnplaced(id, evidence));
+  return proven
+    ? `${count(missing)} of ${count(chain.memberCount)} entries carry no timestamp, so they are not listed as steps.`
+    : `${count(missing)} of ${count(chain.memberCount)} entries have no loaded timeline position, so they are not listed as steps.`;
 }
 
 /** The line after the plot when a cap left entries or connectors undrawn. Null when none was. */
@@ -312,8 +531,8 @@ export function chainCopyText(input: ChainCopyInput): string {
     if (note !== null) lines.push(note);
   }
 
-  lines.push("", "Sequence (ordered by recorded time; order is not evidence of cause)");
-  if (sequence.entries.length === 0) lines.push("  No entry has a loaded timeline position.");
+  lines.push("", SEQUENCE_HEADING);
+  if (sequence.entries.length === 0) lines.push(`  ${NO_ENTRY_POSITION_TEXT}`);
   for (const entry of sequence.entries) {
     const when =
       entry.index === 0
@@ -323,7 +542,7 @@ export function chainCopyText(input: ChainCopyInput): string {
       `  ${entry.index + 1}. ${when}  ${entry.level}  ${entry.entry}  [${entry.laneLabel}]  ${indented(entry.message)}`,
     );
     if (entry.sameTimeAsPrevious) {
-      lines.push("      same timestamp as the entry above; their order is not established");
+      lines.push(`      ${SAME_TIME_SENTENCE}`);
     }
   }
   for (const [heading, ids] of [
@@ -462,7 +681,7 @@ export function windowNotice(
 interface EmptyWindowInput {
   halfWidthMs: number;
   /** The session was built from fewer events than are loaded, or from a scope that is not known. */
-  narrowed: boolean;
+  scopeNarrowed: boolean;
   /** A source was not fully read (a channel needs elevation, a file failed): entries may be missing. */
   unreadSources: boolean;
   /**
@@ -495,7 +714,7 @@ interface EmptyWindowInput {
 export function emptyWindowText(input: EmptyWindowInput): { text: string; absolute: boolean } {
   const width = windowWidthLabel(input.halfWidthMs);
   const entries = input.subject === "entries";
-  if (!input.narrowed && !input.unreadSources && !input.updating && input.unplacedTotal === 0) {
+  if (!input.scopeNarrowed && !input.unreadSources && !input.updating && input.unplacedTotal === 0) {
     return {
       text: entries ? `No other entries within ${width}.` : `No other sources have entries within ${width}.`,
       absolute: true,
@@ -506,7 +725,7 @@ export function emptyWindowText(input: EmptyWindowInput): { text: string; absolu
       ? `No other visible entries within ${width}.`
       : `No other visible sources have entries within ${width}.`,
   ];
-  if (input.narrowed) parts.push("Events hidden by the current filters or time range are not searched.");
+  if (input.scopeNarrowed) parts.push("Events hidden by the current filters or time range are not searched.");
   if (input.unreadSources) parts.push("Some sources were not fully read, so entries may be missing.");
   if (input.updating) parts.push("The timeline is being rebuilt, so this may change.");
   if (input.unplacedTotal === null) {
@@ -651,6 +870,17 @@ export function nearbyReason(reason: NearbyReason): string {
     case "coverageBlockedWithEvent":
       return "coverage blocked with this event";
   }
+}
+
+/**
+ * The reason that goes with the label `nearbyLinkLabel` gave a context entry. A label that is not
+ * one of the three this reads, or none, is the weakest claim: no loaded link.
+ */
+export function nearbyReasonOfLabel(label: string | null): NearbyReason {
+  if (label === NOT_LINKED_LABEL) return "notLinked";
+  if (label === IN_ANOTHER_CHAIN_LABEL) return "inAnotherChain";
+  if (label === LINK_TO_EVENT_UNKNOWN_LABEL) return "linkUnknownToEvent";
+  return "noLoadedLink";
 }
 
 /** The line after the dock's plot when a cap left entries, sources or connectors undrawn. */

@@ -21,6 +21,7 @@
  */
 
 import { getBaseName } from "../../lib/file-paths";
+import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
 import type { DiagnosisFindingClass } from "./types";
 import {
   TIMELINE_SEVERITY_RANK,
@@ -186,6 +187,64 @@ export interface CorrelationChainModel {
    * candidate relation with no second endpoint. Counted once per reduced pair, whatever the label.
    */
   ignoredRelationCount: number;
+}
+
+/**
+ * How many chains a session has, for every surface that says "{n} chains" (the Insights card, the
+ * Chains tab, the Correlation view's announcement): the exact, candidate and ambiguous rows. A
+ * coverage blocked row is a coverage state and is counted apart, never as a correlation (#838
+ * ruling 1). Takes the model's own `counts`, so the three surfaces cannot count it differently.
+ */
+export function correlationChainCount(counts: Readonly<Record<CorrelationChainStrength, number>>): number {
+  return counts.exact + counts.candidate + counts.ambiguous;
+}
+
+/**
+ * The row a member is shown under: the strongest it is in. `rowsByMember` lists a member's rows in
+ * the model's own order, strongest first, and counts every row, so a row the render cap dropped is
+ * found. Null when no row names the member; a row is never made up.
+ */
+export function strongestRowOf(
+  rowsByMember: ReadonlyMap<string, readonly CorrelationChain[]>,
+  memberId: string,
+): CorrelationChain | null {
+  return rowsByMember.get(memberId)?.[0] ?? null;
+}
+
+/**
+ * The chain number a surface may state for the gaps the engine reported, or null when they leave it
+ * unproven. The ONE rule for every surface that says "{n} chains" (the Chains tab, the Insights card,
+ * the Correlation view's announcement):
+ * - a limit or truncation gap, or a gap preview that does not show every gap, means correlation was
+ *   cut short and chains may be missing. `global` is read from the preview alone, so a cut preview
+ *   can hide a limit that is not shown: both flags withhold it (`gapsClearCompleteness`).
+ * - a gap that names an origin means that origin's links may be missing. Chains that were found are
+ *   still found, so a count above 0 is stated, but a 0 says the session has none, which is an absence
+ *   an uncorrelated origin can disprove: it is not stated.
+ */
+export function chainCountForGaps(count: number, gaps: CorrelationGaps): number | null {
+  if (gapsClearCompleteness(gaps)) return null;
+  if (count === 0 && gaps.originIds.size > 0) return null;
+  return count;
+}
+
+/**
+ * The number the rail's Chains tab shows, or null when it has none to show. The tab states a number
+ * only when it is known, current and complete for edges: no counts yet is unknown and not 0; counts of
+ * an earlier session are not the newest session's; with edges missing, the chains found among the
+ * edges that were loaded are neither a lower bound (a missing edge can join two of them) nor an upper
+ * bound (it can add one); and the engine's gaps can withhold it too (`chainCountForGaps`). Takes the
+ * newest counts-only model and its gaps, never the model on show.
+ */
+export function chainsTabCount(
+  counts: {
+    model: Pick<CorrelationChainModel, "counts" | "edgeInputComplete">;
+    gaps: CorrelationGaps;
+    updating: boolean;
+  } | null,
+): number | null {
+  if (counts === null || counts.updating || !counts.model.edgeInputComplete) return null;
+  return chainCountForGaps(correlationChainCount(counts.model.counts), counts.gaps);
 }
 
 /** Code-unit order, so a sort does not depend on the locale. The one comparator of the correlation modules. */

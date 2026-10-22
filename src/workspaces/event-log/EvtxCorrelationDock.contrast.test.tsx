@@ -19,7 +19,7 @@ import { getAllThemes } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import EvtxCorrelationDock from "./EvtxCorrelationDock";
 import { EvtxAnalysisSessionProvider } from "./evtx-analysis-session";
-import { CONNECTOR_STYLES } from "./EvtxCorrelationLanes";
+import { CONNECTOR_STYLES } from "./EvtxCorrelationLegendParts";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { pickRailTextColors } from "./evtx-rail-text";
