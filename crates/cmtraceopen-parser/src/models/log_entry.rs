@@ -304,7 +304,8 @@ pub struct LogEntry {
     /// Iteration identifier for Iteration entries (CmtLog)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub iteration: Option<String>,
-    /// Arbitrary tag list attached to a log entry (CmtLog)
+    /// Arbitrary tags attached to a log entry. IME parsing uses
+    /// `cmtrace:unparsed-ime-record` for source text without a complete frame.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
 }

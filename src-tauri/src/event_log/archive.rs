@@ -258,8 +258,13 @@ where
     let member_count = archive.len();
 
     'members: for index in bounded_member_indices(member_count) {
-        let mut entry = match archive.by_index(index) {
-            Ok(entry) => entry,
+        // A member whose name cannot be decoded is as unreadable as one that cannot be opened.
+        let opened = archive.by_index(index).and_then(|entry| {
+            let raw_name = entry.name()?.into_owned();
+            Ok((entry, raw_name))
+        });
+        let (mut entry, raw_name) = match opened {
+            Ok(opened) => opened,
             Err(error) => {
                 push_metadata(
                     &mut result,
@@ -277,7 +282,6 @@ where
                 continue;
             }
         };
-        let raw_name = entry.name().to_string();
         let member_label = if raw_name.chars().any(is_unsafe_member_character) {
             format!("{source}::member-{index}")
         } else {
@@ -302,8 +306,7 @@ where
         };
         let normalized_label = format!("{source}::{member_name}");
 
-        if entry
-            .unix_mode()
+        if crate::zip_entry::stored_unix_mode(&entry)
             .is_some_and(|mode| (mode & 0o170000) == 0o120000)
         {
             push_metadata(
@@ -1746,5 +1749,66 @@ mod tests {
             .is_some_and(|digest| digest.len() == 64));
         assert_eq!(parsed.metadata[0].outcome, EvtxArchiveMemberOutcome::Parsed);
         fs::remove_file(path).expect("remove archive fixture");
+    }
+
+    #[test]
+    fn symlink_members_stay_unsupported_coverage_for_unix_and_dos_hosts() {
+        // Host 3 (Unix) is the baseline. Host 0 (DOS) carries the same Unix symlink mode
+        // in the high 16 external-attribute bits, which zip 9's unix_mode() ignores.
+        for (host, label) in [(3_u8, "unix"), (0_u8, "dos")] {
+            let path = std::env::temp_dir().join(format!(
+                "cmtraceopen-event-archive-symlink-{label}-{}.zip",
+                std::process::id()
+            ));
+            let file = File::create(&path).expect("create archive fixture");
+            let mut writer = zip::ZipWriter::new(file);
+            writer
+                .start_file(
+                    "logs/app.log",
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Stored),
+                )
+                .expect("create symlink member");
+            writer
+                .write_all(b"../../Windows/System32/config/SAM")
+                .expect("write symlink target");
+            writer.finish().expect("finish archive fixture");
+            let mut bytes = fs::read(&path).expect("read archive fixture");
+            let central = bytes
+                .windows(4)
+                .rposition(|signature| signature == [0x50, 0x4b, 0x01, 0x02])
+                .expect("find central directory header");
+            bytes[central + 5] = host;
+            bytes[central + 38..central + 42].copy_from_slice(&(0o120777_u32 << 16).to_le_bytes());
+            fs::write(&path, bytes).expect("patch member host and attributes");
+
+            let maps = RwLock::new(MapRegistry::new());
+            let providers = RwLock::new(super::super::provider_db::ProviderStore::default());
+            let (parsed, members) =
+                collect_archive(&path, &maps, &providers, usize::MAX).expect("archive should open");
+            let expected_path = format!("{}::logs/app.log", path.to_string_lossy());
+
+            assert!(
+                members.is_empty(),
+                "{label}-host symlink member must not become parsed evidence"
+            );
+            assert_eq!(parsed.metadata.len(), 1, "{label}");
+            assert_eq!(parsed.metadata[0].path, expected_path, "{label}");
+            assert_eq!(
+                parsed.metadata[0].outcome,
+                EvtxArchiveMemberOutcome::Unsupported,
+                "{label}"
+            );
+            assert!(
+                parsed.coverage.iter().any(|gap| {
+                    gap.kind == EvtxCoverageGapKind::Unsupported
+                        && gap.source == expected_path
+                        && gap.reason == "symbolic-link archive members are not followed"
+                }),
+                "{label}: {:?}",
+                parsed.coverage
+            );
+            fs::remove_file(path).expect("remove archive fixture");
+        }
     }
 }

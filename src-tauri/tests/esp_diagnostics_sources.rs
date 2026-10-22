@@ -7378,6 +7378,131 @@ fn archive_rejects_trailing_separator_zip_special_entries() {
     ));
 }
 
+/// Version-made-by host byte for MS-DOS. Windows tools that record a Unix file type
+/// store it in the high 16 external-attribute bits of a DOS-host entry.
+const ZIP_HOST_DOS: u8 = 0;
+
+/// Writes a one-entry ZIP, then stamps its central-directory header with `host` and
+/// `external_attributes`. One entry only, because the patch targets the last header.
+fn write_single_entry_zip_with_host_attributes(
+    path: &Path,
+    name: &str,
+    content: &[u8],
+    host: u8,
+    external_attributes: u32,
+) {
+    write_test_zip(path, &[(name, content)]);
+    let mut bytes = std::fs::read(path).expect("read ZIP fixture");
+    let central = find_last_signature(&bytes, [0x50, 0x4b, 0x01, 0x02]);
+    bytes[central + 5] = host;
+    patch_u32(&mut bytes, central + 38, external_attributes);
+    std::fs::write(path, bytes).expect("patch ZIP fixture");
+}
+
+#[test]
+fn archive_rejects_dos_host_zip_symlink_entries_by_their_stored_mode() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let extraction_parent = tempfile::tempdir().expect("extraction parent");
+    let archive_path = source.path().join("dos-host-symlink.zip");
+    write_single_entry_zip_with_host_attributes(
+        &archive_path,
+        "evidence/link.log",
+        b"../../outside.log",
+        ZIP_HOST_DOS,
+        0o120777_u32 << 16,
+    );
+
+    let error =
+        extract_captured_archive_with_cancel_in(&archive_path, extraction_parent.path(), &|| false)
+            .expect_err("reject a DOS-host entry whose stored mode is a symlink");
+    assert!(
+        matches!(
+            error,
+            ArchiveError::UnsupportedEntryType {
+                kind: ArchiveEntryKind::Symlink,
+                ..
+            }
+        ),
+        "unexpected result: {error:?}"
+    );
+    assert_eq!(
+        extraction_parent
+            .path()
+            .read_dir()
+            .expect("list extraction parent")
+            .count(),
+        0,
+        "a rejected symlink entry must not be written"
+    );
+}
+
+#[test]
+fn archive_rejects_dos_host_zip_special_entries_by_their_stored_mode() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let extraction_parent = tempfile::tempdir().expect("extraction parent");
+    let archive_path = source.path().join("dos-host-fifo.zip");
+    write_single_entry_zip_with_host_attributes(
+        &archive_path,
+        "evidence/fifo.log",
+        b"not a regular file",
+        ZIP_HOST_DOS,
+        0o010644_u32 << 16,
+    );
+
+    let error =
+        extract_captured_archive_with_cancel_in(&archive_path, extraction_parent.path(), &|| false)
+            .expect_err("reject a DOS-host entry whose stored mode is a FIFO");
+    assert!(
+        matches!(
+            error,
+            ArchiveError::UnsupportedEntryType {
+                kind: ArchiveEntryKind::Other,
+                ..
+            }
+        ),
+        "unexpected result: {error:?}"
+    );
+    assert_eq!(
+        extraction_parent
+            .path()
+            .read_dir()
+            .expect("list extraction parent")
+            .count(),
+        0,
+        "a rejected special entry must not be written"
+    );
+}
+
+#[test]
+fn archive_keeps_dos_host_zip_stored_regular_mode_over_the_dos_directory_bit() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let archive_path = source
+        .path()
+        .join("dos-host-regular-with-directory-bit.zip");
+    write_single_entry_zip_with_host_attributes(
+        &archive_path,
+        "evidence/app.log",
+        b"regular evidence",
+        ZIP_HOST_DOS,
+        (0o100644_u32 << 16) | 0x10,
+    );
+
+    let extracted = extract_captured_archive(&archive_path)
+        .expect("a stored regular-file mode decides the type over the DOS directory bit");
+    assert_eq!(
+        extracted
+            .files()
+            .iter()
+            .map(|file| file.relative_path.to_string_lossy().replace('\\', "/"))
+            .collect::<Vec<_>>(),
+        vec!["evidence/app.log"]
+    );
+    assert_eq!(
+        std::fs::read(&extracted.files()[0].path).expect("read extracted evidence"),
+        b"regular evidence"
+    );
+}
+
 #[test]
 fn archive_manifest_enforces_entry_per_file_and_total_uncompressed_caps() {
     let too_many = (0..=MAX_ARCHIVE_ENTRIES)
