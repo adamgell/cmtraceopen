@@ -39,8 +39,8 @@ import { LOG_MONOSPACE_FONT_FAMILY } from "../../lib/log-accessibility";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 import { Disclosure, RailCard, useRailSizes, type RailSizes } from "./EvtxRailParts";
 import { useRailTextColors } from "./evtx-rail-text";
-import { correlationChainCount } from "./evtx-correlation-chains";
-import { edgeInputNotice } from "./evtx-correlation-copy";
+import { chainCountForGaps, correlationChainCount } from "./evtx-correlation-chains";
+import { coverageGapNotice, edgeInputNotice, uncorrelatedOriginsNotice } from "./evtx-correlation-copy";
 import { openChainInCorrelationView, openUnplacedInCorrelationView } from "./evtx-correlation-actions";
 import { describeUnplaced, unplacedCardLine } from "./evtx-unplaced";
 import { useEvtxCorrelationData } from "./useEvtxCorrelation";
@@ -763,6 +763,8 @@ function TopEventIdsCard({
  *   headline is "unknown", never 0;
  * - when edges were not all loaded the counts are of the loaded ones and the shortfall is stated
  *   in the Correlation view's own words;
+ * - the engine's gaps can leave the number unproven (`chainCountForGaps`, the rule the Chains tab
+ *   asks): the headline is then "unknown", with the gap notes below it;
  * - a coverage blocked row is a coverage state and is counted apart, never as a correlation;
  * - a session known to hold no edge at all has nothing to summarise, so there is no card.
  */
@@ -779,13 +781,14 @@ function CorrelationSummaryCard({ sizes, stale }: { sizes: RailSizes; stale: boo
   const unplacedToReview = counts !== null && unplacedView.present;
   const lineStyle = { fontSize: `${sizes.small}px`, color: tokens.colorNeutralForeground2 };
   const mutedStyle = { fontSize: `${sizes.small}px`, color: cardSecondary };
-  const known = counts !== null && counts.edges.totalEdges !== null;
+  // The number the gaps allow: the Chains tab's rule, so the card and the tab never disagree on it.
+  const correlations = counts === null ? null : chainCountForGaps(correlationChainCount(counts.model.counts), counts.gaps);
+  const known = counts !== null && counts.edges.totalEdges !== null && correlations !== null;
   // A session known to hold no edge has nothing to summarise, unless it has unplaced items to review.
   if (counts !== null && counts.edges.totalEdges === 0 && counts.model.edgeInputComplete && !unplacedToReview) {
     return null;
   }
   const rows = counts?.model.counts;
-  const correlations = rows === undefined ? 0 : correlationChainCount(rows);
   const shortfall =
     counts === null
       ? null
@@ -816,6 +819,15 @@ function CorrelationSummaryCard({ sizes, stale }: { sizes: RailSizes; stale: boo
         </div>
       )}
       {shortfall !== null && <div style={mutedStyle}>{shortfall}</div>}
+      {counts !== null && (
+        <>
+          {/* What the engine's gaps leave unproven, in the notes the Correlation view and the Chains tab show. */}
+          {coverageGapNotice(counts.gaps) !== null && <div style={mutedStyle}>{coverageGapNotice(counts.gaps)}</div>}
+          {uncorrelatedOriginsNotice(counts.gaps) !== null && (
+            <div style={mutedStyle}>{uncorrelatedOriginsNotice(counts.gaps)}</div>
+          )}
+        </>
+      )}
       {unplacedLine !== null && (
         <div style={unplacedKnown ? lineStyle : mutedStyle} data-testid="correlation-card-unplaced">
           {unplacedLine}

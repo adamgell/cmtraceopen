@@ -13,7 +13,9 @@ import { useUiStore } from "../../stores/ui-store";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import { DETAIL_RENDER_CAP, OUTCOME_LABELS, EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
-import { fixtureEdges, makeData, type DataOptions } from "./evtx-correlation-test-fixtures";
+import { classifyCoverageGaps } from "./evtx-correlation-gaps";
+import { fixtureEdges, makeData, rid, type DataOptions } from "./evtx-correlation-test-fixtures";
+import panelSource from "./EventDiagnosisPanel.tsx?raw";
 import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
 import type { UnplacedItem } from "./unified-timeline";
 import {
@@ -683,6 +685,48 @@ describe("EventDiagnosisPanel", () => {
       expect(screen.getByTestId("correlation-card-headline")).toHaveTextContent("0 chains");
       expect(card()).toHaveTextContent("1 coverage blocked");
       expect(card()).not.toHaveTextContent("exact");
+    });
+
+    describe("states no chain number the engine's gaps leave unproven, as the Chains tab does (#841, review L1)", () => {
+      const limit = classifyCoverageGaps([{ source: "correlation", reason: "limit" }], 1);
+      // 100 origin gaps shown of 101: `global` is read from the preview, so a cut one can hide a limit.
+      const cut = classifyCoverageGaps(
+        Array.from({ length: 100 }, (_, i) => ({ source: rid(500 + i), reason: "x" })),
+        101,
+      );
+
+      it.each([
+        ["a limit or truncation gap", limit, "The engine limited correlation, so some entries may not have been correlated"],
+        ["a gap preview that is cut", cut, "More coverage gaps may exist than are listed"],
+      ])("reads 'unknown', with the sub-lines gone and the reason said, under %s", (_why, gaps, reason) => {
+        renderCard(counted({ gaps }));
+        expect(screen.getByTestId("correlation-card-headline")).toHaveTextContent("unknown");
+        expect(card()).toHaveTextContent(reason);
+        expect(card().textContent).not.toMatch(/\d+ chains?|exact|candidate|ambiguous|coverage blocked/);
+      });
+
+      it("states the chains that were found when only an origin is uncorrelated, with the note saying so", () => {
+        renderCard(counted({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "alias conflict" }], 1) }));
+        expect(screen.getByTestId("correlation-card-headline")).toHaveTextContent("2 chains");
+        expect(card()).toHaveTextContent("1 event could not be fully correlated, so links involving it may be missing.");
+      });
+
+      it("never states 0 chains while an origin is uncorrelated: that would say the session has none", () => {
+        renderCard(counted({ edges: fixtureEdges("gappedPair"), gaps: classifyCoverageGaps([{ source: rid(900), reason: "x" }], 1) }));
+        expect(screen.getByTestId("correlation-card-headline")).toHaveTextContent("unknown");
+        expect(card().textContent).not.toMatch(/\b0 chains/);
+        expect(card()).toHaveTextContent("1 event could not be fully correlated");
+      });
+
+      it("says 'At least' when the gap preview that names the origins is cut", () => {
+        renderCard(counted({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "x" }, { source: rid(2), reason: "x" }], 40) }));
+        expect(card()).toHaveTextContent("At least 2 events could not be fully correlated, so links involving them may be missing.");
+      });
+
+      it("asks the rule the Chains tab asks, and does not count the chains itself", () => {
+        expect(panelSource).toMatch(/\bchainCountForGaps\(/);
+        expect(panelSource).not.toMatch(/const correlations = rows === undefined \? 0/);
+      });
     });
 
     it("has no card without a session, nor for a session known to hold no edge", () => {
