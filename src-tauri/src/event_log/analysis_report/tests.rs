@@ -1858,6 +1858,45 @@ fn identifier_values_follow_the_print_policy() {
 }
 
 #[test]
+fn a_user_id_that_is_a_sid_is_a_token_or_masked_and_never_raw() {
+    // The timeline reads a record's user_sid as its user id when it has none, so a relation can
+    // rest on a userId whose value is a SID. Its line is a token or "(masked)", never the SID.
+    let sid = "S-1-5-21-1000000001-1000000002-1000000003-1002";
+    let (a, b) = (stable(1), stable(2));
+    let timeline = timeline_of(
+        vec![chain_item(1, 76, 0, "m"), chain_item(2, 77, 9, "m")],
+        vec![edge(
+            &a,
+            &b,
+            TimelineCorrelationKeyKind::UserId,
+            "userId",
+            sid,
+            TimelineCorrelationStrength::Exact,
+        )],
+    );
+    let chains = chains_value(
+        1,
+        (1, 0, 0, 0),
+        vec![row(
+            "exact",
+            &[a.clone(), b.clone()],
+            json!([pair(&a, &b, &[("userId", sid)])]),
+        )],
+    );
+    let report = chain_report_for(&timeline, chains).expect("renders");
+    let values: Vec<&str> = report
+        .lines()
+        .filter_map(|line| line.split(": UserId = ").nth(1))
+        .collect();
+    assert_eq!(values.len(), 2, "one line for each entry: {report}");
+    for value in values {
+        let token = value.starts_with("[sid:") && value.ends_with(']') && value.len() == 22;
+        assert!(token || value == "(masked)", "{value}");
+    }
+    assert!(!leaks(&report, sid) && !leaks(&report, "1000000003-1002"));
+}
+
+#[test]
 fn the_ladder_says_what_the_chain_list_can_and_cannot_support() {
     let (timeline, a, b) = two_event_timeline();
     let members = [a.clone(), b.clone()];

@@ -3241,6 +3241,8 @@ mod screenshot_replies {
     /// Identifiers invented for these tests. None is a real name, SID or tenant.
     const PLANTED_MACHINE: &str = "HOST-0002";
     const PLANTED_SID: &str = "S-1-5-21-1000000001-1000000002-1000000003-1001";
+    /// Only ever a record's `user_sid`: the timeline falls back to it when there is no user id.
+    const PLANTED_SID_ONLY: &str = "S-1-5-21-1000000001-1000000002-1000000003-1002";
     const PLANTED_TENANT_LABELED: &str = "00000000-0000-4000-8000-0000000000e1";
     const PLANTED_TENANT_BARE: &str = "00000000-0000-4000-8000-0000000000e2";
     const PLANTED_UPN: &str = "user0001@example.invalid";
@@ -3274,6 +3276,13 @@ mod screenshot_replies {
         // A second machine, and the identifiers a message can carry.
         records[planted[2]].computer = PLANTED_MACHINE.to_string();
         records[planted[3]].computer = PLANTED_MACHINE.to_string();
+        // Two events on that machine whose only user identity is a SID: the timeline reads it
+        // as their user id, so the relation between them rests on a SID-valued userId.
+        for index in &planted[2..4] {
+            let record = &mut records[*index];
+            record.user_id = None;
+            record.user_sid = Some(PLANTED_SID_ONLY.to_string());
+        }
         let messages = [
             (
                 4,
@@ -3415,6 +3424,7 @@ mod screenshot_replies {
             PLANTED_DEVICE,
             PLANTED_CASE_FOLDER,
             "s-1-5-21-1000000001",
+            PLANTED_SID_ONLY,
         ] {
             assert!(
                 !lower.contains(&planted.to_lowercase()),
@@ -3463,6 +3473,28 @@ mod screenshot_replies {
             .char_indices()
             .filter(|(_, character)| *character == '<')
             .all(|(index, _)| report[..index].ends_with('\\')));
+    }
+
+    #[test]
+    fn a_user_id_that_is_a_sid_is_never_printed_raw() {
+        // One chain rests on a userId that came from a record's user_sid. The line for it is a
+        // token, or "(masked)" when the projection left something that is not one.
+        let (report, _) = planted_report();
+        let values: Vec<&str> = report
+            .lines()
+            .filter_map(|line| line.split(": UserId = ").nth(1))
+            .collect();
+        assert!(
+            values.len() >= 2,
+            "the SID pair gives one line for each of its two entries: {values:?}"
+        );
+        for value in &values {
+            let token = value.starts_with("[sid:") && value.ends_with(']') && value.len() == 22;
+            assert!(token || *value == "(masked)", "{value}");
+        }
+        let unescaped = report.replace('\\', "").to_lowercase();
+        assert!(!unescaped.contains(&PLANTED_SID_ONLY.to_lowercase()));
+        assert!(!unescaped.contains("1000000003-1002"));
     }
 
     fn chain_member_rows(report: &str) -> usize {
