@@ -296,6 +296,19 @@ export function summarizeCoverageGaps(gaps: readonly string[]): string {
 }
 
 /**
+ * How many distinct gaps a view reports: the legacy messages, the live-tail messages and the
+ * structured gaps (as the banner words them), counted once each. The histogram and the swimlanes
+ * both say "N gaps in this view may hide events", so they count the same way.
+ */
+export function countCoverageGapMessages(
+  legacy: readonly string[],
+  tail: readonly string[],
+  structured: readonly EvtxCoverageGap[]
+): number {
+  return new Set([...legacy, ...tail, ...structured.map(formatCoverageGap)]).size;
+}
+
+/**
  * Converts typed source coverage into the stable operator-facing banner wording.
  *
  * The backend keeps coverage structured so source kind and path survive IPC. The banner remains

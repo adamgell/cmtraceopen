@@ -1,4 +1,5 @@
 import {
+  lazy,
   useCallback,
   useMemo,
   useRef,
@@ -64,6 +65,14 @@ const DIAGNOSIS_DEBOUNCE_MS = 75;
 const NO_EVENTS: EvtxRecord[] = [];
 
 const NOT_IMPLEMENTED = "Not implemented in this phase";
+
+/**
+ * The Timeline view's canvas code loads when the view is first shown (spec section 11: the swimlane
+ * canvas is lazy-loaded), inside the Suspense boundary every view renders in.
+ */
+const EvtxSwimlaneView = lazy(() =>
+  import("./EvtxSwimlaneView").then((module) => ({ default: module.EvtxSwimlaneView })),
+);
 
 /**
  * One entry per workbench view. A later phase adds its view file and changes one line here; a
@@ -595,7 +604,12 @@ export function EventLogWorkspace() {
   const views: Record<EvtxViewId, EvtxViewEntry> = {
     table: { keepAlive: true, render: renderTableView },
     grouped: { keepAlive: false, render: () => <ViewPlaceholder view="grouped" /> },
-    timeline: { keepAlive: false, render: () => <ViewPlaceholder view="timeline" /> },
+    // The context, like the histogram: the events the filters leave without the time range, so a
+    // brush on the lanes never empties or rescales the lanes it was drawn on.
+    timeline: {
+      keepAlive: false,
+      render: () => <EvtxSwimlaneView records={contextRecords} loading={isLoading} />,
+    },
     charts: { keepAlive: false, render: () => <ViewPlaceholder view="charts" /> },
     correlation: { keepAlive: false, render: () => <ViewPlaceholder view="correlation" /> },
   };

@@ -550,6 +550,12 @@ export function describeCoverage(gaps: number): string {
   return `Counts cover loaded events only; ${gaps === 1 ? "1 gap" : `${formatCount(gaps)} gaps`} in this view may hide events.`;
 }
 
+/**
+ * The note when the applied time range lies wholly off the charted events (a filter shrank them
+ * after the range was set): no wash can be drawn, and the chart says why instead of showing nothing.
+ */
+export const RANGE_OUTSIDE_NOTE = "The time range is outside the charted events.";
+
 export interface BarSegment {
   level: EvtxLevel;
   count: number;
