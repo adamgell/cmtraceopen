@@ -28,6 +28,7 @@ import {
 import { DEFAULT_QUICK_FILTER, type EvtxQuickFilter } from "./evtx-filter";
 import railSource from "./EvtxInsightsRail.tsx?raw";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
+import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import { T0, eventItem, fixtureEdges, idsOf, makeData, numberOf, type DataOptions } from "./evtx-correlation-test-fixtures";
 import { evtxRailPanelId, evtxRailTabId, sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { EvtxCorrelationProvider, UNAVAILABLE_CORRELATION, type EvtxCorrelationData } from "./useEvtxCorrelation";
@@ -821,6 +822,18 @@ describe("the Chains tab of the rail (#841)", () => {
       inRail(data({ totalEdges: 40 }));
       expect(tab("Chains")).toBeInTheDocument();
       expect(screen.queryByRole("tab", { name: /Chains \d/ })).toBeNull();
+    });
+
+    it("is no number when the engine limited correlation or its gap preview is cut: chains may be missing (review L1)", () => {
+      for (const gaps of [
+        classifyCoverageGaps([{ source: "correlation", reason: "limit" }], 1),
+        classifyCoverageGaps([], 4),
+      ]) {
+        const { unmount } = inRail(data({ gaps }));
+        expect(tab("Chains")).toBeInTheDocument();
+        expect(screen.queryByRole("tab", { name: /Chains \d/ })).toBeNull();
+        unmount();
+      }
     });
 
     it("reads the newest counts, not the model on show", () => {

@@ -3,6 +3,7 @@ import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import {
   CORRELATION_CHAIN_RENDER_LIMIT,
   buildCorrelationChains,
+  chainCountForGaps,
   chainsTabCount,
   correlationChainCount,
   derivedTitle,
@@ -11,6 +12,7 @@ import {
   type CorrelationChainInput,
   type CorrelationChainModel,
 } from "./evtx-correlation-chains";
+import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import type { DiagnosisFindingClass } from "./types";
 import type {
   TimelineCorrelationEdge,
@@ -1798,8 +1800,45 @@ describe("strongestRowOf, the row a member is shown under (#841)", () => {
   });
 });
 
+describe("chainCountForGaps, the number a surface may state for the gaps the engine reported (#841, review L1)", () => {
+  const clear = classifyCoverageGaps([], 0);
+  const originGap = classifyCoverageGaps([{ source: "source4:Live|machine10:HOST|channel3:App|record5", reason: "x" }], 1);
+
+  it("is the count when no gap says chains may be missing, a 0 included", () => {
+    expect(chainCountForGaps(3, clear)).toBe(3);
+    expect(chainCountForGaps(0, clear)).toBe(0);
+  });
+
+  it("is no number under a limit or truncation gap: chains may be missing, whatever the count", () => {
+    const limit = classifyCoverageGaps([{ source: "correlation", reason: "limit" }], 1);
+    expect(limit.global).toBe(true);
+    expect(chainCountForGaps(3, limit)).toBeNull();
+    expect(chainCountForGaps(0, limit)).toBeNull();
+  });
+
+  it("is no number when the gap preview is cut: a gap that is not shown may be the limit", () => {
+    // 100 origin gaps shown of 101: `global` is read from the preview, so it cannot tell.
+    const shown = Array.from({ length: 100 }, (_, i) => ({ source: `origin-${i}`, reason: "x" }));
+    const cut = classifyCoverageGaps(shown, 101);
+    expect(cut.global).toBe(false);
+    expect(cut.previewCut).toBe(true);
+    expect(chainCountForGaps(3, cut)).toBeNull();
+    expect(chainCountForGaps(0, cut)).toBeNull();
+    expect(chainCountForGaps(3, classifyCoverageGaps([], null))).toBeNull();
+  });
+
+  it("states chains that were found when only an origin is uncorrelated, but never a 0: an absence is unproven", () => {
+    expect(chainCountForGaps(3, originGap)).toBe(3);
+    expect(chainCountForGaps(0, originGap)).toBeNull();
+  });
+});
+
 describe("chainsTabCount, the number the Chains tab shows (#841)", () => {
-  const countsOf = (model: CorrelationChainModel, updating = false) => ({ model, updating });
+  const countsOf = (model: CorrelationChainModel, updating = false, gaps = classifyCoverageGaps([], 0)) => ({
+    model,
+    updating,
+    gaps,
+  });
   const mixed = () =>
     build({
       timelineEdges: [
@@ -1838,5 +1877,24 @@ describe("chainsTabCount, the number the Chains tab shows (#841)", () => {
   it.each([Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY])("is no number when the edge total is not trusted (%s)", (total) => {
     const model = build({ timelineEdges: [tEdge("e1", "a", "b", "exact")], totalTimelineEdges: total });
     expect(chainsTabCount(countsOf(model))).toBeNull();
+  });
+
+  it("is no number when the engine limited correlation: chains may be missing (review L1)", () => {
+    const limit = classifyCoverageGaps([{ source: "correlation", reason: "limit" }], 1);
+    expect(chainsTabCount(countsOf(mixed(), false, limit))).toBeNull();
+    expect(chainsTabCount(countsOf(build({}), false, limit))).toBeNull();
+  });
+
+  it("is no number when the gap preview is cut, because a limit that is not shown cannot be ruled out", () => {
+    const shown = Array.from({ length: 100 }, (_, i) => ({ source: `origin-${i}`, reason: "x" }));
+    const cut = classifyCoverageGaps(shown, 101);
+    expect(cut.global).toBe(false);
+    expect(chainsTabCount(countsOf(mixed(), false, cut))).toBeNull();
+  });
+
+  it("states the chains found when an origin is uncorrelated, and no 0 (that would claim an absence)", () => {
+    const originGap = classifyCoverageGaps([{ source: "source4:Live|machine10:HOST|channel3:App|record5", reason: "x" }], 1);
+    expect(chainsTabCount(countsOf(mixed(), false, originGap))).toBe(3);
+    expect(chainsTabCount(countsOf(build({}), false, originGap))).toBeNull();
   });
 });
