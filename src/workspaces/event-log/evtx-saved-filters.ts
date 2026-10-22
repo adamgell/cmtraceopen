@@ -116,6 +116,48 @@ export function sanitizeCriteria(input: unknown): EvtxFilterCriteria {
   };
 }
 
+/**
+ * The part of the event store that criteria are read from. A plain shape rather than the store's
+ * type, so this module stays free of the store (which subscribes to Tauri events at import).
+ */
+export interface EvtxCriteriaSource {
+  filterLevels: ReadonlySet<EvtxLevel>;
+  filterEventIds: string;
+  timeWindow: EvtxTimeWindow;
+  selectedChannels: ReadonlySet<string>;
+  filterSearch: string;
+  /** The search as typed while it is not applied, else null. */
+  filterSearchDraft: string | null;
+  quickFilter: EvtxQuickFilter;
+  /** The quick filter as edited while it is not applied, else null. */
+  quickFilterDraft: EvtxQuickFilter | null;
+  groupBy: readonly EvtxGroupField[];
+}
+
+/**
+ * The criteria the operator is looking at, in the saved shape. The one place a saved filter or a
+ * view is captured from, and the one the active view is compared against, so the two cannot read
+ * different fields. The text is the operator's as typed, whether or not it is applied.
+ *
+ * Reads named fields only. The transient time range and record scope are not on this shape, and a
+ * source that carries them (the store does) is never spread into the result.
+ */
+export function captureCriteria(source: EvtxCriteriaSource): EvtxFilterCriteria {
+  return sanitizeCriteria({
+    beforeLoad: {
+      levels: [...source.filterLevels],
+      eventIds: source.filterEventIds,
+      timeWindow: source.timeWindow,
+      selectedChannels: [...source.selectedChannels],
+    },
+    onLoad: {
+      search: source.filterSearchDraft ?? source.filterSearch,
+      quickFilter: source.quickFilterDraft ?? source.quickFilter,
+    },
+    afterLoad: { groupBy: [...source.groupBy] },
+  });
+}
+
 /** Coerces untrusted input into a saved filter, or null when it carries no usable name. */
 export function sanitizeSavedFilter(input: unknown, fallbackId: string): EvtxSavedFilter | null {
   if (!isRecord(input)) return null;

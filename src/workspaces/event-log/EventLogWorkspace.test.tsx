@@ -163,6 +163,7 @@ import { deferred } from "../../test-utils/deferred";
 import { EVTX_LEVELS } from "./evtx-filter";
 import { sourceKeyOf, useEvtxStore } from "./evtx-store";
 import { sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
+import { useEvtxViewStore } from "./evtx-views-store";
 import { defaultColumnConfig, visibleColumns } from "./evtx-columns";
 import { EventLogWorkspace } from "./EventLogWorkspace";
 import { ChannelPicker } from "./ChannelPicker";
@@ -2031,6 +2032,171 @@ describe("EventLogWorkspace fixtures", () => {
 
     expect(save).toHaveBeenCalledTimes(1);
     expect(sessions).toBe(1);
+  });
+});
+
+describe("the view strip in the workspace (#848)", () => {
+  const AAD = "Microsoft-Windows-AAD/Operational";
+  const DMEDP = "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin";
+  const RANGE = {
+    startMs: Date.parse("2026-01-15T11:00:00.000Z"),
+    endMs: Date.parse("2026-01-15T13:00:00.000Z"),
+  };
+  const strip = () => document.querySelector<HTMLElement>("[data-evtx-region='view-strip']");
+  const triageCard = () => screen.getByRole("button", { name: "Enrollment triage" });
+
+  const eventAt = (channel: string, provider: string, eventId: number, level: EvtxRecord["level"], id: number): EvtxRecord => ({
+    ...fixtureRecord(),
+    id,
+    eventRecordId: 100 + id,
+    channel,
+    provider,
+    eventId,
+    level,
+  });
+
+  beforeEach(() => {
+    invoke.mockReset();
+    configureInvoke();
+    localStorage.clear();
+    useEvtxViewStore.setState({ views: [] });
+    useEvtxStore.getState().reset();
+    useEvtxLayoutStore.setState(sanitizeLayout(undefined));
+    resetVirtualizerState();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    useEvtxStore.getState().reset();
+  });
+
+  it("is mounted above the view bar, and the view bar and filter row follow it", () => {
+    seedFixtureEvents();
+    render(<EventLogWorkspace />);
+    const bar = document.querySelector<HTMLElement>("[data-evtx-region='view-bar']")!;
+    const filterRow = document.querySelector<HTMLElement>("[data-evtx-region='filter-row']")!;
+    expect(strip()).not.toBeNull();
+    expect(strip()!.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(bar.compareDocumentPosition(filterRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(strip()!.parentElement).toBe(bar.parentElement);
+    expect(screen.getByRole("tablist", { name: "Layout" })).toBeInTheDocument();
+    expect(screen.getByRole("toolbar", { name: "Views" })).toBeInTheDocument();
+  });
+
+  it("is absent where there is no event data: on the source picker and on the first-load spinner", () => {
+    const view = render(<EventLogWorkspace />);
+    expect(strip()).toBeNull();
+    view.unmount();
+
+    useEvtxStore.setState({ sourceMode: "live", isLoading: true, records: [], channels: [] });
+    render(<EventLogWorkspace />);
+    expect(screen.getByText("Loading event logs...")).toBeInTheDocument();
+    expect(strip()).toBeNull();
+  });
+
+  it("applies Enrollment triage to the grid: the union of its three selections, and nothing else", () => {
+    const records = [
+      eventAt(DMEDP, "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider", 75, "Information", 0),
+      eventAt(DMEDP, "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider", 76, "Error", 1),
+      eventAt(DMEDP, "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider", 72, "Information", 2),
+      eventAt(AAD, "Microsoft-Windows-AAD", 1098, "Warning", 3),
+      eventAt(AAD, "Microsoft-Windows-AAD", 1104, "Information", 4),
+      eventAt("System", "Microsoft-Windows-DNS-Client", 1014, "Warning", 5),
+      eventAt("System", "Service Control Manager", 7036, "Information", 6),
+      eventAt("Application", "Application Error", 1000, "Error", 7),
+    ];
+    useEvtxStore.setState({
+      records,
+      sourceMode: "files",
+      channels: [DMEDP, AAD, "System", "Application"].map((name) => ({
+        name,
+        eventCount: 2,
+        sourceType: { file: { path: `${name.replace(/\W/g, "_")}.evtx` } },
+      })),
+      loadedChannels: new Set([DMEDP, AAD, "System", "Application"]),
+      selectedChannels: new Set([DMEDP, AAD, "System", "Application"]),
+      completedSourceKey: sourceKeyOf({ sourceMode: "files", remoteMachine: null, sourcePaths: [] }),
+      isLoading: false,
+      timeWindow: "all",
+    });
+    render(<EventLogWorkspace />);
+    const readout = () => document.querySelector("[data-evtx-filter-count]")?.textContent;
+    // No filter is applied, so the chip row, and its readout, are not shown yet.
+    expect(readout()).toBeUndefined();
+
+    fireEvent.click(triageCard());
+
+    // 75, 76, the AAD warning and DNS-Client 1014. Not 72, not AAD information, not the rest.
+    expect(readout()).toBe("Showing 4 of 8");
+    expect(triageCard()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("list", { name: "Active filters" })).toHaveTextContent("Channels: 3 of 4");
+    expect(screen.getByRole("list", { name: "Active filters" })).toHaveTextContent("Search: channel:DeviceManagement");
+    expect(strip()).toHaveTextContent("Source: PC01 · files");
+  });
+
+  describe("Escape, with the strip's menu and dialog (the workspace clears a brushed range on Escape)", () => {
+    const RANGE_CHIP = "[data-evtx-chip='timeRange']";
+    const withRange = () => {
+      seedFixtureEvents();
+      useEvtxStore.setState({ timeZoneMode: "utc" });
+      render(<EventLogWorkspace />);
+      act(() => {
+        expect(useEvtxStore.getState().setTimeRange(RANGE)).toBe(true);
+      });
+      expect(document.querySelector(RANGE_CHIP)).not.toBeNull();
+    };
+
+    it("keeps the range when Escape closes a card's menu, and clears it on the next Escape", async () => {
+      withRange();
+      fireEvent.contextMenu(triageCard());
+      expect(await screen.findByRole("menu")).toBeInTheDocument();
+      triageCard().focus();
+      expect(fireEvent.keyDown(triageCard(), { key: "Escape" })).toBe(false);
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+      expect(useEvtxStore.getState().timeRange).not.toBeNull();
+      expect(document.querySelector(RANGE_CHIP)).not.toBeNull();
+
+      expect(fireEvent.keyDown(document.body, { key: "Escape" })).toBe(false);
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+    });
+
+    it("keeps the range when Escape is pressed on a menu item, where the focus is once the menu opens (T8)", async () => {
+      withRange();
+      fireEvent.contextMenu(triageCard());
+      const menu = await screen.findByRole("menu");
+      const first = within(menu).getAllByRole("menuitem")[0];
+      // Opening moves the focus to the first item, so this is where Escape normally arrives.
+      await waitFor(() => expect(first).toHaveFocus());
+      expect(useEvtxStore.getState().timeRange).not.toBeNull();
+
+      // The menu uses the key (default prevented), so the workspace's listener leaves the range.
+      expect(fireEvent.keyDown(first, { key: "Escape" })).toBe(false);
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+      expect(useEvtxStore.getState().timeRange).not.toBeNull();
+      expect(document.querySelector(RANGE_CHIP)).not.toBeNull();
+      await waitFor(() => expect(triageCard()).toHaveFocus());
+
+      // With no menu open the next Escape is the workspace's own.
+      expect(fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" })).toBe(false);
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+    });
+
+    it("keeps the range when Escape cancels the New view dialog", async () => {
+      withRange();
+      fireEvent.click(screen.getByRole("button", { name: "New view" }));
+      const dialog = await screen.findByRole("dialog", { name: "New view" });
+      fireEvent.keyDown(within(dialog).getByRole("textbox", { name: /Name/ }), { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(useEvtxStore.getState().timeRange).not.toBeNull();
+    });
+
+    it("clears the range when a view is applied, as a load does", () => {
+      withRange();
+      fireEvent.click(triageCard());
+      expect(useEvtxStore.getState().timeRange).toBeNull();
+      expect(document.querySelector(RANGE_CHIP)).toBeNull();
+    });
   });
 });
 
