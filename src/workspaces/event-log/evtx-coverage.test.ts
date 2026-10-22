@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { diagnosisCoverageInputOrdinalCount } from "../../lib/diagnosis-coverage-transport";
 import {
   assertParseResultShape,
+  coverageInputKeys,
   formatCoverageGap,
+  legacyCoverageDisclosureKey,
+  listedCoverageKeys,
   mergeCoverageGaps,
   mergeDiagnosisCoverageGaps,
   mergeStructuredCoverageGaps,
@@ -542,5 +546,117 @@ describe("diagnosis coverage gaps", () => {
         "frontend coverage bound omitted 2 additional gaps; " +
         "backend diagnosis also enforces an input cap",
     });
+  });
+});
+
+describe("the shared coverage key", () => {
+  // The grid banner keys its lines with these and the rail claims a summary's input keys, so a gap
+  // and the diagnosis input it became must share one key or it shows twice or nowhere.
+  const keysOf = (...args: Parameters<typeof mergeDiagnosisCoverageGaps>) => {
+    const input = mergeDiagnosisCoverageGaps(...args);
+    return new Set(coverageInputKeys(input, input.length));
+  };
+
+  it("keys a legacy line with no source the way diagnosis files it", () => {
+    expect(legacyCoverageDisclosureKey("  reader stalled  ", "legacy")).toBe(
+      "event-log: reader stalled",
+    );
+    expect(legacyCoverageDisclosureKey("batch 4 was not received", "tail")).toBe(
+      "live-tail: batch 4 was not received",
+    );
+    expect(keysOf([], [], ["  reader stalled  "], ["batch 4 was not received"])).toEqual(
+      new Set(["event-log: reader stalled", "live-tail: batch 4 was not received"]),
+    );
+  });
+
+  it("keys a manifest row and its mirrored legacy line as one", () => {
+    const path = "C:\\Fixture\\EventLogs\\Security.evtx";
+    const reason = "source metadata access was denied";
+    const legacyKey = legacyCoverageDisclosureKey(`${path}: ${reason}`, "legacy");
+    expect(legacyKey).toBe(`${path}: ${reason}`);
+    expect(
+      keysOf([], [{ kind: "accessDenied", path, reason }], [`${path}: ${reason}`], []),
+    ).toEqual(new Set([legacyKey]));
+  });
+
+  it("keys a located gap by its formatted line, legacy copy included", () => {
+    const gap = { source: "C:\\x.evtx", kind: "chunk" as const, reason: "chunk rejected", chunkId: 3 };
+    const line = formatCoverageGap(gap);
+    expect(line).toBe("C:\\x.evtx chunk 3: chunk rejected");
+    expect(legacyCoverageDisclosureKey(line, "legacy")).toBe(line);
+    expect(keysOf([gap], [], [line], [])).toEqual(new Set([line]));
+  });
+
+  it("leaves gaps beyond the frontend bound out of the input keys", () => {
+    const gaps = Array.from({ length: 258 }, (_, index) => ({
+      source: `source-${index}`,
+      kind: "record" as const,
+      reason: `gap ${index}`,
+    }));
+    const keys = keysOf(gaps, [], [], []);
+    expect(keys.has("source-0: gap 0")).toBe(true);
+    expect(keys.has("source-254: gap 254")).toBe(true);
+    expect(keys.has("source-255: gap 255")).toBe(false);
+    expect(keys.has("source-257: gap 257")).toBe(false);
+  });
+});
+
+describe("claiming only the coverage rows a surface lists", () => {
+  const SYSTEM = { source: "System", kind: "record" as const, reason: "record unavailable" };
+  const PROFILE = {
+    source: "C:\\Users\\alice\\Downloads\\System.evtx",
+    kind: "chunk" as const,
+    reason: "chunk 3 is missing or zero-filled",
+    chunkId: 3,
+  };
+
+  it("keys the inputs that reach the engine at their own ordinal", () => {
+    expect(coverageInputKeys([SYSTEM, PROFILE], 2)).toEqual([
+      formatCoverageGap(SYSTEM),
+      formatCoverageGap(PROFILE),
+    ]);
+    // A bounded transport's notice takes the next ordinal; it names no store gap.
+    expect(coverageInputKeys([SYSTEM, PROFILE], 1)).toEqual([formatCoverageGap(SYSTEM)]);
+  });
+
+  it("joins a listed row to its gaps by ordinal, whatever the row's text says", () => {
+    const keys = coverageInputKeys([SYSTEM, PROFILE], 2);
+    // The engine's display projection rewrote the profile path; the ordinal still names it.
+    const redactedRow = { source: "C:\\Users\\[user]\\Downloads\\System.evtx", inputIndices: [1] };
+    expect(listedCoverageKeys(keys, [redactedRow])).toEqual(new Set([formatCoverageGap(PROFILE)]));
+    // One row may report several inputs.
+    expect(listedCoverageKeys(keys, [{ inputIndices: [0, 1] }])).toEqual(
+      new Set([formatCoverageGap(SYSTEM), formatCoverageGap(PROFILE)]),
+    );
+  });
+
+  it("names nothing through an engine-found row, an unknown ordinal, or an unlisted row", () => {
+    const keys = coverageInputKeys([SYSTEM], 1);
+    expect(listedCoverageKeys(keys, [{}, { inputIndices: [] }])).toEqual(new Set());
+    expect(listedCoverageKeys(keys, [{ inputIndices: [5] }])).toEqual(new Set());
+    expect(listedCoverageKeys(keys, [])).toEqual(new Set());
+  });
+});
+
+describe("which input ordinals reach the engine", () => {
+  const gap = (index: number) => ({
+    source: `Channel-${index}`,
+    kind: "record" as const,
+    reason: `gap ${index}`,
+  });
+  const oversized = { ...gap(0), reason: "x".repeat(5_000) };
+
+  it("is every gap when the transport carries them unchanged", () => {
+    expect(diagnosisCoverageInputOrdinalCount([gap(0), gap(1)])).toBe(2);
+  });
+
+  it("is every gap when it only compacts a field: its notice follows them", () => {
+    expect(diagnosisCoverageInputOrdinalCount([oversized, gap(1)])).toBe(2);
+  });
+
+  it("stops one short at the transport bound: the notice takes the last ordinal", () => {
+    const full = [oversized, ...Array.from({ length: 255 }, (_, index) => gap(index + 1))];
+    expect(full).toHaveLength(256);
+    expect(diagnosisCoverageInputOrdinalCount(full)).toBe(255);
   });
 });

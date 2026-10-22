@@ -54,10 +54,23 @@ async function dismissSplash(
 // Timestamps render in local time; pin the zone and locale so the PNGs do not depend on the host.
 test.use({ timezoneId: "UTC", locale: "en-US" });
 
+/**
+ * The one capture that shows the Insights coverage note (spec 8.13 item 2, Phase 4b #831).
+ *
+ * Its data is the fixture as every capture gets it, which already carries the backend's files-mode
+ * refusal exactly as parser.rs emits it: the manifest's `AccessDenied { path, reason: "source
+ * metadata access was denied" }` for Security.evtx, mirrored in the parse result's `coverageGaps`
+ * and `errorMessages` (see buildSourceManifest and buildParseResult). Only the elevation answer
+ * differs, so the replayed diagnosis and its strict checks are the ones every capture uses. The
+ * capture shows one note, "Security.evtx not read. Findings may be incomplete."; the mockup's live
+ * wording ("Security channel not read.") is covered by the unit tests in EvtxCoverageBanner.test.tsx.
+ */
+const COVERAGE_NOTE_CAPTURE = "event-logs coverage note";
+
 test.describe("event-logs screenshots", () => {
   let timelineGridName: string;
 
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page }, testInfo) => {
     const parseResult = buildParseResult();
     const replies = loadEngineReplies();
     if (engineInputSha256(parseResult) !== replies.provenance.inputSha256) {
@@ -66,6 +79,12 @@ test.describe("event-logs screenshots", () => {
           "Regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`.",
       );
     }
+    // The shim answers platformSupported: false, which hides the note; only the note capture
+    // reports elevation as available. Every capture is served the same fixture and replies.
+    const elevation =
+      testInfo.title === COVERAGE_NOTE_CAPTURE
+        ? { platformSupported: true, isElevated: false }
+        : null;
     timelineGridName = `Event log timeline - ${parseResult.records.length} records`;
 
     // Same guard as e2e/fixtures/index.ts: nothing here may talk to a running backend.
@@ -74,8 +93,9 @@ test.describe("event-logs screenshots", () => {
     );
 
     await page.addInitScript(
-      ({ parseResult, replies, selections, manifest }) => {
+      ({ parseResult, replies, selections, manifest, elevation }) => {
         const overrides = window.__e2e_ipc_overrides__;
+        if (elevation) overrides["get_app_elevation_state"] = () => elevation;
         const same = (a: unknown, b: unknown): boolean =>
           JSON.stringify(a) === JSON.stringify(b);
         const stale = (command: string, detail: string): Error =>
@@ -185,6 +205,7 @@ test.describe("event-logs screenshots", () => {
         replies,
         selections: buildSourceSelections(),
         manifest: buildSourceManifest(),
+        elevation,
       },
     );
 
@@ -204,7 +225,7 @@ test.describe("event-logs screenshots", () => {
     // instead of letting the waits below time out blind.
     const alert = page.getByRole("alert");
     await expect(
-      page.getByLabel("Operational diagnosis").or(alert).first(),
+      page.getByLabel("Operational diagnosis", { exact: true }).or(alert).first(),
     ).toBeVisible({ timeout: 15_000 });
     if ((await alert.count()) > 0) {
       throw new Error(
@@ -217,7 +238,7 @@ test.describe("event-logs screenshots", () => {
     await expect(page.getByRole("grid", { name: timelineGridName })).toBeVisible({
       timeout: 15_000,
     });
-    await expect(page.getByLabel("Operational diagnosis")).toBeVisible({
+    await expect(page.getByLabel("Operational diagnosis", { exact: true })).toBeVisible({
       timeout: 15_000,
     });
     await expect(page.getByText("Loading timeline row")).toHaveCount(0);
@@ -293,6 +314,25 @@ test.describe("event-logs screenshots", () => {
     await assertNoHostPaths(page);
     await page.screenshot({
       path: outPath("event-logs-insights.png"),
+      animations: "disabled",
+    });
+  });
+
+  test(COVERAGE_NOTE_CAPTURE, async ({ page }) => {
+    // The rail on its Insights tab, so the note shows and the grid banner does not: exactly one
+    // note, for the fixture's unreadable Security.evtx.
+    const note = page.getByText("Security.evtx not read. Findings may be incomplete.");
+    await expect(note).toBeVisible();
+    await expect(page.locator("[data-coverage-note]")).toHaveCount(1);
+    await expect(page.getByText(/channel not read/)).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Elevate to read Security.evtx", exact: true }),
+    ).toBeVisible();
+    await expect(page.locator("[data-coverage-banner]")).toHaveCount(0);
+    await note.scrollIntoViewIfNeeded();
+    await assertNoHostPaths(page);
+    await page.screenshot({
+      path: outPath("event-logs-coverage-note.png"),
       animations: "disabled",
     });
   });

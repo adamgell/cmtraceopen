@@ -191,6 +191,10 @@ export function mergeStructuredCoverageGaps(
 }
 
 const MAX_DIAGNOSIS_COVERAGE_GAPS = 256;
+/** The source a legacy gap string without a "source: " prefix is filed under. */
+const LEGACY_GAP_SOURCE = "event-log";
+/** The source a live-tail gap string without a "source: " prefix is filed under. */
+const TAIL_GAP_SOURCE = "live-tail";
 
 function legacyGapKind(reason: string): EvtxCoverageGapKind {
   const lower = reason.toLowerCase();
@@ -251,10 +255,10 @@ export function mergeDiagnosisCoverageGaps(
   );
   const legacyGaps = legacyCoverageGaps
     .filter((gap) => !formattedCoverageGaps.has(gap.trim()))
-    .map((gap) => legacyCoverageGap(gap, "event-log"));
+    .map((gap) => legacyCoverageGap(gap, LEGACY_GAP_SOURCE));
   const tailGaps = tailCoverageGaps
     .filter((gap) => !formattedCoverageGaps.has(gap.trim()))
-    .map((gap) => legacyCoverageGap(gap, "live-tail"));
+    .map((gap) => legacyCoverageGap(gap, TAIL_GAP_SOURCE));
   const merged = mergeStructuredCoverageGaps(
     [],
     [...coverageDetails, ...typedManifestGaps, ...legacyGaps, ...tailGaps]
@@ -272,6 +276,55 @@ export function mergeDiagnosisCoverageGaps(
         "backend diagnosis also enforces an input cap",
     },
   ];
+}
+
+/**
+ * The one key a coverage gap is known by on every surface that shows it: its formatted line.
+ *
+ * A legacy or live-tail gap string is keyed the way `mergeDiagnosisCoverageGaps` reads it (trimmed,
+ * and filed under `event-log` or `live-tail` when it names no source), so a gap in the store and
+ * the diagnosis input it became share one key. The grid banner keys its lines with these, and a
+ * surface showing a summary claims the keys of the input gaps whose rows it lists
+ * (`coverageInputKeys`, `listedCoverageKeys`).
+ */
+export function legacyCoverageDisclosureKey(message: string, origin: "legacy" | "tail"): string {
+  return formatCoverageGap(
+    legacyCoverageGap(message, origin === "tail" ? TAIL_GAP_SOURCE : LEGACY_GAP_SOURCE),
+  );
+}
+
+/**
+ * The shared key of each diagnosis input gap (`mergeDiagnosisCoverageGaps` output), by its ordinal:
+ * the store gap that input became. Only the first `ordinalCount` reach the engine at their own
+ * ordinal (`diagnosisCoverageInputOrdinalCount`); a bounded transport's notice takes the next one
+ * and belongs to no store gap. Gaps beyond the frontend bound are not in the input, and the
+ * synthetic bound gap's key matches no store gap.
+ */
+export function coverageInputKeys(
+  diagnosisInput: readonly EvtxCoverageGap[],
+  ordinalCount: number,
+): readonly string[] {
+  return diagnosisInput.slice(0, ordinalCount).map(formatCoverageGap);
+}
+
+/**
+ * The store gap keys the listed rows name, joined through the ordinals the engine echoes on each
+ * row (`inputIndices`). The join survives the engine's redacted display projection, which rewrites
+ * a row's text. A row the surface only counts names no gap, so it is not passed here, and an
+ * engine-found row has no ordinals.
+ */
+export function listedCoverageKeys(
+  inputKeys: readonly string[],
+  listedRows: readonly { inputIndices?: readonly number[] }[],
+): Set<string> {
+  const keys = new Set<string>();
+  for (const row of listedRows) {
+    for (const ordinal of row.inputIndices ?? []) {
+      const key = inputKeys[ordinal];
+      if (key !== undefined) keys.add(key);
+    }
+  }
+  return keys;
 }
 
 /**

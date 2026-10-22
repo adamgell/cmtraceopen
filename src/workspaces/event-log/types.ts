@@ -294,6 +294,11 @@ export interface DiagnosisCoverageGap {
   state: DiagnosisCoverageState;
   detail: string;
   evidence: DiagnosisEvidence[];
+  /**
+   * Ordinals of the caller-supplied coverage gaps this row reports; absent for a gap the engine
+   * found itself. Unlike the row's text, these survive the engine's redacted display projection.
+   */
+  inputIndices?: number[];
 }
 
 export interface DiagnosisFinding {

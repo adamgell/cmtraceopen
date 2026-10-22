@@ -21,10 +21,10 @@ const FOCUSABLE_SELECTOR = [
 /**
  * The single confirmation shown before CMTrace Open requests UAC.
  *
- * File > Restart as Administrator and the Access Denied recovery prompt both
- * render through here, so neither can reach the backend without a second,
- * deliberate click. The reason carried on the request changes only the wording;
- * the backend call is identical.
+ * File > Restart as Administrator, the Access Denied recovery prompt and the
+ * Event Logs coverage note's Elevate action all render through here, so none
+ * can reach the backend without a second, deliberate click. The reason carried
+ * on the request changes only the wording; the backend call is identical.
  *
  * The ESP coverage banner is the one caller that does not route through this
  * dialog. Its button is already an explicit, labelled affordance rather than a

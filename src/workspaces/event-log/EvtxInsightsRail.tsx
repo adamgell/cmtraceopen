@@ -41,6 +41,11 @@ interface EvtxInsightsRailProps {
   pending?: boolean;
   /** Why the last diagnosis build failed. */
   error?: string | null;
+  /**
+   * The shared keys of the gaps `summary` was built from, by input ordinal (`coverageInputKeys`).
+   * Retained with the summary, so the panel claims only gaps of the summary it shows.
+   */
+  summaryCoverageInput?: readonly string[] | null;
 }
 
 /** Tabs the rail can show today, in order. Phase 10c adds "chains" between the two. */
@@ -101,6 +106,7 @@ export function EvtxInsightsRail({
   records,
   pending = false,
   error = null,
+  summaryCoverageInput = null,
 }: EvtxInsightsRailProps) {
   const railTab = useEvtxLayoutStore((s) => s.railTab);
   const setRailTab = useEvtxLayoutStore((s) => s.setRailTab);
@@ -134,11 +140,20 @@ export function EvtxInsightsRail({
 
   // The diagnosis is cleared while it rebuilds. Keep showing the previous build, marked as
   // updating, so the reader's place survives a live-tail batch; drop it on failure or no input.
-  // The visible-event count is stored WITH the summary, so the scope line states the scope the
-  // shown numbers were built from, never the new count beside old numbers.
-  const lastBuildRef = useRef<{ summary: DiagnosisSummary; scopeCount: number } | null>(null);
+  // The visible-event count and the coverage input keys are stored WITH the summary, so the scope line
+  // states the scope the shown numbers were built from, and the coverage claim covers only gaps the
+  // shown summary was built from, never the store's newer ones.
+  const lastBuildRef = useRef<{
+    summary: DiagnosisSummary;
+    scopeCount: number;
+    coverageInput: readonly string[] | null;
+  } | null>(null);
   if (summary && lastBuildRef.current?.summary !== summary) {
-    lastBuildRef.current = { summary, scopeCount: records.length };
+    lastBuildRef.current = {
+      summary,
+      scopeCount: records.length,
+      coverageInput: summaryCoverageInput,
+    };
   }
   if (error || (!summary && !pending)) lastBuildRef.current = null;
   const shown = summary || (pending && !error) ? lastBuildRef.current : null;
@@ -237,6 +252,10 @@ export function EvtxInsightsRail({
           updating={pending}
           error={error}
           scopeCount={shown?.scopeCount ?? null}
+          // The panel is on screen only while the rail is shown on the tab that renders it (a
+          // persisted tab this build lacks renders Insights, so it counts as Insights here).
+          visible={insightsActive}
+          coverageInput={shown?.coverageInput ?? null}
         />
       </div>
       {activeTab === "details" && (

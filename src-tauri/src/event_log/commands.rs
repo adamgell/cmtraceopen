@@ -1358,6 +1358,22 @@ pub(crate) fn diagnosis_finding_for_gap(
     )
 }
 
+/// The finding for the coverage gap the caller supplied at `ordinal`. The row carries the ordinal
+/// (`input_indices`), so the caller can join it back to its own gap after the display projection
+/// has rewritten the row's text.
+pub(crate) fn diagnosis_finding_for_input_gap(
+    ordinal: usize,
+    gap: EvtxCoverageGap,
+) -> cmtraceopen_parser::diagnosis::DiagnosisFinding {
+    let mut finding = diagnosis_finding_for_gap(gap);
+    // Callers supply at most MAX_DIAGNOSIS_NESTED_ITEMS gaps (validate_diagnosis_coverage_gaps).
+    let ordinal = u32::try_from(ordinal).unwrap_or(u32::MAX);
+    for gap in &mut finding.coverage_gaps {
+        gap.input_indices = vec![ordinal];
+    }
+    finding
+}
+
 pub(crate) fn evtx_log_entry(
     record: super::models::EvtxRecord,
 ) -> cmtraceopen_parser::models::log_entry::LogEntry {

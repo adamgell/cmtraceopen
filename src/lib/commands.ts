@@ -2,7 +2,10 @@ import { isFirewallTimelineError } from "./timeline-errors";
 import { isFirewallCoverage, isFirewallDecoding, isFirewallRecord } from "./firewall";
 import type { FirewallControlToken } from "../types/log";
 import { invoke } from "@tauri-apps/api/core";
-import { boundUtf8WithDigest } from "./bounded-utf8";
+import {
+  EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT,
+  projectDiagnosisCoverageGaps,
+} from "./diagnosis-coverage-transport";
 import type {
   AggregateParseResult,
   FolderListingResult,
@@ -1593,7 +1596,16 @@ function isDiagnosisCoverageGap(value: unknown): value is DiagnosisCoverageGap {
     typeof value.state === "string" &&
     DIAGNOSIS_COVERAGE_STATES.has(value.state) &&
     isDiagnosisIdentityString(value.detail) &&
-    isDiagnosisEvidenceArray(value.evidence)
+    isDiagnosisEvidenceArray(value.evidence) &&
+    (value.inputIndices === undefined ||
+      (Array.isArray(value.inputIndices) &&
+        value.inputIndices.every(
+          (ordinal) =>
+            typeof ordinal === "number" &&
+            Number.isInteger(ordinal) &&
+            ordinal >= 0 &&
+            ordinal <= 0xffff_ffff,
+        )))
   );
 }
 
@@ -2256,110 +2268,12 @@ export async function queryEventLogAnalysisEdges(
   });
 }
 
-export const EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT = 4 * 1024;
-const EVENT_LOG_DIAGNOSIS_COVERAGE_GAP_LIMIT = 256;
-const DIAGNOSIS_COVERAGE_PROJECTION_SOURCE = "diagnosis-input-projection";
-const MAX_U64_TEXT = "18446744073709551615";
-
-function canonicalCoverageRecordIdText(value: string): string {
-  if (!/^\d+$/.test(value)) {
-    throw new Error("EventRecordID text must be an unsigned decimal integer.");
-  }
-  let firstSignificant = 0;
-  while (
-    firstSignificant < value.length - 1 &&
-    value.charCodeAt(firstSignificant) === 0x30
-  ) {
-    firstSignificant += 1;
-  }
-  const canonical = value.slice(firstSignificant);
-  if (
-    canonical.length > MAX_U64_TEXT.length ||
-    (canonical.length === MAX_U64_TEXT.length && canonical > MAX_U64_TEXT)
-  ) {
-    throw new Error("EventRecordID text exceeds the unsigned 64-bit range.");
-  }
-  return canonical;
-}
+export { EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT };
 
 function diagnosisCoverageGapsForTransport(
   coverageGaps: EvtxCoverageGap[],
 ): EvtxCoverageGap[] {
-  let compactedFieldCount = 0;
-  let transportChanged = false;
-  const projected = coverageGaps.map((gap) => {
-    const source = boundUtf8WithDigest(
-      gap.source,
-      EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT,
-    );
-    const reason = boundUtf8WithDigest(
-      gap.reason,
-      EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT,
-    );
-    const provider =
-      gap.providerMessage === undefined
-        ? undefined
-        : boundUtf8WithDigest(
-            gap.providerMessage.provider,
-            EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT,
-          );
-    const eventRecordIdText =
-      gap.eventRecordIdText === undefined
-        ? undefined
-        : canonicalCoverageRecordIdText(gap.eventRecordIdText);
-    compactedFieldCount += Number(source !== gap.source);
-    compactedFieldCount += Number(reason !== gap.reason);
-    compactedFieldCount += Number(
-      provider !== undefined && provider !== gap.providerMessage?.provider,
-    );
-    const unchanged =
-      source === gap.source &&
-      reason === gap.reason &&
-      provider === gap.providerMessage?.provider &&
-      eventRecordIdText === gap.eventRecordIdText;
-    transportChanged ||= !unchanged;
-    if (unchanged) return gap;
-    return {
-      ...gap,
-      source,
-      reason,
-      ...(eventRecordIdText === undefined ? {} : { eventRecordIdText }),
-      ...(gap.providerMessage === undefined
-        ? {}
-        : {
-            providerMessage: {
-              ...gap.providerMessage,
-              provider: provider!,
-            },
-          }),
-    };
-  });
-
-  if (
-    compactedFieldCount === 0 &&
-    projected.length <= EVENT_LOG_DIAGNOSIS_COVERAGE_GAP_LIMIT
-  ) {
-    return transportChanged ? projected : coverageGaps;
-  }
-
-  const retainedOriginalCount = Math.min(
-    projected.length,
-    EVENT_LOG_DIAGNOSIS_COVERAGE_GAP_LIMIT - 1,
-  );
-  const omittedOriginalGapCount = projected.length - retainedOriginalCount;
-  const fieldLabel = compactedFieldCount === 1 ? "field" : "fields";
-  const gapLabel = omittedOriginalGapCount === 1 ? "gap" : "gaps";
-  return [
-    ...projected.slice(0, retainedOriginalCount),
-    {
-      source: DIAGNOSIS_COVERAGE_PROJECTION_SOURCE,
-      kind: "limit",
-      reason:
-        `Diagnosis coverage transport compacted ${compactedFieldCount} oversized text ${fieldLabel} ` +
-        `to ${EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT} UTF-8 bytes and omitted ` +
-        `${omittedOriginalGapCount} original coverage ${gapLabel} to reserve this projection notice.`,
-    },
-  ];
+  return projectDiagnosisCoverageGaps(coverageGaps).gaps;
 }
 
 export async function diagnoseEventLogAnalysisSession(

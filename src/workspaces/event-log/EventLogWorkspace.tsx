@@ -14,6 +14,7 @@ import {
   type EventLogAnalysisSessionStatus,
   type EventLogAnalysisTimelinePage,
 } from "../../lib/commands";
+import { diagnosisCoverageInputOrdinalCount } from "../../lib/diagnosis-coverage-transport";
 import { useEvtxStore } from "./evtx-store";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
@@ -42,7 +43,8 @@ import {
 } from "./evtx-layout-store";
 import { selectVisibleRecords } from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
-import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
+import { coverageInputKeys, mergeDiagnosisCoverageGaps } from "./evtx-coverage";
+import { CoverageClaimsProvider } from "./evtx-coverage-claims";
 import type {
   DiagnosisSummary,
   EvtxCoverageGap,
@@ -279,6 +281,11 @@ export function EventLogWorkspace() {
   );
 
   const [diagnosis, setDiagnosis] = useState<DiagnosisSummary | null>(null);
+  // The shared keys of the gaps `diagnosis` was built from (its snapshot's input), by the ordinal
+  // the engine echoes on each row, set and cleared with it, so the rail claims only gaps of that
+  // summary whose rows it lists, never a gap that arrived since.
+  const [diagnosisCoverageInput, setDiagnosisCoverageInput] =
+    useState<readonly string[] | null>(null);
   const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
   const [analysisStatus, setAnalysisStatus] =
     useState<EventLogAnalysisSessionStatus | null>(null);
@@ -350,6 +357,7 @@ export function EventLogWorkspace() {
     }
 
     setDiagnosis(null);
+    setDiagnosisCoverageInput(null);
     setDiagnosisError(null);
     setAnalysisStatus(null);
     setInitialTimelinePage(null);
@@ -415,6 +423,12 @@ export function EventLogWorkspace() {
           setAnalysisStatus(result.status);
           setInitialTimelinePage(result.initialPage);
           setDiagnosis(result.diagnosis);
+          setDiagnosisCoverageInput(
+            coverageInputKeys(
+              snapshot.coverageGaps,
+              diagnosisCoverageInputOrdinalCount(snapshot.coverageGaps),
+            ),
+          );
           setTimelinePending(false);
         })
         .catch((error: unknown) => {
@@ -429,6 +443,7 @@ export function EventLogWorkspace() {
             error instanceof Error ? error.message : String(error);
           setTimelinePending(false);
           setDiagnosis(null);
+          setDiagnosisCoverageInput(null);
           setDiagnosisError(
             `Operational diagnosis could not be built: ${message}`,
           );
@@ -514,26 +529,39 @@ export function EventLogWorkspace() {
     correlation: { keepAlive: false, render: () => <ViewPlaceholder view="correlation" /> },
   };
 
+  // The one polite live region for newly reported gaps, whichever surface shows them. It is the
+  // first child of every branch below, so it stays mounted through the picker and the spinner and
+  // is already in place when a load's first gaps arrive.
+  const announcer = <EvtxCoverageBanner variant="announcer" />;
+
   if (!hasData && !isLoading) {
-    return <SourcePicker />;
+    return (
+      <>
+        {announcer}
+        <SourcePicker />
+      </>
+    );
   }
 
   if (isLoading && records.length === 0) {
     return (
-      <div
-        style={{
-          flex: 1,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Spinner label="Loading event logs..." />
-      </div>
+      <>
+        {announcer}
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Spinner label="Loading event logs..." />
+        </div>
+      </>
     );
   }
 
-  return (
+  const workspace = (
     <div
       style={{
         flex: 1,
@@ -567,6 +595,8 @@ export function EventLogWorkspace() {
       {isLoading && <ProgressBar style={{ width: "100%", flexShrink: 0 }} />}
       <EvtxViewBar nowEpoch={nowEpoch} />
       <EvtxFilterBar nowEpoch={nowEpoch} />
+      {/* The gaps no other surface shows (evtx-coverage-claims.tsx): the rail claims what its
+          coverage note and its coverage disclosure render, while they are on screen. */}
       <EvtxCoverageBanner />
 
       {timelineError && (
@@ -700,10 +730,18 @@ export function EventLogWorkspace() {
               records={analysisRecords}
               pending={timelinePending}
               error={diagnosisError}
+              summaryCoverageInput={diagnosisCoverageInput}
             />
           </div>
         </aside>
       </div>
     </div>
+  );
+
+  return (
+    <>
+      {announcer}
+      <CoverageClaimsProvider>{workspace}</CoverageClaimsProvider>
+    </>
   );
 }

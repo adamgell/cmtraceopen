@@ -2,9 +2,9 @@
  * Builds elevation requests from the current application context.
  *
  * Kept pure and separate from the coordinator in `src/lib/elevation.ts` so the
- * menu action, the Access Denied recovery prompt, and the ESP banner all derive
- * a request the same way instead of each reaching into stores and inventing its
- * own shape.
+ * menu action, the Access Denied recovery prompt, the ESP banner, and the Event
+ * Logs coverage note all derive a request the same way instead of each reaching
+ * into stores and inventing its own shape.
  *
  * Two rules drive everything here:
  *

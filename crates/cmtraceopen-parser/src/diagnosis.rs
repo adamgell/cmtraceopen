@@ -252,6 +252,12 @@ pub struct CoverageGap {
     pub detail: String,
     #[serde(default)]
     pub evidence: Vec<EvidenceRef>,
+    /// Ordinals of the caller-supplied coverage gaps this row reports, in the order the caller
+    /// passed them; empty for a gap the engine found itself. Rows deduplicated into one carry the
+    /// ordinals of all of them. Numbers are not redacted, so a caller can join a row back to its own
+    /// input after the display projection has rewritten the row's text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_indices: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,6 +324,7 @@ pub fn finding_for_coverage(
         state,
         detail: detail.clone(),
         evidence: Vec::new(),
+        input_indices: Vec::new(),
     };
     DiagnosisFinding {
         finding_id: format!("coverage-gap:{source}:{detail}"),
@@ -1016,6 +1023,7 @@ fn rule_coverage_finding(
         state,
         detail: detail.clone(),
         evidence: vec![evidence.clone()],
+        input_indices: Vec::new(),
     };
     DiagnosisFinding {
         finding_id: format!("{}:{suffix}", evidence.stable_id()),
@@ -1688,6 +1696,7 @@ pub fn adapt_intune_finding(value: &IntuneFinding) -> DiagnosisFinding {
                     "Intune finding cites an incomplete artifact; capture state was not supplied."
                         .to_string(),
                 evidence: Vec::new(),
+                input_indices: Vec::new(),
             })
             .collect(),
         recommended_checks: value.recommended_checks.clone(),
@@ -1736,6 +1745,7 @@ pub fn adapt_esp_finding(value: &EspDiagnosticFinding) -> DiagnosisFinding {
                 detail: "ESP finding cites an incomplete artifact; capture state was not supplied."
                     .to_string(),
                 evidence: Vec::new(),
+                input_indices: Vec::new(),
             })
             .collect(),
         recommended_checks: value.recommended_checks.clone(),
@@ -1811,6 +1821,7 @@ pub fn adapt_sccm_finding(value: &SccmFinding) -> DiagnosisFinding {
                 },
                 detail: "SCCM source coverage is incomplete.".to_string(),
                 evidence: Vec::new(),
+                input_indices: Vec::new(),
             })
             .collect(),
         recommended_checks: value
@@ -2258,7 +2269,19 @@ pub fn summarize_cross_source(
         }
     }
     coverage_gaps.sort_by(|left, right| left.id.cmp(&right.id));
-    coverage_gaps.dedup_by(|left, right| left.id == right.id);
+    // One row per id. A duplicate's input ordinals move to the row kept, so the caller can still
+    // join every input it supplied to the row that reports it.
+    coverage_gaps.dedup_by(|later, kept| {
+        if later.id != kept.id {
+            return false;
+        }
+        kept.input_indices.append(&mut later.input_indices);
+        true
+    });
+    for gap in &mut coverage_gaps {
+        gap.input_indices.sort_unstable();
+        gap.input_indices.dedup();
+    }
     let correlations = correlations
         .into_iter()
         .map(normalize_correlation)
@@ -2453,6 +2476,7 @@ mod tests {
                 state: super::CoverageState::Covered,
                 detail: "Retry for jane.doe@example.invalid on DESKTOP-JANE".into(),
                 evidence: vec![evidence.clone()],
+                input_indices: Vec::new(),
             }],
             recommended_checks: vec![r"Inspect C:\Users\Jane Doe\AppData\Local\event.evtx".into()],
         };
@@ -2730,5 +2754,79 @@ mod tests {
                 "{} serialized bytes",
                 projection.stats.omitted_relevant_event_bytes
             )));
+    }
+
+    fn input_gap(source: &str, detail: &str, ordinal: u32) -> super::DiagnosisFinding {
+        let mut finding =
+            super::finding_for_coverage(source, CoverageState::ParseFailed, detail.to_string());
+        finding.coverage_gaps[0].input_indices = vec![ordinal];
+        finding
+    }
+
+    #[test]
+    fn deduplicated_coverage_rows_keep_every_input_ordinal() {
+        // Two supplied gaps that report the same row, and one that reports its own.
+        let summary = super::summarize_cross_source(
+            Vec::new(),
+            vec![
+                input_gap("System", "chunk 3 is missing (chunk 3)", 4),
+                input_gap("Application", "record unavailable", 1),
+                input_gap("System", "chunk 3 is missing (chunk 3)", 0),
+            ],
+            Vec::new(),
+        );
+
+        let ordinals = summary
+            .coverage_gaps
+            .iter()
+            .map(|gap| (gap.source.as_str(), gap.input_indices.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ordinals,
+            vec![("Application", vec![1]), ("System", vec![0, 4])]
+        );
+        assert_eq!(summary.overview.coverage_gap_count, 2);
+    }
+
+    #[test]
+    fn display_projection_keeps_input_ordinals_on_a_redacted_profile_path() {
+        let source = r"C:\Users\alice\Downloads\System.evtx";
+        let summary = super::summarize_cross_source(
+            Vec::new(),
+            vec![input_gap(
+                source,
+                "chunk 3 is missing or zero-filled (chunk 3)",
+                7,
+            )],
+            Vec::new(),
+        );
+
+        let redacted = super::redacted_display_projection(summary);
+
+        let gap = &redacted.coverage_gaps[0];
+        assert!(!gap.source.contains("alice"), "{}", gap.source);
+        assert_ne!(gap.source, source);
+        assert_eq!(gap.input_indices, vec![7]);
+        assert_eq!(redacted.findings[0].coverage_gaps[0].input_indices, vec![7]);
+    }
+
+    #[test]
+    fn input_ordinals_serialize_camel_case_and_only_when_present() {
+        let mut engine_found =
+            super::finding_for_coverage("intune", CoverageState::Unknown, "not captured".into());
+        let supplied = input_gap("System", "record unavailable", 2);
+        let engine_json =
+            serde_json::to_value(&engine_found.coverage_gaps[0]).expect("gap serializes");
+        assert!(engine_json.get("inputIndices").is_none(), "{engine_json}");
+        let supplied_json =
+            serde_json::to_value(&supplied.coverage_gaps[0]).expect("gap serializes");
+        assert_eq!(supplied_json["inputIndices"], serde_json::json!([2]));
+
+        // An older payload without the field still reads, as an engine-found gap.
+        let mut value = engine_json;
+        value.as_object_mut().unwrap().remove("inputIndices");
+        let read: super::CoverageGap = serde_json::from_value(value).expect("gap deserializes");
+        engine_found.coverage_gaps[0].input_indices.clear();
+        assert_eq!(read, engine_found.coverage_gaps[0]);
     }
 }
