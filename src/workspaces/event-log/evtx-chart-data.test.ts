@@ -707,6 +707,56 @@ describe("the largest valid minute, second and offset still place", () => {
   });
 });
 
+describe("edge whitespace is trimmed as the engine trims it", () => {
+  const zero = (timestamp: string) => ({ timestamp, timestampEpoch: 0 });
+  const range = (low: number, high: number) =>
+    Array.from({ length: high - low + 1 }, (_, i) => low + i);
+  // The code points Rust's `str::trim` strips (`char::is_whitespace`), enumerated over all of
+  // U+0000 to U+10FFFF with rustc 1.98. JavaScript's `trim()` differs in exactly two of them:
+  // it strips U+FEFF, which Rust keeps, and keeps U+0085, which Rust strips.
+  const rustWhiteSpace = [
+    ...range(0x09, 0x0d),
+    0x20,
+    0x85,
+    0xa0,
+    0x1680,
+    ...range(0x2000, 0x200a),
+    0x2028,
+    0x2029,
+    0x202f,
+    0x205f,
+    0x3000,
+  ];
+  const forms = ["2026-11-01T01:30:00Z", "2026-11-01 01:30:00+02:00", "2026-11-01T01:30:00.250"];
+
+  it.each(rustWhiteSpace.map((code) => [`U+${code.toString(16).toUpperCase().padStart(4, "0")}`, String.fromCharCode(code)]))(
+    "places text padded with %s on both sides",
+    (_name, space) => {
+      for (const form of forms) {
+        expect(hourOfDay(zero(`${space}${space}${form}${space}`), "utc")).not.toBeNull();
+      }
+      expect(hourOfDay(zero(`${space}2026-11-01T01:30:00Z${space}`), "utc")).toBe(1);
+    },
+  );
+
+  it("does not place text with a leading or trailing U+FEFF, which Rust does not trim", () => {
+    for (const form of forms) {
+      expect(hourOfDay(zero(`\uFEFF${form}`), "utc")).toBeNull();
+      expect(hourOfDay(zero(`${form}\uFEFF`), "utc")).toBeNull();
+      expect(hourOfDay(zero(` \uFEFF${form}`), "utc")).toBeNull();
+    }
+    expect(placedEpochMs(zero("\uFEFF2026-11-01T01:30:00Z"))).toBeNull();
+  });
+
+  it("does not trim other zero-width or separator code points that neither engine trims", () => {
+    for (const code of [0x180e, 0x200b, 0x2060]) {
+      const c = String.fromCharCode(code);
+      expect(hourOfDay(zero(`${c}2026-11-01T01:30:00Z`), "utc")).toBeNull();
+      expect(hourOfDay(zero(`2026-11-01T01:30:00Z${c}`), "utc")).toBeNull();
+    }
+  });
+});
+
 describe("wiring helpers", () => {
   it("labels the window for the Events tile", () => {
     expect(chartWindowLabel("1h")).toBe("1 h");

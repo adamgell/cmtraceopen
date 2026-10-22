@@ -17,8 +17,9 @@
  *   with HH 00 to 23 and MM 00 to 59 (`+24:00` and `+05:60` stay unplaced), and
  *   a day that exists in its month. One deliberate narrowing: second 60 (a leap
  *   second, which chrono accepts) stays unplaced on every engine, because
- *   JavaScript cannot represent it. Display text such as
- *   "2026-11-01 01:30:00.000" is never guessed at.
+ *   JavaScript cannot represent it. Edge whitespace is trimmed as Rust's
+ *   `str::trim` does, not as `String.prototype.trim` does (U+FEFF is kept, U+0085
+ *   is stripped). Display text such as "2026-11-01 01:30:00.000" is never guessed at.
  * - Archived text-log lines (`originKind: "log"`) are not Windows events. They
  *   count toward the visible total and the level counts and hours, which
  *   follow the visible rows, but not toward anything keyed by event ID or
@@ -232,6 +233,21 @@ const RFC3339 =
   /^\d{4}-\d{2}-\d{2}[Tt ](?:[01]\d|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.\d+)?(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$/;
 const NAIVE_ISO = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.\d+)?$/;
 
+/**
+ * Rust's `str::trim` strips the Unicode White_Space characters, which are all in the Basic
+ * Multilingual Plane. JavaScript's `trim()` differs in two code points: it strips U+FEFF, which
+ * Rust keeps, and keeps U+0085, which Rust strips. Spell the Rust set out, as escapes.
+ */
+const RUST_WHITE_SPACE = /^[\t-\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]$/;
+
+function trimLikeRust(text: string): string {
+  let start = 0;
+  let end = text.length;
+  while (start < end && RUST_WHITE_SPACE.test(text[start])) start += 1;
+  while (end > start && RUST_WHITE_SPACE.test(text[end - 1])) end -= 1;
+  return text.slice(start, end);
+}
+
 /** False when the date part names a day its month does not have (leap years included). */
 function dayExists(text: string): boolean {
   const year = Number(text.slice(0, 4));
@@ -248,7 +264,8 @@ function dayExists(text: string): boolean {
  * missing. Mirrors `parsed_timestamp_epoch`: a non-zero epoch is taken as is;
  * a zero epoch falls back to the text, which must be RFC 3339 (separator "T",
  * "t" or a space; a U+2212 minus sign in the offset is read as "-") or a
- * zone-less `T` ISO form read as UTC. Hour, minute, second and offset are
+ * zone-less `T` ISO form read as UTC, after the edge whitespace Rust's `trim`
+ * strips (`trimLikeRust`; U+FEFF is not among it). Hour, minute, second and offset are
  * range-checked by the patterns and the day by `dayExists`, all before parsing,
  * as chrono does; second 60 stays unplaced (see the module header). Never
  * `Date.parse` on a display string.
@@ -260,7 +277,7 @@ export function placedEpochMs(
   if (typeof epoch !== "number" || !Number.isFinite(epoch)) return null;
   if (epoch !== 0) return epoch;
   // U+2212 is read as "-" only as the offset sign, never between date parts.
-  const text = (record.timestamp?.trim() ?? "").replace(/\u2212(?=\d{2}:\d{2}$)/, "-");
+  const text = trimLikeRust(record.timestamp ?? "").replace(/\u2212(?=\d{2}:\d{2}$)/, "-");
   if (RFC3339.test(text) && dayExists(text)) {
     const parsed = Date.parse(text.replace(/^(\d{4}-\d{2}-\d{2})[Tt ]/, "$1T").toUpperCase());
     return Number.isNaN(parsed) ? null : parsed;
