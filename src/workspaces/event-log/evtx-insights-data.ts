@@ -283,7 +283,7 @@ function isEngineCompactionOf(
 }
 
 /**
- * Whether a timeline origin's text names the record's raw value. Exactly one of three holds, and
+ * Whether a timeline origin's text names the record's raw value. At least one of three holds, and
  * none reads a redaction token as a wildcard, because the engine never redacts a timeline origin
  * (`origin_of` copies the source label, channel and provider raw; redaction is for the diagnosis
  * summary only), so a folder named `[case:0f1e2d3c4b5a6978]` is that folder and nothing else:
