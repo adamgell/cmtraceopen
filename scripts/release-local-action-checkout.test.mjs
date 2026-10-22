@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
 
 const workflowDir = fileURLToPath(
   new URL("../.github/workflows/", import.meta.url),
@@ -95,3 +96,28 @@ test("the guard detects a job that names a local action without checking out", (
     "the guard must reject a local action with no earlier checkout",
   );
 });
+
+// The existing CI release-contract entry point runs these boundary suites too;
+// they need no native artifact, credentials, network, or application execution.
+for (const [name, program, script] of [
+  ["complete updater coverage", process.execPath, "../.github/scripts/updater-coverage.test.mjs"],
+  ["NSIS signing sequence", process.execPath, "./nsis-signing-sequence.test.mjs"],
+  ["published stable release guard", "python3", "../.github/scripts/stable-release-guard_test.py"],
+  ["macOS trust boundary", "python3", "./verify-macos-release_test.py"],
+]) {
+  test(name, () => {
+    const args = program === process.execPath ? ["--test", "--test-reporter=tap"] : [];
+    args.push(fileURLToPath(new URL(script, import.meta.url)));
+    const childEnv = { ...process.env, PYTHONDONTWRITEBYTECODE: "1" };
+    delete childEnv.NODE_TEST_CONTEXT;
+    const result = spawnSync(program, args, {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: childEnv,
+    });
+    assert.equal(result.status, 0, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`);
+    if (program === process.execPath) {
+      assert.match(result.stdout, /^# pass [1-9][0-9]*$/m, "nested Node suite must execute passing tests");
+    }
+  });
+}

@@ -81,6 +81,12 @@ describe("evtx-layout-store", () => {
     expect(useEvtxLayoutStore.getState().railWidth).toBe(DEFAULT_RAIL_WIDTH);
   });
 
+  it("keeps the dock ceiling an integer, so the dock handle never sees a fractional value", () => {
+    expect(Number.isInteger(maxDockHeightFor(901))).toBe(true);
+    expect(Number.isInteger(maxDockHeightFor(1003.7))).toBe(true);
+    expect(Number.isInteger(clampDockHeight(333.4, 901))).toBe(true);
+  });
+
   it("clamps the dock height to 160 px through half the viewport, in pixels at use time", () => {
     expect(maxDockHeightFor(900)).toBe(450);
     expect(maxDockHeightFor(200)).toBe(MIN_DOCK_HEIGHT);
@@ -145,11 +151,12 @@ describe("evtx-layout-store", () => {
     expect(useEvtxLayoutStore.getState().railWidth).toBe(DEFAULT_RAIL_WIDTH);
   });
 
-  // Guard for the enable-and-migrate rule (see EVTX_PANELS_AVAILABLE). A user who last ran a build
-  // where a panel was off holds a persisted `false`. If a phase flips that panel's default without
-  // bumping the persist version and migrating, this fails: the user would stay on `false` and
-  // never see the new panel.
-  it("keeps a persisted false equal to the default for every panel (flip a default only with a migrate)", async () => {
+  // Guard for the ship-a-panel rule (see EVTX_PANELS_AVAILABLE): flip the availability and the
+  // default together and bump the persist version, with no migrate. A version-1 envelope holding
+  // `false` must then resolve to the current default. If a phase flips a default without bumping
+  // the version, the stored `false` survives and this fails; with the bump, the old envelope is
+  // dropped and this passes.
+  it("resolves a stored version-1 false to the current default for every panel", async () => {
     await rehydrateFrom({
       panels: { channels: true, insights: false, dock: false },
     });
