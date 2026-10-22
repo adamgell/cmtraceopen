@@ -667,11 +667,11 @@ fn render_report_within(input: &ReportInput<'_>, limit: usize) -> Result<String,
 fn render_title(doc: &mut Doc) {
     doc.lit("# Event Logs report").nl().nl();
     doc.lit(
-        "> Values that match known patterns, and machine names found in the loaded events, are \
-         replaced by tokens such as [host:0123456789abcdef]. Free text can still contain \
-         identifiers that no pattern recognizes, for example a computer name inside a sentence, \
-         an account name after a label such as Account Name, a bare tenant ID or a folder name \
-         in a path. Review this file before sharing it.",
+        "> Values that match known patterns, and machine names recorded by the events in this \
+         report, are replaced by tokens such as [host:0123456789abcdef]. Free text can still \
+         contain identifiers that no pattern recognizes, for example a computer name inside a \
+         sentence, an account name after a label such as Account Name, a bare tenant ID or a \
+         folder name in a path. Review this file before sharing it.",
     )
     .nl()
     .nl();

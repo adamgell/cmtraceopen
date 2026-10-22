@@ -229,9 +229,11 @@ impl Redactor {
     }
 }
 
-/// A character that continues a machine name or identifier.
+/// A character that continues a machine name. Only letters and digits do: a dash or an underscore
+/// beside a name is punctuation, and collector file names and evtx basenames carry the machine
+/// that way (`collector-...-HOST-0002-4242.log`, `HOST-0002_System.evtx`).
 fn is_name_char(character: char) -> bool {
-    character.is_alphanumeric() || character == '_' || character == '-'
+    character.is_alphanumeric()
 }
 
 /// The length of the `[kind:16 hex digits]` token that starts at byte `start`, if one does.

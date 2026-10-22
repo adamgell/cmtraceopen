@@ -126,6 +126,27 @@ fn known_machines_are_replaced_longest_first_at_name_boundaries() {
 }
 
 #[test]
+fn a_machine_name_continues_only_on_alphanumerics() {
+    let r = redactor(&["HOST-0002"]);
+    // A dash or an underscore beside the name is punctuation: collector file names and evtx
+    // basenames carry the machine this way, and an identifier-style boundary left them readable.
+    assert_eq!(
+        r.text("collector-20261018-101010-HOST-0002-4242.log", 240)
+            .as_str(),
+        format!("collector-20261018-101010-{}-4242.log", host("HOST-0002"))
+    );
+    assert_eq!(
+        r.text("HOST-0002_System.evtx", 240).as_str(),
+        format!(r"{}\_System.evtx", host("HOST-0002"))
+    );
+    // A letter or a digit still makes it a longer name.
+    assert_eq!(
+        r.text("XHOST-0002Y HOST-00022 HOST-0002a", 240).as_str(),
+        "XHOST-0002Y HOST-00022 HOST-0002a"
+    );
+}
+
+#[test]
 fn machine_matching_ignores_ascii_case_and_leaves_tokens_alone() {
     let r = redactor(&["Host-0007", "host"]);
     let out = r.text("HOST-0007 and [host:0123456789abcdef] and host", 240);
@@ -700,6 +721,18 @@ fn a_report_over_its_cap_is_an_error_and_never_a_shorter_file() {
     assert!(render_report_within(&input, full.len()).is_ok());
     let error = render_report_within(&input, full.len() - 1).expect_err("one byte over");
     assert!(error.contains("not written"), "{error}");
+}
+
+#[test]
+fn the_banner_says_where_the_known_machine_names_come_from() {
+    // The report only knows the machines its own entries record. It cannot know the machines of
+    // events that are loaded in the app but outside the session.
+    let report = render(&base_request(), &snapshot_of(Vec::new(), 0));
+    assert!(
+        report.contains("machine names recorded by the events in this report"),
+        "{report}"
+    );
+    assert!(!report.contains("found in the loaded events"), "{report}");
 }
 
 #[test]
