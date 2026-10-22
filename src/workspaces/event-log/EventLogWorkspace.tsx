@@ -53,6 +53,7 @@ import {
 } from "./evtx-chart-data";
 import { orderChannelNames } from "./evtx-channel-order";
 import { useEvtxVisualTokens } from "./evtx-visual-tokens";
+import { useEvtxChartComparison } from "./useEvtxChartComparison";
 import type {
   DiagnosisSummary,
   EvtxCoverageGap,
@@ -620,6 +621,9 @@ export function EventLogWorkspace() {
     [activeView, scopedLogEntries, records],
   );
   const chartHideRules = useMemo(() => [quickFilter], [quickFilter]);
+  // The previous-period comparison (spec 8.16). It reads the grid's `nowEpoch`, so what it offers,
+  // the anchor it compares from and the clock it is checked against are the ones the tiles use.
+  const chartComparison = useEvtxChartComparison(activeView === "charts", nowEpoch);
   // Phase 10c replaces this with the shared chain model. Until then the Charts chains KPI builds
   // its own from the first timeline page and its bounded edge preview, only while Charts is
   // active, so `edgeInputComplete` tells the tile when the count is a loaded subset.
@@ -646,6 +650,7 @@ export function EventLogWorkspace() {
       textLogCount={chartTextLogCount}
       loading={isLoading}
       windowLabel={chartWindowLabel(timeWindow)}
+      comparison={chartComparison}
       metrics={chartMetrics}
       visualTokens={visualTokens}
     />

@@ -14,6 +14,10 @@ vi.mock("./event-analysis-session", () => ({
   buildEventLogAnalysisSession: vi.fn(() => new Promise(() => undefined)),
   EventLogAnalysisCancelled: class EventLogAnalysisCancelled extends Error {},
 }));
+vi.mock("./useEvtxChartComparison", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./useEvtxChartComparison")>();
+  return { ...actual, useEvtxChartComparison: vi.fn(actual.useEvtxChartComparison) };
+});
 vi.mock("./SourcePicker", () => ({ SourcePicker: () => null }));
 vi.mock("./ChannelPicker", () => ({
   ChannelPicker: () => <input aria-label="Filter channels" data-testid="channel-picker" />,
@@ -38,6 +42,7 @@ import {
   useEvtxLayoutStore,
 } from "./evtx-layout-store";
 import { useEvtxStore } from "./evtx-store";
+import { useEvtxChartComparison } from "./useEvtxChartComparison";
 import type { EvtxRecord } from "./types";
 import type { LogEntry } from "../../types/log";
 
@@ -337,5 +342,69 @@ describe("EventLogWorkspace Charts view wiring", () => {
   it("shows n/a for the chains tile until a timeline page exists", async () => {
     await eventsTile();
     expect(screen.getByTestId("kpi-value-chains").textContent).toBe("n/a");
+  });
+
+  describe("the previous-period comparison", () => {
+    const compare = () => screen.getByRole("button", { name: "Compare with previous period" });
+    const hook = vi.mocked(useEvtxChartComparison);
+
+    it("is built only while Charts is the active view, from the grid's own instant", async () => {
+      hook.mockClear();
+      useEvtxLayoutStore.setState({ activeView: "table" });
+      render(<EventLogWorkspace />);
+      await screen.findByTestId("records-table");
+      expect(hook).toHaveBeenCalled();
+      expect(hook.mock.calls.every(([active]) => active === false)).toBe(true);
+      cleanup();
+
+      hook.mockClear();
+      useEvtxLayoutStore.setState({ activeView: "charts" });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(Date.parse("2026-08-10T12:00:00.000Z"));
+        await eventsTile();
+        // The clock moves, and a change that is not one of the grid's inputs renders it again.
+        vi.setSystemTime(Date.parse("2026-08-10T15:00:00.000Z"));
+        act(() => useEvtxStore.setState({ selectedRecordId: 1 }));
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(hook.mock.calls.length).toBeGreaterThan(1);
+      expect(hook.mock.calls.every(([active]) => active === true)).toBe(true);
+      // The grid's instant, not the clock: one finite number that did not move with the clock.
+      const instants = new Set(hook.mock.calls.map(([, nowEpoch]) => nowEpoch));
+      expect(instants.size).toBe(1);
+      expect(Number.isFinite([...instants][0])).toBe(true);
+    });
+
+    it("offers Compare, disabled with the reason, for All time (the default for opened files)", async () => {
+      await eventsTile();
+      expect(compare()).toHaveAttribute("aria-disabled", "true");
+      expect(screen.getByTestId("comparison-disabled-reason").textContent).toBe(
+        "All time has no previous period.",
+      );
+    });
+
+    it("names the capture that cannot speak for the previous period, in the comparison's words", async () => {
+      useEvtxStore.setState({ timeWindow: "24h" });
+      await eventsTile();
+      expect(compare()).toHaveAttribute("aria-disabled", "true");
+      expect(screen.getByTestId("comparison-disabled-reason").textContent).toBe(
+        "The loaded files do not cover the previous period. sample.evtx (Application) does not span it. No selected channel has entries that can be compared.",
+      );
+    });
+
+    it("offers Compare in live mode for a window with a previous period, and states a refusal in the comparison's words", async () => {
+      useEvtxStore.setState({ sourceMode: "live", timeWindow: "24h" });
+      await eventsTile();
+      expect(compare()).toBeEnabled();
+      fireEvent.click(compare());
+      // Nothing was read under this test's store, so the comparison cannot fix its current period.
+      await vi.waitFor(() =>
+        expect(screen.getByTestId("comparison-status").textContent).toBe(
+          "Comparison unavailable: When Application was read is not recorded, so the current period cannot be compared.",
+        ),
+      );
+    });
   });
 });
