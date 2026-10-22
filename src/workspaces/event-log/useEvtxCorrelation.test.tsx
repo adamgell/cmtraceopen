@@ -781,6 +781,96 @@ describe("items (the Correlation view and the Chains tab)", () => {
     });
   });
 
+  describe("the counts carry the gaps and the scope of their own run (#842, F2)", () => {
+    const fanOut = (id: string): TimelineCoverageGap => ({
+      source: id,
+      reason: "exact UserId identity group exceeds the 256-member correlation limit",
+    });
+    const scope = (visibleCount: number) => ({ visibleCount, loadedCount: 10, textLogCount: 2 });
+
+    it("exposes them with no scan, beside the counts-only model", async () => {
+      const session = new FakeSession({
+        itemCount: 50,
+        pairs: [[1, 2]],
+        gaps: [fanOut("item-30")],
+        totalCoverageGaps: 1,
+      });
+      const props = session.props({ scope: scope(4) });
+      const { result } = renderHook(() => useEvtxCorrelation(props));
+      await waitFor(() => expect(result.current.stage).toBe("edgesOnly"));
+      expect(result.current.counts?.gaps).toEqual({
+        originIds: new Set(["item-30"]),
+        global: false,
+        previewCut: false,
+      });
+      expect(result.current.counts?.scope).toEqual(scope(4));
+    });
+
+    it("are the newest session's while the full model on show is an older session's", async () => {
+      const one = new FakeSession({
+        itemCount: 2_500,
+        pairs: [[5, 1_200]],
+        revision: 1,
+        gaps: [fanOut("item-7")],
+        totalCoverageGaps: 1,
+      });
+      const two = new FakeSession({
+        itemCount: 2_500,
+        pairs: [[5, 1_200], [7, 1_300]],
+        revision: 2,
+        gaps: [],
+        totalCoverageGaps: 0,
+      });
+      const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+        initialProps: one.props({ needItems: true, scope: scope(3) }),
+      });
+      await waitFor(() => expect(result.current.stage).toBe("ready"));
+      two.timelineGate = gate();
+      rerender(two.props({ needItems: true, scope: scope(7) }));
+      await waitFor(() => expect(result.current.nextScan?.state).toBe("running"));
+      // The full model on show, and everything read beside it, is revision 1's.
+      expect(result.current.updating).toBe(true);
+      expect(result.current.gaps.originIds.has("item-7")).toBe(true);
+      expect(result.current.scope).toEqual(scope(3));
+      // The counts are revision 2's, and so are their gaps and their scope.
+      expect(result.current.counts?.builtFor).toBe(`${two.id}:2`);
+      expect(result.current.counts?.updating).toBe(false);
+      expect(result.current.counts?.gaps.originIds.size).toBe(0);
+      expect(result.current.counts?.gaps.previewCut).toBe(false);
+      expect(result.current.counts?.scope).toEqual(scope(7));
+      act(() => two.timelineGate?.open());
+      await waitFor(() => expect(result.current.builtFor).toBe(`${two.id}:2`));
+    });
+
+    it("keep an earlier session's own gaps and scope, marked updating, while the next is loaded", async () => {
+      const one = new FakeSession({ itemCount: 50, pairs: [[1, 2]], revision: 1, gaps: [fanOut("item-30")], totalCoverageGaps: 1 });
+      const two = new FakeSession({ itemCount: 50, pairs: [[1, 2]], revision: 2, previewEdges: 0 });
+      const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+        initialProps: one.props({ scope: scope(4) }),
+      });
+      await waitFor(() => expect(result.current.stage).toBe("edgesOnly"));
+      two.edgeGate = gate();
+      rerender(two.props({ scope: scope(9) }));
+      await waitFor(() => expect(result.current.counts?.updating).toBe(true));
+      expect(result.current.counts?.builtFor).toBe(`${one.id}:1`);
+      expect(result.current.counts?.gaps.originIds.has("item-30")).toBe(true);
+      expect(result.current.counts?.scope).toEqual(scope(4));
+      act(() => two.edgeGate?.open());
+      await waitFor(() => expect(result.current.counts?.builtFor).toBe(`${two.id}:2`));
+      expect(result.current.counts?.scope).toEqual(scope(9));
+      expect(result.current.counts?.gaps.originIds.size).toBe(0);
+    });
+
+    it("say the scope is not known when the caller did not give it, and are null before any session", async () => {
+      const session = new FakeSession({ itemCount: 50, pairs: [[1, 2]] });
+      const props = session.props({ scope: null });
+      const { result } = renderHook(() => useEvtxCorrelation(props));
+      await waitFor(() => expect(result.current.stage).toBe("edgesOnly"));
+      expect(result.current.counts?.scope).toBeNull();
+      expect(renderHook(() => useEvtxCorrelation(NONE)).result.current.counts).toBeNull();
+    });
+  });
+
   it("gives the join the unplaced origins of the model's own page", async () => {
     const session = new FakeSession({ itemCount: 50, pairs: [[1, 2]], unplacedCount: 3 });
     const props = session.props({ needItems: true });
@@ -999,5 +1089,138 @@ describe("a failure that is not a load result", () => {
     act(() => result.current.retry());
     await waitFor(() => expect(result.current.stage).toBe("ready"));
     expect(result.current.error).toBeNull();
+  });
+});
+
+describe("the unplaced list (Phase 10b)", () => {
+  /** The first reply with its OWN counts replaced, and a status that says something else. */
+  function withTotals(
+    session: FakeSession,
+    totals: { page?: unknown; status?: number },
+    overrides: Partial<UseEvtxCorrelationOptions> = {},
+  ): UseEvtxCorrelationOptions {
+    const base = session.props(overrides);
+    return {
+      ...base,
+      status: { ...(base.status as EventLogAnalysisSessionStatus), totalUnplaced: totals.status ?? 0 },
+      initialPage: {
+        ...(base.initialPage as EventLogAnalysisTimelinePage),
+        totalUnplaced: totals.page as number,
+      },
+    };
+  }
+
+  it("is null with no session: there is no run, which is not a run whose count is unknown", () => {
+    expect(UNAVAILABLE_CORRELATION.unplacedList).toBeNull();
+    const { result } = renderHook(() => useEvtxCorrelation(NONE));
+    expect(result.current.unplacedList).toBeNull();
+    expect(result.current.counts).toBeNull();
+  });
+
+  it("is a list with an unknown count, not null, for a run whose count was not trusted and whose preview is empty", async () => {
+    // The shape that must not read as a counted zero, and must not read as no run either.
+    const session = new FakeSession({ itemCount: 10, pairs: [[1, 2]], unplacedCount: 0 });
+    const props = withTotals(session, { page: Number.NaN, status: 0 });
+    const { result } = renderHook(() => useEvtxCorrelation(props));
+    await waitFor(() => expect(result.current.stage).toBe("edgesOnly"));
+    expect(result.current.unplacedList).toEqual({ items: [], total: null });
+    expect(result.current.counts?.unplacedList).toEqual({ items: [], total: null });
+    // And a counted zero is a different value, which is what lets a consumer tell them apart.
+    const countedProps = session.props();
+    const counted = renderHook(() => useEvtxCorrelation(countedProps));
+    await waitFor(() => expect(counted.result.current.stage).toBe("edgesOnly"));
+    expect(counted.result.current.unplacedList).toEqual({ items: [], total: 0 });
+  });
+
+  it("carries the first reply's preview and its own count, on the model and on the counts", async () => {
+    const session = new FakeSession({ itemCount: 10, pairs: [[1, 2]], unplacedCount: 3, totalUnplaced: 8 });
+    // The props are made once: the hook keys what it loads on the identity of the first reply.
+    const edgesOnlyProps = session.props();
+    const edgesOnly = renderHook(() => useEvtxCorrelation(edgesOnlyProps));
+    await waitFor(() => expect(edgesOnly.result.current.stage).toBe("edgesOnly"));
+    expect(edgesOnly.result.current.counts?.unplacedList.items).toHaveLength(3);
+    expect(edgesOnly.result.current.counts?.unplacedList.total).toBe(8);
+    // Counts-only: the model-side field is the same page's, so a consumer of either reads one list.
+    expect(edgesOnly.result.current.unplacedList?.total).toBe(8);
+
+    const fullProps = session.props({ needItems: true });
+    const full = renderHook(() => useEvtxCorrelation(fullProps));
+    await waitFor(() => expect(full.result.current.stage).toBe("ready"));
+    expect(full.result.current.unplacedList?.items).toHaveLength(3);
+    expect(full.result.current.unplacedList?.total).toBe(8);
+    expect(full.result.current.counts?.unplacedList.total).toBe(8);
+  });
+
+  it("takes the count from the SAME page as the preview, not from the status", async () => {
+    const session = new FakeSession({ itemCount: 10, pairs: [[1, 2]], unplacedCount: 2 });
+    const props = withTotals(session, { page: 40, status: 9 });
+    const { result } = renderHook(() => useEvtxCorrelation(props));
+    await waitFor(() => expect(result.current.stage).toBe("edgesOnly"));
+    expect(result.current.unplacedList?.total).toBe(40);
+    expect(result.current.counts?.unplacedList.total).toBe(40);
+  });
+
+  it("proves the list complete against the page's own count, whatever the status says", async () => {
+    const session = new FakeSession({ itemCount: 10, pairs: [[1, 2]], unplacedCount: 2 });
+    // The page counts 2 and holds 2: complete. A status that says 5 must not undo that.
+    const completeProps = withTotals(session, { page: 2, status: 5 }, { needItems: true });
+    const complete = renderHook(() => useEvtxCorrelation(completeProps));
+    await waitFor(() => expect(complete.result.current.stage).toBe("ready"));
+    expect(complete.result.current.unplaced.unplacedListComplete).toBe(true);
+    // The page counts 5 and holds 2: not complete. A status that says 2 must not prove it.
+    const cutProps = withTotals(session, { page: 5, status: 2 }, { needItems: true });
+    const cut = renderHook(() => useEvtxCorrelation(cutProps));
+    await waitFor(() => expect(cut.result.current.stage).toBe("ready"));
+    expect(cut.result.current.unplaced.unplacedListComplete).toBe(false);
+  });
+
+  it.each([
+    ["not a number", Number.NaN],
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["infinite", Number.POSITIVE_INFINITY],
+    ["missing", undefined],
+    ["a string", "2"],
+  ])("reads a page count that is %s as unknown, never 0, and proves nothing complete", async (_why, bad) => {
+    // The status counts 2 and the preview holds 2: against the status alone the list would be
+    // "complete". The page's own count is what is untrusted, so nothing is proven.
+    const session = new FakeSession({ itemCount: 10, pairs: [[1, 2]], unplacedCount: 2 });
+    const props = withTotals(session, { page: bad, status: 2 }, { needItems: true });
+    const { result } = renderHook(() => useEvtxCorrelation(props));
+    await waitFor(() => expect(result.current.stage).toBe("ready"));
+    expect(result.current.unplacedList?.total).toBeNull();
+    expect(result.current.counts?.unplacedList.total).toBeNull();
+    expect(result.current.unplacedList?.items).toHaveLength(2);
+    expect(result.current.unplaced.unplacedListComplete).toBe(false);
+  });
+
+  it("keeps the list of the model on show while a newer session is built, and the newest in counts (G5)", async () => {
+    const one = new FakeSession({ itemCount: 2_500, pairs: [[5, 1_200]], revision: 1, unplacedCount: 2 });
+    const two = new FakeSession({
+      itemCount: 2_500,
+      pairs: [[5, 1_200]],
+      revision: 2,
+      unplacedCount: 5,
+      totalUnplaced: 70,
+    });
+    const { result, rerender } = renderHook((props: UseEvtxCorrelationOptions) => useEvtxCorrelation(props), {
+      initialProps: one.props({ needItems: true }),
+    });
+    await waitFor(() => expect(result.current.stage).toBe("ready"));
+    const shown = result.current.unplacedList;
+    expect(shown?.total).toBe(2);
+
+    two.timelineGate = gate();
+    rerender(two.props({ needItems: true }));
+    await waitFor(() => expect(result.current.nextScan?.state).toBe("running"));
+    expect(result.current.updating).toBe(true);
+    // The model on show is revision 1's, so its list is; revision 2's list is in the counts.
+    expect(result.current.unplacedList).toBe(shown);
+    expect(result.current.counts?.unplacedList.total).toBe(70);
+    expect(result.current.counts?.unplacedList.items).toHaveLength(5);
+
+    act(() => two.timelineGate?.open());
+    await waitFor(() => expect(result.current.builtFor).toBe(`${two.id}:2`));
+    expect(result.current.unplacedList?.total).toBe(70);
   });
 });

@@ -35,6 +35,8 @@ vi.mock("./UnifiedTimelineView", () => ({
 }));
 
 import { useLogStore } from "../../stores/log-store";
+import { useUiStore } from "../../stores/ui-store";
+import { DEFAULT_LOG_LIST_FONT_SIZE, getLogListMetrics } from "../../lib/log-accessibility";
 import { EventLogWorkspace, EvtxViewHost, type EvtxViewEntry } from "./EventLogWorkspace";
 import { EvtxViewBar } from "./EvtxViewBar";
 import { requireElement, stubLayout } from "./evtx-test-dom";
@@ -45,6 +47,7 @@ import {
   sanitizeLayout,
   useEvtxLayoutStore,
 } from "./evtx-layout-store";
+import { DOCK_MIN_HEIGHT_PX, gridRecordRowPx } from "./evtx-main-column-layout";
 import { selectRecordAndShowDetails } from "./evtx-select-record";
 import { useEvtxStore } from "./evtx-store";
 import type { EvtxRecord } from "./types";
@@ -72,7 +75,8 @@ const requireRegion = (name: string) => requireElement(region(name), `the ${name
 describe("EventLogWorkspace three-column shell", () => {
   beforeEach(() => {
     localStorage.clear();
-    useEvtxLayoutStore.setState(sanitizeLayout(undefined));
+    // Whether the dock is collapsed is not part of the stored layout, so reset it with the rest.
+    useEvtxLayoutStore.setState({ ...sanitizeLayout(undefined), dockCollapsed: false });
     useEvtxStore.getState().reset();
     useEvtxStore.setState({
       records: [RECORD],
@@ -239,6 +243,180 @@ describe("EventLogWorkspace three-column shell", () => {
     act(() => useEvtxLayoutStore.getState().setDockHeight(5000));
     expect(region("dock")).toBe(dock);
     expect(dock).toHaveStyle({ height: "450px" });
+    // Only the rendered height clamps: what the user chose is kept as it was.
+    expect(useEvtxLayoutStore.getState().dockHeight).toBe(5000);
+  });
+
+  // jsdom does no layout, so these are style guards: the numbers the browser spec measures
+  // (e2e/screenshots/event-logs.spec.ts, "event-logs correlation dock") come from the styles below.
+  describe("the floors of the main column", () => {
+    // One row of the grid, by the function the grid sizes its rows with: the floor counts these.
+    const gridRowPx = () =>
+      gridRecordRowPx(
+        getLogListMetrics(useUiStore.getState().logListFontSize).rowHeight,
+        useEvtxStore.getState().columnConfig.order,
+      );
+    const resizeTo = (height: number) => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+    };
+    const tableView = () => document.querySelector<HTMLElement>('[data-evtx-view="table"]')!;
+    const strip = () => tableView().children[0] as HTMLElement;
+    const gridBox = () => tableView().children[1] as HTMLElement;
+    const panel = () => document.getElementById(EVTX_VIEW_PANEL_ID) as HTMLElement;
+
+    it("gives the Table view its strip and five grid rows as a floor, so a short window scrolls it", () => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      render(<EventLogWorkspace />);
+      expect(strip()).toHaveStyle({ height: "320px", flexShrink: "0" });
+      expect(gridBox()).toHaveStyle({ minHeight: `${5 * gridRowPx()}px` });
+      expect(panel()).toHaveStyle({ minHeight: `${320 + 5 * gridRowPx()}px` });
+    });
+
+    it("counts five of the grid's own rows, so the floor follows the Level column and the font", () => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      // 23 px of row at the default font; a grid record row is 29 px with the Level column on and
+      // 25 px without it (a list row), so the floor is 145 px and then 125 px.
+      expect(getLogListMetrics(DEFAULT_LOG_LIST_FONT_SIZE).rowHeight).toBe(23);
+      expect(gridRecordRowPx(23, ["timestamp", "level"])).toBe(29);
+      expect(gridRecordRowPx(23, ["timestamp"])).toBe(25);
+      render(<EventLogWorkspace />);
+      expect(useEvtxStore.getState().columnConfig.order).toContain("level");
+      expect(gridBox()).toHaveStyle({ minHeight: "145px" });
+      expect(panel()).toHaveStyle({ minHeight: "465px" });
+      act(() => useEvtxStore.getState().toggleColumnVisible("level"));
+      expect(gridBox()).toHaveStyle({ minHeight: "125px" });
+      expect(panel()).toHaveStyle({ minHeight: "445px" });
+      act(() => useEvtxStore.getState().toggleColumnVisible("level"));
+      expect(gridBox()).toHaveStyle({ minHeight: "145px" });
+      // A larger font makes a taller row, and the floor follows it.
+      try {
+        act(() => useUiStore.setState({ logListFontSize: 20 }));
+        expect(gridBox()).toHaveStyle({ minHeight: `${5 * (getLogListMetrics(20).rowHeight + 6)}px` });
+      } finally {
+        act(() => useUiStore.setState({ logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE }));
+      }
+    });
+
+    it("draws the strip at half the window when that is under 320 px, and never under 240 px", () => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      render(<EventLogWorkspace />);
+      resizeTo(560);
+      expect(strip()).toHaveStyle({ height: "280px" });
+      expect(panel()).toHaveStyle({ minHeight: `${280 + 5 * gridRowPx()}px` });
+      resizeTo(400);
+      expect(strip()).toHaveStyle({ height: "240px" });
+      expect(panel()).toHaveStyle({ minHeight: `${240 + 5 * gridRowPx()}px` });
+    });
+
+    it("holds a floor for every view, not only the Table", () => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      render(<EventLogWorkspace />);
+      // The Correlation view keeps its chain list header and three rows (36 + 3 * 83 px at the
+      // default font); the placeholder views share one generic minimum (a header and three rows).
+      act(() => useEvtxLayoutStore.getState().setActiveView("correlation"));
+      expect(panel()).toHaveStyle({ minHeight: "285px" });
+      for (const view of ["grouped", "timeline", "charts"] as const) {
+        act(() => useEvtxLayoutStore.getState().setActiveView(view));
+        expect(panel()).toHaveStyle({ minHeight: "111px" });
+      }
+      act(() => useEvtxLayoutStore.getState().setActiveView("table"));
+      expect(panel()).toHaveStyle({ minHeight: `${320 + 5 * gridRowPx()}px` });
+    });
+
+    it("scrolls the main column instead of clipping it", () => {
+      render(<EventLogWorkspace />);
+      expect(region("main")).toHaveStyle({ overflowX: "hidden", overflowY: "auto" });
+    });
+
+    it("lets an expanded dock give way, down to its header and one lane, and keeps a collapsed one whole", async () => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      render(<EventLogWorkspace />);
+      const dock = region("dock")!;
+      expect(dock).toHaveStyle({ height: "210px", flexShrink: "1", minHeight: `${DOCK_MIN_HEIGHT_PX}px` });
+      // The minimum is under the height the dock opens at, so the dock has room to give.
+      expect(DOCK_MIN_HEIGHT_PX).toBeLessThan(useEvtxLayoutStore.getState().dockHeight);
+      act(() => useEvtxLayoutStore.getState().setPanel("dock", true));
+      fireEvent.click(await screen.findByRole("button", { name: "Collapse correlation" }));
+      expect(dock).toHaveStyle({ flexShrink: "0" });
+      expect(dock.style.minHeight).toBe("");
+    });
+  });
+
+  // The dock's own box and the column's height are measured. jsdom does no layout, so they are
+  // supplied here: the dock renders at `slot`, in a column of `main`, under the Table's floor.
+  describe("the dock's resize handle", () => {
+    let restore: (() => void) | null = null;
+    const stubLayout = (slot: number, main: number) => {
+      const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+        this: HTMLElement,
+      ) {
+        const height = this.dataset.evtxRegion === "dock" ? slot : 0;
+        return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: height, width: 0, height, toJSON: () => ({}) };
+      });
+      Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.dataset.evtxRegion === "main" ? main : 0;
+        },
+      });
+      restore = () => {
+        rect.mockRestore();
+        delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+      };
+    };
+    afterEach(() => restore?.());
+    const open = () => {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+      render(<EventLogWorkspace />);
+      act(() => useEvtxLayoutStore.getState().setPanel("dock", true));
+      return screen.getByRole("separator", { name: "Resize correlation dock" });
+    };
+    const chosen = () => useEvtxLayoutStore.getState().dockHeight;
+
+    it("reports the rendered height and the range the column leaves, not the chosen height", () => {
+      // The Table's floor at 900 px is 320 + 145 = 465, so a 600 px column leaves the dock 135.
+      stubLayout(117, 600);
+      const handle = open();
+      expect(chosen()).toBe(210);
+      expect(handle).toHaveAttribute("aria-valuenow", "117");
+      expect(handle).toHaveAttribute("aria-valuemin", String(DOCK_MIN_HEIGHT_PX));
+      expect(handle).toHaveAttribute("aria-valuemax", "135");
+    });
+
+    it("steps from the rendered height, so a key press moves the dock, and a bound moves nothing", () => {
+      stubLayout(117, 600);
+      const handle = open();
+      fireEvent.keyDown(handle, { key: "ArrowUp" });
+      expect(chosen()).toBe(133);
+      fireEvent.keyDown(handle, { key: "ArrowDown" });
+      expect(chosen()).toBe(DOCK_MIN_HEIGHT_PX);
+    });
+
+    it("takes no step past a bound, and says it is at the bound by its value", () => {
+      // The dock is as tall as the column lets it be: 135 of 135.
+      stubLayout(135, 600);
+      const handle = open();
+      expect(handle).toHaveAttribute("aria-valuenow", "135");
+      expect(handle).toHaveAttribute("aria-valuemax", "135");
+      fireEvent.keyDown(handle, { key: "ArrowUp" });
+      fireEvent.keyDown(handle, { key: "End" });
+      expect(chosen()).toBe(210);
+      fireEvent.keyDown(handle, { key: "Home" });
+      expect(chosen()).toBe(DOCK_MIN_HEIGHT_PX);
+    });
+
+    it("drags from the rendered height", () => {
+      stubLayout(117, 600);
+      const handle = open();
+      fireEvent.pointerDown(handle, { clientY: 500, button: 0, isPrimary: true, pointerId: 1 });
+      // Eight px up grows the dock by eight from the 117 px that is there, not from the 210 chosen.
+      fireEvent.pointerMove(handle, { clientY: 492, buttons: 1, pointerId: 1 });
+      expect(chosen()).toBe(125);
+      fireEvent.pointerUp(handle, { pointerId: 1 });
+    });
   });
 
   it("keeps the stored dock height when the viewport caps it and a resize changes nothing", () => {
@@ -293,9 +471,39 @@ describe("EventLogWorkspace three-column shell", () => {
     expect(region("channels")).not.toBeVisible();
     expect(region("rail")).toHaveStyle({ width: "400px" });
     expect(region("dock")).toHaveStyle({ height: "250px" });
-    // The dock has no content yet, so it stays hidden whatever the envelope says.
+    // The dock is available, so the envelope's choice shows it, with the dock in it.
     expect(region("rail")).toBeVisible();
+    expect(region("dock")).toBeVisible();
+    expect(await screen.findByRole("region", { name: "Correlation dock" })).toBeInTheDocument();
+  });
+
+  it("opens the dock from its toggle, and Close hides it and gives focus back to the toggle", async () => {
+    render(<EventLogWorkspace />);
+    const toggle = screen.getByRole("button", { name: "Correlation dock" });
     expect(region("dock")).not.toBeVisible();
+    expect(screen.queryByRole("region", { name: "Correlation dock" })).toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(region("dock")).toBeVisible();
+    const dock = await screen.findByRole("region", { name: "Correlation dock" });
+    expect(region("dock")).toContainElement(dock);
+    fireEvent.click(screen.getByRole("button", { name: "Close correlation dock" }));
+    expect(region("dock")).not.toBeVisible();
+    expect(screen.queryByRole("region", { name: "Correlation dock" })).toBeNull();
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(toggle).toHaveFocus();
+  });
+
+  it("shows a dock that was collapsed expanded when its toggle opens it again", async () => {
+    render(<EventLogWorkspace />);
+    const toggle = screen.getByRole("button", { name: "Correlation dock" });
+    fireEvent.click(toggle);
+    fireEvent.click(await screen.findByRole("button", { name: "Collapse correlation" }));
+    expect(region("dock")!.style.height).toBe("auto");
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    expect(await screen.findByRole("button", { name: "Collapse correlation" })).toBeInTheDocument();
+    expect(region("dock")).toHaveStyle({ height: "210px" });
   });
 
   it("links the layout tabs and the tabpanel in both directions", () => {

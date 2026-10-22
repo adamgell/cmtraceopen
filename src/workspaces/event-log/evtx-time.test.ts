@@ -1,10 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
+  LONDON_2026,
+  LONDON_2026_2027,
+  LONDON_REPEATED_HOUR_START,
+  NEW_YORK_2025_2026,
+  NEW_YORK_2026,
+  modelZone,
+} from "./__fixtures__/model-zone";
+import {
   eventDateKey,
   formatClock,
+  formatDayClock,
   formatEventTime,
   formatTimeRange,
   TIME_RANGE_SEPARATOR,
+  offsetLabel,
+  tellRangeEndsApart,
+  timeRangeNeedsYear,
   timeZoneLabel,
 } from "./evtx-time";
 
@@ -134,5 +146,312 @@ describe("formatTimeRange", () => {
     expect(formatTimeRange(start, end, "local")).toBe(
       `${formatClock(start, "local")}${SEP}${formatClock(end, "local")}`,
     );
+  });
+});
+
+describe("formatDayClock", () => {
+  const utc = (day: number, hour: number, minute: number, second = 0) =>
+    Date.UTC(2026, 9, day, hour, minute, second);
+
+  it("puts the zone's month and day before the clock", () => {
+    expect(formatDayClock(utc(16, 22, 0), "utc")).toBe("Oct 16 22:00");
+    expect(formatDayClock(utc(3, 4, 5, 9), "utc", true)).toBe("Oct 3 04:05:09");
+  });
+
+  it("reads the day on the chosen clock, not the UTC one", () => {
+    const local = new Date(utc(16, 22, 0));
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    expect(formatDayClock(utc(16, 22, 0), "local")).toBe(
+      `${months[local.getMonth()]} ${local.getDate()} ${formatClock(utc(16, 22, 0), "local")}`,
+    );
+  });
+
+  it("is the form a range label uses for each end when the range crosses a day", () => {
+    const start = utc(16, 22, 0);
+    const end = utc(17, 3, 0);
+    expect(formatTimeRange(start, end, "utc")).toBe(
+      `${formatDayClock(start, "utc")}${TIME_RANGE_SEPARATOR}${formatDayClock(end, "utc")}`,
+    );
+  });
+});
+
+describe("the year in day labels", () => {
+  const utc = (year: number, month: number, day: number, hour = 0, minute = 0) =>
+    Date.UTC(year, month - 1, day, hour, minute);
+
+  it("puts the zone's year between the day and the clock when asked", () => {
+    expect(formatDayClock(utc(2024, 1, 5, 22), "utc", false, true)).toBe("Jan 5 2024 22:00");
+    expect(formatDayClock(utc(2026, 10, 16, 3, 4), "utc", true, true)).toBe("Oct 16 2026 03:04:00");
+    expect(formatDayClock(utc(2026, 10, 16, 3, 4), "utc")).toBe("Oct 16 03:04");
+  });
+
+  it("reads the year on the chosen clock, not the UTC one", () => {
+    const local = new Date(utc(2025, 12, 31, 23, 30));
+    expect(formatDayClock(utc(2025, 12, 31, 23, 30), "local", false, true)).toContain(` ${local.getFullYear()} `);
+  });
+
+  it("gives a range both days and years, even one inside a single day, so two ends are never alike", () => {
+    expect(formatTimeRange(utc(2026, 2, 14), utc(2027, 2, 14), "utc", true)).toBe(
+      `Feb 14 2026 00:00${TIME_RANGE_SEPARATOR}Feb 14 2027 00:00`,
+    );
+    expect(formatTimeRange(utc(2026, 10, 16, 9), utc(2026, 10, 16, 9, 45), "utc", true)).toBe(
+      `Oct 16 2026 09:00${TIME_RANGE_SEPARATOR}Oct 16 2026 09:45`,
+    );
+    expect(formatTimeRange(utc(2026, 10, 16, 9), utc(2026, 10, 16, 9, 45), "utc")).toBe(
+      `09:00${TIME_RANGE_SEPARATOR}09:45`,
+    );
+  });
+});
+
+describe("timeRangeNeedsYear", () => {
+  const utc = (year: number, month: number, day: number, hour = 0, minute = 0) =>
+    Date.UTC(year, month - 1, day, hour, minute);
+  const NOW = utc(2026, 10, 16, 12);
+  const needs = (start: number, end: number) => timeRangeNeedsYear(start, end, "utc", NOW);
+
+  it("leaves the year out of a range inside the current year", () => {
+    expect(needs(utc(2026, 10, 16, 9), utc(2026, 10, 16, 9, 45))).toBe(false);
+    expect(needs(utc(2026, 1, 2), utc(2026, 8, 30))).toBe(false);
+  });
+
+  it("names the year of a range in a past year or a future one", () => {
+    expect(needs(utc(2024, 3, 3), utc(2024, 4, 2))).toBe(true);
+    expect(needs(utc(2027, 1, 5), utc(2027, 1, 6))).toBe(true);
+  });
+
+  it("names the year of a range whose ends fall in different years, across New Year", () => {
+    expect(needs(utc(2025, 12, 31, 22), utc(2026, 1, 1, 3))).toBe(true);
+    expect(needs(utc(2026, 12, 31, 22), utc(2027, 1, 1, 3))).toBe(true);
+  });
+
+  it("names the year of a range of 365 days or more, even one inside the current year's dates", () => {
+    expect(needs(utc(2026, 1, 1), utc(2027, 1, 1))).toBe(true);
+    expect(needs(utc(2026, 1, 1), utc(2026, 12, 31))).toBe(false);
+  });
+
+  it("names the year of a range of exactly 365 days inside one leap year, whose ends share the current year", () => {
+    const now2028 = utc(2028, 6, 1);
+    expect(timeRangeNeedsYear(utc(2028, 1, 1), utc(2028, 12, 31), "utc", now2028)).toBe(true);
+    expect(timeRangeNeedsYear(utc(2028, 1, 1), utc(2028, 12, 30), "utc", now2028)).toBe(false);
+  });
+
+  it("reads the year on the chosen clock, not the UTC one", () => {
+    // Built from the host's own calendar, so it holds in any zone: local New Year's Eve into the new year.
+    const eve = new Date(2026, 11, 31, 23, 0).getTime();
+    const newYear = new Date(2027, 0, 1, 1, 0).getTime();
+    const june = new Date(2026, 5, 15, 12, 0).getTime();
+    expect(timeRangeNeedsYear(eve, newYear, "local", june)).toBe(true);
+    expect(timeRangeNeedsYear(june - 3600_000, june, "local", june)).toBe(false);
+  });
+});
+
+describe("a range label never reads with its start equal to its end", () => {
+  const utc = (year: number, month: number, day: number, hour = 0, minute = 0, second = 0, ms = 0) =>
+    Date.UTC(year, month - 1, day, hour, minute, second, ms);
+
+  it("names the year for a range of 365 days or more even when the caller did not ask", () => {
+    const label = formatTimeRange(utc(2026, 2, 14), utc(2027, 2, 14), "utc");
+    const [start, end] = label.split(TIME_RANGE_SEPARATOR);
+    expect(start).not.toBe(end);
+    expect(label).toBe(`Feb 14 2026 00:00${TIME_RANGE_SEPARATOR}Feb 14 2027 00:00`);
+  });
+
+  it("adds milliseconds to a range shorter than a second, which seconds alone cannot tell apart", () => {
+    const label = formatTimeRange(utc(2026, 10, 16, 9, 0, 0, 0), utc(2026, 10, 16, 9, 0, 0, 500), "utc");
+    expect(label).toBe(`09:00:00.000${TIME_RANGE_SEPARATOR}09:00:00.500`);
+    const across = formatTimeRange(utc(2026, 10, 16, 23, 59, 59, 600), utc(2026, 10, 16, 23, 59, 59, 900), "utc");
+    expect(across).toBe(`23:59:59.600${TIME_RANGE_SEPARATOR}23:59:59.900`);
+  });
+
+  it("leaves a range that already reads apart alone", () => {
+    expect(formatTimeRange(utc(2026, 10, 16, 9, 0, 0, 0), utc(2026, 10, 16, 9, 0, 1, 500), "utc")).toBe(
+      `09:00:00${TIME_RANGE_SEPARATOR}09:00:01`,
+    );
+  });
+});
+
+describe("a range whose two ends read alike across a DST fall-back", () => {
+  const SEP = TIME_RANGE_SEPARATOR;
+
+  describe("tellRangeEndsApart, a pure rule that takes the two offsets", () => {
+    it("labels each end with its offset when the texts are equal and the offsets differ (Europe/London, 26 Oct 2025)", () => {
+      // 01:00 BST (UTC+01:00) to 01:00 GMT (UTC+00:00): the same wall text twice, an hour apart.
+      expect(tellRangeEndsApart("Oct 26 2025 01:00", "Oct 26 2025 01:00", 60, 0)).toEqual({
+        start: "Oct 26 2025 01:00 UTC+01:00",
+        end: "Oct 26 2025 01:00 UTC+00:00",
+      });
+      expect(tellRangeEndsApart("01:00", "01:00", 60, 0)).toEqual({
+        start: "01:00 UTC+01:00",
+        end: "01:00 UTC+00:00",
+      });
+    });
+
+    it("does the same across America/New_York's fall-back and a half-hour zone's", () => {
+      expect(tellRangeEndsApart("Nov 2 2025 01:00", "Nov 2 2025 01:00", -240, -300)).toEqual({
+        start: "Nov 2 2025 01:00 UTC-04:00",
+        end: "Nov 2 2025 01:00 UTC-05:00",
+      });
+      expect(tellRangeEndsApart("01:30", "01:30", 345, 330)).toEqual({
+        start: "01:30 UTC+05:45",
+        end: "01:30 UTC+05:30",
+      });
+    });
+
+    it("leaves a normal range alone: texts that differ get no offset, even when the offsets differ", () => {
+      expect(tellRangeEndsApart("00:30", "02:30", 60, 0)).toEqual({ start: "00:30", end: "02:30" });
+      expect(tellRangeEndsApart("09:00", "09:45", 0, 0)).toEqual({ start: "09:00", end: "09:45" });
+    });
+
+    it("leaves equal texts alone when the offsets do not differ: that is a sub-second range, for milliseconds", () => {
+      expect(tellRangeEndsApart("09:00:00", "09:00:00", 0, 0)).toEqual({ start: "09:00:00", end: "09:00:00" });
+    });
+
+    it("writes an offset as UTC+hh:mm, the way timeZoneLabel does", () => {
+      expect(offsetLabel(60)).toBe("UTC+01:00");
+      expect(offsetLabel(0)).toBe("UTC+00:00");
+      expect(offsetLabel(-300)).toBe("UTC-05:00");
+      expect(offsetLabel(345)).toBe("UTC+05:45");
+    });
+  });
+
+  describe("formatTimeRange", () => {
+    const utc = (hour: number, minute = 0, second = 0, ms = 0) => Date.UTC(2026, 9, 16, hour, minute, second, ms);
+
+    it("still adds milliseconds to a genuinely sub-second range, and gives it no offset", () => {
+      expect(formatTimeRange(utc(9, 0, 0, 0), utc(9, 0, 0, 500), "utc")).toBe(
+        `09:00:00.000${SEP}09:00:00.500`,
+      );
+    });
+
+    it("gives a normal range no offset", () => {
+      expect(formatTimeRange(utc(9), utc(9, 45), "utc")).toBe(`09:00${SEP}09:45`);
+      const local = formatTimeRange(utc(9), utc(9, 45), "local");
+      expect(local).not.toMatch(/UTC/);
+    });
+
+    it("never reads with its two ends alike, across every hour of a year in the host's own zone", () => {
+      // The host's zone decides whether any of these ranges is a repeated hour: run under TZ=Europe/London
+      // or TZ=America/New_York to cover a fall-back. Under UTC it checks only that nothing reads alike.
+      const from = Date.UTC(2025, 0, 1);
+      let checked = 0;
+      for (let at = from; at < from + 365 * 24 * 3600_000; at += 3600_000) {
+        for (const span of [20 * 60_000, 3600_000, 2 * 3600_000]) {
+          for (const withYear of [false, true]) {
+            const [start, end] = formatTimeRange(at, at + span, "local", withYear).split(SEP);
+            if (start === end) throw new Error(`${new Date(at).toISOString()} + ${span}: ${start} ${SEP} ${end}`);
+            checked += 1;
+          }
+        }
+      }
+      expect(checked).toBe(365 * 24 * 3 * 2);
+    });
+  });
+});
+
+describe("the repeated hour of a modelled fall-back, whatever the host's zone", () => {
+  const SEP = TIME_RANGE_SEPARATOR;
+  const HOUR_MS = 3600_000;
+
+  it("gives each end its OWN offset: 01:00 BST to 01:00 GMT on 25 Oct 2026 in Europe/London", () => {
+    const restore = modelZone(LONDON_2026);
+    try {
+      const start = LONDON_REPEATED_HOUR_START;
+      // The modelled getters really read the repeated wall time at both ends.
+      expect(new Date(start).getHours()).toBe(1);
+      expect(new Date(start + HOUR_MS).getHours()).toBe(1);
+      expect(new Date(start).getTimezoneOffset()).toBe(-60);
+      expect(new Date(start + HOUR_MS).getTimezoneOffset()).toBe(0);
+      expect(formatTimeRange(start, start + HOUR_MS, "local")).toBe(
+        `01:00 UTC+01:00${SEP}01:00 UTC+00:00`,
+      );
+      expect(formatTimeRange(start, start + HOUR_MS, "local", true)).toBe(
+        `Oct 25 2026 01:00 UTC+01:00${SEP}Oct 25 2026 01:00 UTC+00:00`,
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("does the same across America/New_York's fall-back, with negative offsets", () => {
+    const restore = modelZone(NEW_YORK_2026);
+    try {
+      // 1 Nov 2026 05:00Z is 01:00 EDT (UTC-04:00); 06:00Z is 01:00 EST (UTC-05:00).
+      const start = Date.UTC(2026, 10, 1, 5);
+      expect(formatTimeRange(start, start + HOUR_MS, "local")).toBe(`01:00 UTC-04:00${SEP}01:00 UTC-05:00`);
+    } finally {
+      restore();
+    }
+  });
+
+  it("gives a range an hour either side of the repeated hour no offset", () => {
+    const restore = modelZone(LONDON_2026);
+    try {
+      const start = LONDON_REPEATED_HOUR_START - HOUR_MS;
+      // 23:00 BST to 01:00 BST (an hour of the repeated pair): clock texts differ.
+      expect(formatTimeRange(start, start + HOUR_MS, "local")).toBe(`00:00${SEP}01:00`);
+      const after = LONDON_REPEATED_HOUR_START + HOUR_MS;
+      expect(formatTimeRange(after, after + HOUR_MS, "local")).toBe(`01:00${SEP}02:00`);
+    } finally {
+      restore();
+    }
+  });
+
+  it("restores the host's own getters when it is done", () => {
+    const real = new Date(Date.UTC(2026, 9, 25, 0)).getHours();
+    const restore = modelZone(LONDON_2026);
+    restore();
+    expect(new Date(Date.UTC(2026, 9, 25, 0)).getHours()).toBe(real);
+  });
+});
+
+describe("the year step of the ladder is reachable in local mode across a DST change", () => {
+  const SEP = TIME_RANGE_SEPARATOR;
+  const YEAR = 365 * 24 * 3600_000;
+
+  // From a wall time in standard time to the same wall time a calendar year later in summer time, a
+  // range lasts 365 days minus the shift: under a year, so the year is not forced, and the day form
+  // reads alike at both ends. Only the year step tells them apart; without it the ends would read as
+  // one hour on one day, named by their two offsets.
+  it("reads Europe/London 28 Mar 2026 12:00 GMT to 28 Mar 2027 12:00 BST with both years", () => {
+    const restore = modelZone(LONDON_2026_2027);
+    try {
+      const start = Date.UTC(2026, 2, 28, 12);
+      const end = Date.UTC(2027, 2, 28, 11);
+      expect(end - start).toBe(YEAR - 3600_000);
+      expect(new Date(start).getHours()).toBe(12);
+      expect(new Date(end).getHours()).toBe(12);
+      expect(new Date(start).getTimezoneOffset()).toBe(0);
+      expect(new Date(end).getTimezoneOffset()).toBe(-60);
+      expect(formatTimeRange(start, end, "local")).toBe(`Mar 28 2026 12:00${SEP}Mar 28 2027 12:00`);
+    } finally {
+      restore();
+    }
+  });
+
+  it("reads America/New_York 8 Mar 2025 12:00 EST to 8 Mar 2026 12:00 EDT with both years", () => {
+    const restore = modelZone(NEW_YORK_2025_2026);
+    try {
+      const start = Date.UTC(2025, 2, 8, 17);
+      const end = Date.UTC(2026, 2, 8, 16);
+      expect(end - start).toBe(YEAR - 3600_000);
+      expect(new Date(start).getHours()).toBe(12);
+      expect(new Date(end).getHours()).toBe(12);
+      expect(new Date(start).getTimezoneOffset()).toBe(300);
+      expect(new Date(end).getTimezoneOffset()).toBe(240);
+      expect(formatTimeRange(start, end, "local")).toBe(`Mar 8 2025 12:00${SEP}Mar 8 2026 12:00`);
+    } finally {
+      restore();
+    }
+  });
+
+  it("leaves the year out of an ordinary one-day range in the same modelled zone", () => {
+    const restore = modelZone(LONDON_2026_2027);
+    try {
+      expect(formatTimeRange(Date.UTC(2026, 3, 1, 9), Date.UTC(2026, 3, 2, 9), "local")).toBe(
+        `Apr 1 10:00${SEP}Apr 2 10:00`,
+      );
+    } finally {
+      restore();
+    }
   });
 });

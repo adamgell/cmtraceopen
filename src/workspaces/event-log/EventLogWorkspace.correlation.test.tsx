@@ -16,9 +16,11 @@ const mocks = vi.hoisted(() => ({
   closeAnalysis: vi.fn(),
   queryTimeline: vi.fn(),
   queryEdges: vi.fn(),
+  queryWindow: vi.fn(),
   hook: vi.fn(),
   rail: vi.fn(),
   viewLoaded: vi.fn(),
+  dockLoaded: vi.fn(),
 }));
 
 vi.mock("../../lib/commands", async (importOriginal) => ({
@@ -26,6 +28,7 @@ vi.mock("../../lib/commands", async (importOriginal) => ({
   closeEventLogAnalysisSession: mocks.closeAnalysis,
   queryEventLogAnalysisTimeline: mocks.queryTimeline,
   queryEventLogAnalysisEdges: mocks.queryEdges,
+  queryEventLogAnalysisTimelineWindow: mocks.queryWindow,
 }));
 vi.mock("./event-analysis-session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./event-analysis-session")>()),
@@ -49,6 +52,11 @@ vi.mock("./EvtxCorrelationView", async (importOriginal) => {
   mocks.viewLoaded();
   return importOriginal<typeof import("./EvtxCorrelationView")>();
 });
+// The same for the dock: its module is evaluated when the dock is first shown.
+vi.mock("./EvtxCorrelationDock", async (importOriginal) => {
+  mocks.dockLoaded();
+  return importOriginal<typeof import("./EvtxCorrelationDock")>();
+});
 // The real hook, with its options recorded.
 vi.mock("./useEvtxCorrelation", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./useEvtxCorrelation")>();
@@ -69,7 +77,8 @@ import {
   fixtureEdges,
   recordFor,
 } from "./evtx-correlation-test-fixtures";
-import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
+import { ANALYSIS_BUILDING_TEXT } from "./evtx-correlation-copy";
+import { evtxViewTabId, sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
 import { useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { useEvtxStore } from "./evtx-store";
 import { deferred } from "../../test-utils/deferred";
@@ -153,6 +162,24 @@ beforeEach(() => {
   mocks.closeAnalysis.mockResolvedValue(undefined);
   let built = 0;
   mocks.buildAnalysis.mockImplementation(async () => analysisResult(`session-${(built += 1)}`));
+  mocks.queryWindow.mockImplementation(async (sessionId: string, startMs: number, endMs: number) => {
+    const items = [eventItem(1, T0, "error", "first failed"), eventItem(2, T0 + 6_000, "info", "second ok")].filter(
+      (item) => item.timestampMs >= startMs && item.timestampMs <= endMs,
+    );
+    return {
+      sessionId,
+      revision: 1,
+      startMs,
+      endMs,
+      offset: 0,
+      nextOffset: null,
+      totalItems: 2,
+      windowItems: items.length,
+      omittedItems: 0,
+      items,
+      serializedBytes: 1_024,
+    };
+  });
   useEvtxLayoutStore.setState({ activeView: "table" });
   useEvtxCorrelationStore.setState({ selectedChainId: null });
   useLogStore.setState({ entries: [], activeSource: null, sourceOpenMode: "merged" });
@@ -384,5 +411,195 @@ describe("the Correlation view in the workspace", () => {
     // Anywhere else in the workspace Escape is still the time range's.
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(useEvtxStore.getState().timeRange).toBeNull();
+  });
+
+  it("keeps an active time range when Escape is pressed on the overview band, which never writes it", async () => {
+    await openView();
+    await screen.findByRole("figure");
+    const range = { startMs: T0, endMs: T0 + 60_000 };
+    act(() => useEvtxStore.getState().setTimeRange(range));
+    const band = screen.getByRole("slider", { name: "Zoom window of the lane plot" });
+    band.focus();
+    // The REAL workspace handler: the band spends Escape with preventDefault, so it steps aside.
+    expect(fireEvent.keyDown(band, { key: "Escape" })).toBe(false);
+    expect(useEvtxStore.getState().timeRange).toEqual(range);
+    // Moving the band changes the lane window and nothing the table, histogram or diagnosis read.
+    fireEvent.keyDown(band, { key: "ArrowRight" });
+    fireEvent.keyDown(band, { key: "Home" });
+    expect(useEvtxStore.getState().timeRange).toEqual(range);
+    // Anywhere else in the workspace Escape is still the time range's.
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(useEvtxStore.getState().timeRange).toBeNull();
+  });
+});
+
+/**
+ * The correlation dock in the workspace (spec 8.12, #842): mounted only while it is shown, given the
+ * workspace's own session, reading nothing while hidden or collapsed, and sized by its slot.
+ */
+describe("the correlation dock in the workspace", () => {
+  const showDock = (on: boolean) =>
+    act(() => useEvtxLayoutStore.setState({ panels: { channels: true, insights: true, dock: on } }));
+  const region = () => document.querySelector<HTMLElement>('[data-evtx-region="dock"]')!;
+  const dockSection = () => screen.queryByRole("region", { name: "Correlation dock" });
+  /** The dock's lane plot: the histogram above the views is a figure too. */
+  const dockPlot = () =>
+    waitFor(() => expect(region().querySelector('[data-testid="lane-plot"]')).not.toBeNull(), { timeout: 4_000 });
+  const selectRecord = (id: number | null) => act(() => useEvtxStore.getState().setSelectedRecordId(id));
+
+  beforeEach(() => {
+    useEvtxLayoutStore.setState({ ...sanitizeLayout(undefined), activeView: "table", dockCollapsed: false });
+    useEvtxStore.setState({ selectedRecordId: 1 });
+  });
+  afterEach(() => {
+    useEvtxLayoutStore.setState({ ...sanitizeLayout(undefined), dockCollapsed: false });
+  });
+
+  it("is not mounted, nor is its module loaded, until the dock is shown, and is gone when it is hidden", async () => {
+    render(<EventLogWorkspace />);
+    await waitFor(() => expect(lastHookCall().status).not.toBeNull());
+    expect(dockSection()).toBeNull();
+    expect(mocks.dockLoaded).not.toHaveBeenCalled();
+    expect(workspaceSource).toMatch(/lazy\(\(\) => import\("\.\/EvtxCorrelationDock"\)\)/);
+    showDock(true);
+    expect(await screen.findByRole("region", { name: "Correlation dock" })).toBeInTheDocument();
+    expect(region()).toContainElement(dockSection());
+    expect(mocks.dockLoaded).toHaveBeenCalledTimes(1);
+    showDock(false);
+    expect(dockSection()).toBeNull();
+    expect(region()).not.toBeVisible();
+    showDock(true);
+    expect(await screen.findByRole("region", { name: "Correlation dock" })).toBeInTheDocument();
+    expect(mocks.dockLoaded).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the window of the workspace's session around the selected event, and draws it", async () => {
+    showDock(true);
+    render(<EventLogWorkspace />);
+    await dockPlot();
+    const center = recordFor(1).timestampEpoch;
+    expect(mocks.queryWindow).toHaveBeenCalledTimes(1);
+    expect(mocks.queryWindow.mock.calls[0]).toEqual(["session-1", center - 75_000, center + 75_000, 1000]);
+    expect(screen.getByTestId("correlation-dock-subtitle")).toHaveTextContent("around Event 101");
+  });
+
+  it("says the analysis is being built while the session is, then draws once it is published (not 'no analysis')", async () => {
+    showDock(true);
+    const build = deferred<ReturnType<typeof analysisResult>>();
+    mocks.buildAnalysis.mockImplementationOnce(() => build.promise);
+    render(<EventLogWorkspace />);
+    await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+    const message = await screen.findByTestId("correlation-dock-message");
+    expect(message).toHaveTextContent(ANALYSIS_BUILDING_TEXT);
+    expect(message.textContent).not.toMatch(/Load events/);
+    expect(screen.getByRole("region", { name: "Correlation dock" })).toHaveAttribute("aria-busy", "true");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(mocks.queryWindow).not.toHaveBeenCalled();
+    await act(async () => {
+      build.resolve(analysisResult("built-late"));
+    });
+    await dockPlot();
+    expect(screen.queryByTestId("correlation-dock-message")).toBeNull();
+    expect(mocks.queryWindow.mock.calls[0]![0]).toBe("built-late");
+  });
+
+  it("reads nothing while the dock is hidden or collapsed, and recenters when it is shown again", async () => {
+    render(<EventLogWorkspace />);
+    await waitFor(() => expect(lastHookCall().status).not.toBeNull());
+    selectRecord(2);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(mocks.queryWindow).not.toHaveBeenCalled();
+    showDock(true);
+    await dockPlot();
+    expect(mocks.queryWindow).toHaveBeenCalledTimes(1);
+    expect(mocks.queryWindow.mock.calls[0]![1]).toBe(recordFor(2).timestampEpoch - 75_000);
+    act(() => useEvtxLayoutStore.getState().setDockCollapsed(true));
+    selectRecord(3);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(mocks.queryWindow).toHaveBeenCalledTimes(1);
+    act(() => useEvtxLayoutStore.getState().setDockCollapsed(false));
+    await waitFor(() => expect(mocks.queryWindow).toHaveBeenCalledTimes(2), { timeout: 4_000 });
+    expect(mocks.queryWindow.mock.calls[1]![1]).toBe(recordFor(3).timestampEpoch - 75_000);
+  });
+
+  it("sizes its slot from the store with a resize handle, and collapses it to the header with none", async () => {
+    showDock(true);
+    render(<EventLogWorkspace />);
+    await screen.findByRole("region", { name: "Correlation dock" });
+    expect(region()).toHaveStyle({ height: "210px" });
+    expect(screen.getByRole("separator", { name: "Resize correlation dock" })).toBeInTheDocument();
+    const scroller = region().querySelector<HTMLElement>("[data-evtx-dock-scroll]")!;
+    expect(scroller.style.overflow).toBe("auto");
+    expect(scroller.style.height).toBe("100%");
+    act(() => useEvtxLayoutStore.getState().setDockCollapsed(true));
+    expect(region().style.height).toBe("auto");
+    expect(scroller.style.height).toBe("auto");
+    expect(screen.queryByRole("separator", { name: "Resize correlation dock" })).toBeNull();
+    // The dock itself stays: it is its header row.
+    expect(dockSection()).not.toBeNull();
+    act(() => useEvtxLayoutStore.getState().setDockCollapsed(false));
+    expect(region()).toHaveStyle({ height: "210px" });
+    expect(screen.getByRole("separator", { name: "Resize correlation dock" })).toBeInTheDocument();
+  });
+
+  it("keeps an active time range when Escape is pressed on a dock marker, and still clears it elsewhere", async () => {
+    showDock(true);
+    render(<EventLogWorkspace />);
+    await dockPlot();
+    act(() => useEvtxStore.getState().setTimeRange({ startMs: T0, endMs: T0 + 60_000 }));
+    const marker = document.querySelector<HTMLElement>('[data-evtx-region="dock"] button[data-marker]')!;
+    marker.focus();
+    expect(fireEvent.keyDown(marker, { key: "Escape" })).toBe(false);
+    expect(useEvtxStore.getState().timeRange).not.toBeNull();
+    expect(screen.getByRole("combobox", { name: "Correlation window" })).toHaveFocus();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(useEvtxStore.getState().timeRange).toBeNull();
+  });
+
+  it("builds the timeline strip's key from sessionKeyOf, as the dock and the hook do, not from its own string", () => {
+    expect(workspaceSource).toMatch(/sessionKeyOf\(analysisStatus\)/);
+    expect(workspaceSource).not.toMatch(/\$\{analysisStatus\.sessionId\}:\$\{analysisStatus\.revision\}/);
+  });
+
+  describe("Open in Correlation view (a2_notes 4)", () => {
+    const NO_LONGER = "no longer present";
+    const openButton = () => screen.getByRole("button", { name: "Open in Correlation view" });
+
+    async function viewWithDock() {
+      showDock(true);
+      useEvtxLayoutStore.setState({ activeView: "correlation" });
+      render(<EventLogWorkspace />);
+      await screen.findAllByRole("option");
+      await dockPlot();
+      await waitFor(() => expect(openButton()).not.toHaveAttribute("aria-disabled", "true"), { timeout: 4_000 });
+    }
+
+    it("opens the row the dock found, in the view, and moves focus to the Correlation tab", async () => {
+      useEvtxLayoutStore.setState({ activeView: "table" });
+      showDock(true);
+      render(<EventLogWorkspace />);
+      await dockPlot();
+      await waitFor(() => expect(openButton()).not.toHaveAttribute("aria-disabled", "true"), { timeout: 4_000 });
+      fireEvent.click(openButton());
+      expect(useEvtxLayoutStore.getState().activeView).toBe("correlation");
+      expect(document.getElementById(evtxViewTabId("correlation"))).toHaveFocus();
+      const options = await screen.findAllByRole("option");
+      expect(options.filter((option) => option.getAttribute("aria-selected") === "true")).toHaveLength(1);
+      expect(options[0]!.getAttribute("data-chain-id")).toBe(useEvtxCorrelationStore.getState().selectedChainId);
+    });
+
+    it("drops a loss notice from before the Open, and never speaks it", async () => {
+      await viewWithDock();
+      // The selected chain is gone: the view records the loss and shows its notice, unspoken yet.
+      act(() => useEvtxCorrelationStore.getState().selectChain("a-chain-that-is-gone"));
+      await waitFor(() => expect(screen.getByTestId("correlation-notices")).toHaveTextContent(NO_LONGER));
+      fireEvent.click(openButton());
+      await waitFor(() => expect(screen.queryByTestId("correlation-notices")?.textContent ?? "").not.toContain(NO_LONGER));
+      // Not on any later publication of the polite region either.
+      const { CORRELATION_ANNOUNCE_MS } = await import("./EvtxCorrelationView");
+      await new Promise((resolve) => setTimeout(resolve, CORRELATION_ANNOUNCE_MS + 500));
+      expect(screen.getByTestId("correlation-announcer").textContent).not.toContain(NO_LONGER);
+      expect(document.body.textContent).not.toContain(NO_LONGER);
+    }, 20_000);
   });
 });

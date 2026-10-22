@@ -19,7 +19,12 @@ import {
   knownTotal,
   loadAnalysisEdges,
   loadLinkedItems,
+  messageOf,
   modelEdgeTotal,
+  replyProblem,
+  sessionKeyOf,
+  sessionProblem,
+  withRetry,
   type CorrelationLoadDeps,
 } from "./evtx-correlation-load";
 import {
@@ -802,5 +807,131 @@ describe("loadLinkedItems", () => {
     });
     expect(loaded.stoppedBy).toBe("error");
     expect(session.timelineCalls).toHaveLength(1);
+  });
+});
+
+describe("the helpers the window loader shares (#842)", () => {
+  const status = { sessionId: SESSION, revision: 3 };
+
+  describe("messageOf", () => {
+    it("reads an Error's message and prints anything else", () => {
+      expect(messageOf(new Error("boom"))).toBe("boom");
+      expect(messageOf("plain")).toBe("plain");
+      expect(messageOf(42)).toBe("42");
+    });
+  });
+
+  describe("sessionKeyOf", () => {
+    it("is the id and the revision, and null with no session", () => {
+      expect(sessionKeyOf(status)).toBe(`${SESSION}:3`);
+      expect(sessionKeyOf(null)).toBeNull();
+    });
+
+    it("tells two revisions of one session apart, and two sessions of one revision", () => {
+      expect(sessionKeyOf({ sessionId: SESSION, revision: 4 })).not.toBe(sessionKeyOf(status));
+      expect(sessionKeyOf({ sessionId: "other", revision: 3 })).not.toBe(sessionKeyOf(status));
+    });
+  });
+
+  describe("sessionProblem", () => {
+    it("accepts a reply for the same session and revision", () => {
+      expect(sessionProblem({ sessionId: SESSION, revision: 3 }, status)).toBeNull();
+    });
+
+    it("refuses another revision and another session, with the same words", () => {
+      const text = "The event-log analysis session changed while paging.";
+      expect(sessionProblem({ sessionId: SESSION, revision: 4 }, status)).toBe(text);
+      expect(sessionProblem({ sessionId: "00000000-0000-4000-8000-0000000008ff", revision: 3 }, status)).toBe(text);
+    });
+  });
+
+  describe("replyProblem", () => {
+    it("accepts the session, revision and offset that were asked for", () => {
+      expect(replyProblem({ sessionId: SESSION, revision: 3, offset: 10 }, status, 10)).toBeNull();
+    });
+
+    it("refuses another revision before it looks at the offset", () => {
+      expect(replyProblem({ sessionId: SESSION, revision: 2, offset: 99 }, status, 10)).toBe(
+        "The event-log analysis session changed while paging.",
+      );
+    });
+
+    it("refuses another offset on the right session", () => {
+      expect(replyProblem({ sessionId: SESSION, revision: 3, offset: 11 }, status, 10)).toBe(
+        "The event-log analysis returned the wrong page.",
+      );
+    });
+  });
+
+  describe("withRetry", () => {
+    const never = () => false;
+
+    it("returns the first reply with one call and no sleep", async () => {
+      const call = vi.fn().mockResolvedValue("ok");
+      const sleep = vi.fn().mockResolvedValue(undefined);
+      await expect(withRetry(call, never, sleep)).resolves.toBe("ok");
+      expect(call).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
+
+    it("tries again with a doubling backoff and then returns", async () => {
+      const call = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("one"))
+        .mockRejectedValueOnce(new Error("two"))
+        .mockResolvedValue("ok");
+      const sleep = vi.fn().mockResolvedValue(undefined);
+      await expect(withRetry(call, never, sleep)).resolves.toBe("ok");
+      expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([100, 200]);
+    });
+
+    it("throws the last error after the retry limit, having called limit + 1 times", async () => {
+      const call = vi.fn().mockRejectedValue(new Error("down"));
+      const sleep = vi.fn().mockResolvedValue(undefined);
+      await expect(withRetry(call, never, sleep)).rejects.toThrow("down");
+      expect(call).toHaveBeenCalledTimes(EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT + 1);
+    });
+
+    it("throws as cancelled, with no call, when already cancelled", async () => {
+      const call = vi.fn().mockResolvedValue("ok");
+      await expect(withRetry(call, () => true, vi.fn())).rejects.toBeInstanceOf(CorrelationLoadCancelled);
+      expect(call).not.toHaveBeenCalled();
+    });
+
+    it("throws as cancelled, not as the failure, when the failure arrives after the caller moved on", async () => {
+      let cancelled = false;
+      const call = vi.fn().mockImplementation(async () => {
+        cancelled = true;
+        throw new Error("event-log analysis session was not found");
+      });
+      const sleep = vi.fn().mockResolvedValue(undefined);
+      await expect(withRetry(call, () => cancelled, sleep)).rejects.toBeInstanceOf(CorrelationLoadCancelled);
+      expect(call).toHaveBeenCalledTimes(1);
+      // It does not wait to try again for a caller that has gone.
+      expect(sleep).not.toHaveBeenCalled();
+    });
+
+    it("throws as cancelled when the failure of the LAST try arrives after the caller moved on", async () => {
+      let tries = 0;
+      let cancelled = false;
+      const call = vi.fn().mockImplementation(async () => {
+        tries += 1;
+        if (tries > EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT) cancelled = true;
+        throw new Error("event-log analysis session was not found");
+      });
+      await expect(withRetry(call, () => cancelled, vi.fn().mockResolvedValue(undefined))).rejects.toBeInstanceOf(
+        CorrelationLoadCancelled,
+      );
+      expect(call).toHaveBeenCalledTimes(EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT + 1);
+    });
+
+    it("throws as cancelled, and never returns the reply, when cancelled during the call", async () => {
+      let cancelled = false;
+      const call = vi.fn().mockImplementation(async () => {
+        cancelled = true;
+        return "late";
+      });
+      await expect(withRetry(call, () => cancelled, vi.fn())).rejects.toBeInstanceOf(CorrelationLoadCancelled);
+    });
   });
 });

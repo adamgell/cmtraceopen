@@ -10,7 +10,9 @@
  * REAL engine (`EventLogAnalysisSession` in src-tauri/src/event_log/analysis_session.rs) over the
  * fixture's records and writes down exactly what it answers, with the same call sequence the UI
  * makes (event-analysis-session.ts): create, append in chunks of 1,000 records, finalize, every
- * timeline page of 1,000, then diagnose with the coverage gaps.
+ * timeline page of 1,000, the timeline windows the specs ask for (`timelineWindows` in the engine
+ * input: the correlation dock's window and the Details context's, each centered on a named fixture
+ * record), then diagnose with the coverage gaps.
  *
  * Why not the debug IPC bridge (127.0.0.1:1422)
  * ---------------------------------------------
@@ -232,6 +234,12 @@ try {
   if (engine.sessionId !== engineInput(parseResult).sessionId || !engine.diagnosis?.overview) {
     throw new Error("the capture output is not an engine reply set (missing sessionId or diagnosis)");
   }
+  if (
+    !Array.isArray(engine.timelineWindows) ||
+    engine.timelineWindows.length !== engineInput(parseResult).timelineWindows.length
+  ) {
+    throw new Error("the capture output holds no reply for some timeline window that was asked for");
+  }
   const replies = {
     about:
       "Replies captured from the real event-log analysis engine (EventLogAnalysisSession) over the " +
@@ -257,7 +265,8 @@ try {
   console.log(
     `wrote ${path.relative(REPO, ENGINE_REPLIES_PATH)} ` +
       `(outcome ${replies.diagnosis.overview.outcome}, ` +
-      `${replies.diagnosis.overview.findingCount} findings, commit ${engineCommit})`,
+      `${replies.diagnosis.overview.findingCount} findings, ` +
+      `${replies.timelineWindows.length} timeline windows, commit ${engineCommit})`,
   );
 } finally {
   rmSync(tempDir, { recursive: true, force: true });

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { EventLogSourceCoverage, EvtxCoverageGap, EvtxCoverageGapKind } from "./types";
 import {
   assertParseResultShape,
   formatCoverageGap,
@@ -6,6 +7,7 @@ import {
   mergeDiagnosisCoverageGaps,
   mergeStructuredCoverageGaps,
   summarizeCoverageGaps,
+  unreadSourcesFrom,
 } from "./evtx-coverage";
 
 describe("mergeCoverageGaps", () => {
@@ -542,5 +544,83 @@ describe("diagnosis coverage gaps", () => {
         "frontend coverage bound omitted 2 additional gaps; " +
         "backend diagnosis also enforces an input cap",
     });
+  });
+});
+
+describe("unreadSourcesFrom, per gap kind: a source's records were not (all) loaded", () => {
+  const gap = (kind: EvtxCoverageGapKind): EvtxCoverageGap => ({ source: "System", kind, reason: `a ${kind} gap` });
+  const unread = (...gaps: EvtxCoverageGap[]) =>
+    unreadSourcesFrom({ coverageDetails: gaps, manifestCoverage: [], coverageGaps: [], tailCoverageGaps: [] });
+
+  it("is false with no gap at all", () => {
+    expect(unread()).toBe(false);
+  });
+
+  it.each([
+    ["unsupported", true],
+    ["accessDenied", true],
+    ["missing", true],
+    ["invalidPattern", true],
+    ["limitReached", true],
+    ["file", true],
+    ["chunk", true],
+    ["record", true],
+    ["xml", true],
+    ["limit", true],
+    ["cancelled", true],
+    // Nothing is missing from a source that has no events, nor from a record whose provider text
+    // could not be resolved: the records are loaded.
+    ["empty", false],
+    ["provider", false],
+  ] as const)("says %s is %s", (kind, expected) => {
+    expect(unread(gap(kind))).toBe(expected);
+  });
+
+  it("is true when any one gap loses records, whatever else is listed", () => {
+    expect(unread(gap("empty"), gap("provider"), gap("chunk"))).toBe(true);
+    expect(unread(gap("empty"), gap("provider"))).toBe(false);
+  });
+});
+
+describe("unreadSourcesFrom: the store's coverage state, merged as the diagnosis merges it", () => {
+  const none = { coverageDetails: [], manifestCoverage: [], coverageGaps: [], tailCoverageGaps: [] };
+  const manifestGap = (kind: EventLogSourceCoverage["kind"]): EventLogSourceCoverage => ({
+    path: "C:\\Evidence\\System.evtx",
+    kind,
+    reason: `manifest ${kind}`,
+  });
+
+  it("is false when nothing is missing", () => {
+    expect(unreadSourcesFrom(none)).toBe(false);
+  });
+
+  it("reads the structured gaps", () => {
+    expect(
+      unreadSourcesFrom({ ...none, coverageDetails: [{ source: "Security", kind: "accessDenied", reason: "needs elevation" }] }),
+    ).toBe(true);
+    expect(
+      unreadSourcesFrom({ ...none, coverageDetails: [{ source: "Setup", kind: "empty", reason: "no events" }] }),
+    ).toBe(false);
+  });
+
+  it("reads the source manifest's coverage", () => {
+    expect(unreadSourcesFrom({ ...none, manifestCoverage: [manifestGap("accessDenied")] })).toBe(true);
+    expect(unreadSourcesFrom({ ...none, manifestCoverage: [manifestGap("empty")] })).toBe(false);
+  });
+
+  it("reads the legacy string gaps by what they say", () => {
+    expect(unreadSourcesFrom({ ...none, coverageGaps: ["Security: access denied"] })).toBe(true);
+    expect(unreadSourcesFrom({ ...none, coverageGaps: ["System: stopped at 100000 events"] })).toBe(true);
+    expect(unreadSourcesFrom({ ...none, coverageGaps: ["Setup: no events"] })).toBe(false);
+  });
+
+  it("reads the live-tail gaps", () => {
+    expect(unreadSourcesFrom({ ...none, tailCoverageGaps: ["Application: not delivered"] })).toBe(true);
+    expect(unreadSourcesFrom({ ...none, tailCoverageGaps: ["Setup: no events"] })).toBe(false);
+  });
+
+  it("is true when so many gaps were merged that the list was bounded, which is itself a gap", () => {
+    const many = Array.from({ length: 300 }, (_, i) => `Channel${i}: no events`);
+    expect(unreadSourcesFrom({ ...none, coverageGaps: many })).toBe(true);
   });
 });

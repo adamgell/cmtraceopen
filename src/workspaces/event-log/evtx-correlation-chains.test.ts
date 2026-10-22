@@ -3,6 +3,7 @@ import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import {
   CORRELATION_CHAIN_RENDER_LIMIT,
   buildCorrelationChains,
+  derivedTitle,
   type CorrelationChain,
   type CorrelationChainInput,
   type CorrelationChainModel,
@@ -1619,5 +1620,111 @@ describe("linkedPairs, the uncapped reduced pair list the links index counts fro
       .map((edge) => `${edge.left}+${edge.right}:${edge.strength}`)
       .sort();
     expect(pairsOf(model).sort()).toEqual(fromChains);
+  });
+});
+
+describe("the uncapped member index (#842 ruling 3)", () => {
+  const manyPairs = (count: number) =>
+    Array.from({ length: count }, (_, i) => tEdge(`e${i}`, `l${i}`, `r${i}`, "exact"));
+
+  it("finds the row of a member whose row the 100-row render cap dropped", () => {
+    const model = build({ timelineEdges: manyPairs(130) });
+    expect(model.chains).toHaveLength(100);
+    const shown = new Set(model.chains.flatMap((chain) => [...chain.memberIds, ...chain.unresolvedMemberIds]));
+    const past = Array.from({ length: 130 }, (_, i) => `l${i}`).find((id) => !shown.has(id));
+    expect(past).toBeDefined();
+    const rows = model.rowsByMember.get(past as string);
+    expect(rows).toHaveLength(1);
+    expect(rows?.[0]?.strength).toBe("exact");
+    expect(model.chains).not.toContain(rows?.[0]);
+    expect(rows?.[0]?.memberCount).toBe(2);
+  });
+
+  it("indexes every member of every row, shown or not", () => {
+    const model = build({ timelineEdges: manyPairs(130) });
+    expect(model.rowsByMember.size).toBe(260);
+    for (let i = 0; i < 130; i += 1) {
+      expect(model.rowsByMember.get(`l${i}`)).toHaveLength(1);
+      expect(model.rowsByMember.get(`r${i}`)).toHaveLength(1);
+    }
+  });
+
+  it("holds the same row object `chains` holds when the cap keeps it", () => {
+    const model = build({ timelineEdges: manyPairs(10) });
+    for (const chain of model.chains) {
+      for (const id of [...chain.memberIds, ...chain.unresolvedMemberIds]) {
+        expect(model.rowsByMember.get(id)?.[0]).toBe(chain);
+      }
+    }
+  });
+
+  it("finds a member in a counts-only model (every member unresolved) and in a full one alike", () => {
+    const edges = [tEdge("e1", "a", "b", "exact")];
+    const countsOnly = build({ timelineEdges: edges });
+    const full = build({
+      timelineEdges: edges,
+      items: [eventItem("a", 1000), eventItem("b", 2000)],
+    });
+    expect(countsOnly.chains[0]?.memberIds).toEqual([]);
+    expect(countsOnly.rowsByMember.get("a")?.[0]?.id).toBe(full.rowsByMember.get("a")?.[0]?.id);
+    expect(countsOnly.rowsByMember.get("b")?.[0]?.id).toBe(full.rowsByMember.get("b")?.[0]?.id);
+  });
+
+  it("lists every row a member is in, strongest first", () => {
+    const model = build({
+      timelineEdges: [
+        tEdge("e1", "a", "b", "exact"),
+        ...ambiguousGroup("g", ["a", "x", "y"]),
+      ],
+    });
+    const strengths = model.rowsByMember.get("a")?.map((row) => row.strength);
+    expect(strengths).toEqual(["exact", "ambiguous"]);
+    expect(model.rowsByMember.get("b")?.map((row) => row.strength)).toEqual(["exact"]);
+    expect(model.rowsByMember.get("x")?.map((row) => row.strength)).toEqual(["ambiguous"]);
+  });
+
+  it("lists the members an ambiguous relation names only as candidates", () => {
+    const model = build({
+      timelineEdges: [tEdge("e1", "a", "b", "ambiguous", { candidateIds: ["c", "d"] })],
+    });
+    for (const id of ["a", "b", "c", "d"]) {
+      expect(model.rowsByMember.get(id)).toHaveLength(1);
+    }
+  });
+
+  it("has no entry, never an empty list, for an id no row names", () => {
+    const model = build({ timelineEdges: [tEdge("e1", "a", "b", "exact")] });
+    expect(model.rowsByMember.has("zzz")).toBe(false);
+    expect(build({}).rowsByMember.size).toBe(0);
+  });
+
+  it("is the same for any input order", () => {
+    const edges = [
+      tEdge("e1", "z", "a", "exact"),
+      tEdge("e2", "m", "n", "candidate"),
+      tEdge("e3", "k", "b", "exact"),
+    ];
+    const ids = (model: CorrelationChainModel) =>
+      [...model.rowsByMember].map(([id, rows]) => `${id}:${rows.map((row) => row.id).join(",")}`);
+    expect(ids(build({ timelineEdges: edges }))).toEqual(
+      ids(build({ timelineEdges: [...edges].reverse() })),
+    );
+  });
+});
+
+describe("the exported D19 title (#842)", () => {
+  it("is the title the model gives a row with no covering finding", () => {
+    const items = [
+      eventItem("a", 1000, "warning", "slow", 5),
+      eventItem("b", 2000, "error", "boom", 7),
+    ];
+    const model = build({ items, timelineEdges: [tEdge("e1", "a", "b", "exact")] });
+    const byId = new Map(items.map((item) => [timelineOriginId(item.origin), item]));
+    expect(derivedTitle(["a", "b"], byId)).toBe("7 · boom");
+    expect(derivedTitle(["a", "b"], byId)).toBe(model.chains[0]?.title);
+  });
+
+  it("is null when no member has an item", () => {
+    expect(derivedTitle(["a", "b"], new Map())).toBeNull();
   });
 });

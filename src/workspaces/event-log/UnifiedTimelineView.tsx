@@ -15,6 +15,7 @@ import {
   EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT,
   EVENT_LOG_TIMELINE_CACHE_BYTE_LIMIT,
   EVENT_LOG_TIMELINE_PAGE_SIZE,
+  EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT,
 } from "./evtx-timeline-paging";
 import {
   isEventOrigin,
@@ -28,7 +29,12 @@ import {
 } from "./unified-timeline";
 import { timelineStripLayout } from "./evtx-timeline-strip";
 
-const UNPLACED_PREVIEW_LIMIT = 100;
+/**
+ * Evidence rows listed under one correlation edge. A display cap of this view: an edge's evidence is
+ * not an engine preview, so it is not `EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT`, though the numbers
+ * are equal today.
+ */
+const EDGE_EVIDENCE_ROWS_SHOWN = 100;
 
 /**
  * The total a page reports for a preview IT carries, or null when it cannot be trusted: missing,
@@ -540,14 +546,14 @@ export function UnifiedTimelineView({
         : `${unplacedCount.toLocaleString()} timeline ${unplacedCount === 1 ? "item" : "items"} could not be placed: no timestamp`;
   const unplacedPreview = previewTimeline.unplaced.slice(
     0,
-    UNPLACED_PREVIEW_LIMIT,
+    EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT,
   );
   const unplacedOmittedCount =
     unplacedCount === null ? 0 : unplacedCount - unplacedPreview.length;
-  const correlationPreview = correlationEdges.slice(0, UNPLACED_PREVIEW_LIMIT);
+  const correlationPreview = correlationEdges.slice(0, EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT);
   const correlationOmittedCount =
     totalCorrelationEdges === null ? 0 : totalCorrelationEdges - correlationPreview.length;
-  const coverageGapPreview = coverageGaps.slice(0, UNPLACED_PREVIEW_LIMIT);
+  const coverageGapPreview = coverageGaps.slice(0, EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT);
   const coverageGapOmittedCount =
     coverageGapCount === null ? 0 : coverageGapCount - coverageGapPreview.length;
 
@@ -715,16 +721,16 @@ export function UnifiedTimelineView({
                 {edge.candidateIds.length > 0 && (
                   <span>candidate IDs: {edge.candidateIds.join(", ")}</span>
                 )}
-                {edge.evidence.slice(0, UNPLACED_PREVIEW_LIMIT).map((evidence) => (
+                {edge.evidence.slice(0, EDGE_EVIDENCE_ROWS_SHOWN).map((evidence) => (
                   <span key={`${edge.id}-${evidence.originId}-${evidence.field}`}>
                     {evidence.field}: {evidence.value} ({evidence.originId})
                   </span>
                 ))}
-                {edge.evidence.length > UNPLACED_PREVIEW_LIMIT && (
+                {edge.evidence.length > EDGE_EVIDENCE_ROWS_SHOWN && (
                   <span>
-                    Showing the first {UNPLACED_PREVIEW_LIMIT.toLocaleString()} of{" "}
+                    Showing the first {EDGE_EVIDENCE_ROWS_SHOWN.toLocaleString()} of{" "}
                     {edge.evidence.length.toLocaleString()} evidence items;{" "}
-                    {(edge.evidence.length - UNPLACED_PREVIEW_LIMIT).toLocaleString()} omitted.
+                    {(edge.evidence.length - EDGE_EVIDENCE_ROWS_SHOWN).toLocaleString()} omitted.
                   </span>
                 )}
                 {edge.coverage.gap && (

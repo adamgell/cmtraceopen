@@ -25,16 +25,21 @@
  *   none is guessed. Identical duplicates, such as the same archive loaded twice, are therefore
  *   reported as ambiguous.
  * - An origin with no usable identity matches nothing.
- * - A text-log origin is not a grid record and is never counted, as finding evidence is.
+ * - A text-log ORIGIN is not resolved by the event join (`resolveOriginRecords` answers "notEvent")
+ *   and so is not counted by it, as finding evidence is not. An archive text row IS a loaded grid
+ *   record (`originKind` "log") and the engine gives it a log origin; `logOriginNamesRecord` is the
+ *   strict matcher for that pair.
  * - Nothing here holds a record id: `EvtxRecord.id` is renumbered on every merge, so a result is
  *   held by record OBJECT and resolved at use time.
  */
 import { boundUtf8WithDigest } from "../../lib/bounded-utf8";
 import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session";
+import { bundleOfSource } from "./evtx-collector-bundle";
 import type { CorrelationChain } from "./evtx-correlation-chains";
 import { countScopeReferences, type EvtxRecordScopeCounts } from "./evtx-filter";
 import {
   engineRecordIdentity,
+  engineTimelineRecordIdentity,
   recordsForOriginIdentity,
   timelineTextMatches,
   type EvidenceIndex,
@@ -151,8 +156,65 @@ function fieldsAgree(origin: EventOrigin, record: EvtxRecord): boolean {
   return provenanceAgrees(origin.machine, record.computer);
 }
 
+/** The largest line number a log origin carries (`u32::MAX`): a larger record id is clamped to it. */
+const LOG_LINE_MAX = 4_294_967_295;
+
+/**
+ * Whether a log origin's bundle is the one the engine derived from the record's source label
+ * (`bundle_from_source`, then `compact_timeline_origin`). The engine derives it from the label it
+ * RECEIVED: the whole label for a record it received whole, and the transport's bounded label for
+ * one the transport projected (over 8 MiB), whose file the engine then holds in that bounded form.
+ * Which of the two applies is read off the origin's own file, so the bundle is judged against one
+ * label and not against whichever agrees. A label with no bundle is the empty value, which agrees
+ * only with an origin that has none; a bundle id the engine compacted is compared as it left it.
+ */
+function bundleAgrees(origin: Extract<TimelineOrigin, { kind: "log" }>, sourceLabel: string): boolean {
+  const bounded = boundUtf8WithDigest(sourceLabel, EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT);
+  const received = bounded !== sourceLabel && origin.file === bounded ? bounded : sourceLabel;
+  return provenanceAgrees(origin.bundle, bundleOfSource(received) ?? "");
+}
+
+/**
+ * Whether a log origin is the one the engine built from an archive text row (`originKind` "log"):
+ * `origin_of` in src-tauri/src/event_log/timeline.rs sets file and source to the record's source
+ * label, the line to its EventRecordID clamped to a u32, the record id to the EventRecordID, the
+ * machine and component to the normalized computer and provider, and the bundle from the source;
+ * `compact_timeline_origin` then compacts every text over 256 bytes.
+ * EVERY one of them must agree, each through the matcher that reproduces what the engine did:
+ * `timelineTextMatches` for file and source, `provenanceAgrees` (normalize first, then compare) for
+ * machine, component and bundle. A record id that is not a safe non-negative integer matches nothing.
+ */
+export function logOriginNamesRecord(origin: TimelineOrigin, record: EvtxRecord): boolean {
+  if (origin.kind !== "log" || record.originKind !== "log") return false;
+  const id = record.eventRecordId;
+  if (!Number.isSafeInteger(id) || id < 0) return false;
+  if (origin.recordId !== id) return false;
+  if (origin.line !== Math.min(id, LOG_LINE_MAX)) return false;
+  if (!timelineTextMatches(origin.file, record.sourceLabel)) return false;
+  if (!timelineTextMatches(origin.source, record.sourceLabel)) return false;
+  if (!provenanceAgrees(origin.machine, record.computer)) return false;
+  if (!provenanceAgrees(origin.component, record.provider)) return false;
+  return bundleAgrees(origin, record.sourceLabel);
+}
+
+/**
+ * Whether the event join can never name `record`, whatever the timeline holds: an EVENT record whose
+ * timeline origin carries no usable record identity. The engine still places such a record and gives
+ * it an origin, but the join matches events by the identity the origin carries and an origin with
+ * none matches nothing (`resolveOriginRecords`: "noUsableIdentity"). The origin's identity is what
+ * `engineTimelineRecordIdentity` predicts, which is the join's own mirror of the engine's refusal of
+ * a malformed identity, so there is one definition. A log-kind record is matched by
+ * `logOriginNamesRecord`, not by identity.
+ */
+export function isUnmatchableEvent(record: EvtxRecord): boolean {
+  return record.originKind !== "log" && engineTimelineRecordIdentity(record) === null;
+}
+
 export type OriginResolution =
-  /** A text-log origin. It is not a grid record. */
+  /**
+   * A log origin: the EVENT join does not resolve it. (An archive text row is a loaded grid record
+   * with a log origin; `logOriginNamesRecord` is the matcher for that pair.)
+   */
   | { kind: "notEvent" }
   /** The record carried no identity a record can be matched on. */
   | { kind: "noUsableIdentity" }

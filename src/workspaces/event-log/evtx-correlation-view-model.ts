@@ -18,14 +18,23 @@
  *   `[]`, there is no producer, and those markers never join a chain or a connector.
  */
 import { getBaseName, getDirectoryName } from "../../lib/file-paths";
-import type {
-  CorrelationChain,
-  CorrelationChainEdge,
-  CorrelationChainStrength,
-  CorrelationEvidenceRow,
+import {
+  compareStrings,
+  type CorrelationChain,
+  type CorrelationChainEdge,
+  type CorrelationChainModel,
+  type CorrelationChainStrength,
+  type CorrelationEvidenceRow,
 } from "./evtx-correlation-chains";
 import { gapsClearCompleteness, type CorrelationGaps } from "./evtx-correlation-gaps";
-import { formatClock, TIME_RANGE_SEPARATOR, type EvtxTimeZoneMode } from "./evtx-time";
+import {
+  eventDateKey,
+  formatClock,
+  formatDayClock,
+  TIME_RANGE_SEPARATOR,
+  timeRangeNeedsYear,
+  type EvtxTimeZoneMode,
+} from "./evtx-time";
 import type { EvtxLevel } from "./types";
 import {
   originContext,
@@ -49,10 +58,6 @@ export const CORRELATION_SEQUENCE_INITIAL = 200;
 export const CORRELATION_AXIS_TICKS = 5;
 /** Spec 8.11: the key value is truncated in the middle to 12 characters. */
 export const KEY_VALUE_DISPLAY_CHARS = 12;
-
-function compareStrings(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
 
 export function levelOfSeverity(severity: TimelineSeverity): EvtxLevel {
   switch (severity) {
@@ -119,6 +124,42 @@ export function axisTicks(window: TimeWindow, count = CORRELATION_AXIS_TICKS): n
   return Array.from(
     { length: count },
     (_, i) => window.startMs + ((window.endMs - window.startMs) * i) / (count - 1),
+  );
+}
+
+interface TickLabelOptions {
+  /**
+   * Seconds on every label. By default they are shown when the ticks are less than a minute apart,
+   * so two neighbours never read as the same minute.
+   */
+  withSeconds?: boolean;
+  /** "Now" for the year rule, which compares with the current year. The real clock unless a test gives one. */
+  nowMs?: number;
+}
+
+/**
+ * The labels of an axis, one per tick: the clock alone (`10:20:05`) on a span inside one calendar
+ * day of the current year, and the day with it (`Oct 6 23:59:57`) once the ticks cross midnight, so
+ * a bare clock never names two different days alike. A span outside the current year, or across a
+ * year, names the year too (`Oct 6 2026 10:20:05`). This is the histogram's rule (`buildAxisTicks`
+ * in evtx-histogram.ts) with the same pieces: `eventDateKey`, `timeRangeNeedsYear` and
+ * `formatDayClock`, in the zone the view shows times in. The lane plot and the overview strip share
+ * it, so one window cannot be labelled two ways.
+ */
+export function tickLabels(
+  ticks: readonly number[],
+  mode: EvtxTimeZoneMode,
+  options: TickLabelOptions = {},
+): string[] {
+  const first = ticks[0];
+  const last = ticks[ticks.length - 1];
+  if (first === undefined || last === undefined) return [];
+  const step = ticks.length > 1 ? (last - first) / (ticks.length - 1) : Number.POSITIVE_INFINITY;
+  const withSeconds = options.withSeconds ?? step < 60_000;
+  const withYear = timeRangeNeedsYear(first, last, mode, options.nowMs ?? Date.now());
+  const withDay = eventDateKey(first, mode) !== eventDateKey(last, mode) || withYear;
+  return ticks.map((tick) =>
+    withDay ? formatDayClock(tick, mode, withSeconds, withYear) : formatClock(tick, mode, withSeconds),
   );
 }
 
@@ -313,12 +354,31 @@ export const NOT_LINKED_LABEL = "Not linked";
  * state, not evidence of no link.
  */
 export const NO_LOADED_LINK_LABEL = "No loaded link";
+/**
+ * What a context marker says of an entry that HAS a loaded exact or candidate partner, so it is in
+ * another chain. It is a fact the edges gave, true whatever else is incomplete, and it is not
+ * "Not linked": the entry is linked, to something this chain does not hold.
+ */
+export const IN_ANOTHER_CHAIN_LABEL = "In another chain";
+/**
+ * The one legend word for the dotted marker when any marker it stands for is in another chain: what
+ * every such marker has in common is that it is not part of this chain, and nothing more.
+ */
+export const NOT_IN_THIS_CHAIN_LABEL = "Not in this chain";
+/**
+ * What a context marker says of an entry that has a loaded partner when the plot's own selection is
+ * NOT IDENTIFIED (`selectionIdentified` false): the entry is linked to something, and whether that
+ * something is the selected event cannot be told, so it is neither "in another chain" nor "not
+ * linked". It is also the legend's word then: with no chain of the selected event drawn, "this
+ * chain" names nothing.
+ */
+export const LINK_TO_EVENT_UNKNOWN_LABEL = "Link to this event not known";
 
 export interface PlotMarker {
   id: string;
   laneKey: string;
   kind: "event" | "log";
-  /** `member`: a placed entry of the chain. `nearby`: a "Not linked" context marker (the seam). */
+  /** `member`: a placed entry of the chain. `nearby`: a dotted context marker, drawn for an entry that is not in the chain. */
   role: "member" | "nearby";
   timestampMs: number;
   severity: TimelineSeverity;
@@ -331,8 +391,8 @@ export interface PlotMarker {
   /** Position among the chain's placed members in time order; null for a nearby marker. */
   sequenceIndex: number | null;
   /**
-   * For a nearby marker, "Not linked" or "No loaded link" (see `ChainPlotInput`); null for a
-   * member, which is linked or is a row that is not.
+   * For a nearby marker, "In another chain", "Not linked" or "No loaded link" (see
+   * `ChainPlotInput`); null for a member, which is linked or is a row that is not.
    */
   linkLabel: string | null;
 }
@@ -382,8 +442,17 @@ export interface ChainPlot {
   notLinkedLabel: string;
 }
 
+/**
+ * What the plot reads of a row. A row from the model is one; so is the dock's view of a row that
+ * holds only the members inside its window, or of an entry that is in no row at all.
+ */
+export type PlotChain = Pick<
+  CorrelationChain,
+  "memberIds" | "unresolvedMemberIds" | "edges" | "evidence" | "startMs" | "endMs"
+>;
+
 export interface ChainPlotInput {
-  chain: CorrelationChain;
+  chain: PlotChain;
   itemsById: ReadonlyMap<string, TimelineItem>;
   /**
    * Every timeline edge of the session was loaded (`CorrelationChainModel.edgeInputComplete`).
@@ -404,8 +473,25 @@ export interface ChainPlotInput {
   gaps: CorrelationGaps;
   /** Overrides the default window (the zoom band, a later phase). */
   window?: TimeWindow | null;
-  /** Context entries to draw as "Not linked" markers. Production passes none (decision A). */
+  /**
+   * Context entries to draw as dotted markers: entries that are not in the chain. The Correlation
+   * view passes none; the dock passes the other items of its window (a time-proximity read, never a
+   * relation: they get no connector, no chain and no count).
+   */
   nearby?: readonly TimelineItem[];
+  /**
+   * Distinct exact and candidate partners per origin id (`linkPartnerCounts`), so a context entry
+   * that is linked elsewhere is called "In another chain" and never "Not linked". Optional: without
+   * it no entry is known to be linked and the labels are the other two.
+   */
+  linkPartners?: ReadonlyMap<string, number>;
+  /**
+   * The plot's selected entry was identified. False when it could not be (several entries could be
+   * it, or the read stopped before it): an entry with a loaded partner may then be linked TO IT, so
+   * it is called `LINK_TO_EVENT_UNKNOWN_LABEL`, never "In another chain". "Not linked" and "No
+   * loaded link" are facts about the entry itself and are unchanged. Defaults to true.
+   */
+  selectionIdentified?: boolean;
   markerCap?: number;
   connectorCap?: number;
 }
@@ -430,8 +516,13 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     !input.narrowed &&
     !gapsClearCompleteness(input.gaps) &&
     !memberHasGap;
-  const labelFor = (originId: string) =>
-    chainClear && !input.gaps.originIds.has(originId) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
+  const labelFor = (originId: string) => {
+    // A loaded partner is a fact, whatever else is incomplete: say it first.
+    if ((input.linkPartners?.get(originId) ?? 0) > 0) {
+      return input.selectionIdentified === false ? LINK_TO_EVENT_UNKNOWN_LABEL : IN_ANOTHER_CHAIN_LABEL;
+    }
+    return chainClear && !input.gaps.originIds.has(originId) ? NOT_LINKED_LABEL : NO_LOADED_LINK_LABEL;
+  };
   const markerCap = input.markerCap ?? CORRELATION_MARKER_CAP;
   const connectorCap = input.connectorCap ?? CORRELATION_CONNECTOR_CAP;
   const placed = chain.memberIds.flatMap((id) => {
@@ -558,11 +649,15 @@ export function buildChainPlot(input: ChainPlotInput): ChainPlot {
     membersWithoutItem,
     showsNotLinkedLegend: nearby.length > 0,
     // One legend entry for the dotted marker: it says "Not linked" only if every marker it stands
-    // for may be called that.
-    notLinkedLabel:
-      chainClear && nearby.every((marker) => marker.linkLabel === NOT_LINKED_LABEL)
-        ? NOT_LINKED_LABEL
-        : NO_LOADED_LINK_LABEL,
+    // for may be called that, and it drops to "Not in this chain" when any of them is linked
+    // elsewhere, which is all that they then have in common.
+    notLinkedLabel: nearby.some((marker) => marker.linkLabel === LINK_TO_EVENT_UNKNOWN_LABEL)
+      ? LINK_TO_EVENT_UNKNOWN_LABEL
+      : nearby.some((marker) => marker.linkLabel === IN_ANOTHER_CHAIN_LABEL)
+        ? NOT_IN_THIS_CHAIN_LABEL
+        : chainClear && nearby.every((marker) => marker.linkLabel === NOT_LINKED_LABEL)
+          ? NOT_LINKED_LABEL
+          : NO_LOADED_LINK_LABEL,
   };
 }
 
@@ -820,6 +915,37 @@ export function reconcileSelection(
     return { selectedId, lost: false };
   }
   return { selectedId: chains[0]?.id ?? null, lost: selectedId !== null };
+}
+
+export interface ListedRows {
+  /** The capped rows, then the selected row when the cap dropped it. */
+  rows: readonly CorrelationChain[];
+  /** The id of the selected row when it is listed past the cap, else null. */
+  pastCapId: string | null;
+}
+
+/**
+ * The rows the list shows: the model's capped `chains`, plus the selected row when the render cap
+ * dropped it. The dock and the rail open a row by id from a record's own chain (found through
+ * `rowsByMember`, which the cap does not trim), and that row can be one of thousands. Without this
+ * the selection would read as lost and another row would be shown in its place.
+ *
+ * The extra row is listed AFTER the capped ones, so the order of the capped rows never moves and
+ * the cap notice stays true. An id that no row has is not listed, and `reconcileSelection` then
+ * reports the loss.
+ */
+export function listedRows(
+  model: Pick<CorrelationChainModel, "chains" | "rowsByMember">,
+  selectedId: string | null,
+): ListedRows {
+  if (selectedId === null || model.chains.some((row) => row.id === selectedId)) {
+    return { rows: model.chains, pastCapId: null };
+  }
+  for (const rows of model.rowsByMember.values()) {
+    const row = rows.find((candidate) => candidate.id === selectedId);
+    if (row !== undefined) return { rows: [...model.chains, row], pastCapId: row.id };
+  }
+  return { rows: model.chains, pastCapId: null };
 }
 
 /** Distinct partners of each placed member by link strength, for a marker's accessible name. */

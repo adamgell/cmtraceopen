@@ -26,13 +26,25 @@ vi.mock("./evtx-insights-data", async (importOriginal) => {
   };
 });
 
+const plotBuilds = vi.hoisted(() => vi.fn());
+vi.mock("./evtx-correlation-view-model", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./evtx-correlation-view-model")>();
+  return {
+    ...actual,
+    buildChainPlot: (...args: Parameters<typeof actual.buildChainPlot>) => {
+      plotBuilds(...args);
+      return actual.buildChainPlot(...args);
+    },
+  };
+});
+
 import { contrastRatio } from "../../lib/color-contrast";
 import { getAllThemes } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui-store";
 import EvtxCorrelationView, { CORRELATION_ANNOUNCE_MS, scopeFailureText } from "./EvtxCorrelationView";
 import viewSource from "./EvtxCorrelationView.tsx?raw";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
-import { useEvtxCorrelationStore } from "./evtx-correlation-store";
+import { openCorrelationView, openUnplacedList, useEvtxCorrelationStore } from "./evtx-correlation-store";
 import { evtxViewTabId, useEvtxLayoutStore } from "./evtx-layout-store";
 import { pickRailTextColors } from "./evtx-rail-text";
 import { useEvtxStore } from "./evtx-store";
@@ -55,8 +67,9 @@ import {
   synthetic,
   type DataOptions,
 } from "./evtx-correlation-test-fixtures";
+import type { TimeWindow } from "./evtx-correlation-view-model";
 import type { EvtxRecord } from "./types";
-import type { TimelineCorrelationEdge, TimelineItem } from "./unified-timeline";
+import { timelineOriginId, type TimelineCorrelationEdge, type TimelineItem, type UnplacedItem } from "./unified-timeline";
 
 const NO_UNPROVEN_CLAIM = /not placed|no timeline position|without a timeline position|no timestamp/i;
 
@@ -104,10 +117,11 @@ const alertText = () => screen.getByTestId("correlation-action-alert");
 beforeEach(() => {
   localStorage.clear();
   useUiStore.setState({ themeId: "light" });
-  useEvtxCorrelationStore.setState({ selectedChainId: null });
+  useEvtxCorrelationStore.setState({ selectedChainId: null, unplacedOpen: false });
   useEvtxLayoutStore.setState({ activeView: "correlation" });
   seedStore();
   vi.mocked(writeText).mockReset();
+  plotBuilds.mockClear();
 });
 afterEach(() => {
   cleanup();
@@ -250,6 +264,125 @@ describe("the chain list (spec 8.11)", () => {
     const notices = screen.getByTestId("correlation-notices").textContent ?? "";
     expect(notices).toContain("Showing the first 100 of 120; 20 omitted.");
     expect(notices).not.toMatch(/paged and bounded/);
+  });
+
+  describe("a selected row the cap dropped (#842, ruling 3)", () => {
+    function manyData(extra: Partial<DataOptions> = {}, without: ReadonlySet<string> = new Set()) {
+      const edges: TimelineCorrelationEdge[] = [];
+      const items: TimelineItem[] = [];
+      for (let i = 0; i < 120; i += 1) {
+        const pair = [eventItem(1 + i * 2, T0 + i * 1_000), eventItem(2 + i * 2, T0 + i * 1_000 + 500)];
+        if (pair.some((item) => without.has(timelineOriginId(item.origin)))) continue;
+        edges.push(synthetic(`e${i}`, rid(1 + i * 2), rid(2 + i * 2)));
+        items.push(...pair);
+      }
+      const data = makeData({ items, edges, ...extra });
+      const shown = new Set((data.model?.chains ?? []).map((row) => row.id));
+      const pastCap = [...(data.model?.rowsByMember.values() ?? [])]
+        .map((list) => list[0]!)
+        .find((row) => !shown.has(row.id));
+      return { data, pastCap: pastCap as NonNullable<typeof pastCap> };
+    }
+    const chainRows = () => Array.from(document.querySelectorAll<HTMLElement>("[data-chain-id]"));
+    const notPlacedOption = () => document.querySelector<HTMLElement>("[data-unplaced-option]")!;
+    const notes = () => screen.getByTestId("correlation-notices").textContent ?? "";
+
+    it("lists it after the 100, selected, and says why it is there", () => {
+      const { data, pastCap } = manyData();
+      useEvtxCorrelationStore.setState({ selectedChainId: pastCap.id });
+      show(data);
+      expect(rows()).toHaveLength(101);
+      const last = rows()[100]!;
+      expect(last).toHaveAttribute("data-chain-id", pastCap.id);
+      expect(last).toHaveAttribute("aria-selected", "true");
+      expect(rows().filter((row) => row.getAttribute("aria-selected") === "true")).toHaveLength(1);
+      expect(notes()).toContain("The selected chain is past the first 100 rows, so it is listed after them.");
+      expect(notes()).toContain("Showing the first 100 of 120; 20 omitted.");
+      // Not read as lost: no loss notice, and the store still holds the id it was given.
+      expect(notes()).not.toContain("no longer present");
+      expect(useEvtxCorrelationStore.getState().selectedChainId).toBe(pastCap.id);
+      expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(pastCap.title ?? "");
+    });
+
+    it("leaves the first 100 rows where they were", () => {
+      const { data, pastCap } = manyData();
+      show(data);
+      const before = rowTitles();
+      cleanup();
+      useEvtxCorrelationStore.setState({ selectedChainId: pastCap.id });
+      show(data);
+      expect(rowTitles().slice(0, 100)).toEqual(before.slice(0, 100));
+    });
+
+    it("drops the extra row again when the selection moves back among the 100", () => {
+      const { data, pastCap } = manyData();
+      useEvtxCorrelationStore.setState({ selectedChainId: pastCap.id });
+      show(data);
+      fireEvent.keyDown(screen.getByRole("listbox"), { key: "ArrowUp" });
+      expect(rows()).toHaveLength(100);
+      expect(rows()[99]).toHaveAttribute("aria-selected", "true");
+      expect(notes()).not.toContain("past the first");
+    });
+
+    it("says nothing about it when the selection is among the 100, or an id no row has is selected", () => {
+      const { data } = manyData();
+      useEvtxCorrelationStore.setState({ selectedChainId: data.model!.chains[5]!.id });
+      show(data);
+      expect(rows()).toHaveLength(100);
+      expect(notes()).not.toContain("past the first");
+      cleanup();
+      useEvtxCorrelationStore.setState({ selectedChainId: "chain-that-never-was" });
+      show(data);
+      expect(rows()).toHaveLength(100);
+      expect(notes()).not.toContain("past the first");
+    });
+
+    it("puts the Not placed option one past the listed rows, with an id of its own, and walks to it", () => {
+      const { data, pastCap } = manyData({ unplacedList: { items: unplacedItems(3), total: 3 } });
+      useEvtxCorrelationStore.setState({ selectedChainId: pastCap.id });
+      show(data);
+      const listbox = screen.getByRole("listbox");
+      expect(chainRows()).toHaveLength(101);
+      expect(rows()).toHaveLength(102);
+      const ids = rows().map((row) => row.id);
+      // The option after row 100 (the dropped one) is not row 100's id again.
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(rows()[101]).toBe(notPlacedOption());
+      expect(listbox.getAttribute("aria-activedescendant")).toBe(rows()[100]!.id);
+      fireEvent.keyDown(listbox, { key: "End" });
+      expect(notPlacedOption()).toHaveAttribute("aria-selected", "true");
+      expect(listbox.getAttribute("aria-activedescendant")).toBe(notPlacedOption().id);
+      expect(document.getElementById(listbox.getAttribute("aria-activedescendant")!)).toBe(notPlacedOption());
+      // Up returns to the listed row, which the cap had dropped, and closes the pane.
+      fireEvent.keyDown(listbox, { key: "ArrowUp" });
+      expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(false);
+      expect(useEvtxCorrelationStore.getState().selectedChainId).toBe(pastCap.id);
+      expect(chainRows()[100]).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("draws the dropped row in the overview strip, selected, with the others", () => {
+      const { data, pastCap } = manyData();
+      useEvtxCorrelationStore.setState({ selectedChainId: pastCap.id });
+      show(data);
+      expect(document.querySelectorAll("[data-bar]")).toHaveLength(101);
+      expect(document.querySelectorAll('[data-bar][data-selected="true"]')).toHaveLength(1);
+    });
+
+    it("stops saying a chain is lost once an outside selection brings it back as a dropped row", () => {
+      const full = manyData();
+      const missing = new Set([...full.pastCap.memberIds, ...full.pastCap.unresolvedMemberIds]);
+      const without = manyData({}, missing);
+      expect(without.data.model?.rowsByMember.has([...missing][0]!)).toBe(false);
+      useEvtxCorrelationStore.setState({ selectedChainId: full.pastCap.id });
+      const view = show(without.data);
+      expect(notes()).toContain("The chain that was selected is no longer present.");
+      // The chain is back in the data, past the cap. The operator has not selected it: still said.
+      view.update(full.data);
+      expect(notes()).toContain("The chain that was selected is no longer present.");
+      act(() => useEvtxCorrelationStore.getState().selectChain(full.pastCap.id));
+      expect(chainRows()[100]).toHaveAttribute("aria-selected", "true");
+      expect(notes()).not.toContain("no longer present");
+    });
   });
 
   it("keeps the cap line and the paged-and-bounded line apart when both apply", () => {
@@ -747,6 +880,83 @@ describe("the evidence index (P8)", () => {
   });
 });
 
+describe("selecting a log entry's record from the plot (F3, an archive text row is a grid record)", () => {
+  const FILE = "C:\\Logs\\AppEnforce.log";
+  const archiveRow = (line: number, overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
+    ...recordFor(7),
+    id: 900 + line,
+    eventRecordId: line,
+    eventRecordIdText: String(line),
+    originKind: "log",
+    eventId: 0,
+    sourceLabel: FILE,
+    channel: FILE,
+    provider: "CcmExec",
+    computer: "",
+    ...overrides,
+  });
+  /** A chain of the event (1) and the log entry (line 4) of `file`, linked by an exact edge. */
+  function chainWithLog(file = FILE): EvtxCorrelationData {
+    const log: TimelineItem = {
+      timestampMs: T0 + 3_000,
+      severity: "info",
+      message: "log line 4",
+      origin: { kind: "log", file, component: "CcmExec", line: 4, source: file, machine: null, bundle: null, recordId: 4 },
+    };
+    return makeData({
+      items: [eventItem(1, T0, "error", "first failed"), log],
+      edges: [synthetic("l", rid(1), timelineOriginId(log.origin))],
+    });
+  }
+  const logMarker = () => document.querySelector<HTMLElement>('button[data-kind="log"]')!;
+
+  it("selects the archive row when exactly one loaded row matches, and opens Details", () => {
+    seedStore([recordFor(1), archiveRow(3), archiveRow(4)]);
+    useEvtxLayoutStore.setState({ railTab: "insights" });
+    show(chainWithLog());
+    fireEvent.click(logMarker());
+    expect(useEvtxStore.getState().selectedRecordId).toBe(archiveRow(4).id);
+    expect(useEvtxLayoutStore.getState().railTab).toBe("details");
+  });
+
+  it("selects nothing and says several rows match when two identical archive rows do", () => {
+    seedStore([recordFor(1), archiveRow(4), archiveRow(4, { id: 999 })]);
+    show(chainWithLog());
+    fireEvent.click(logMarker());
+    expect(useEvtxStore.getState().selectedRecordId).toBeNull();
+    expect(status()).toHaveTextContent("More than one loaded log record matches this entry, so none is selected.");
+  });
+
+  it("selects nothing and says no loaded record matches when the file's rows are loaded but not this line's", () => {
+    seedStore([recordFor(1), archiveRow(9)]);
+    show(chainWithLog());
+    fireEvent.click(logMarker());
+    expect(useEvtxStore.getState().selectedRecordId).toBeNull();
+    expect(status()).toHaveTextContent("No loaded log record matches this entry, so no record is selected.");
+  });
+
+  it("says a line of a Log Viewer file has no record in the grid, and does not call it something it is not", () => {
+    seedStore([recordFor(1), archiveRow(4)]);
+    show(chainWithLog("C:\\Logs\\FromTheLogViewer.log"));
+    fireEvent.click(logMarker());
+    expect(useEvtxStore.getState().selectedRecordId).toBeNull();
+    expect(status()).toHaveTextContent("This is a line of a log file with no record in the grid, so no record is selected.");
+    expect(status().textContent).not.toMatch(/not an event record/);
+  });
+
+  it("shares the dock's resolver rather than keeping a matcher of its own", () => {
+    expect(viewSource).toMatch(/resolveMarkerClick\(item\.origin, useEvtxStore\.getState\(\)\.records\)/);
+    expect(viewSource).not.toMatch(/logOriginNamesRecord/);
+  });
+
+  it("leaves the event branch as it was: an event entry still names its record through the origin join", () => {
+    seedStore([recordFor(1), archiveRow(4)]);
+    show(chainWithLog());
+    fireEvent.click(document.querySelector(`[data-marker="${rid(1)}"]`)!);
+    expect(useEvtxStore.getState().selectedRecordId).toBe(1);
+  });
+});
+
 describe("selecting an entry's record from the plot", () => {
   it("selects the one loaded record the marker names, and opens Details", () => {
     seedStore([recordFor(1), recordFor(2)]);
@@ -1045,3 +1255,873 @@ describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
     });
   },
 );
+
+// ---- the overview strip and the Not placed pane (Phase 10b, #840) --------------------------------
+
+/** Log lines with no timestamp, as the engine lists them. */
+function unplacedLog(n: number): UnplacedItem {
+  return {
+    reason: "missingTimestamp",
+    origin: {
+      kind: "log",
+      file: "C:\\Logs\\IntuneManagementExtension.log",
+      component: null,
+      line: n,
+      source: "writer.cpp",
+      machine: null,
+      bundle: null,
+      recordId: n,
+    },
+  };
+}
+const unplacedItems = (count: number) => Array.from({ length: count }, (_, i) => unplacedLog(i + 1));
+const slider = () => screen.getByRole("slider", { name: "Zoom window of the lane plot" });
+const axisLabels = () =>
+  Array.from((document.querySelector("[data-axis]") as HTMLElement).children).map((node) => node.textContent);
+const pinned = () => document.querySelectorAll("[data-pinned]").length;
+
+describe("the overview strip in the view (spec 8.11)", () => {
+  it("sits between the header (with its legend) and the lane plot, above the plot", () => {
+    show(mixedData());
+    const legend = screen.getByTestId("correlation-legend");
+    const overview = screen.getByTestId("correlation-overview");
+    const plot = screen.getByTestId("lane-plot");
+    expect(legend.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(overview.compareDocumentPosition(plot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The marker-shape legend is in the detail header, as spec 8.11 places it.
+    expect(legend).toHaveTextContent("Event");
+    expect(legend).toHaveTextContent("Log line");
+  });
+
+  it("is not drawn before the entries are read, where there is no plot either", () => {
+    show(pairData({ hasItems: false, stage: "edgesOnly" }));
+    expect(screen.queryByTestId("correlation-overview")).toBeNull();
+    expect(screen.queryByRole("slider")).toBeNull();
+  });
+
+  it("draws a bar for every chain with a position, and the selected chain's solid", () => {
+    show(mixedData());
+    const bars = document.querySelectorAll("[data-bar]");
+    expect(bars).toHaveLength(rows().length);
+    expect(document.querySelectorAll('[data-bar][data-selected="true"]')).toHaveLength(1);
+  });
+
+  it("starts at the chain's default window, which the plot also uses", () => {
+    show(mixedData());
+    const before = axisLabels();
+    expect(slider().getAttribute("aria-valuetext")).toMatch(/ to .*, 10 s wide$/);
+    expect(before).toHaveLength(5);
+    expect(screen.getByTestId("lane-plot")).toBeInTheDocument();
+  });
+
+  it("sets the lane window: moving the band pins the entries it leaves outside, and Home brings them back", () => {
+    show(mixedData());
+    const initial = axisLabels();
+    expect(pinned()).toBe(0);
+    for (let press = 0; press < 5; press += 1) fireEvent.keyDown(slider(), { key: "ArrowRight" });
+    expect(axisLabels()).not.toEqual(initial);
+    expect(pinned()).toBeGreaterThan(0);
+    fireEvent.keyDown(slider(), { key: "Home" });
+    expect(axisLabels()).toEqual(initial);
+    expect(pinned()).toBe(0);
+  });
+
+  it("widens the lane window with Shift+Right, which the plot's ticks show, and cannot narrow below 10 s", () => {
+    show(mixedData());
+    const initial = axisLabels();
+    fireEvent.keyDown(slider(), { key: "ArrowLeft", shiftKey: true });
+    expect(slider().getAttribute("aria-valuetext")).toMatch(/, 10 s wide$/);
+    expect(axisLabels()).toEqual(initial);
+    fireEvent.keyDown(slider(), { key: "ArrowRight", shiftKey: true });
+    // The first chain's window starts at the strip's start, so only its end can grow: 11 s.
+    expect(slider().getAttribute("aria-valuetext")).toMatch(/, 11 s wide$/);
+    expect(axisLabels()).not.toEqual(initial);
+  });
+
+  it("never turns the default window into null, which would draw nothing", () => {
+    show(mixedData());
+    expect(screen.getByTestId("lane-plot")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/nothing to plot/);
+    fireEvent.keyDown(slider(), { key: "ArrowRight" });
+    fireEvent.keyDown(slider(), { key: "Home" });
+    expect(screen.getByTestId("lane-plot")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/nothing to plot/);
+  });
+
+  describe("a window equal to the default is the default, so the plot goes on following it", () => {
+    const lastBuiltWindow = () => {
+      const calls = plotBuilds.mock.calls;
+      return (calls[calls.length - 1]![0] as { window?: TimeWindow | null }).window;
+    };
+    const LEFT = 100;
+    const WIDTH = 720;
+    /** The band's own press target, with the strip's geometry stubbed (jsdom has no layout). */
+    const bandAndBox = () => {
+      screen.getByTestId("overview-box").getBoundingClientRect = () =>
+        ({ left: LEFT, top: 0, right: LEFT + WIDTH, bottom: 48, width: WIDTH, height: 48, x: LEFT, y: 0, toJSON: () => ({}) }) as DOMRect;
+      const wash = document.querySelector<HTMLElement>('[data-evtx-layer="wash"]')!;
+      return { box: slider(), wash, startX: LEFT + (parseFloat(wash.style.left) / 100) * WIDTH + 2 };
+    };
+
+    it("hands the plot undefined before anything is done, and after a drag cancelled with Escape", () => {
+      show(mixedData());
+      expect(lastBuiltWindow()).toBeUndefined();
+      const { box, wash, startX } = bandAndBox();
+      fireEvent.pointerDown(wash, { clientX: startX, button: 0, buttons: 1, isPrimary: true, pointerId: 1 });
+      fireEvent.pointerMove(box, { clientX: startX + 60, buttons: 1, pointerId: 1 });
+      // Mid-drag the band is somewhere else, so the plot has a concrete window.
+      expect(lastBuiltWindow()).toBeDefined();
+      expect(fireEvent.keyDown(box, { key: "Escape" })).toBe(false);
+      // Back where it was pressed, which is the default: no override is kept.
+      expect(lastBuiltWindow()).toBeUndefined();
+    });
+
+    // Only a window equal at BOTH ends is the default. The first chain's default starts at the strip's
+    // start, so its end handle is the one that can move on its own; the second chain sits in the middle
+    // of the strip, so there the start handle can.
+    it.each([
+      { chainRow: 0, side: "end", dx: 40 },
+      { chainRow: 1, side: "start", dx: -40 },
+    ] as const)("hands the plot a concrete window when only the $side edge of chain $chainRow's default moves", ({ chainRow, side, dx }) => {
+      show(mixedData());
+      if (chainRow !== 0) fireEvent.click(rows()[chainRow]!);
+      const { box } = bandAndBox();
+      const wash = document.querySelector<HTMLElement>('[data-evtx-layer="wash"]')!;
+      const left = parseFloat(wash.style.left) / 100;
+      const right = left + parseFloat(wash.style.width) / 100;
+      const edgeX = LEFT + (side === "start" ? left : right) * WIDTH;
+      const handle = document.querySelector<HTMLElement>(`[data-part="${side}"]`)!;
+      fireEvent.pointerDown(handle, { clientX: edgeX, button: 0, buttons: 1, isPrimary: true, pointerId: 1 });
+      fireEvent.pointerMove(box, { clientX: edgeX + dx, buttons: 1, pointerId: 1 });
+      expect(lastBuiltWindow()).toBeDefined();
+    });
+
+    it("hands the plot undefined when a key move lands exactly back on the default", () => {
+      show(mixedData());
+      fireEvent.keyDown(slider(), { key: "ArrowRight" });
+      expect(lastBuiltWindow()).toBeDefined();
+      fireEvent.keyDown(slider(), { key: "ArrowLeft" });
+      expect(lastBuiltWindow()).toBeUndefined();
+    });
+
+    it("follows the new default when a live rebuild changes it after a cancelled drag", () => {
+      const view = show(mixedData());
+      const { box, wash, startX } = bandAndBox();
+      fireEvent.pointerDown(wash, { clientX: startX, button: 0, buttons: 1, isPrimary: true, pointerId: 1 });
+      fireEvent.pointerMove(box, { clientX: startX + 60, buttons: 1, pointerId: 1 });
+      fireEvent.keyDown(box, { key: "Escape" });
+      const before = axisLabels();
+      // A live rebuild in which the selected chain's first entry is 1 s earlier: its default moves, and
+      // the strip only grows, so the old window is still legal there and nothing clamps it.
+      const edges = [
+        ...fixtureEdges("pairAndGroupDisjoint"),
+        ...fixtureEdges("secondaryPair", 10),
+        ...fixtureEdges("gappedPair", 20),
+      ];
+      const earlier = idsOf(edges).map((id) => eventItem(numberOf(id), T0 + numberOf(id) * 1_000 - (numberOf(id) === 1 ? 1_000 : 0)));
+      view.update(makeData({ items: earlier, edges, builtFor: "session:2" }));
+      expect(axisLabels()).not.toEqual(before);
+    });
+  });
+
+  it("starts the next chain from its own default, and so does coming back", () => {
+    show(mixedData());
+    const first = slider().getAttribute("aria-valuetext");
+    for (let press = 0; press < 3; press += 1) fireEvent.keyDown(slider(), { key: "ArrowRight" });
+    const moved = slider().getAttribute("aria-valuetext");
+    expect(moved).not.toBe(first);
+    fireEvent.click(rows()[1]!);
+    const second = slider().getAttribute("aria-valuetext");
+    expect(second).not.toBe(moved);
+    fireEvent.click(rows()[0]!);
+    expect(slider().getAttribute("aria-valuetext")).toBe(first);
+  });
+
+  it("keeps the band, in absolute time, through a live rebuild of the same chain", () => {
+    const view = show(mixedData());
+    for (let press = 0; press < 3; press += 1) fireEvent.keyDown(slider(), { key: "ArrowRight" });
+    const moved = slider().getAttribute("aria-valuetext");
+    view.update(mixedData({ builtFor: "session:2" }));
+    expect(slider().getAttribute("aria-valuetext")).toBe(moved);
+  });
+
+  it("writes nothing to the time range, whatever is done on the band", () => {
+    const original = useEvtxStore.getState().setTimeRange;
+    const spy = vi.fn(original);
+    useEvtxStore.setState({ setTimeRange: spy as typeof original });
+    try {
+      show(mixedData());
+      for (const key of ["ArrowRight", "ArrowLeft", "Home", "Escape"]) fireEvent.keyDown(slider(), { key });
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      useEvtxStore.setState({ setTimeRange: original });
+    }
+  });
+
+  it("is untouched by the unplaced items, which are never positioned on any timeline", () => {
+    const without = show(mixedData());
+    const barsWithout = Array.from(document.querySelectorAll("[data-bar]")).map((bar) => bar.outerHTML);
+    const markersWithout = Array.from(document.querySelectorAll("[data-marker]")).map((marker) => marker.getAttribute("data-marker"));
+    without.unmount();
+    show(mixedData({ unplacedList: { items: unplacedItems(5), total: 5 } }));
+    expect(Array.from(document.querySelectorAll("[data-bar]")).map((bar) => bar.outerHTML)).toEqual(barsWithout);
+    expect(Array.from(document.querySelectorAll("[data-marker]")).map((marker) => marker.getAttribute("data-marker"))).toEqual(markersWithout);
+    expect(screen.getByTestId("lane-plot").textContent).not.toMatch(/IntuneManagementExtension/);
+  });
+});
+
+describe("the Not placed option (spec 8.11, 8.11a)", () => {
+  const options = () => screen.getAllByRole("option");
+  const notPlaced = () => document.querySelector("[data-unplaced-option]") as HTMLElement;
+
+  it("is the last option of the same listbox, labelled from the engine's count", () => {
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    const all = options();
+    expect(all[all.length - 1]).toBe(notPlaced());
+    expect(notPlaced()).toHaveAccessibleName(
+      "Not placed (3). Text-log lines without timestamps are listed, never guessed onto the timeline.",
+    );
+    expect(screen.getByRole("listbox")).toContainElement(notPlaced());
+    expect(screen.getByRole("listbox")).toHaveAccessibleName(
+      "Correlation chains, strongest first, and items that are not placed",
+    );
+  });
+
+  it("has no row for a session that counted none", () => {
+    show(mixedData());
+    expect(notPlaced()).toBeNull();
+    expect(screen.getByRole("listbox")).toHaveAccessibleName("Correlation chains, strongest first");
+  });
+
+  it("labels an unknown count as unknown, never as 0, even with nothing listed", () => {
+    show(mixedData({ unplacedList: { items: [], total: null } }));
+    expect(notPlaced()).toHaveTextContent("Not placed (count unknown)");
+    expect(notPlaced().textContent).not.toMatch(/\b0\b/);
+  });
+
+  it("uses the count, not the preview's length, and the neutral caption for a partial list", () => {
+    show(mixedData({ unplacedList: { items: unplacedItems(100), total: 5_000 } }));
+    expect(notPlaced()).toHaveTextContent("Not placed (5,000)");
+    expect(notPlaced()).toHaveTextContent("Entries without timestamps are listed, never guessed onto the timeline.");
+  });
+
+  it("is there when the session has no chain at all", () => {
+    show(makeData({ items: [], edges: [], totalEdges: 0, unplacedList: { items: unplacedItems(2), total: 2 } }));
+    expect(screen.getByTestId("correlation-view")).toHaveTextContent("No correlation chains were found in this session.");
+    expect(options()).toHaveLength(1);
+    expect(notPlaced()).toHaveTextContent("Not placed (2)");
+  });
+
+  it("is there in the counts-only stage, before any entry is read", () => {
+    show(pairData({ hasItems: false, stage: "edgesOnly", unplacedList: { items: unplacedItems(4), total: 4 } }));
+    expect(notPlaced()).toHaveTextContent("Not placed (4)");
+  });
+
+  it("is reached by the arrow keys, Home and End, and selecting it replaces the detail with the list", () => {
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    const listbox = screen.getByRole("listbox");
+    const chainCount = options().length - 1;
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(true);
+    expect(notPlaced()).toHaveAttribute("aria-selected", "true");
+    expect(listbox.getAttribute("aria-activedescendant")).toBe(notPlaced().id);
+    expect(options().filter((row) => row.getAttribute("aria-selected") === "true")).toHaveLength(1);
+    // The detail is the list: no chain header, no overview, no plot, no cards.
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+    expect(screen.queryByTestId("lane-plot")).toBeNull();
+    expect(screen.queryByTestId("correlation-overview")).toBeNull();
+    expect(screen.queryByRole("heading", { name: /Why these are linked|Sequence/ })).toBeNull();
+    // ArrowDown at the end stays; ArrowUp returns to the last chain, closing the pane.
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(notPlaced()).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(listbox, { key: "ArrowUp" });
+    expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(false);
+    expect(options()[chainCount - 1]).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("lane-plot")).toBeInTheDocument();
+    fireEvent.keyDown(listbox, { key: "Home" });
+    expect(options()[0]).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("is selected by a click, and a chain click leaves it", () => {
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    fireEvent.click(notPlaced());
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+    fireEvent.click(options()[0]!);
+    expect(screen.queryByTestId("unplaced-pane")).toBeNull();
+    expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(false);
+  });
+
+  it("stays open when 'Review unplaced lines' opens it before any chain is selected (the reconcile does not call selectChain)", () => {
+    useEvtxCorrelationStore.setState({ selectedChainId: null, unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+    expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(true);
+    // No chain was chosen for the operator, who asked for this pane.
+    expect(useEvtxCorrelationStore.getState().selectedChainId).toBeNull();
+    expect(notPlaced()).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("leaves the pane for a chain, and says so once, when nothing is left to list", () => {
+    vi.useFakeTimers();
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    const view = show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+    view.update(mixedData({ unplacedList: { items: [], total: 0 }, builtFor: "session:2" }));
+    expect(screen.queryByTestId("unplaced-pane")).toBeNull();
+    expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(false);
+    expect(notPlaced()).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(CORRELATION_ANNOUNCE_MS + 100);
+    });
+    expect(announcer().textContent).toContain("Nothing is listed under Not placed any more, showing a chain");
+  });
+
+  it("keeps showing the model's own list while a newer session is rebuilt", () => {
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 }, updating: true, builtFor: "old:1" }));
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+    expect(useEvtxCorrelationStore.getState().unplacedOpen).toBe(true);
+  });
+
+  it("holds exactly two status regions with the pane open, and its replies use the action region", async () => {
+    vi.mocked(writeText).mockResolvedValue(undefined);
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    const regions = () => screen.getAllByRole("status").map((node) => node.getAttribute("data-testid")).sort();
+    expect(regions()).toEqual(["correlation-action-status", "correlation-announcer"]);
+    fireEvent.click(screen.getByRole("button", { name: "Copy as text" }));
+    await waitFor(() => expect(status()).toHaveTextContent("Copied the unplaced list as text."));
+    expect(announcer().textContent).not.toContain("Copied");
+    expect(regions()).toEqual(["correlation-action-status", "correlation-announcer"]);
+  });
+
+  it("copies nothing from the pane while the data is updating, as the chain's Copy does not either", () => {
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 }, updating: true, builtFor: "old:1" }));
+    const paneCopy = screen.getByRole("button", { name: "Copy as text" });
+    expect(paneCopy).toHaveAttribute("aria-disabled", "true");
+    expect(paneCopy).toHaveAttribute("title", "Wait for the update to finish.");
+    fireEvent.click(paneCopy);
+    expect(vi.mocked(writeText)).not.toHaveBeenCalled();
+    cleanup();
+    useEvtxCorrelationStore.setState({ unplacedOpen: false });
+    show(mixedData({ updating: true, builtFor: "old:1" }));
+    const chainCopy = screen.getByRole("button", { name: "Copy as text" });
+    expect(chainCopy).toHaveAttribute("aria-disabled", "true");
+    expect(chainCopy).toHaveAttribute("title", paneCopy.getAttribute("title"));
+  });
+
+  it("reports a failed copy from the pane as an alert, with no third status", async () => {
+    vi.mocked(writeText).mockRejectedValue(new Error("clipboard denied"));
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy as text" }));
+    await waitFor(() => expect(alertText()).toHaveTextContent("Copy failed: clipboard denied"));
+    expect(screen.getAllByRole("status")).toHaveLength(2);
+  });
+
+  it("does not announce a lost chain while the pane is the thing shown", () => {
+    vi.useFakeTimers();
+    useEvtxCorrelationStore.setState({ selectedChainId: "a-chain-that-is-gone", unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    act(() => {
+      vi.advanceTimersByTime(CORRELATION_ANNOUNCE_MS + 100);
+    });
+    expect(announcer().textContent).not.toContain("no longer present");
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+  });
+
+  it("holds exactly two status regions with the pane open and no chain at all", () => {
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(makeData({ items: [], edges: [], totalEdges: 0, unplacedList: { items: unplacedItems(2), total: 2 } }));
+    expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+    expect(screen.getAllByRole("status").map((node) => node.getAttribute("data-testid")).sort()).toEqual([
+      "correlation-action-status",
+      "correlation-announcer",
+    ]);
+  });
+
+  it("spends Escape in the pane and returns focus to the list, never reaching the time range", () => {
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    const copy = screen.getByRole("button", { name: "Copy as text" });
+    expect(fireEvent.keyDown(copy, { key: "Escape" })).toBe(false);
+    expect(document.activeElement).toBe(screen.getByRole("listbox"));
+  });
+
+  it("does not build the plot while the pane is shown, and builds it for a chain", () => {
+    useEvtxCorrelationStore.setState({ unplacedOpen: true });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    expect(document.querySelectorAll("[data-marker]")).toHaveLength(0);
+    expect(plotBuilds).not.toHaveBeenCalled();
+    cleanup();
+    useEvtxCorrelationStore.setState({ unplacedOpen: false });
+    show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+    expect(plotBuilds).toHaveBeenCalled();
+  });
+});
+
+describe("a lost selection is an event, said once and by what exists (the sticky flags of #840 review F1)", () => {
+  const NOTHING_LISTED = "Nothing is listed under Not placed any more";
+  const CHAIN_GONE = "The selected chain is no longer present";
+  const settle = () =>
+    act(() => {
+      vi.advanceTimersByTime(CORRELATION_ANNOUNCE_MS + 100);
+    });
+  /** No chain at all in the session, so no selection can be shown. */
+  const zeroChains = (extra: Partial<DataOptions> = {}) =>
+    makeData({ items: [], edges: [], totalEdges: 0, ...extra });
+  const none = { items: [], total: 0 };
+  const three = () => ({ items: unplacedItems(3), total: 3 });
+  const spokenCount = (heard: string[], sentence: string) => heard.filter((text) => text.includes(sentence)).length;
+
+  describe("the Not placed pane that is left", () => {
+    it("names no chain when there are none, and is said once, not again after a later model or update", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(zeroChains({ unplacedList: three() }));
+      const heard: string[] = [];
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:2" }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      expect(announcer().textContent).toContain(NOTHING_LISTED);
+      expect(announcer().textContent).not.toMatch(/showing/);
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:3" }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:3", updating: true }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:4" }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      expect(spokenCount(heard, NOTHING_LISTED)).toBe(1);
+      expect(announcer().textContent).not.toContain(NOTHING_LISTED);
+    });
+
+    it("says a chain is shown only when one is", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(mixedData({ unplacedList: three() }));
+      view.update(mixedData({ unplacedList: none, builtFor: "session:2" }));
+      settle();
+      expect(announcer().textContent).toContain(`${NOTHING_LISTED}, showing a chain`);
+    });
+
+    it("is gone when the rail's Review unplaced lines shows the pane again", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(mixedData({ unplacedList: three() }));
+      // The list goes (the sentence is waiting for the region), and a later session lists items again.
+      view.update(mixedData({ unplacedList: none, builtFor: "session:2" }));
+      view.update(mixedData({ unplacedList: { items: unplacedItems(2), total: 2 }, builtFor: "session:3" }));
+      act(() => openUnplacedList());
+      settle();
+      expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+      expect(announcer().textContent).not.toContain(NOTHING_LISTED);
+      // Leaving the pane by another route does not bring it back.
+      act(() => useEvtxCorrelationStore.getState().selectChain(null));
+      settle();
+      expect(announcer().textContent).not.toContain(NOTHING_LISTED);
+    });
+
+    it("is gone when a later session lists items again before anything is picked", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(mixedData({ unplacedList: three() }));
+      view.update(mixedData({ unplacedList: none, builtFor: "session:2" }));
+      view.update(mixedData({ unplacedList: { items: unplacedItems(2), total: 2 }, builtFor: "session:3" }));
+      settle();
+      expect(document.querySelector("[data-unplaced-option]")).not.toBeNull();
+      expect(announcer().textContent).not.toContain(NOTHING_LISTED);
+    });
+
+    it("does not come back when the items go away again with the pane closed", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(mixedData({ unplacedList: three() }));
+      view.update(mixedData({ unplacedList: none, builtFor: "session:2" }));
+      view.update(mixedData({ unplacedList: { items: unplacedItems(2), total: 2 }, builtFor: "session:3" }));
+      view.update(mixedData({ unplacedList: none, builtFor: "session:4" }));
+      settle();
+      // The pane was not open when the items went the second time, so nothing was lost.
+      expect(announcer().textContent).not.toContain(NOTHING_LISTED);
+    });
+  });
+
+  describe("the receipt: said by a publication made after the record, never by an earlier one", () => {
+    const ZERO = "The selected chain is no longer present";
+    const SHOWN = `${ZERO}, showing another`;
+    /** Time passes in quarter seconds; every distinct text the region holds is kept, in order. */
+    const heard: string[] = [];
+    const hear = () => {
+      const text = announcer().textContent ?? "";
+      if (heard[heard.length - 1] !== text) heard.push(text);
+    };
+    const advance = (ms: number) => {
+      for (let elapsed = 0; elapsed < ms; elapsed += 250) {
+        act(() => {
+          vi.advanceTimersByTime(250);
+        });
+        hear();
+      }
+    };
+    const saidCount = (sentence: string) => heard.filter((text) => text.includes(sentence)).length;
+    /** One secondary pair only: a model that does not hold the mixed model's first chain. */
+    const secondaryOnly = (extra: Partial<DataOptions> = {}) => {
+      const edges = fixtureEdges("secondaryPair", 10);
+      return makeData({
+        items: idsOf(edges).map((id) => eventItem(numberOf(id), T0 + numberOf(id) * 1_000)),
+        edges,
+        ...extra,
+      });
+    };
+    beforeEach(() => {
+      heard.length = 0;
+    });
+
+    it("speaks a second loss of the same kind recorded inside the window after the first was published", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone-1" });
+      const view = show(mixedData());
+      hear();
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard[heard.length - 1]).toBe(`4 chains. ${SHOWN}`);
+      // The next tail rebuild drops the chain the operator was moved to, before the first publication is replaced.
+      view.update(secondaryOnly({ builtFor: "session:2" }));
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard).toContain(`1 chain. ${SHOWN}`);
+      expect(saidCount(SHOWN)).toBe(2);
+      // Each is said once: a later model and an update do not say either again.
+      view.update(secondaryOnly({ builtFor: "session:3", updating: true }));
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      view.update(secondaryOnly({ builtFor: "session:4" }));
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(saidCount(SHOWN)).toBe(2);
+      expect(announcer().textContent).not.toContain(ZERO);
+    });
+
+    it("speaks a zero-chain loss after a chain-shown one of the same kind, whose sentence contains it", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone-1" });
+      const view = show(mixedData());
+      hear();
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard[heard.length - 1]).toBe(`4 chains. ${SHOWN}`);
+      // The operator's selection goes again, and now there is no chain at all.
+      act(() => {
+        useEvtxCorrelationStore.setState({ selectedChainId: "gone-2" });
+        view.update(makeData({ items: [], edges: [], totalEdges: 0, builtFor: "session:2" }));
+      });
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard).toContain(`0 chains. ${ZERO}`);
+      expect(saidCount(SHOWN)).toBe(1);
+      expect(saidCount(ZERO)).toBe(2);
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(announcer().textContent).not.toContain(ZERO);
+    });
+
+    it("speaks a chain-shown loss after a zero-chain one of the same kind", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone-1" });
+      const view = show(makeData({ items: [], edges: [], totalEdges: 0 }));
+      hear();
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard[heard.length - 1]).toBe(`0 chains. ${ZERO}`);
+      act(() => {
+        useEvtxCorrelationStore.setState({ selectedChainId: "gone-2" });
+        view.update(mixedData({ builtFor: "session:2" }));
+      });
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard).toContain(`4 chains. ${SHOWN}`);
+      expect(saidCount(SHOWN)).toBe(1);
+    });
+
+    it("speaks a second Not placed loss recorded inside the window after the first was published", () => {
+      vi.useFakeTimers();
+      const NOTHING = "Nothing is listed under Not placed any more, showing a chain";
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+      view.update(mixedData({ unplacedList: { items: [], total: 0 }, builtFor: "session:2" }));
+      hear();
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard[heard.length - 1]).toBe(`4 chains. ${NOTHING}`);
+      // Items are listed again and the operator opens the pane from the rail; then they go again.
+      view.update(mixedData({ unplacedList: { items: unplacedItems(2), total: 2 }, builtFor: "session:3" }));
+      act(() => openUnplacedList());
+      expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+      view.update(secondaryOnly({ unplacedList: { items: [], total: 0 }, builtFor: "session:4" }));
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard).toContain(`1 chain. ${NOTHING}`);
+      expect(heard.filter((text) => text.includes(NOTHING))).toHaveLength(2);
+    });
+
+    it("says it once when the announcement changes in the same step as the publication that carries it", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone-1" });
+      const view = show(mixedData());
+      hear();
+      advance(CORRELATION_ANNOUNCE_MS - 250);
+      expect(announcer().textContent).toBe("4 chains");
+      // The timer fires and the data starts updating in one step, so the announcement composed with the
+      // sentence is no longer the text that was published. The publication still said it.
+      act(() => {
+        vi.advanceTimersByTime(300);
+        view.update(mixedData({ builtFor: "session:2", updating: true }));
+      });
+      hear();
+      expect(heard).toContain(`4 chains. ${SHOWN}`);
+      advance(3 * (CORRELATION_ANNOUNCE_MS + 100));
+      expect(saidCount(SHOWN)).toBe(1);
+    });
+
+    // Every branch of the announcement that is composed WITHOUT the sentence while a loss is true: no
+    // model, in its three texts. The region then holds text that never carries the sentence, so the
+    // loss stays unsaid until the first later publication that does.
+    it.each([
+      ["no analysis", () => UNAVAILABLE_CORRELATION, "No event analysis is available. Load events to see correlation."],
+      [
+        "the edges being read",
+        () => ({ ...UNAVAILABLE_CORRELATION, stage: "pending" as const }),
+        "Reading correlation edges...",
+      ],
+      ["a failure with no model", () => ({ ...UNAVAILABLE_CORRELATION, stage: "pending" as const, error: "boom" }), ""],
+    ])("is still spoken when the model goes away inside the window and a session returns: %s", (_name, noModel, held) => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone-1" });
+      const view = show(mixedData());
+      hear();
+      advance(1_000);
+      // The end of the data, before the sentence was published: the region publishes the no-model text.
+      view.update(noModel());
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(announcer().textContent).toBe(held);
+      expect(saidCount(SHOWN)).toBe(0);
+      // A session returns with the replacement shown. No new loss is recorded: the first is still unsaid.
+      view.update(mixedData({ builtFor: "session:2" }));
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard).toContain(`4 chains. ${SHOWN}`);
+      expect(saidCount(SHOWN)).toBe(1);
+      // Said once: nothing later says it again.
+      view.update(mixedData({ builtFor: "session:3", updating: true }));
+      advance(2 * (CORRELATION_ANNOUNCE_MS + 100));
+      expect(saidCount(SHOWN)).toBe(1);
+      expect(announcer().textContent).not.toContain(ZERO);
+    });
+
+    it("speaks a Not placed loss too when the model goes away inside the window", () => {
+      vi.useFakeTimers();
+      const NOTHING = "Nothing is listed under Not placed any more, showing a chain";
+      useEvtxCorrelationStore.setState({ unplacedOpen: true });
+      const view = show(mixedData({ unplacedList: { items: unplacedItems(3), total: 3 } }));
+      view.update(mixedData({ unplacedList: { items: [], total: 0 }, builtFor: "session:2" }));
+      hear();
+      advance(1_000);
+      view.update(UNAVAILABLE_CORRELATION);
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard.filter((text) => text.includes(NOTHING))).toHaveLength(0);
+      view.update(mixedData({ unplacedList: { items: [], total: 0 }, builtFor: "session:3" }));
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard).toContain(`4 chains. ${NOTHING}`);
+      expect(heard.filter((text) => text.includes(NOTHING))).toHaveLength(1);
+    });
+
+    it("counts an announcement identical to what the region holds as said, and does not publish it again", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone-1" });
+      show(mixedData());
+      hear();
+      advance(CORRELATION_ANNOUNCE_MS + 100);
+      expect(heard[heard.length - 1]).toBe(`4 chains. ${SHOWN}`);
+      // A second loss of the same kind in the same model composes exactly the text the region holds.
+      act(() => useEvtxCorrelationStore.setState({ selectedChainId: "gone-2" }));
+      hear();
+      expect(announcer().textContent).toBe(`4 chains. ${SHOWN}`);
+      advance(2 * (CORRELATION_ANNOUNCE_MS + 100));
+      // The region held the sentence once, then dropped it. It did not stay in every later announcement,
+      // and it was not published a second time.
+      expect(heard).toEqual(["4 chains", `4 chains. ${SHOWN}`, "4 chains"]);
+    });
+  });
+
+  describe("the chain that was selected", () => {
+    const notice = () => screen.queryByTestId("correlation-notices")?.textContent ?? "";
+    const GONE_VISIBLE = "The chain that was selected is no longer present.";
+
+    it("names no other chain when there are none, and is said once, not again after a later model or update", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone" });
+      const view = show(zeroChains({ unplacedList: none }));
+      const heard: string[] = [];
+      settle();
+      heard.push(announcer().textContent ?? "");
+      expect(announcer().textContent).toContain(CHAIN_GONE);
+      expect(announcer().textContent).not.toMatch(/showing|another/i);
+      expect(notice()).toContain(GONE_VISIBLE);
+      expect(notice()).not.toMatch(/another/i);
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:2" }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:2", updating: true }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      view.update(zeroChains({ unplacedList: none, builtFor: "session:3" }));
+      settle();
+      heard.push(announcer().textContent ?? "");
+      expect(spokenCount(heard, CHAIN_GONE)).toBe(1);
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+    });
+
+    it("says another chain is shown when one is, and says it once", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone" });
+      const view = show(mixedData());
+      settle();
+      expect(announcer().textContent).toContain(`${CHAIN_GONE}, showing another`);
+      expect(notice()).toContain(`${GONE_VISIBLE} Another chain is shown.`);
+      view.update(mixedData({ builtFor: "session:2" }));
+      settle();
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      view.update(mixedData({ builtFor: "session:2", updating: true }));
+      settle();
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+    });
+
+    it("is gone when the rail's Review unplaced lines shows the pane", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone" });
+      show(mixedData({ unplacedList: three() }));
+      act(() => openUnplacedList());
+      settle();
+      expect(screen.getByTestId("unplaced-pane")).toBeInTheDocument();
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      expect(document.body.textContent).not.toContain(GONE_VISIBLE);
+      // And leaving the pane by another route does not bring it back.
+      act(() => useEvtxCorrelationStore.getState().selectChain(null));
+      settle();
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      expect(document.body.textContent).not.toContain(GONE_VISIBLE);
+    });
+
+    it("is dropped by a pick of a chain or of Not placed, before it was spoken", () => {
+      vi.useFakeTimers();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone" });
+      const view = show(mixedData({ unplacedList: three() }));
+      expect(notice()).toContain(GONE_VISIBLE);
+      fireEvent.click(rows()[1]!);
+      settle();
+      expect(notice()).not.toContain(GONE_VISIBLE);
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      view.unmount();
+      cleanup();
+      useEvtxCorrelationStore.setState({ selectedChainId: "gone", unplacedOpen: false });
+      show(mixedData({ unplacedList: three() }));
+      expect(notice()).toContain(GONE_VISIBLE);
+      fireEvent.click(document.querySelector("[data-unplaced-option]")!);
+      settle();
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      expect(document.body.textContent).not.toContain(GONE_VISIBLE);
+    });
+
+    describe("and a chain opened from outside, the dock's Open (#842)", () => {
+      it("drops the loss before it was spoken: the notice is gone and the sentence is never said", () => {
+        vi.useFakeTimers();
+        useEvtxCorrelationStore.setState({ selectedChainId: "gone" });
+        const data = mixedData();
+        show(data);
+        expect(notice()).toContain(GONE_VISIBLE);
+        const opened = data.model!.chains[1]!.id;
+        act(() => openCorrelationView(opened));
+        settle();
+        expect(useEvtxCorrelationStore.getState().selectedChainId).toBe(opened);
+        expect(notice()).not.toContain(GONE_VISIBLE);
+        expect(announcer().textContent).not.toContain(CHAIN_GONE);
+        expect(document.body.textContent).not.toContain("no longer present");
+        // Nor on any later publication.
+        act(() => {
+          vi.advanceTimersByTime(CORRELATION_ANNOUNCE_MS * 4);
+        });
+        expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      });
+
+      it("drops the notice of a loss that was already spoken, which stays until a pick", () => {
+        vi.useFakeTimers();
+        useEvtxCorrelationStore.setState({ selectedChainId: "gone" });
+        const data = mixedData();
+        show(data);
+        settle();
+        expect(announcer().textContent).toContain(CHAIN_GONE);
+        expect(notice()).toContain(GONE_VISIBLE);
+        act(() => openCorrelationView(data.model!.chains[1]!.id));
+        settle();
+        expect(notice()).not.toContain(GONE_VISIBLE);
+        expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      });
+
+      it("does not make a loss of a row the model on show does not have yet (an older model, updating)", () => {
+        vi.useFakeTimers();
+        const newer = mixedData({ builtFor: "session:2" });
+        const arriving = newer.model!.chains[2]!.id;
+        const older = pairData({ builtFor: "session:1", updating: true });
+        expect(older.model!.chains.some((row) => row.id === arriving)).toBe(false);
+        const view = show(older);
+        settle();
+        act(() => openCorrelationView(arriving));
+        settle();
+        // The view shows its older model's first chain meanwhile, and says nothing was lost.
+        expect(useEvtxCorrelationStore.getState().selectedChainId).toBe(arriving);
+        expect(announcer().textContent).not.toContain(CHAIN_GONE);
+        expect(document.body.textContent).not.toContain("no longer present");
+        view.update(newer);
+        settle();
+        expect(useEvtxCorrelationStore.getState().selectedChainId).toBe(arriving);
+        expect(rows().find((row) => row.getAttribute("aria-selected") === "true")).toHaveAttribute(
+          "data-chain-id",
+          arriving,
+        );
+        expect(announcer().textContent).not.toContain(CHAIN_GONE);
+        expect(document.body.textContent).not.toContain("no longer present");
+      });
+
+      it("makes no loss of an opened id the current model lacks either: nothing was lost, so nothing is said", () => {
+        vi.useFakeTimers();
+        show(mixedData());
+        act(() => openCorrelationView("a-row-no-model-has"));
+        settle();
+        expect(announcer().textContent).not.toContain(CHAIN_GONE);
+        expect(document.body.textContent).not.toContain("no longer present");
+        // The view falls back to its first chain, as it does for any selection it cannot show.
+        expect(rows()[0]).toHaveAttribute("aria-selected", "true");
+      });
+
+      it("still says a loss that happens after the open", () => {
+        vi.useFakeTimers();
+        const data = mixedData();
+        const opened = data.model!.chains[1]!.id;
+        expect(pairData().model!.chains.some((row) => row.id === opened)).toBe(false);
+        const view = show(data);
+        act(() => openCorrelationView(opened));
+        settle();
+        expect(notice()).not.toContain(GONE_VISIBLE);
+        // A later session no longer has the chain the operator opened.
+        view.update(pairData({ builtFor: "session:2" }));
+        settle();
+        expect(notice()).toContain(GONE_VISIBLE);
+        expect(announcer().textContent).toContain(CHAIN_GONE);
+      });
+    });
+
+    it("is gone when a later session has the chain again", () => {
+      vi.useFakeTimers();
+      const later = mixedData();
+      const returning = later.model!.chains[1]!.id;
+      useEvtxCorrelationStore.setState({ selectedChainId: returning });
+      const view = show(pairData());
+      expect(notice()).toContain(GONE_VISIBLE);
+      view.update(later);
+      settle();
+      expect(announcer().textContent).not.toContain(CHAIN_GONE);
+      expect(notice()).not.toContain(GONE_VISIBLE);
+    });
+  });
+});

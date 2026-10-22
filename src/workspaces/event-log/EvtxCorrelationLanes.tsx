@@ -19,15 +19,22 @@
  * is handed to `onEscape` after `preventDefault`, so the workspace's Escape handler does not also
  * clear the time range.
  *
+ * Two variants share all of the above. The `view` variant is the Correlation view's plot (spec 8.11).
+ * The `dock` variant is the Correlation dock's (spec 8.12): 12 px glyphs in the same 24 px hit box,
+ * a 170 px label column at max(10, f - 3), lanes 24 px tall with no label row under them, no height
+ * cap (the dock caps the lanes at five instead), no per-marker text (the marker's accessible name
+ * and tooltip carry it), and a 1 px rule at 50% of the track, which is the selected event's instant
+ * because the dock's window is centered on it.
+ *
  * Colors come from the visual tokens and the theme; text sizes from the log list font size.
  */
 import { Fragment, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createFocusOutlineStyle, makeStyles, tokens } from "@fluentui/react-components";
 import { ArrowLeft12Regular, ArrowRight12Regular } from "@fluentui/react-icons";
-import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useRailTextColors } from "./evtx-rail-text";
-import { formatClock, type EvtxTimeZoneMode } from "./evtx-time";
-import type { ChainPlot, PlotConnector, PlotLane, PlotMarker } from "./evtx-correlation-view-model";
+import type { CorrelationSizes } from "./evtx-correlation-sizes";
+import type { EvtxTimeZoneMode } from "./evtx-time";
+import { tickLabels, type ChainPlot, type PlotConnector, type PlotLane, type PlotMarker } from "./evtx-correlation-view-model";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
 
 /** Spec 8.11: markers are 14 px; the lane label column is 184 px. */
@@ -36,7 +43,10 @@ export const CORRELATION_LANE_LABEL_PX = 184;
 /** The clickable box around a marker: WCAG 2.5.8 asks for 24 px, the drawn marker stays 14. */
 export const CORRELATION_MARKER_HIT_PX = 24;
 /** Spec 8.11: the lane plot is 240 px tall. */
-export const CORRELATION_PLOT_HEIGHT_PX = 240;
+const CORRELATION_PLOT_HEIGHT_PX = 240;
+/** Spec 8.12: the dock draws 12 px markers, a 170 px label column and 24 px lanes. */
+const DOCK_MARKER_PX = 12;
+const DOCK_LANE_LABEL_PX = 170;
 /** Spec 8.11: an exact connector is 2.5 px solid, a candidate one 1.5 px dashed `5 4`. */
 export const CONNECTOR_STYLES = {
   exact: { width: 2.5, dash: undefined },
@@ -44,31 +54,6 @@ export const CONNECTOR_STYLES = {
 } as const;
 /** Spec 8.11: a pinned entry's fill is drawn at 55% opacity. Only the fill. */
 export const PINNED_FILL_OPACITY = 0.55;
-
-/**
- * The text sizes of the view, from the user's log list font size `f` (spec 7.1, 8.11). The only
- * floors are the spec's own: captions and badge text max(10, f - 3), axis ticks max(9, f - 4).
- * Secondary labels (the lane labels) are f - 2 with none; `f` is at least 11 in the app.
- */
-export interface CorrelationSizes {
-  f: number;
-  /** f - 2: lane labels. */
-  lane: number;
-  /** max(10, f - 3): marker labels, captions. */
-  label: number;
-  /** max(9, f - 4): axis ticks. */
-  tick: number;
-}
-
-export function correlationSizes(logListFontSize: number): CorrelationSizes {
-  const f = getLogListMetrics(logListFontSize).fontSize;
-  return {
-    f,
-    lane: f - 2,
-    label: Math.max(10, f - 3),
-    tick: Math.max(9, f - 4),
-  };
-}
 
 const useStyles = makeStyles({
   marker: {
@@ -86,17 +71,60 @@ const useStyles = makeStyles({
   },
 });
 
-function laneHeightFor(sizes: CorrelationSizes): number {
-  return CORRELATION_MARKER_HIT_PX + sizes.label + 10;
+type CorrelationLanesVariant = "view" | "dock";
+
+/** What differs between the two variants, so the drawing below reads one object. */
+interface LaneGeometry {
+  markerPx: number;
+  labelColumnPx: number;
+  laneHeight: number;
+  /** The lane label's text size. */
+  laneLabelSize: number;
+  /** The figure's height cap, or null for none. */
+  maxHeight: number | null;
+  /** A text label under each marker. */
+  markerLabels: boolean;
+  /** A rule at the middle of the track. */
+  centerRule: boolean;
+}
+
+function geometryFor(variant: CorrelationLanesVariant, sizes: CorrelationSizes): LaneGeometry {
+  return variant === "dock"
+    ? {
+        markerPx: DOCK_MARKER_PX,
+        labelColumnPx: DOCK_LANE_LABEL_PX,
+        laneHeight: CORRELATION_MARKER_HIT_PX,
+        laneLabelSize: sizes.label,
+        maxHeight: null,
+        markerLabels: false,
+        centerRule: true,
+      }
+    : {
+        markerPx: CORRELATION_MARKER_PX,
+        labelColumnPx: CORRELATION_LANE_LABEL_PX,
+        laneHeight: CORRELATION_MARKER_HIT_PX + sizes.label + 10,
+        laneLabelSize: sizes.lane,
+        maxHeight: CORRELATION_PLOT_HEIGHT_PX,
+        markerLabels: true,
+        centerRule: false,
+      };
 }
 
 const pct = (x: number) => `${x * 100}%`;
 
 /** The glyph inside a marker's box: the ring, the fill and (for a log line) the rounded square. */
-function MarkerGlyph({ marker, visuals }: { marker: PlotMarker; visuals: EvtxVisualTokens }) {
+function MarkerGlyph({
+  marker,
+  visuals,
+  markerPx,
+}: {
+  marker: PlotMarker;
+  visuals: EvtxVisualTokens;
+  markerPx: number;
+}) {
   const dot = visuals.levels[marker.level].dotColor;
   const radius = marker.kind === "event" ? "50%" : "3px";
-  const size = `${CORRELATION_MARKER_PX}px`;
+  const size = `${markerPx}px`;
   if (marker.role === "nearby") {
     return (
       <span
@@ -239,6 +267,8 @@ function ConnectorLine({
 }
 
 export interface EvtxCorrelationLanesProps {
+  /** `view` (the default) is the Correlation view's plot; `dock` is the dock's. */
+  variant?: CorrelationLanesVariant;
   plot: ChainPlot;
   timeZoneMode: EvtxTimeZoneMode;
   sizes: CorrelationSizes;
@@ -254,6 +284,7 @@ export interface EvtxCorrelationLanesProps {
 
 /** The lane plot. A chain with no placed entry draws a sentence instead, never an empty frame. */
 export function EvtxCorrelationLanes({
+  variant = "view",
   plot,
   timeZoneMode,
   sizes,
@@ -265,7 +296,8 @@ export function EvtxCorrelationLanes({
   const styles = useStyles();
   const visuals = useEvtxVisualTokens();
   const { cardSecondary } = useRailTextColors();
-  const laneHeight = laneHeightFor(sizes);
+  const geometry = geometryFor(variant, sizes);
+  const { laneHeight } = geometry;
   const ordered = useMemo(() => [...plot.members, ...plot.nearby], [plot.members, plot.nearby]);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
@@ -331,25 +363,30 @@ export function EvtxCorrelationLanes({
 
   const trackHeight = Math.max(1, plot.lanes.length) * laneHeight;
   const tickLast = plot.ticks.length - 1;
+  // With seconds always: a lane window can be as narrow as 10 s. The day (and year) join the label
+  // when the window crosses midnight or is not in this year, so one clock never names two days.
+  const axisLabels = tickLabels(plot.ticks, timeZoneMode, { withSeconds: true });
 
   return (
     <figure
       aria-label={label}
       data-testid="lane-plot"
+      data-variant={variant}
       style={{
         margin: 0,
         border: `1px solid ${tokens.colorNeutralStroke2}`,
         borderRadius: "6px",
         padding: "6px 10px",
         backgroundColor: tokens.colorNeutralBackground1,
-        maxHeight: `${CORRELATION_PLOT_HEIGHT_PX}px`,
-        overflowY: "auto",
+        ...(geometry.maxHeight === null
+          ? {}
+          : { maxHeight: `${geometry.maxHeight}px`, overflowY: "auto" as const }),
         overflowX: "hidden",
         boxSizing: "border-box",
       }}
     >
       <div style={{ display: "flex" }}>
-        <div style={{ width: `${CORRELATION_LANE_LABEL_PX}px`, flexShrink: 0 }}>
+        <div style={{ width: `${geometry.labelColumnPx}px`, flexShrink: 0 }}>
           {plot.lanes.map((lane: PlotLane) => (
             <div
               key={lane.key}
@@ -358,10 +395,10 @@ export function EvtxCorrelationLanes({
               style={{
                 height: `${laneHeight}px`,
                 boxSizing: "border-box",
-                paddingTop: `${CORRELATION_MARKER_HIT_PX / 2 - sizes.lane / 2 - 1}px`,
+                paddingTop: `${CORRELATION_MARKER_HIT_PX / 2 - geometry.laneLabelSize / 2 - 1}px`,
                 paddingRight: "8px",
-                fontSize: `${sizes.lane}px`,
-                lineHeight: `${sizes.lane + 2}px`,
+                fontSize: `${geometry.laneLabelSize}px`,
+                lineHeight: `${geometry.laneLabelSize + 2}px`,
                 color: tokens.colorNeutralForeground2,
                 overflow: "hidden",
                 whiteSpace: "nowrap",
@@ -387,6 +424,20 @@ export function EvtxCorrelationLanes({
                 }}
               />
             ))}
+            {geometry.centerRule && (
+              <div
+                aria-hidden="true"
+                data-center-rule=""
+                style={{
+                  position: "absolute",
+                  left: "50%",
+                  top: 0,
+                  bottom: 0,
+                  width: "1px",
+                  backgroundColor: tokens.colorNeutralStrokeAccessible,
+                }}
+              />
+            )}
             <svg
               aria-hidden="true"
               width="100%"
@@ -447,14 +498,16 @@ export function EvtxCorrelationLanes({
                           onClick={() => onActivate?.(marker)}
                           onKeyDown={(event) => onKeyDown(event, orderIndex)}
                         >
-                          <MarkerGlyph marker={marker} visuals={visuals} />
+                          <MarkerGlyph marker={marker} visuals={visuals} markerPx={geometry.markerPx} />
                         </button>
-                        <MarkerLabel
-                          marker={marker}
-                          box={labelBox(marker, inLane)}
-                          sizes={sizes}
-                          color={cardSecondary}
-                        />
+                        {geometry.markerLabels && (
+                          <MarkerLabel
+                            marker={marker}
+                            box={labelBox(marker, inLane)}
+                            sizes={sizes}
+                            color={cardSecondary}
+                          />
+                        )}
                       </Fragment>
                     );
                   })}
@@ -467,7 +520,7 @@ export function EvtxCorrelationLanes({
             data-axis=""
             style={{ position: "relative", height: `${sizes.tick + 6}px`, marginTop: "2px" }}
           >
-            {plot.ticks.map((tick, index) => (
+            {axisLabels.map((text, index) => (
               <span
                 key={index}
                 style={{
@@ -480,7 +533,7 @@ export function EvtxCorrelationLanes({
                   whiteSpace: "nowrap",
                 }}
               >
-                {formatClock(tick, timeZoneMode, true)}
+                {text}
               </span>
             ))}
           </div>

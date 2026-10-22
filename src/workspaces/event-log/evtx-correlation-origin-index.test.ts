@@ -12,8 +12,11 @@ import { EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT } from "./event-analysis-session
 import fixtureDocument from "./__fixtures__/correlation-edges.json";
 import vectorDocument from "./__fixtures__/engine-compaction-vectors.json";
 import { timelineReference } from "./evtx-engine-compaction-test-fixtures";
+import { bundleOfSource } from "./evtx-collector-bundle";
 import { buildCorrelationChains } from "./evtx-correlation-chains";
 import {
+  isUnmatchableEvent,
+  logOriginNamesRecord,
   originLookup,
   linkCountsByRecord,
   linkPartnerCounts,
@@ -27,7 +30,7 @@ import {
   classifyCoverageGaps,
   type CorrelationGaps,
 } from "./evtx-correlation-gaps";
-import { buildEvidenceIndex } from "./evtx-insights-data";
+import { buildEvidenceIndex, recordsForOriginIdentity } from "./evtx-insights-data";
 import type { EvtxRecord } from "./types";
 import {
   assertUnifiedTimelineShape,
@@ -1492,5 +1495,316 @@ describe("timeline text is never redacted: a label shaped like a redaction token
     });
     expect(forged.source).not.toBe(projected.source);
     expect(resolveOriginRecords(forged, indexOf([wanted, twin]))).toEqual({ kind: "matches", records: [] });
+  });
+});
+
+describe("logOriginNamesRecord: the strict matcher for an archive text row (#842)", () => {
+  const FILE = "C:\\Logs\\AppEnforce.log";
+  const BUNDLE_ID = "CMTRACE-20260822-120000-HOST-0123456789abcdef0123456789abcdef";
+  const BUNDLE_FILE = `C:\\ProgramData\\${BUNDLE_ID}\\evidence\\ccm.log`;
+
+  /** An archive text row as `text_entry_to_record` builds it (archive.rs), at line `line`. */
+  function logRecord(line: number, overrides: Partial<EvtxRecord> = {}): EvtxRecord {
+    return record(line, {
+      originKind: "log",
+      eventId: 0,
+      sourceLabel: FILE,
+      channel: FILE,
+      provider: "CcmExec",
+      computer: "",
+      ...overrides,
+    });
+  }
+
+  /** The origin the engine builds for it, written out field by field (`origin_of`, timeline.rs). */
+  function logOrigin(line: number, overrides: Partial<Extract<TimelineOrigin, { kind: "log" }>> = {}): TimelineOrigin {
+    return {
+      kind: "log",
+      file: FILE,
+      component: "CcmExec",
+      line,
+      source: FILE,
+      machine: null,
+      bundle: null,
+      recordId: line,
+      ...overrides,
+    };
+  }
+
+  it("names the record whose every field agrees", () => {
+    expect(logOriginNamesRecord(logOrigin(7), logRecord(7))).toBe(true);
+  });
+
+  it.each([
+    ["file", { file: "C:\\Logs\\Other.log" }],
+    ["source", { source: "C:\\Logs\\Other.log" }],
+    ["line", { line: 8 }],
+    ["record id", { recordId: 8 }],
+    ["machine", { machine: "DESKTOP-01" }],
+    ["component", { component: "Other" }],
+    ["bundle", { bundle: BUNDLE_ID }],
+  ])("does not name it when the %s differs", (_field, change) => {
+    expect(logOriginNamesRecord(logOrigin(7, change), logRecord(7))).toBe(false);
+  });
+
+  it("does not name a record that is in a bundle when the origin names none, nor the reverse", () => {
+    const inBundle = logRecord(7, { sourceLabel: BUNDLE_FILE, channel: BUNDLE_FILE });
+    expect(logOriginNamesRecord(logOrigin(7, { file: BUNDLE_FILE, source: BUNDLE_FILE, bundle: BUNDLE_ID }), inBundle)).toBe(true);
+    expect(logOriginNamesRecord(logOrigin(7, { file: BUNDLE_FILE, source: BUNDLE_FILE, bundle: null }), inBundle)).toBe(false);
+    expect(logOriginNamesRecord(logOrigin(7, { bundle: BUNDLE_ID }), logRecord(7))).toBe(false);
+  });
+
+  it("normalizes the machine and the component as the engine does", () => {
+    for (const word of ENGINE_NO_PROVENANCE) {
+      expect(logOriginNamesRecord(logOrigin(7, { machine: null, component: null }), logRecord(7, { computer: ` ${word.toUpperCase()} `, provider: word }))).toBe(true);
+    }
+    expect(logOriginNamesRecord(logOrigin(7, { machine: "DESKTOP-01" }), logRecord(7, { computer: "  DESKTOP-01 " }))).toBe(true);
+    expect(logOriginNamesRecord(logOrigin(7, { component: "CcmExec" }), logRecord(7, { provider: " CcmExec " }))).toBe(true);
+    // An origin that carries a component or machine the record does not have is another origin.
+    expect(logOriginNamesRecord(logOrigin(7, { component: "CcmExec" }), logRecord(7, { provider: "" }))).toBe(false);
+    expect(logOriginNamesRecord(logOrigin(7, { machine: null }), logRecord(7, { computer: "DESKTOP-01" }))).toBe(false);
+  });
+
+  it("compares a label the engine bounded, through the same bounding", () => {
+    const long = `C:\\Logs\\${"x".repeat(EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT + 50)}.log`;
+    const boundedLong = bounded(long);
+    expect(boundedLong).not.toBe(long);
+    const row = logRecord(7, { sourceLabel: long, channel: long });
+    expect(logOriginNamesRecord(logOrigin(7, { file: boundedLong, source: boundedLong }), row)).toBe(true);
+    expect(logOriginNamesRecord(logOrigin(7, { file: boundedLong, source: boundedLong }), logRecord(7, { sourceLabel: `${long}y`, channel: long }))).toBe(false);
+  });
+
+  it("derives the bundle from the label the engine received: the whole label for a record it received whole", () => {
+    // The bundle's directory lies past 256 bytes, so the engine compacts the source and the file, but
+    // it derived the bundle (`bundle_from_source`) from the whole label, before it compacted anything.
+    const long = `C:\\${"x".repeat(EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT + 50)}\\${BUNDLE_ID}\\evidence\\ccm.log`;
+    const row = logRecord(7, { sourceLabel: long, channel: long });
+    const compacted = timelineReference(long);
+    expect(compacted).not.toBe(long);
+    expect(logOriginNamesRecord(logOrigin(7, { file: compacted, source: compacted, bundle: BUNDLE_ID }), row)).toBe(true);
+    expect(logOriginNamesRecord(logOrigin(7, { file: compacted, source: compacted, bundle: null }), row)).toBe(false);
+  });
+
+  it("derives the bundle from the transport's bounded label for a record the transport projected", () => {
+    // A record over 8 MiB reaches the engine with its label already bounded: the bundle's directory
+    // was cut off, so the engine found none. Its file and source are the transport's bounded text.
+    const long = `C:\\${"x".repeat(EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT + 50)}\\${BUNDLE_ID}\\evidence\\ccm.log`;
+    expect(bundleOfSource(long)).toBe(BUNDLE_ID);
+    expect(bundleOfSource(bounded(long))).toBeNull();
+    const row = logRecord(7, { sourceLabel: long, channel: long });
+    expect(logOriginNamesRecord(logOrigin(7, { file: bounded(long), source: bounded(long), bundle: null }), row)).toBe(true);
+    expect(logOriginNamesRecord(logOrigin(7, { file: bounded(long), source: bounded(long), bundle: BUNDLE_ID }), row)).toBe(false);
+  });
+
+  describe("a label the engine compacted (#842, review A1 fv1): the matcher reads the engine's own form", () => {
+    /** The bundle id each long label really has, derived by hand from `bundle_from_source`'s rule. */
+    const COLLECTOR_SEGMENT =
+      "CMTRACE-20261017-101500-DESKTOP-7H2K9Q1-0f3c9a1b2d4e5f60718293a4b5c6d7e8.zip::CMTRACE-20261017-101500-DESKTOP-7H2K9Q1-0f3c9a1b2d4e5f60718293a4b5c6d7e8";
+    const LONG_LOG_LABELS: readonly (readonly [string, string, string | null])[] = [
+      ["257 bytes", vectorText("ascii-257"), null],
+      ["300 bytes with backslashes", vectorText("ascii-300-backslashes"), null],
+      ["a collector bundle path of 276 bytes", vectorText("bundle-path-276"), COLLECTOR_SEGMENT],
+      ["3-byte characters past 256 bytes", vectorText("cjk-273"), null],
+    ];
+
+    it.each(LONG_LOG_LABELS)("names the archive row whose source label is %s", (_why, label, bundle) => {
+      const row = logRecord(7, { sourceLabel: label, channel: label });
+      const compacted = timelineReference(label);
+      expect(compacted).not.toBe(label);
+      expect(logOriginNamesRecord(logOrigin(7, { file: compacted, source: compacted, bundle }), row)).toBe(true);
+    });
+
+    it.each(LONG_LOG_LABELS)("does not name a row with the same prefix and another length or digest (%s)", (_why, label, bundle) => {
+      const compacted = timelineReference(label);
+      const origin = logOrigin(7, { file: compacted, source: compacted, bundle });
+      expect(logOriginNamesRecord(origin, logRow7(`${label}z`))).toBe(false);
+      expect(logOriginNamesRecord(origin, logRow7(sameWidthVariant(label)))).toBe(false);
+      function logRow7(sourceLabel: string) {
+        return logRecord(7, { sourceLabel, channel: sourceLabel });
+      }
+    });
+
+    it("names the row whose file but not source, or source but not file, differs: both are compared", () => {
+      const label = vectorText("ascii-257");
+      const row = logRecord(7, { sourceLabel: label, channel: label });
+      const compacted = timelineReference(label);
+      expect(logOriginNamesRecord(logOrigin(7, { file: compacted, source: compacted }), row)).toBe(true);
+      expect(logOriginNamesRecord(logOrigin(7, { file: compacted, source: "elsewhere" }), row)).toBe(false);
+      expect(logOriginNamesRecord(logOrigin(7, { file: "elsewhere", source: compacted }), row)).toBe(false);
+    });
+
+    it("keeps a bundle the engine compacted itself: a bundle id over 256 bytes is compared as the engine leaves it", () => {
+      const host = "H".repeat(300);
+      const id = `CMTRACE-20260822-120000-${host}-0123456789abcdef0123456789abcdef`;
+      const label = `C:\\Cases\\${id}\\evidence\\ccm.log`;
+      expect(new TextEncoder().encode(id).length).toBeGreaterThan(256);
+      const row = logRecord(7, { sourceLabel: label, channel: label });
+      const origin = (bundle: string | null) =>
+        logOrigin(7, { file: timelineReference(label), source: timelineReference(label), bundle });
+      expect(logOriginNamesRecord(origin(timelineReference(id)), row)).toBe(true);
+      expect(logOriginNamesRecord(origin(null), row)).toBe(false);
+      expect(logOriginNamesRecord(origin(timelineReference(`${id}x`)), row)).toBe(false);
+    });
+
+    it("normalizes the machine and the component BEFORE it compares them, as the engine does", () => {
+      for (const name of ["log-component-padded", "log-component-fits"]) {
+        const vector = vectorDocument.origins.find((c) => c.name === name) as {
+          sourceLabel: string;
+          provider: string;
+          computer: string;
+          origin: { file: string; source: string; machine?: string | null; component?: string | null };
+        };
+        const row = logRecord(7, {
+          sourceLabel: vector.sourceLabel,
+          channel: vector.sourceLabel,
+          provider: vector.provider,
+          computer: vector.computer,
+        });
+        // The origin is what the engine's own functions built (the committed vectors), whole.
+        const origin = logOrigin(7, {
+          file: vector.origin.file,
+          source: vector.origin.source,
+          machine: vector.origin.machine ?? null,
+          component: vector.origin.component ?? null,
+        });
+        expect(logOriginNamesRecord(origin, row), name).toBe(true);
+        expect(logOriginNamesRecord(logOrigin(7, { ...originFields(origin), component: "other" }), row), name).toBe(false);
+        expect(logOriginNamesRecord(logOrigin(7, { ...originFields(origin), machine: "OTHER" }), row), name).toBe(false);
+      }
+    });
+
+    it("takes a component padded past the limit that fits once trimmed, which the engine leaves alone", () => {
+      const provider = `  ${"C".repeat(254)}  `;
+      expect(new TextEncoder().encode(provider).length).toBeGreaterThan(256);
+      const row = logRecord(7, { provider });
+      expect(logOriginNamesRecord(logOrigin(7, { component: provider.trim() }), row)).toBe(true);
+      expect(logOriginNamesRecord(logOrigin(7, { component: timelineReference(provider) }), row)).toBe(false);
+    });
+
+    function originFields(origin: TimelineOrigin) {
+      if (origin.kind !== "log") throw new Error("a log origin");
+      const { kind: _kind, ...fields } = origin;
+      return fields;
+    }
+  });
+
+  it("clamps the line to a u32 and keeps the record id whole", () => {
+    const id = 5_000_000_000;
+    const row = logRecord(id);
+    expect(logOriginNamesRecord(logOrigin(id, { line: 4_294_967_295, recordId: id }), row)).toBe(true);
+    expect(logOriginNamesRecord(logOrigin(id, { line: id, recordId: id }), row)).toBe(false);
+    expect(logOriginNamesRecord(logOrigin(id, { line: 4_294_967_295, recordId: 4_294_967_295 }), row)).toBe(false);
+    expect(logOriginNamesRecord(logOrigin(4_294_967_295), logRecord(4_294_967_295))).toBe(true);
+  });
+
+  it("names a row numbered 0", () => {
+    expect(logOriginNamesRecord(logOrigin(0), logRecord(0))).toBe(true);
+  });
+
+  it.each([
+    ["a negative record id", -1],
+    ["a record id that is not a whole number", 7.5],
+    ["a record id past the safe integers", Number.MAX_SAFE_INTEGER + 2],
+    ["a record id that is not finite", Number.NaN],
+  ])("names nothing for %s, even from an origin that carries the same number", (_why, id) => {
+    expect(logOriginNamesRecord(logOrigin(7), logRecord(7, { eventRecordId: id }))).toBe(false);
+    expect(logOriginNamesRecord(logOrigin(7, { recordId: id, line: id }), logRecord(7, { eventRecordId: id }))).toBe(false);
+    expect(logOriginNamesRecord(logOrigin(7, { recordId: id, line: Math.min(id, 4_294_967_295) }), logRecord(7, { eventRecordId: id }))).toBe(false);
+  });
+
+  it("pairs only a log record with a log origin", () => {
+    const event = originOf(record(7, { eventId: 100 }));
+    expect(logOriginNamesRecord(event, logRecord(7))).toBe(false);
+    expect(logOriginNamesRecord(logOrigin(7), record(7))).toBe(false);
+    expect(logOriginNamesRecord(logOrigin(7), logRecord(7, { originKind: "event" }))).toBe(false);
+    expect(logOriginNamesRecord(logOrigin(7), logRecord(7, { originKind: undefined }))).toBe(false);
+  });
+});
+
+describe("isUnmatchableEvent: an event record the join can never name (#842)", () => {
+  it.each([
+    ["no number and no text", { eventRecordId: 0, eventRecordIdText: null }],
+    ["a number of 0 and empty text", { eventRecordId: 0, eventRecordIdText: "" }],
+    ["text that is not digits and a number of 0", { eventRecordId: 0, eventRecordIdText: "abc" }],
+    ["all-zero text", { eventRecordId: 0, eventRecordIdText: "000" }],
+    ["a negative number", { eventRecordId: -4, eventRecordIdText: undefined }],
+    ["digit text and a number of 0, which the engine refuses and cannot rewrite", { eventRecordId: 0, eventRecordIdText: "12" }],
+    ["padded digit text and a number of 0, which the engine refuses and cannot rewrite", { eventRecordId: 0, eventRecordIdText: " 7 " }],
+    ["a number past 2^53 and no text, which the engine refuses and cannot rewrite", { eventRecordId: Number.MAX_SAFE_INTEGER + 1, eventRecordIdText: null }],
+  ])("is true for an event record with %s", (_why, change) => {
+    expect(isUnmatchableEvent(record(5, change))).toBe(true);
+  });
+
+  it.each([
+    ["a number", { eventRecordId: 5, eventRecordIdText: undefined }],
+    ["digit text and the same number", { eventRecordId: 12, eventRecordIdText: "12" }],
+    ["text that is not digits and a number the engine rewrites it to", { eventRecordId: 5, eventRecordIdText: "abc" }],
+    ["padded text and a number the engine rewrites it to", { eventRecordId: 7, eventRecordIdText: " 7 " }],
+    ["text that conflicts with a positive number, which the engine rewrites to the number", { eventRecordId: 9, eventRecordIdText: "5" }],
+    ["digit text past 2^53 that the engine accepts", { eventRecordId: Number.MAX_SAFE_INTEGER + 1, eventRecordIdText: "9007199254740993" }],
+  ])("is false for an event record with %s", (_why, change) => {
+    expect(isUnmatchableEvent(record(5, change))).toBe(false);
+  });
+
+  it("is false for a log record, which is matched by its fields and not by an identity", () => {
+    expect(isUnmatchableEvent(record(5, { originKind: "log", eventRecordId: 0, eventRecordIdText: null }))).toBe(false);
+  });
+
+  describe("agrees with the identity the ENGINE put on the origin (the committed vectors)", () => {
+    interface IdentityVector {
+      name: string;
+      originKind: "event" | "log";
+      text: string | null;
+      id: number;
+      originRecordIdText: string | null;
+      originRecordId: number;
+    }
+    const cases = (vectorDocument.identities as IdentityVector[]).filter((c) => c.originKind === "event");
+
+    it.each(cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
+      const row = record(5, { eventRecordId: c.id, eventRecordIdText: c.text });
+      // What the join reads off the origin the engine built: `originIdentityText`.
+      const engineIdentity = originIdentityText({
+        kind: "event",
+        stableId: "opaque",
+        source: "Live",
+        machine: null,
+        bundle: null,
+        channel: "System",
+        provider: "Provider",
+        processId: null,
+        eventId: 100,
+        recordId: c.originRecordId,
+        recordIdText: c.originRecordIdText,
+      } as EventOrigin);
+      expect(isUnmatchableEvent(row)).toBe(engineIdentity === null);
+    });
+
+    it("covers cases of both kinds, so the agreement is not trivial", () => {
+      const verdicts = cases.map((c) => isUnmatchableEvent(record(5, { eventRecordId: c.id, eventRecordIdText: c.text })));
+      expect(verdicts).toContain(true);
+      expect(verdicts).toContain(false);
+    });
+  });
+
+  it("is the join's own mirror: an event record is unmatchable exactly when no identity finds it in the join's index", () => {
+    const samples = [
+      record(1),
+      record(2, { eventRecordId: 0, eventRecordIdText: null }),
+      record(3, { eventRecordId: 0, eventRecordIdText: "abc" }),
+      record(4, { eventRecordId: 0, eventRecordIdText: "000" }),
+      record(5, { eventRecordId: 7, eventRecordIdText: " 9 " }),
+      record(6, { eventRecordId: -1, eventRecordIdText: "" }),
+      record(7, { eventRecordId: 0, eventRecordIdText: "12" }),
+      record(8, { eventRecordId: Number.MAX_SAFE_INTEGER + 1, eventRecordIdText: null }),
+    ];
+    for (const sample of samples) {
+      const index = buildEvidenceIndex([sample]);
+      const candidates = new Set(
+        [sample.eventRecordIdText ?? "", sample.eventRecordIdText?.trim() ?? "", String(sample.eventRecordId), "5", "7", "9", "12", "0", "000"].filter((c) => c !== ""),
+      );
+      const found = [...candidates].some((identity) => recordsForOriginIdentity(index, sample.eventId, identity).includes(sample));
+      expect(isUnmatchableEvent(sample), `${sample.eventRecordIdText ?? "null"} / ${sample.eventRecordId}`).toBe(!found);
+    }
   });
 });

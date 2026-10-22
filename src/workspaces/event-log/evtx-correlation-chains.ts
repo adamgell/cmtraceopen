@@ -31,7 +31,12 @@ import {
   type TimelineItem,
 } from "./unified-timeline";
 
-/** Same bound as `UNPLACED_PREVIEW_LIMIT` in `UnifiedTimelineView`. */
+/**
+ * The most chain rows the view and the rail draw (spec 8.11: 100). A render budget of this feature.
+ * It is not the engine's preview limit (`EVENT_LOG_TIMELINE_PREVIEW_ITEM_LIMIT`), which bounds the
+ * items in the first reply's previews and says nothing about how many rows are drawn; the numbers
+ * are equal and neither follows the other.
+ */
 export const CORRELATION_CHAIN_RENDER_LIMIT = 100;
 
 const TITLE_HEAD_LIMIT = 80;
@@ -42,8 +47,11 @@ export type CorrelationChainStrength =
   | "ambiguous"
   | "coverageBlocked";
 
-/** Strongest first. A higher index is a weaker label and wins a contradiction. */
-const STRENGTH_ORDER: readonly CorrelationChainStrength[] = [
+/**
+ * Strongest first. A higher index is a weaker label and wins a contradiction. The overview strip
+ * uses the same order for its rows, so the two cannot disagree about which strength is strongest.
+ */
+export const STRENGTH_ORDER: readonly CorrelationChainStrength[] = [
   "exact",
   "candidate",
   "ambiguous",
@@ -167,13 +175,21 @@ export interface CorrelationChainModel {
    */
   linkedPairs: CorrelationLinkedPair[];
   /**
+   * EVERY row, before the render cap, by each of its member ids (resolved or not), in the model's
+   * row order, strongest first. The cap trims `chains` only: a record whose row is past it is
+   * still found here. A row listed here is the same object `chains` holds when the cap keeps it.
+   * An id that no row names is absent.
+   */
+  rowsByMember: ReadonlyMap<string, readonly CorrelationChain[]>;
+  /**
    * Reduced pairs that cannot link two entries: fewer than 2 distinct member ids, or an exact or
    * candidate relation with no second endpoint. Counted once per reduced pair, whatever the label.
    */
   ignoredRelationCount: number;
 }
 
-function compareStrings(a: string, b: string): number {
+/** Code-unit order, so a sort does not depend on the locale. The one comparator of the correlation modules. */
+export function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
@@ -354,7 +370,11 @@ class DisjointSet {
   }
 }
 
-function messageHead(message: string): string {
+/**
+ * The first non-empty line of a message, cut to the title head (80 code points, "..." when cut).
+ * Exported so the dock names an entry's message exactly as a chain title does.
+ */
+export function messageHead(message: string): string {
   const line =
     message
       .split(/\r?\n/)
@@ -377,8 +397,12 @@ function itemLabel(item: TimelineItem): string {
     : `${getBaseName(item.origin.file) || item.origin.file} · line ${item.origin.line}`;
 }
 
-/** D19: highest-severity member, ties broken by earliest timestamp, then by id. */
-function derivedTitle(
+/**
+ * D19: highest-severity member, ties broken by earliest timestamp, then by id. Exported so the
+ * dock, which reads only the items inside its window, can name a row exactly as the model does
+ * when every member is among them. It is the title of a row with no covering finding.
+ */
+export function derivedTitle(
   memberIds: readonly string[],
   itemsById: ReadonlyMap<string, TimelineItem>,
 ): string | null {
@@ -654,7 +678,15 @@ export function buildCorrelationChains(
     ambiguous: 0,
     coverageBlocked: 0,
   };
-  for (const row of rows) counts[row.strength] += 1;
+  const rowsByMember = new Map<string, CorrelationChain[]>();
+  for (const row of rows) {
+    counts[row.strength] += 1;
+    for (const member of [...row.memberIds, ...row.unresolvedMemberIds]) {
+      const listed = rowsByMember.get(member);
+      if (listed === undefined) rowsByMember.set(member, [row]);
+      else listed.push(row);
+    }
+  }
 
   const chains = rows.slice(0, CORRELATION_CHAIN_RENDER_LIMIT);
   const totalIsValid =
@@ -676,6 +708,7 @@ export function buildCorrelationChains(
       right: relation.right as string,
       strength: relation.strength as "exact" | "candidate",
     })),
+    rowsByMember,
     ignoredRelationCount,
   };
 }

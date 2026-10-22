@@ -33,49 +33,7 @@ import {
   ENGINE_DIAGNOSIS_DISPLAY_TEXT_BYTES,
   ENGINE_TIMELINE_IDENTITY_TEXT_BYTES,
 } from "./evtx-insights-data";
-
-const squash = (text: string) => text.replace(/\s+/g, "");
-
-/**
- * The text of the item that starts at `start` (a signature), through the brace that closes its body.
- * Braces inside string literals and line comments do not count.
- */
-function itemText(source: string, start: string): string {
-  const at = source.indexOf(start);
-  if (at < 0) throw new Error(`the Rust source no longer has \`${start}\``);
-  if (source.indexOf(start, at + 1) >= 0) throw new Error(`\`${start}\` is no longer unique`);
-  let depth = 0;
-  let opened = false;
-  for (let index = at; index < source.length; index += 1) {
-    const char = source[index] as string;
-    if (char === "/" && source[index + 1] === "/") {
-      while (index < source.length && source[index] !== "\n") index += 1;
-    } else if (char === '"') {
-      index += 1;
-      while (index < source.length && source[index] !== '"') {
-        if (source[index] === "\\") index += 1;
-        index += 1;
-      }
-    } else if (char === "{") {
-      depth += 1;
-      opened = true;
-    } else if (char === "}") {
-      depth -= 1;
-      if (opened && depth === 0) return source.slice(at, index + 1);
-    }
-  }
-  throw new Error(`\`${start}\` has no closing brace`);
-}
-
-/** The value of `const NAME: usize = <expression>;`, a product of integer literals. */
-function constantValue(source: string, name: string): number {
-  const found = new RegExp(`const ${name}: (?:usize|u64) = ([0-9_ *]+);`).exec(source);
-  if (!found) throw new Error(`the Rust source no longer has \`const ${name}\` as integer literals`);
-  return (found[1] as string)
-    .split("*")
-    .map((factor) => Number(factor.trim().replace(/_/g, "")))
-    .reduce((product, factor) => product * factor, 1);
-}
+import { constantValue, itemText, squash } from "./rust-source-test-helpers";
 
 describe("timeline.rs: identity text compaction", () => {
   it("limits identity text to the bytes the frontend copy assumes", () => {

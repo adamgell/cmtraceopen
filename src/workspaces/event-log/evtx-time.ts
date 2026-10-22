@@ -105,6 +105,7 @@ function wallClock(epochMs: number, mode: EvtxTimeZoneMode) {
   const date = new Date(epochMs);
   return mode === "utc"
     ? {
+        year: date.getUTCFullYear(),
         month: date.getUTCMonth(),
         day: date.getUTCDate(),
         hours: date.getUTCHours(),
@@ -112,6 +113,7 @@ function wallClock(epochMs: number, mode: EvtxTimeZoneMode) {
         seconds: date.getUTCSeconds(),
       }
     : {
+        year: date.getFullYear(),
         month: date.getMonth(),
         day: date.getDate(),
         hours: date.getHours(),
@@ -127,27 +129,137 @@ export function formatClock(epochMs: number, mode: EvtxTimeZoneMode, withSeconds
   return withSeconds ? `${hhmm}:${pad(clock.seconds)}` : hhmm;
 }
 
+/**
+ * A clock reading with its day, `Oct 16 22:00` (`Oct 16 22:00:05` with `withSeconds`), in the chosen
+ * zone. For labels that sit on a span longer than a day, where a bare `22:00` would not say which one.
+ * With `withYear` the zone's year follows the day, `Oct 16 2026 22:00`, for a span that crosses a
+ * calendar year or buckets a year wide: without it the same label names two different years alike.
+ */
+export function formatDayClock(
+  epochMs: number,
+  mode: EvtxTimeZoneMode,
+  withSeconds = false,
+  withYear = false,
+): string {
+  const { year, month, day } = wallClock(epochMs, mode);
+  const date = withYear ? `${MONTH_ABBREVIATIONS[month]} ${day} ${year}` : `${MONTH_ABBREVIATIONS[month]} ${day}`;
+  return `${date} ${formatClock(epochMs, mode, withSeconds)}`;
+}
+
 /** Between the two times of a range label: an en dash, the spec's glyph (section 8.4). */
 export const TIME_RANGE_SEPARATOR = "\u2013";
+
+/** A range this long or longer always names the year in its label. */
+const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 
 /** A range shorter than this shows seconds, so its two ends do not read as the same minute. */
 const SECONDS_BELOW_MS = 2 * 60 * 1000;
 
 /**
  * A half-open time range as a label: `09:00-09:45` on one day, `Oct 16 22:00-Oct 17 03:00` across
- * days, and with seconds when the range is shorter than two minutes. The days are the zone's own,
- * and the last instant inside the range decides whether it crosses one, so a range that ends at
- * midnight stays on its day. The separator is `TIME_RANGE_SEPARATOR`.
+ * days, and with seconds when the range is shorter than two minutes. The days are the zone's own.
+ * The separator is `TIME_RANGE_SEPARATOR`. `withYear` is `formatDayClock`'s.
+ *
+ * The two ends never read alike for a range of a second or more. The label escalates until they
+ * differ: the clock alone (`09:00`), then the day (`Oct 6 00:00`, which a midnight-to-midnight day
+ * needs: it ends on the NEXT date but its last instant is on the first), then the year, and when no
+ * date separates them (a DST fall-back repeats a wall time) each end names its offset
+ * (`01:00 UTC+01:00`). Milliseconds are only for a range under one second.
  */
-export function formatTimeRange(startMs: number, endMs: number, mode: EvtxTimeZoneMode): string {
+export function formatTimeRange(
+  startMs: number,
+  endMs: number,
+  mode: EvtxTimeZoneMode,
+  withYear = false,
+): string {
   const withSeconds = endMs - startMs < SECONDS_BELOW_MS;
-  const crossesDays = eventDateKey(startMs, mode) !== eventDateKey(Math.max(startMs, endMs - 1), mode);
-  const end = (epochMs: number) => {
-    const { month, day } = wallClock(epochMs, mode);
-    const clock = formatClock(epochMs, mode, withSeconds);
-    return crossesDays ? `${MONTH_ABBREVIATIONS[month]} ${day} ${clock}` : clock;
+  // A range a year wide or more always names the year: its two ends would otherwise read alike.
+  const year = withYear || endMs - startMs >= YEAR_MS;
+  // The form to start with. A range that ends at a midnight is on the day before it, so its last
+  // instant says "same day" and a clock alone is tried first; the ladder below corrects that.
+  const sameDay =
+    eventDateKey(startMs, mode) === eventDateKey(Math.max(startMs, endMs - 1), mode);
+  const first = year ? 2 : sameDay ? 0 : 1;
+  const endText = (epochMs: number, form: number) =>
+    form === 0
+      ? formatClock(epochMs, mode, withSeconds)
+      : formatDayClock(epochMs, mode, withSeconds, form === 2);
+
+  // The ladder: the clock, then the day, then the year, taking the first form whose two ends differ.
+  // No range of a second or more may ever render equal ends, whatever made them alike.
+  for (let form = first; form <= 2; form += 1) {
+    const from = endText(startMs, form);
+    const to = endText(endMs, form);
+    if (from !== to) return `${from}${TIME_RANGE_SEPARATOR}${to}`;
+  }
+  // No form told them apart, so the ends are the same wall time and the difference is not in the date:
+  // either a repeated hour (a DST fall-back), where each end names its own offset, or a range under a
+  // second, which milliseconds tell apart. Both are applied to the first form tried, not to the longest.
+  const ends = tellRangeEndsApart(
+    endText(startMs, first),
+    endText(endMs, first),
+    zoneOffsetMinutes(startMs, mode),
+    zoneOffsetMinutes(endMs, mode),
+  );
+  if (ends.start !== ends.end || endMs - startMs >= 1000) {
+    return `${ends.start}${TIME_RANGE_SEPARATOR}${ends.end}`;
+  }
+  const milliseconds = (epochMs: number) => String(((epochMs % 1000) + 1000) % 1000).padStart(3, "0");
+  return `${ends.start}.${milliseconds(startMs)}${TIME_RANGE_SEPARATOR}${ends.end}.${milliseconds(endMs)}`;
+}
+
+/**
+ * The two end texts of a range, each with its zone offset when they read alike and the offsets
+ * differ: `01:00 UTC+01:00` and `01:00 UTC+00:00` for the hour that repeats when the clocks go back.
+ * Anything else is returned as it came: texts that differ need nothing, and equal texts at one offset
+ * are a sub-second range, which `formatTimeRange` tells apart by milliseconds. Pure, so it is tested
+ * with any two offsets whatever the host's zone.
+ */
+export function tellRangeEndsApart(
+  startText: string,
+  endText: string,
+  startOffsetMinutes: number,
+  endOffsetMinutes: number,
+): { start: string; end: string } {
+  if (startText !== endText || startOffsetMinutes === endOffsetMinutes) {
+    return { start: startText, end: endText };
+  }
+  return {
+    start: `${startText} ${offsetLabel(startOffsetMinutes)}`,
+    end: `${endText} ${offsetLabel(endOffsetMinutes)}`,
   };
-  return `${end(startMs)}${TIME_RANGE_SEPARATOR}${end(endMs)}`;
+}
+
+/** A zone's offset from UTC in minutes at an instant: zero in UTC, the host's own in local mode. */
+function zoneOffsetMinutes(epochMs: number, mode: EvtxTimeZoneMode): number {
+  // getTimezoneOffset is minutes *behind* UTC, so the sign is inverted.
+  return mode === "utc" ? 0 : -new Date(epochMs).getTimezoneOffset();
+}
+
+/** An offset as `UTC+01:00` (`UTC-05:00`, `UTC+00:00`). */
+export function offsetLabel(offsetMinutes: number): string {
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const absolute = Math.abs(offsetMinutes);
+  return `UTC${sign}${pad(Math.floor(absolute / 60))}:${pad(absolute % 60)}`;
+}
+
+/**
+ * Whether a range label must name the year: either end is not in the current year (`nowMs`, in the
+ * chosen zone), the two ends fall in different years, or the range is 365 days or longer. The Time
+ * chip uses it, so a range brushed on a multi-year chart reads as the chart's own labels do.
+ */
+export function timeRangeNeedsYear(
+  startMs: number,
+  endMs: number,
+  mode: EvtxTimeZoneMode,
+  nowMs: number,
+): boolean {
+  const current = wallClock(nowMs, mode).year;
+  return (
+    endMs - startMs >= YEAR_MS ||
+    wallClock(startMs, mode).year !== current ||
+    wallClock(endMs, mode).year !== current
+  );
 }
 
 /**
@@ -159,9 +271,5 @@ export function formatTimeRange(startMs: number, endMs: number, mode: EvtxTimeZo
  */
 export function timeZoneLabel(mode: EvtxTimeZoneMode, epochMs = Date.now()): string {
   if (mode === "utc") return "UTC";
-  // getTimezoneOffset is minutes *behind* UTC, so the sign is inverted for display.
-  const offsetMinutes = -new Date(epochMs).getTimezoneOffset();
-  const sign = offsetMinutes < 0 ? "-" : "+";
-  const absolute = Math.abs(offsetMinutes);
-  return `UTC${sign}${pad(Math.floor(absolute / 60))}:${pad(absolute % 60)}`;
+  return offsetLabel(zoneOffsetMinutes(epochMs, mode));
 }

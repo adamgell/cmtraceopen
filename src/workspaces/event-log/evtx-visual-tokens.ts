@@ -33,6 +33,7 @@ import { readableOn } from "../../lib/color-contrast";
 import { getThemeById } from "../../lib/themes";
 import type { CMTraceTheme } from "../../lib/themes/types";
 import { useUiStore } from "../../stores/ui-store";
+import type { CorrelationChainStrength } from "./evtx-correlation-chains";
 import type {
   DiagnosisCorrelationStatus,
   DiagnosisFindingSeverity,
@@ -99,6 +100,15 @@ export interface EvtxColorTriplet {
 export interface EvtxVisualTokens {
   levels: Record<EvtxLevel, EvtxLevelVisual>;
   strengths: Record<DiagnosisCorrelationStatus, EvtxBadgeVisual>;
+  /**
+   * The thin chain-span bars of the Correlation overview strip (8.11, issue #840): each strength's
+   * solid hue. Spec 8.11 draws them in `strengths.<s>.border`, so today they ARE those colors; the
+   * role is its own so that the placement inventory holds the bars to 3:1 on the strip and under
+   * the zoom band, and a later change to a badge border cannot move them unseen. Drawn on
+   * colorNeutralBackground1 and over the band's wash, which is drawn behind them
+   * (`overviewBandOpacity` solves how opaque it may be); never on a selection background.
+   */
+  strengthBars: Record<CorrelationChainStrength, string>;
   /** Selected row, chain, view card and active brushed-time chip (Q-1). */
   selection: EvtxColorTriplet;
   /** Error finding callouts in the rail. */
@@ -257,65 +267,73 @@ export function buildEvtxVisualTokens(theme: CMTraceTheme): EvtxVisualTokens {
     },
   };
 
+  const strengths: Record<DiagnosisCorrelationStatus, EvtxBadgeVisual> = {
+    exact: {
+      label: "Exact",
+      background: tokens.colorPaletteBlueBackground2,
+      foreground: tokens.colorPaletteBlueForeground2,
+      border: tokens.colorPaletteBlueBorderActive,
+      borderStyle: "solid",
+    },
+    candidate: {
+      label: "Candidate",
+      background: tokens.colorNeutralBackground3,
+      foreground: tokens.colorNeutralForeground2,
+      border: tokens.colorNeutralForeground2,
+      borderStyle: "dashed",
+    },
+    ambiguous: {
+      label: "Ambiguous",
+      background: palette.warning.background,
+      // Deviates from spec 6.3 (palette.warning.text label): the label goes
+      // through readableOn, which falls back to black or white when the
+      // warning text misses 4.5:1 on the badge. No theme falls back at
+      // present (the lowest is 4.63:1, solarized-dark).
+      foreground: readableOn(
+        palette.warning.background,
+        palette.warning.text,
+        4.5,
+      ),
+      // Deviates from spec 6.3 (colorPaletteMarigoldBorder2): that token is
+      // 2.16:1 on the light surface; the warning text color reaches 3:1.
+      border: palette.warning.text,
+      borderStyle: "solid",
+    },
+    // The spec names the label and icon but no colors. A coverage gap is
+    // neither success nor failure, so it stays neutral, with the icon
+    // carrying the meaning. Its solid accessible border keeps it from being
+    // mistaken for Candidate (dashed) or Not linked (dotted). Background3
+    // plus Foreground2 keep the label at 4.5:1 in every theme (the lowest
+    // is 4.86:1, solarized-dark).
+    coverageBlocked: {
+      label: "Coverage blocked",
+      background: tokens.colorNeutralBackground3,
+      foreground: tokens.colorNeutralForeground2,
+      border: tokens.colorNeutralStrokeAccessible,
+      borderStyle: "solid",
+      Icon: PlugDisconnected16Regular,
+    },
+    notCausal: {
+      label: "Not linked",
+      background: tokens.colorNeutralBackground3,
+      foreground: tokens.colorNeutralForeground2,
+      // Deviates from spec 6.3 (colorNeutralForeground3): that token is
+      // 2.92:1 on the solarized-dark rail and 2.16 to 2.28:1 on the
+      // selection background; the accessible stroke reaches 3:1 on every
+      // surface the badge sits on. The dotted style still marks the state.
+      border: tokens.colorNeutralStrokeAccessible,
+      borderStyle: "dotted",
+    },
+  };
+
   return {
     levels,
-    strengths: {
-      exact: {
-        label: "Exact",
-        background: tokens.colorPaletteBlueBackground2,
-        foreground: tokens.colorPaletteBlueForeground2,
-        border: tokens.colorPaletteBlueBorderActive,
-        borderStyle: "solid",
-      },
-      candidate: {
-        label: "Candidate",
-        background: tokens.colorNeutralBackground3,
-        foreground: tokens.colorNeutralForeground2,
-        border: tokens.colorNeutralForeground2,
-        borderStyle: "dashed",
-      },
-      ambiguous: {
-        label: "Ambiguous",
-        background: palette.warning.background,
-        // Deviates from spec 6.3 (palette.warning.text label): the label goes
-        // through readableOn, which falls back to black or white when the
-        // warning text misses 4.5:1 on the badge. No theme falls back at
-        // present (the lowest is 4.63:1, solarized-dark).
-        foreground: readableOn(
-          palette.warning.background,
-          palette.warning.text,
-          4.5,
-        ),
-        // Deviates from spec 6.3 (colorPaletteMarigoldBorder2): that token is
-        // 2.16:1 on the light surface; the warning text color reaches 3:1.
-        border: palette.warning.text,
-        borderStyle: "solid",
-      },
-      // The spec names the label and icon but no colors. A coverage gap is
-      // neither success nor failure, so it stays neutral, with the icon
-      // carrying the meaning. Its solid accessible border keeps it from being
-      // mistaken for Candidate (dashed) or Not linked (dotted). Background3
-      // plus Foreground2 keep the label at 4.5:1 in every theme (the lowest
-      // is 4.86:1, solarized-dark).
-      coverageBlocked: {
-        label: "Coverage blocked",
-        background: tokens.colorNeutralBackground3,
-        foreground: tokens.colorNeutralForeground2,
-        border: tokens.colorNeutralStrokeAccessible,
-        borderStyle: "solid",
-        Icon: PlugDisconnected16Regular,
-      },
-      notCausal: {
-        label: "Not linked",
-        background: tokens.colorNeutralBackground3,
-        foreground: tokens.colorNeutralForeground2,
-        // Deviates from spec 6.3 (colorNeutralForeground3): that token is
-        // 2.92:1 on the solarized-dark rail and 2.16 to 2.28:1 on the
-        // selection background; the accessible stroke reaches 3:1 on every
-        // surface the badge sits on. The dotted style still marks the state.
-        border: tokens.colorNeutralStrokeAccessible,
-        borderStyle: "dotted",
-      },
+    strengths,
+    strengthBars: {
+      exact: strengths.exact.border,
+      candidate: strengths.candidate.border,
+      ambiguous: strengths.ambiguous.border,
+      coverageBlocked: strengths.coverageBlocked.border,
     },
     findingSeverityVisual: (severity) =>
       levels[FINDING_SEVERITY_LEVEL[severity]],

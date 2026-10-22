@@ -27,6 +27,7 @@ import {
 } from "./evtx-correlation-view-model";
 import { formatEventTime, timeZoneLabel, type EvtxTimeZoneMode } from "./evtx-time";
 import type { TimelineItem } from "./unified-timeline";
+import type { LoadedCorrelationWindow } from "./evtx-correlation-window";
 
 export type { UnplacedEvidence };
 
@@ -168,6 +169,15 @@ export function renderCapNotice(input: {
   return input.omittedCount > 0
     ? `Showing the first ${count(input.shown)} of ${count(input.totalCount)}; ${count(input.omittedCount)} omitted.`
     : null;
+}
+
+/**
+ * The line when the selected row is past the render cap and is listed after the rows the cap kept
+ * (`listedRows`). `shown` is the number of rows the cap kept. Without it a row opened from the dock
+ * or the rail would appear below the cap with nothing saying why it is there.
+ */
+export function pastCapNotice(shown: number): string {
+  return `The selected chain is past the first ${count(shown)} rows, so it is listed after them.`;
 }
 
 /**
@@ -333,4 +343,329 @@ export function chainCopyText(input: ChainCopyInput): string {
   if (rows.length === 0) lines.push("  No evidence row was loaded for this row.");
   for (const row of rows) lines.push(`  ${row.entry}: ${row.field} = ${row.value}`);
   return lines.join("\n");
+}
+
+// ---- the correlation dock (spec 8.12, #842) ------------------------------------------------------
+//
+// The dock shows what was recorded around one event. Every entry it draws that is not in the event's
+// chain is there because of its TIME and for no other reason, and its words say so: they never say
+// one entry caused, followed or explains another, and "not linked" is said only when the session can
+// speak for the entry (`buildChainPlot`'s rule). Everything the dock could not look at is a coverage
+// state in its words, never an absence.
+
+/** The half width as the dropdown names it: "±30 s", "±75 s", "±2 min", "±5 min". */
+export function windowWidthLabel(halfWidthMs: number): string {
+  if (halfWidthMs >= 60_000 && halfWidthMs % 60_000 === 0) return `\u00b1${halfWidthMs / 60_000} min`;
+  if (halfWidthMs >= 1_000 && halfWidthMs % 1_000 === 0) return `\u00b1${halfWidthMs / 1_000} s`;
+  return `\u00b1${count(halfWidthMs)} ms`;
+}
+
+/**
+ * "{n} sources", or "at least {n} sources" when the window was not read whole: an unread entry can
+ * belong to a source that is not counted.
+ */
+export function sourcesText(sourceCount: number, complete: boolean): string {
+  const noun = sourceCount === 1 ? "source" : "sources";
+  return `${complete ? "" : "at least "}${count(sourceCount)} ${noun}`;
+}
+
+interface DockSubtitleInput {
+  eventId: number;
+  /** The event's time, formatted by the caller in the operator's time zone. */
+  timeText: string;
+  halfWidthMs: number;
+  /** Null when the window was not read (the dock is collapsed, or the read has not finished). */
+  sources: string | null;
+}
+
+/** The header line (spec 8.12): "around Event {id} · {time} · window ±{w} · {n} sources". */
+export function dockSubtitle(input: DockSubtitleInput): string {
+  return [
+    `around Event ${input.eventId}`,
+    input.timeText,
+    `window ${windowWidthLabel(input.halfWidthMs)}`,
+    input.sources,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" \u00b7 ");
+}
+
+/** The dock body when no event is selected. */
+export const NO_SELECTION_TEXT = "Select an event to see what happened around it.";
+
+/**
+ * The dock body when the selected event has no usable timestamp (spec 8.12). It states a fact read
+ * from the event's OWN timestamp field (a record is untimed when it has none), not a claim about an
+ * entry of the unplaced list, so the unplaced audit does not apply to it.
+ */
+export const UNTIMED_TEXT = "This event has no timestamp; it cannot be placed.";
+
+/**
+ * The body of a surface that reads the analysis session, while there is no session and none is on
+ * the way: nothing was loaded, or the analysis could not be built.
+ */
+export const NO_SESSION_TEXT = "No event analysis is available. Load events to see what is around an event.";
+
+/**
+ * The same surfaces' body while the session IS on the way: the events are loaded and the analysis is
+ * being built (or rebuilt), so there is no session yet. "Pending" is not "none": this says to wait,
+ * where `NO_SESSION_TEXT` says there is nothing to wait for. Shared by the correlation dock and the
+ * Details context (#843).
+ */
+export const ANALYSIS_BUILDING_TEXT =
+  "The event analysis is being built, so the entries around this event are not available yet.";
+
+/** The dock body while the first read of a window is under way. */
+export const READING_WINDOW_TEXT = "Reading the entries around this event...";
+
+/**
+ * Said while the session's correlation links are not in: the entries are shown by time alone, and
+ * no entry is called linked or not linked.
+ */
+export const LINKS_LOADING_TEXT =
+  "Correlation links for this session are still loading, so entries are shown by time only.";
+
+/** The failure of the first read, whose count of entries is therefore not known. */
+export function windowFailureText(error: string | null): string {
+  return `The entries around this event could not be read${error === null ? "" : ` (${error})`}.`;
+}
+
+/**
+ * The line for a window that was not read whole, or null when it was. The numbers are exact: the
+ * first reply counted the window. It names what stopped the read and never says the unread entries
+ * do not exist. A read that failed before any count is `windowFailureText`'s.
+ */
+export function windowNotice(
+  window: Pick<
+    LoadedCorrelationWindow,
+    "complete" | "windowItems" | "omittedItems" | "items" | "halfWidthMs" | "stoppedBy" | "error"
+  >,
+): string | null {
+  if (window.complete) return null;
+  if (window.windowItems === null) return windowFailureText(window.error);
+  const why =
+    window.stoppedBy === "callLimit"
+      ? "its call limit"
+      : window.stoppedBy === "budget"
+        ? "its memory limit"
+        : `an error${window.error === null ? "" : ` (${window.error})`}`;
+  return `Showing ${count(window.items.length)} of ${count(window.windowItems)} entries within ${windowWidthLabel(window.halfWidthMs)}; reading stopped at ${why}, so entries and sources may be missing.`;
+}
+
+interface EmptyWindowInput {
+  halfWidthMs: number;
+  /** The session was built from fewer events than are loaded, or from a scope that is not known. */
+  narrowed: boolean;
+  /** A source was not fully read (a channel needs elevation, a file failed): entries may be missing. */
+  unreadSources: boolean;
+  /**
+   * The window and its counts are an earlier session's, shown while a newer one is read: the newer
+   * one exists because events were added or the load changed, so the claim may already be false.
+   */
+  updating: boolean;
+  /**
+   * How many entries the session could not place in time (`CorrelationCounts.unplacedList.total`,
+   * the engine's own count from the same run), or null when it is not known. An entry the engine
+   * could not place is in NO window, so a window cannot speak for it: the claim needs a KNOWN zero.
+   */
+  unplacedTotal: number | null;
+}
+
+/**
+ * The dock's "no other sources" sentence. The spec's own words are an absence claim, so they are
+ * said only when all of these hold: the window was read whole (the caller asks only then), nothing
+ * is narrowed, no source went unread, the pair is not an earlier session's, and the session's count
+ * of entries it could not place in time is a known zero. Otherwise the sentence says what it was
+ * looked for IN, and what was not looked at. (A correlation coverage gap does not bear on it: no
+ * gap removes an entry from the window; gaps withdraw "not linked", and the dock does that.)
+ */
+export function emptyWindowText(input: EmptyWindowInput): { text: string; absolute: boolean } {
+  const width = windowWidthLabel(input.halfWidthMs);
+  if (!input.narrowed && !input.unreadSources && !input.updating && input.unplacedTotal === 0) {
+    return { text: `No other sources have entries within ${width}.`, absolute: true };
+  }
+  const parts = [`No other visible sources have entries within ${width}.`];
+  if (input.narrowed) parts.push("Events hidden by the current filters or time range are not searched.");
+  if (input.unreadSources) parts.push("Some sources were not fully read, so entries may be missing.");
+  if (input.updating) parts.push("The timeline is being rebuilt, so this may change.");
+  if (input.unplacedTotal === null) {
+    parts.push("How many entries have no usable time is not known, and such entries are in no window.");
+  } else if (input.unplacedTotal > 0) {
+    parts.push(
+      `${count(input.unplacedTotal)} ${input.unplacedTotal === 1 ? "entry has" : "entries have"} no usable time and ${input.unplacedTotal === 1 ? "appears" : "appear"} in no window.`,
+    );
+  }
+  return { text: parts.join(" "), absolute: false };
+}
+
+/** Added after the scope disclosure when the view is narrowed: the window is narrowed too. */
+export const DOCK_SCOPE_NOTE =
+  "Entries from events hidden by the current filters or time range are not shown in this window.";
+
+/** A source was not fully read: the window may be missing entries from it. */
+export const UNREAD_SOURCES_NOTE = "Some sources were not fully read, so entries may be missing from this window.";
+
+/**
+ * The selected event is not among the entries the timeline was built from. An absence claim: it is
+ * given ONLY for a window that was read whole (an unread entry could be the event), and only for a
+ * record the join could have matched.
+ */
+export const NOT_IN_TIMELINE_NOTE =
+  "This event is not among the entries this timeline was built from (the current filters can hide it), so its links cannot be shown.";
+
+/**
+ * The read of the window stopped before this event was found. It may be among the entries that
+ * were not read, so nothing is said about whether it is in the timeline or what it is linked to.
+ */
+export const NOT_READ_NOTE =
+  "The read of this window stopped before this event was found, so whether it is among the entries, and what it is linked to, are not known.";
+
+/**
+ * Several entries of the window each match the selected event, so which one it is cannot be told.
+ * They are named by count and left out of the context, since each of them could be the event.
+ */
+export function ambiguousEventNote(candidates: number): string {
+  return `${count(candidates)} entries of this window match this event, so which one it is cannot be told. They are not drawn as context, and no link is shown.`;
+}
+
+/**
+ * The selected event has no record identity the timeline's join can match (an event the provider
+ * never numbered), so which entry of the window is it cannot be told, and none is drawn: any of
+ * them could be the event itself. A way out is an input ordinal on the timeline origins (#957).
+ */
+export function unmatchableNote(entries: number, halfWidthMs: number): string {
+  const width = windowWidthLabel(halfWidthMs);
+  return entries === 0
+    ? `This event has no record identity the timeline can match, so it cannot be found among the entries within ${width}. No link is shown.`
+    : `This event has no record identity the timeline can match, so which of the ${count(entries)} ${entries === 1 ? "entry" : "entries"} within ${width} it is cannot be told. They are not drawn, and no link is shown.`;
+}
+
+/**
+ * How many of the row's entries are outside the window. They are counted, never placed. For a window
+ * that was read WHOLE only: in a window that was not, an entry without an item may be inside it and
+ * simply unread, and `notReadNote` is the sentence for that.
+ */
+export function outsideWindowNote(outside: number, memberCount: number): string | null {
+  if (outside <= 0) return null;
+  return `${count(outside)} of ${count(memberCount)} ${memberCount === 1 ? "entry" : "entries"} of this chain ${outside === 1 ? "is" : "are"} outside this window, so ${outside === 1 ? "it is" : "they are"} not shown here.`;
+}
+
+/**
+ * How many of the row's entries are not among the entries that were read, for a window that was NOT
+ * read whole. The number is exact; where those entries are (outside the window, or inside it and
+ * unread) is not known, so it is never said to be "outside".
+ */
+export function notReadNote(notShown: number, memberCount: number): string | null {
+  if (notShown <= 0) return null;
+  return `${count(notShown)} of ${count(memberCount)} ${memberCount === 1 ? "entry" : "entries"} of this chain ${notShown === 1 ? "is" : "are"} not among the entries read, so ${notShown === 1 ? "it is" : "they are"} not shown here.`;
+}
+
+/**
+ * The row title when the entries read are only some of the row's: no title is claimed for the whole.
+ * `read` counts the entries read. For a window read whole they are the ones in the window; for one
+ * that was not, the others may be inside it, so the count says "read" and nothing about the window.
+ */
+export function partialChainTitle(memberCount: number, read: number, windowComplete: boolean): string {
+  return `Chain of ${entriesText(memberCount)} (${count(read)} ${windowComplete ? "in this window" : "read"})`;
+}
+
+/**
+ * "+3 more" when the count is exact, "at least 3 more" when it is a lower bound: a list taken from
+ * the entries READ of a window that was not read whole has more entries than it can count.
+ */
+export function moreText(more: number, exact: boolean): string | null {
+  if (more <= 0) return null;
+  return exact ? `+${count(more)} more` : `at least ${count(more)} more`;
+}
+
+/** What a context entry's words may be, from the facts the dock holds about it. */
+export type NearbyReason =
+  | "notLinked"
+  | "noLoadedLink"
+  | "inAnotherChain"
+  | "linkUnknownToEvent"
+  | "ambiguousWithEvent"
+  | "coverageBlockedWithEvent";
+
+/**
+ * The reason beside an entry of "Also nearby" and in its marker's name.
+ *
+ * The three RULED reasons (#842 ruling 2) say the entry is there by TIME ("time only"), then the one
+ * thing known about its links; "not linked" appears only for the entry the session can speak for.
+ *
+ * The other three are RECORDED ADDITIONS to ruling 2 (rulings_a1 item 2 for the first two,
+ * rulings_a1_fix A for the third), and do not begin "time only", because each says more than time:
+ * - "ambiguous with this event" and "coverage blocked with this event": the engine reported a shared
+ *   identity key with the selected event in a row that establishes no link (ambiguous: several
+ *   entries could be the same transaction; coverage blocked: a gap stopped the link);
+ * - "linked, but its link to this event is not known": the entry has a loaded partner and the
+ *   selected event could not be identified, so its partner may be the event.
+ */
+export function nearbyReason(reason: NearbyReason): string {
+  switch (reason) {
+    case "notLinked":
+      return "time only, not linked";
+    case "noLoadedLink":
+      return "time only, no loaded link";
+    case "inAnotherChain":
+      return "time only; in another chain";
+    case "linkUnknownToEvent":
+      return "linked, but its link to this event is not known";
+    case "ambiguousWithEvent":
+      return "ambiguous with this event";
+    case "coverageBlockedWithEvent":
+      return "coverage blocked with this event";
+  }
+}
+
+/** The line after the dock's plot when a cap left entries, sources or connectors undrawn. */
+export function dockOmissionNotice(input: {
+  omittedMarkers: number;
+  omittedNearby: number;
+  omittedConnectors: number;
+  omittedSources: number;
+  omittedSourceEntries: number;
+}): string | null {
+  const parts: string[] = [];
+  if (input.omittedSources > 0) {
+    parts.push(
+      `${count(input.omittedSources)} more ${input.omittedSources === 1 ? "source" : "sources"} not drawn (${count(input.omittedSourceEntries)} ${input.omittedSourceEntries === 1 ? "entry" : "entries"})`,
+    );
+  }
+  if (input.omittedMarkers > 0) {
+    parts.push(`${count(input.omittedMarkers)} ${input.omittedMarkers === 1 ? "entry" : "entries"} of this chain not drawn`);
+  }
+  if (input.omittedNearby > 0) {
+    parts.push(`${count(input.omittedNearby)} more nearby ${input.omittedNearby === 1 ? "entry" : "entries"} not drawn`);
+  }
+  if (input.omittedConnectors > 0) {
+    parts.push(`${count(input.omittedConnectors)} ${input.omittedConnectors === 1 ? "connector is" : "connectors are"} not drawn`);
+  }
+  return parts.length === 0 ? null : `${parts.join("; ")}.`;
+}
+
+/** Why "Open in Correlation view" cannot act, as visible text beside the disabled button. */
+export type OpenDisabled =
+  | "loading"
+  | "notInTimeline"
+  | "notRead"
+  | "unmatchable"
+  | "notInChain"
+  | "ambiguous";
+
+export function openDisabledText(reason: OpenDisabled): string {
+  switch (reason) {
+    case "loading":
+      return "Correlation links are still loading.";
+    case "notInTimeline":
+      return "Not in the timeline built for these filters.";
+    case "notRead":
+      return "The read of this window did not reach this event.";
+    case "unmatchable":
+      return "This event cannot be matched to an entry.";
+    case "notInChain":
+      return "Not in a loaded chain.";
+    case "ambiguous":
+      return "More than one entry matches this event.";
+  }
 }

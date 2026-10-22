@@ -1,11 +1,11 @@
 {
   "about": "Replies captured from the real event-log analysis engine (EventLogAnalysisSession) over the records in event-log-data.ts. Do not edit by hand. Regenerate with `node e2e/fixtures/capture-event-log-replies.mjs`; engineCommit is the commit the engine was built from.",
   "provenance": {
-    "engineCommit": "822bbb25c3cfa1ff893cb95289cec566d4ff23ec",
+    "engineCommit": "2c6a4a078eeddbc0071cdbbed7ad9784c080b009",
     "engineTreeDirty": false,
     "capturedBy": "e2e/fixtures/capture-event-log-replies.mjs",
-    "inputSha256": "772a7cf87e68dace166c1bb040bf33f8112693dd160d24f9cf2cd5206dd7dc72",
-    "engineSourceSha256": "b7e604242dfa2a4a223ab32d4f293b1173b50c498282ce46a683c1302aefe273"
+    "inputSha256": "60b994535f2ee08096ef64bbffbe10c7c7a7664c8e9d25213a97c70258d57908",
+    "engineSourceSha256": "b6552b16dbd5a213205b115134922c527b33ba4e43de9767258654ce0acb2f72"
   },
   "sessionId": "00000000-0000-4000-8000-000000000828",
   "appendChunkRecordCounts": [
@@ -24301,6 +24301,306 @@
         "edgesPreview": [],
         "coverageGapsPreview": [],
         "serializedBytes": 170972
+      }
+    }
+  ],
+  "timelineWindows": [
+    {
+      "name": "dock",
+      "centerMs": 1791364318000,
+      "halfWidthMs": 75000,
+      "startMs": 1791364243000,
+      "endMs": 1791364393000,
+      "limit": 1000,
+      "window": {
+        "sessionId": "00000000-0000-4000-8000-000000000828",
+        "revision": 3,
+        "startMs": 1791364243000,
+        "endMs": 1791364393000,
+        "offset": 1231,
+        "nextOffset": null,
+        "totalItems": 1331,
+        "windowItems": 3,
+        "omittedItems": 0,
+        "items": [
+          {
+            "timestampMs": 1791364252000,
+            "severity": "info",
+            "message": "The start type of the Background Intelligent Transfer Service service was changed from demand start to auto start.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source32:C:\\Fixture\\EventLogs\\System.evtx|machine12:CONTOSO-PC01|channel6:System|record91909",
+              "source": "C:\\Fixture\\EventLogs\\System.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "System",
+              "provider": "Service Control Manager",
+              "processId": null,
+              "eventId": 7040,
+              "recordId": 91909,
+              "recordIdText": "91909"
+            }
+          },
+          {
+            "timestampMs": 1791364312000,
+            "severity": "info",
+            "message": "MDM Enroll: auto-enrollment triggered by policy",
+            "origin": {
+              "kind": "event",
+              "stableId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91912",
+              "source": "C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+              "processId": null,
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}",
+              "eventId": 72,
+              "recordId": 91912,
+              "recordIdText": "91912"
+            }
+          },
+          {
+            "timestampMs": 1791364318000,
+            "severity": "error",
+            "message": "Auto MDM Enroll: Failed",
+            "origin": {
+              "kind": "event",
+              "stableId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record91915",
+              "source": "C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+              "processId": null,
+              "activityId": "{5ee0a1d1-a10b-4c1d-8e1f-c0de0a0b0c01}",
+              "eventId": 76,
+              "recordId": 91915,
+              "recordIdText": "91915"
+            }
+          }
+        ],
+        "serializedBytes": 2162
+      }
+    },
+    {
+      "name": "selectedContext",
+      "centerMs": 1791301403000,
+      "halfWidthMs": 300000,
+      "startMs": 1791301103000,
+      "endMs": 1791301703000,
+      "limit": 1000,
+      "window": {
+        "sessionId": "00000000-0000-4000-8000-000000000828",
+        "revision": 3,
+        "startMs": 1791301103000,
+        "endMs": 1791301703000,
+        "offset": 300,
+        "nextOffset": null,
+        "totalItems": 1331,
+        "windowItems": 11,
+        "omittedItems": 0,
+        "items": [
+          {
+            "timestampMs": 1791301189000,
+            "severity": "warning",
+            "message": "Token broker operation failed.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source41:C:\\Fixture\\EventLogs\\AAD-Operational.evtx|machine12:CONTOSO-PC01|channel33:Microsoft-Windows-AAD/Operational|record89116",
+              "source": "C:\\Fixture\\EventLogs\\AAD-Operational.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Microsoft-Windows-AAD/Operational",
+              "provider": "Microsoft-Windows-AAD",
+              "processId": null,
+              "eventId": 1098,
+              "recordId": 89116,
+              "recordIdText": "89116"
+            }
+          },
+          {
+            "timestampMs": 1791301234000,
+            "severity": "warning",
+            "message": "The application-specific permission settings do not grant Local Activation permission for the COM Server application.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source32:C:\\Fixture\\EventLogs\\System.evtx|machine12:CONTOSO-PC01|channel6:System|record89119",
+              "source": "C:\\Fixture\\EventLogs\\System.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "System",
+              "provider": "Microsoft-Windows-DistributedCOM",
+              "processId": null,
+              "eventId": 10016,
+              "recordId": 89119,
+              "recordIdText": "89119"
+            }
+          },
+          {
+            "timestampMs": 1791301282000,
+            "severity": "info",
+            "message": "The Background Intelligent Transfer Service service entered the stopped state.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source32:C:\\Fixture\\EventLogs\\System.evtx|machine12:CONTOSO-PC01|channel6:System|record89122",
+              "source": "C:\\Fixture\\EventLogs\\System.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "System",
+              "provider": "Service Control Manager",
+              "processId": null,
+              "eventId": 7036,
+              "recordId": 89122,
+              "recordIdText": "89122"
+            }
+          },
+          {
+            "timestampMs": 1791301302000,
+            "severity": "info",
+            "message": "AAD Cloud AP plugin call Plugin initialize returned success.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source41:C:\\Fixture\\EventLogs\\AAD-Operational.evtx|machine12:CONTOSO-PC01|channel33:Microsoft-Windows-AAD/Operational|record89125",
+              "source": "C:\\Fixture\\EventLogs\\AAD-Operational.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Microsoft-Windows-AAD/Operational",
+              "provider": "Microsoft-Windows-AAD",
+              "processId": null,
+              "eventId": 1104,
+              "recordId": 89125,
+              "recordIdText": "89125"
+            }
+          },
+          {
+            "timestampMs": 1791301354000,
+            "severity": "warning",
+            "message": "The application-specific permission settings do not grant Local Activation permission for the COM Server application.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source32:C:\\Fixture\\EventLogs\\System.evtx|machine12:CONTOSO-PC01|channel6:System|record89128",
+              "source": "C:\\Fixture\\EventLogs\\System.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "System",
+              "provider": "Microsoft-Windows-DistributedCOM",
+              "processId": null,
+              "eventId": 10016,
+              "recordId": 89128,
+              "recordIdText": "89128"
+            }
+          },
+          {
+            "timestampMs": 1791301403000,
+            "severity": "error",
+            "message": "MDM ConfigurationManager: Command failure status. Configuration Source: (MDM).",
+            "origin": {
+              "kind": "event",
+              "stableId": "source48:C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx|machine12:CONTOSO-PC01|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record89131",
+              "source": "C:\\Fixture\\EventLogs\\DeviceManagement-Admin.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+              "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+              "processId": null,
+              "eventId": 404,
+              "recordId": 89131,
+              "recordIdText": "89131"
+            }
+          },
+          {
+            "timestampMs": 1791301421000,
+            "severity": "info",
+            "message": "The WinHTTP Web Proxy Auto-Discovery service entered the stopped state.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source32:C:\\Fixture\\EventLogs\\System.evtx|machine12:CONTOSO-PC01|channel6:System|record89134",
+              "source": "C:\\Fixture\\EventLogs\\System.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "System",
+              "provider": "Service Control Manager",
+              "processId": null,
+              "eventId": 7036,
+              "recordId": 89134,
+              "recordIdText": "89134"
+            }
+          },
+          {
+            "timestampMs": 1791301432000,
+            "severity": "info",
+            "message": "Service started",
+            "origin": {
+              "kind": "event",
+              "stableId": "source37:C:\\Fixture\\EventLogs\\Application.evtx|machine12:CONTOSO-PC01|channel11:Application|record89137",
+              "source": "C:\\Fixture\\EventLogs\\Application.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Application",
+              "provider": "edgeupdate",
+              "processId": null,
+              "eventId": 0,
+              "recordId": 89137,
+              "recordIdText": "89137"
+            }
+          },
+          {
+            "timestampMs": 1791301441000,
+            "severity": "info",
+            "message": "Successfully scheduled Software Protection service for re-start.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source37:C:\\Fixture\\EventLogs\\Application.evtx|machine12:CONTOSO-PC01|channel11:Application|record89140",
+              "source": "C:\\Fixture\\EventLogs\\Application.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Application",
+              "provider": "Microsoft-Windows-Security-SPP",
+              "processId": null,
+              "eventId": 16384,
+              "recordId": 89140,
+              "recordIdText": "89140"
+            }
+          },
+          {
+            "timestampMs": 1791301483000,
+            "severity": "info",
+            "message": "The Background Intelligent Transfer Service service entered the stopped state.",
+            "origin": {
+              "kind": "event",
+              "stableId": "source32:C:\\Fixture\\EventLogs\\System.evtx|machine12:CONTOSO-PC01|channel6:System|record89143",
+              "source": "C:\\Fixture\\EventLogs\\System.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "System",
+              "provider": "Service Control Manager",
+              "processId": null,
+              "eventId": 7036,
+              "recordId": 89143,
+              "recordIdText": "89143"
+            }
+          },
+          {
+            "timestampMs": 1791301564000,
+            "severity": "info",
+            "message": "Service started",
+            "origin": {
+              "kind": "event",
+              "stableId": "source37:C:\\Fixture\\EventLogs\\Application.evtx|machine12:CONTOSO-PC01|channel11:Application|record89146",
+              "source": "C:\\Fixture\\EventLogs\\Application.evtx",
+              "machine": "CONTOSO-PC01",
+              "bundle": null,
+              "channel": "Application",
+              "provider": "edgeupdate",
+              "processId": null,
+              "eventId": 0,
+              "recordId": 89146,
+              "recordIdText": "89146"
+            }
+          }
+        ],
+        "serializedBytes": 5878
       }
     }
   ],

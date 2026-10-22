@@ -103,11 +103,18 @@ export function edgeEndpointIds(
   return ids;
 }
 
-function messageOf(error: unknown): string {
+export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function withRetry<T>(
+/**
+ * Runs `call`, trying again after a failure with the unified timeline's backoff (100 ms doubling,
+ * `EVENT_LOG_TIMELINE_AUTOMATIC_RETRY_LIMIT` more tries) and then throwing the last error. Once
+ * `isCancelled` is true it throws `CorrelationLoadCancelled` instead, before a call, after a reply
+ * and in place of a failure: a call that fails because the session it asked about was closed by the
+ * caller's own supersession is not a failure to report.
+ */
+export async function withRetry<T>(
   call: () => Promise<T>,
   isCancelled: () => boolean,
   sleep: (ms: number) => Promise<void>,
@@ -127,15 +134,38 @@ async function withRetry<T>(
   }
 }
 
+/**
+ * The key a model, a window and a scan carry for the session they were read from: its id and its
+ * revision. Two things read from one session have the same key; a reader that pairs them compares
+ * keys, never ids alone. Null when there is no session.
+ */
+export function sessionKeyOf(
+  status: Pick<EventLogAnalysisSessionStatus, "sessionId" | "revision"> | null,
+): string | null {
+  return status === null ? null : `${status.sessionId}:${status.revision}`;
+}
+
+/**
+ * Why a reply belongs to another session or revision than `status`, or null when it does not. The
+ * session is immutable once published, so a mismatch means the caller has moved on.
+ */
+export function sessionProblem(
+  reply: { sessionId: string; revision: number },
+  status: Pick<EventLogAnalysisSessionStatus, "sessionId" | "revision">,
+): string | null {
+  return reply.sessionId !== status.sessionId || reply.revision !== status.revision
+    ? "The event-log analysis session changed while paging."
+    : null;
+}
+
 /** Why a reply cannot be used for this session, or null when it can. */
-function replyProblem(
+export function replyProblem(
   reply: { sessionId: string; revision: number; offset: number },
   status: Pick<EventLogAnalysisSessionStatus, "sessionId" | "revision">,
   offset: number,
 ): string | null {
-  if (reply.sessionId !== status.sessionId || reply.revision !== status.revision) {
-    return "The event-log analysis session changed while paging.";
-  }
+  const session = sessionProblem(reply, status);
+  if (session !== null) return session;
   if (reply.offset !== offset) {
     return "The event-log analysis returned the wrong page.";
   }
