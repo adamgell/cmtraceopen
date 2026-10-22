@@ -601,8 +601,21 @@ describe("the notices", () => {
     show(pairData({ gaps: classifyCoverageGaps([], 40) }));
     expect(screen.getByTestId("correlation-notices")).toHaveTextContent("More coverage gaps may exist than are listed");
     cleanup();
-    show(pairData({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "alias conflict" }], 1) }));
+    show(pairData({ gaps: classifyCoverageGaps([], 0) }));
     expect(screen.queryByTestId("correlation-notices")).toBeNull();
+  });
+
+  it("says how many events could not be fully correlated when a gap names an origin, though the gaps clear nothing (#841, review M1)", () => {
+    show(pairData({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "alias conflict" }], 1) }));
+    const notices = screen.getByTestId("correlation-notices");
+    expect(notices).toHaveTextContent("1 event could not be fully correlated, so links involving it may be missing.");
+    // The gaps clear no completeness, so the coverage-gap notice stays out: this is the only note.
+    expect(notices).not.toHaveTextContent("The engine limited correlation");
+    cleanup();
+    show(pairData({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "alias conflict" }], 40) }));
+    expect(screen.getByTestId("correlation-notices")).toHaveTextContent(
+      "At least 1 event could not be fully correlated, so links involving it may be missing.",
+    );
   });
 
   it("shows a stopped read and an edge failure, each with a Retry that calls the hook's retry", () => {

@@ -141,6 +141,22 @@ export function coverageGapNotice(gaps: CorrelationGaps): string | null {
   return `More coverage gaps may exist than are listed, ${tail}`;
 }
 
+/**
+ * The notice for the origins the engine left uncorrelated (`gaps.originIds`), or null when it left
+ * none. A gap that names an origin means that origin's records were never fully correlated, so a
+ * link involving them can be missing, and so an absence of links anywhere in the session is
+ * unproven. `coverageGapNotice` says nothing for such a gap (it is not global and cuts nothing), so
+ * without this note a surface that withdrew its absence claim would point at no note at all. The
+ * number is the distinct origins the preview names; when the preview is cut, the gaps that are not
+ * shown may name more, so it is a lower bound and the sentence says so.
+ */
+export function uncorrelatedOriginsNotice(gaps: CorrelationGaps): string | null {
+  const n = gaps.originIds.size;
+  if (n === 0) return null;
+  const sentence = `${events(n)} could not be fully correlated, so links involving ${n === 1 ? "it" : "them"} may be missing.`;
+  return gaps.previewCut ? `At least ${sentence}` : sentence;
+}
+
 export interface ScanNoticeInput {
   state: "idle" | "running" | "complete" | "incomplete";
   stoppedBy: "budget" | "error" | null;
@@ -340,15 +356,16 @@ export interface CorrelationNoticesInput {
 
 /**
  * Everything the model says about what it did not cover, in one order, for every surface that lists
- * its chains: the edges that were not all loaded, a failed edge page, the engine's coverage gaps,
- * an unfinished timeline read, a narrowed view, and the render cap. A notice with nothing to say is
- * left out.
+ * its chains: the edges that were not all loaded, a failed edge page, the engine's coverage gaps and
+ * the origins it left uncorrelated, an unfinished timeline read, a narrowed view, and the render
+ * cap. A notice with nothing to say is left out.
  */
 export function correlationNotices(input: CorrelationNoticesInput): string[] {
   return [
     edgeInputNotice(input.edgeInput),
     edgeErrorNotice(input.edgeError),
     coverageGapNotice(input.gaps),
+    uncorrelatedOriginsNotice(input.gaps),
     scanNotice(input.scan),
     input.selectionLoss,
     ...(input.scope === null ? [] : [input.scope.strengthNote, input.scope.textLogNote]),

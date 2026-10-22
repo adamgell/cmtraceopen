@@ -72,6 +72,7 @@ import {
   scopeDisclosure,
   sourcesText,
   timelineReadingText,
+  uncorrelatedOriginsNotice,
   unmatchableNote,
   unresolvedNotice,
   unresolvedStepsNotice,
@@ -384,6 +385,59 @@ describe("coverageGapNotice", () => {
   });
 });
 
+describe("uncorrelatedOriginsNotice, what a gap that names an origin means for every claim of absence (#841, review M1)", () => {
+  const origins = (preview: { source: string; reason: string }[], total: number | null = preview.length) =>
+    classifyCoverageGaps(preview, total);
+  const gapOf = (n: number, reason = "identity conflict") => ({ source: rid(n), reason });
+
+  it("says nothing when the engine left no origin uncorrelated, whatever else is cut or limited", () => {
+    expect(uncorrelatedOriginsNotice(origins([]))).toBeNull();
+    expect(uncorrelatedOriginsNotice({ originIds: new Set(), global: true, previewCut: true })).toBeNull();
+    // A display gap is list-view compaction, not an origin the engine left out.
+    expect(uncorrelatedOriginsNotice(origins([{ source: "timeline-item-projection", reason: "compaction" }]))).toBeNull();
+  });
+
+  it("says how many events could not be fully correlated, in the singular and the plural", () => {
+    expect(uncorrelatedOriginsNotice(origins([gapOf(1)]))).toBe(
+      "1 event could not be fully correlated, so links involving it may be missing.",
+    );
+    expect(uncorrelatedOriginsNotice(origins([gapOf(1), gapOf(2)]))).toBe(
+      "2 events could not be fully correlated, so links involving them may be missing.",
+    );
+  });
+
+  it("says 'At least' when the gap preview is cut: the gaps that are not shown may name more origins", () => {
+    expect(uncorrelatedOriginsNotice(origins([gapOf(1), gapOf(2)], 9))).toBe(
+      "At least 2 events could not be fully correlated, so links involving them may be missing.",
+    );
+    expect(uncorrelatedOriginsNotice(origins([gapOf(1)], null))).toBe(
+      "At least 1 event could not be fully correlated, so links involving it may be missing.",
+    );
+  });
+
+  it("counts distinct origins: a gap stated twice, a global gap and a display gap are not more origins", () => {
+    const gaps = origins([
+      gapOf(1),
+      gapOf(1, "process start identity"),
+      gapOf(2, "machine identity unavailable"),
+      { source: "correlation", reason: "limit" },
+      { source: "timeline-item-projection", reason: "compaction" },
+    ]);
+    expect(uncorrelatedOriginsNotice(gaps)).toBe(
+      "2 events could not be fully correlated, so links involving them may be missing.",
+    );
+  });
+
+  it("is a coverage state, never a claim about links", () => {
+    for (const text of [
+      uncorrelatedOriginsNotice(origins([gapOf(1)])),
+      uncorrelatedOriginsNotice(origins([gapOf(1), gapOf(2)], 9)),
+    ]) {
+      expect(text).not.toMatch(/no link|not linked|no linked/i);
+    }
+  });
+});
+
 describe("scanNotice and edgeErrorNotice", () => {
   it("say nothing unless reading the timeline stopped early", () => {
     for (const state of ["idle", "running", "complete"] as const) {
@@ -631,6 +685,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "sharedOriginNote",
     "sourcesText",
     "timelineReadingText",
+    "uncorrelatedOriginsNotice",
     "unmatchableNote",
     "unresolvedNotice",
     "unresolvedStepsNotice",
@@ -806,12 +861,15 @@ describe("no string claims an entry is unplaced without proof", () => {
       nearbyHeading("Not linked", 3),
       nearbyHeading("No loaded link", 1),
       nearbyHeading("Not in this chain", 2),
+      uncorrelatedOriginsNotice({ originIds: new Set([rid(1)]), global: false, previewCut: false }) ?? "",
+      uncorrelatedOriginsNotice({ originIds: new Set([rid(1), rid(2)]), global: false, previewCut: false }) ?? "",
+      uncorrelatedOriginsNotice({ originIds: new Set([rid(1), rid(2)]), global: false, previewCut: true }) ?? "",
       unresolvedStepsNotice(chain, PROVEN) ?? "",
       unresolvedStepsNotice(chain, { scanComplete: false, unplacedListComplete: false, unplacedIds: new Set() }) ?? "",
       ...correlationNotices({
         edgeInput: { edgeInputComplete: false, unloadedEdgeCount: 4 },
         edgeError: "edges down",
-        gaps: { originIds: new Set(), global: true, previewCut: true },
+        gaps: { originIds: new Set([rid(1), rid(2)]), global: true, previewCut: true },
         scan: { state: "incomplete", stoppedBy: "budget", error: null },
         selectionLoss: null,
         scope: scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 }),
@@ -1529,6 +1587,31 @@ describe("the words the Correlation view and the Chains tab share (#841)", () =>
           pastCapShown: null,
         }),
       ).toEqual([]);
+    });
+
+    it("says the origins the engine left uncorrelated after the coverage note, even when no gap is global (#841, review M1)", () => {
+      const originOnly = classifyCoverageGaps([{ source: rid(1), reason: "identity conflict" }], 1);
+      const complete = {
+        edgeInput: COMPLETE,
+        edgeError: null,
+        scan: { state: "complete", stoppedBy: null, error: null } as const,
+        selectionLoss: null,
+        scope: null,
+        cap: { shown: 3, totalCount: 3, omittedCount: 0 },
+        pastCapShown: null,
+      };
+      // coverageGapNotice has nothing to say for a gap that names an origin: this note is what does.
+      expect(coverageGapNotice(originOnly)).toBeNull();
+      expect(correlationNotices({ ...complete, gaps: originOnly })).toEqual([uncorrelatedOriginsNotice(originOnly)]);
+      const both = classifyCoverageGaps(
+        [
+          { source: "correlation", reason: "limit" },
+          { source: rid(1), reason: "identity conflict" },
+        ],
+        2,
+      );
+      const notices = correlationNotices({ ...complete, gaps: both });
+      expect(notices).toEqual([coverageGapNotice(both), uncorrelatedOriginsNotice(both)]);
     });
 
     it("says the past-cap line only when the selected row is listed past the rows the cap kept", () => {
