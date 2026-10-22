@@ -406,6 +406,49 @@ describe("the chain list (spec 8.11)", () => {
     expect(screen.getAllByText("No correlation chains were found in this session.").length).toBe(1);
   });
 
+  describe("says the session has no chains only when the session can speak for an absence (#841, review M1)", () => {
+    const ABSOLUTE = "No correlation chains were found in this session.";
+    const QUALIFIED = "No chains were found among the edges that were loaded.";
+    const none = (extra: Partial<DataOptions> = {}) => makeData({ items: [], edges: [], totalEdges: 0, ...extra });
+
+    it("says it when every edge is loaded and nothing withdraws it", () => {
+      show(none());
+      expect(screen.getByText(ABSOLUTE)).toBeInTheDocument();
+      expect(screen.queryByText(QUALIFIED)).toBeNull();
+    });
+
+    it.each([
+      ["the view is narrowed", () => none({ scope: { visibleCount: 3, loadedCount: 9, textLogCount: 0 } })],
+      ["the scope of the model is not known", () => none({ scope: null })],
+      ["a rebuild is under way", () => none({ updating: true })],
+      ["the engine limited correlation", () => none({ gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) })],
+      ["the gap preview is cut", () => none({ gaps: classifyCoverageGaps([], 4) })],
+      ["a gap names an origin", () => none({ gaps: classifyCoverageGaps([{ source: rid(5), reason: "alias conflict" }], 1) })],
+    ])("says only what was looked at when %s", (_why, makeDataFor) => {
+      show(makeDataFor());
+      expect(screen.getByText(QUALIFIED)).toBeInTheDocument();
+      expect(screen.queryByText(ABSOLUTE)).toBeNull();
+    });
+
+    it("says only what was looked at while a source was not fully read", () => {
+      seedStore();
+      act(() =>
+        useEvtxStore.setState({
+          coverageDetails: [{ source: "Security", kind: "accessDenied", reason: "needs elevation" }],
+        }),
+      );
+      show(none());
+      expect(screen.getByText(QUALIFIED)).toBeInTheDocument();
+      expect(screen.queryByText(ABSOLUTE)).toBeNull();
+    });
+
+    it("asks the session's rule for it, with the edges as one of its inputs and not as the whole rule", () => {
+      expect(viewSource).toMatch(/\bsessionSpeaksForAbsenceOverall\(/);
+      expect(viewSource).toMatch(/\bnoChainsFoundText\(speaksForAbsence\)/);
+      expect(viewSource).not.toMatch(/\bnoChainsFoundText\(model\.edgeInputComplete\)/);
+    });
+  });
+
   it("marks a partial chain and counts its entries from every member (acceptance 11)", () => {
     // Member 2's item was never read: it is unresolved, not absent.
     const edges = fixtureEdges("exactPair");

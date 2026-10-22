@@ -83,6 +83,7 @@ import {
   listedRows,
   memberLinkSummary,
   reconcileSelection,
+  sessionSpeaksForAbsenceOverall,
   spanText,
   whyRows,
   type ListedRows,
@@ -759,6 +760,15 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
 
   const reading = data.nextScan?.state === "running" || data.stage === "scanning";
   const progress = data.nextScan?.progress ?? scan.progress;
+  // "No correlation chains in this session" is a claim about the whole session: the rail's rule, with
+  // every origin gap a member, and the edges only one of its inputs.
+  const speaksForAbsence = sessionSpeaksForAbsenceOverall({
+    edgeInputComplete: model.edgeInputComplete,
+    scopeNarrowed,
+    unreadSources,
+    updating: data.updating,
+    gaps,
+  });
   const notices = correlationNotices({
     edgeInput: { edgeInputComplete: model.edgeInputComplete, unloadedEdgeCount: model.unloadedEdgeCount },
     edgeError: edges.error,
@@ -808,7 +818,7 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
         </div>
         {model.chains.length === 0 && (
           <div style={{ padding: "8px 12px", fontSize: `${sizes.lane}px`, color: palette.listPrimary }}>
-            {noChainsFoundText(model.edgeInputComplete)}
+            {noChainsFoundText(speaksForAbsence)}
           </div>
         )}
         {(model.chains.length > 0 || unplacedPresent) && (

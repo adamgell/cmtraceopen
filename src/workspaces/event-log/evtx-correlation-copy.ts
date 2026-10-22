@@ -270,11 +270,13 @@ export function timelineReadingText(
 }
 
 /**
- * The line for a model that holds no chain. The absolute sentence is said only when every edge was
- * loaded; with edges missing it says only what was looked at.
+ * The line for a model that holds no chain. The absolute sentence says the session has none, so it
+ * is said only when the session can speak for an absence (`sessionSpeaksForAbsenceOverall`: every
+ * edge loaded, nothing narrowed or unread, no rebuild under way, no gap); otherwise it says only
+ * what was looked at.
  */
-export function noChainsFoundText(edgeInputComplete: boolean): string {
-  return edgeInputComplete
+export function noChainsFoundText(speaks: boolean): string {
+  return speaks
     ? "No correlation chains were found in this session."
     : "No chains were found among the edges that were loaded.";
 }
