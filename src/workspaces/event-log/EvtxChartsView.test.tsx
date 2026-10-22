@@ -300,6 +300,8 @@ describe("EvtxChartsView", () => {
           });
           const value = eventsValue();
           if (value !== shown) {
+            // An update applies the latest value, not the one captured when its wait began.
+            expect(value).toBe(count);
             shown = value;
             updates.push(now);
           }
@@ -314,6 +316,12 @@ describe("EvtxChartsView", () => {
         }
         expect(1000 - marks[marks.length - 1]).toBeLessThanOrEqual(CHART_DATA_THROTTLE_MS + 5);
         expect(updates.length).toBeGreaterThan(10);
+        // Once the stream ends the last wait applies the final count, and no timer is left.
+        act(() => {
+          vi.advanceTimersByTime(CHART_DATA_THROTTLE_MS);
+        });
+        expect(eventsValue()).toBe(count);
+        expect(vi.getTimerCount()).toBe(0);
       } finally {
         vi.useRealTimers();
       }
@@ -337,6 +345,23 @@ describe("EvtxChartsView", () => {
           vi.advanceTimersByTime(1000);
         });
         expect(eventsValue()).toBe(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("clears a pending wait on unmount, and a remount shows the current value at once", () => {
+      vi.useFakeTimers();
+      try {
+        const { rerender, unmount } = render(<EvtxChartsView {...props({ records: batch(1) })} />);
+        rerender(<EvtxChartsView {...props({ records: batch(2) })} />);
+        // The change started a wait; unmounting must not leave it running.
+        expect(vi.getTimerCount()).toBe(1);
+        unmount();
+        expect(vi.getTimerCount()).toBe(0);
+        render(<EvtxChartsView {...props({ records: batch(2) })} />);
+        expect(eventsValue()).toBe(2);
+        expect(vi.getTimerCount()).toBe(0);
       } finally {
         vi.useRealTimers();
       }
