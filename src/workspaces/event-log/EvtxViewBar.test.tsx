@@ -9,6 +9,7 @@ const exportMock = vi.hoisted(() => ({ stream: vi.fn() }));
 vi.mock("./event-export-session", () => ({ streamEventLogExport: exportMock.stream }));
 
 import { EvtxViewBar } from "./EvtxViewBar";
+import { requireElement, requireSelector } from "./evtx-test-dom";
 import { EVTX_EXPORT_FORMATS } from "./evtx-export";
 import { defaultColumnConfig } from "./evtx-columns";
 import { evtxPanelToggleId, sanitizeLayout, useEvtxLayoutStore } from "./evtx-layout-store";
@@ -163,7 +164,7 @@ describe("EvtxViewBar", () => {
     useUiStore.setState({ themeId: "high-contrast" });
     try {
       render(<EvtxViewBar nowEpoch={0} />);
-      const bar = document.querySelector<HTMLElement>("[data-evtx-region=view-bar]")!;
+      const bar = requireSelector("[data-evtx-region=view-bar]");
       // High-contrast fails 4.5:1 with the brand foreground, so the fallback is black.
       expect(bar.style.getPropertyValue("--evtx-active-text")).toBe("#000000");
       const tab = screen.getByRole("tab", { name: "Table" });
@@ -204,7 +205,7 @@ describe("EvtxViewBar", () => {
 
   it("keeps the export status in the spacer with overflow ellipsis and the full text in the title", () => {
     render(<EvtxViewBar nowEpoch={0} />);
-    const status = document.querySelector<HTMLElement>("[data-evtx-export-status]")!;
+    const status = requireSelector("[data-evtx-export-status]");
     // Visible progress is not a live region; the announcement element is separate.
     expect(status).not.toHaveAttribute("aria-live");
     expect(status).toHaveStyle({
@@ -238,9 +239,9 @@ describe("EvtxViewBar", () => {
     fireEvent.click(await screen.findByRole("combobox", { name: "Visible columns" }));
     const options = await screen.findAllByRole("menuitemcheckbox");
     const hidden = options.find((option) => option.getAttribute("aria-checked") === "false");
-    expect(hidden).toBeDefined();
+    const target = requireElement(hidden, "a column option that is not yet shown");
     await act(async () => {
-      fireEvent.click(hidden!);
+      fireEvent.click(target);
     });
     expect(useEvtxStore.getState().columnConfig.order.length).toBe(count + 1);
   });
@@ -361,7 +362,7 @@ describe("EvtxViewBar", () => {
         },
       );
       render(<EvtxViewBar nowEpoch={0} />);
-      const live = document.querySelector<HTMLElement>("[data-evtx-export-announcement]")!;
+      const live = requireSelector("[data-evtx-export-announcement]");
       expect(live).toHaveAttribute("role", "status");
       expect(live).toHaveAttribute("aria-live", "polite");
       const heard: string[] = [];
@@ -369,7 +370,7 @@ describe("EvtxViewBar", () => {
       observer.observe(live, { childList: true, characterData: true, subtree: true });
 
       await exportJson();
-      const status = document.querySelector<HTMLElement>("[data-evtx-export-status]")!;
+      const status = requireSelector("[data-evtx-export-status]");
       await waitFor(() => expect(status).toHaveTextContent("Exported 5,000 events (1,234 bytes)"));
       await Promise.resolve();
       observer.disconnect();
@@ -378,7 +379,7 @@ describe("EvtxViewBar", () => {
     });
 
     const heardAnnouncements = () => {
-      const live = document.querySelector<HTMLElement>("[data-evtx-export-announcement]")!;
+      const live = requireSelector("[data-evtx-export-announcement]");
       const heard: string[] = [];
       const observer = new MutationObserver(() => heard.push(live.textContent ?? ""));
       observer.observe(live, { childList: true, characterData: true, subtree: true });

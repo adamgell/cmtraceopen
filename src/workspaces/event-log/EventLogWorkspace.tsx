@@ -40,6 +40,7 @@ import {
 import { EvtxInsightsRail } from "./EvtxInsightsRail";
 import { EvtxViewBar } from "./EvtxViewBar";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
+import { effectiveResizeRange, proposeResize, useRowCappedSize } from "./use-row-capped-size";
 import {
   EVTX_VIEW_LABELS,
   EVTX_VIEW_PANEL_ID,
@@ -438,6 +439,11 @@ export function EventLogWorkspace() {
   const dockHeight = useEvtxLayoutStore((s) => s.dockHeight);
   const dockCollapsed = useEvtxLayoutStore((s) => s.dockCollapsed);
   const setRailWidth = useEvtxLayoutStore((s) => s.setRailWidth);
+  // The rail is capped to a share of the body row (see its style), so the handle reports and
+  // steps from the width actually rendered and its maximum never exceeds the cap.
+  const { ref: railRef, ...railMeasure } = useRowCappedSize(1, railWidth);
+  const railRange = effectiveResizeRange(railWidth, MIN_RAIL_WIDTH, MAX_RAIL_WIDTH, railMeasure);
+
   const setDockHeight = useEvtxLayoutStore((s) => s.setDockHeight);
   const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight);
   useEffect(() => {
@@ -885,6 +891,7 @@ export function EventLogWorkspace() {
             {/* Hidden, not unmounted, so the rail's tab and scroll state survive a toggle. */}
             <aside
               id={EVTX_RAIL_ID}
+              ref={railRef}
               data-evtx-region="rail"
               aria-label="Insights rail"
               style={{
@@ -906,11 +913,16 @@ export function EventLogWorkspace() {
                 edge="start"
                 label="Resize insights rail"
                 controls={EVTX_RAIL_ID}
-                value={railWidth}
-                min={MIN_RAIL_WIDTH}
-                max={MAX_RAIL_WIDTH}
+                value={railRange.value}
+                min={railRange.min}
+                max={railRange.max}
                 direction={-1}
-                onChange={setRailWidth}
+                onChange={(next) => {
+                  // Same rule as the channel pane: never overwrite the requested width with a value
+                  // that leaves the rendered rail unchanged.
+                  const proposed = proposeResize(next, railRange);
+                  if (proposed !== null) setRailWidth(proposed);
+                }}
               />
               {/* The rail scrolls its own tab bodies under a fixed tablist, so this wrapper does not. */}
               <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>

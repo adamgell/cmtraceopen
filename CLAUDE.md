@@ -54,7 +54,7 @@ Six required status checks — the `Protect` ruleset over `main`:
 Three more jobs run on every PR but are not required to merge:
 
 - **Source Quality** — `cargo fmt --all -- --check`, changed-range whitespace, and `cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown`. The wasm check is a purity constraint rather than a formality: the parser crate must stay wasm32-compatible.
-- **Rust MSRV (1.88)** — on Ubuntu and Windows. Anything added has to build on 1.88, not only on the pinned toolchain.
+- **Rust MSRV (1.89)** — on Ubuntu and Windows. Desktop/plugin changes must build on Rust 1.89; `cmtraceopen-parser` changes must retain its separate Rust 1.88 floor. CI checks the workspace on 1.89 and the parser alone on 1.88; neither may rely solely on the pinned toolchain.
 - **ESP Diagnostics (Windows)** — the Windows-only diagnostics suite.
 
 Build the Lite edition locally with `npm run app:build:lite` (`--no-default-features`).
@@ -156,7 +156,7 @@ Format detection (`detect.rs`) samples the first lines of a file to auto-select 
 ## Prerequisites
 
 - Node.js 18+ (v20 LTS recommended)
-- Rust 1.88+ (MSVC toolchain on Windows)
+- Rust 1.89+ (MSVC toolchain on Windows)
 - Windows: Visual Studio Build Tools with C++ workload + Windows SDK + WebView2 Runtime
 - Automated Windows setup: `powershell -ExecutionPolicy Bypass -File .\scripts\Install-CMTraceOpenBuildPrereqs.ps1`
 
