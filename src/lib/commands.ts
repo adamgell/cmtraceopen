@@ -2668,6 +2668,8 @@ export interface DnsLoggingStatus {
   debugLoggingEnabled: boolean;
   logFilePath: string | null;
   dhcpServerInstalled: boolean;
+  canRestoreLogging: boolean;
+  restoreError: string | null;
 }
 
 export async function checkDnsLoggingStatus(): Promise<DnsLoggingStatus> {
@@ -2676,6 +2678,10 @@ export async function checkDnsLoggingStatus(): Promise<DnsLoggingStatus> {
 
 export async function enableDnsDebugLogging(): Promise<string> {
   return invokeCommand("enable_dns_debug_logging");
+}
+
+export async function disableDnsDebugLogging(): Promise<string> {
+  return invokeCommand("disable_dns_debug_logging");
 }
 
 export interface DnsDhcpCollectionProgress {
@@ -3415,8 +3421,11 @@ const COMMAND_DECODERS = {
       debugLoggingEnabled: (field) => typeof field === "boolean",
       logFilePath: isNullableCommandString,
       dhcpServerInstalled: (field) => typeof field === "boolean",
+      canRestoreLogging: (field) => typeof field === "boolean",
+      restoreError: (field) => field === null || (typeof field === "string" && field.length <= 512),
     }),
   enable_dns_debug_logging: decodeStringResponse,
+  disable_dns_debug_logging: decodeStringResponse,
   collect_dns_dhcp_from_domain: (value, commandName) =>
     decodeRecordResponse<DnsDhcpCollectionResult>(value, commandName, {
       bundlePath: (field) => typeof field === "string",

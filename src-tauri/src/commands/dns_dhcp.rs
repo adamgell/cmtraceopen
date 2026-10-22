@@ -13,37 +13,69 @@ pub struct DnsLoggingStatus {
     pub log_file_path: Option<String>,
     /// Whether DHCP Server service is installed on this machine.
     pub dhcp_server_installed: bool,
+    /// A trusted saved baseline can currently be restored without a detected conflict.
+    pub can_restore_logging: bool,
+    /// Bounded recovery/ownership diagnostic; never raw PowerShell output.
+    pub restore_error: Option<String>,
 }
 
 /// Check DNS/DHCP server logging status on this machine.
 #[tauri::command]
-pub fn check_dns_logging_status() -> DnsLoggingStatus {
+pub async fn check_dns_logging_status() -> Result<DnsLoggingStatus, String> {
     #[cfg(target_os = "windows")]
     {
-        check_dns_logging_status_windows()
+        tauri::async_runtime::spawn_blocking(check_dns_logging_status_windows)
+            .await
+            .map_err(|_| "DNS logging status could not be checked.".to_string())
     }
     #[cfg(not(target_os = "windows"))]
     {
-        DnsLoggingStatus {
+        Ok(DnsLoggingStatus {
             dns_server_installed: false,
             debug_logging_enabled: false,
             log_file_path: None,
             dhcp_server_installed: false,
-        }
+            can_restore_logging: false,
+            restore_error: None,
+        })
     }
 }
 
 /// Enable DNS debug logging on this machine via PowerShell.
 /// Requires the app to be running elevated (Administrator).
 #[tauri::command]
-pub fn enable_dns_debug_logging() -> Result<String, String> {
+pub async fn enable_dns_debug_logging() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        enable_dns_debug_logging_windows()
+        tauri::async_runtime::spawn_blocking(|| set_dns_debug_logging_windows(true))
+            .await
+            .map_err(|_| {
+                "DNS logging operation was interrupted. Scan this server to check recovery."
+                    .to_string()
+            })?
     }
     #[cfg(not(target_os = "windows"))]
     {
         Err("DNS debug logging can only be enabled on Windows Server.".to_string())
+    }
+}
+
+/// Restore the diagnostic values saved before this tool enabled logging.
+/// Missing, untrusted or conflicting recovery state never authorizes a write.
+#[tauri::command]
+pub async fn disable_dns_debug_logging() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        tauri::async_runtime::spawn_blocking(|| set_dns_debug_logging_windows(false))
+            .await
+            .map_err(|_| {
+                "DNS logging operation was interrupted. Scan this server to check recovery."
+                    .to_string()
+            })?
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("DNS debug logging can only be changed on Windows Server.".to_string())
     }
 }
 
@@ -63,12 +95,19 @@ fn check_dns_logging_status_windows() -> DnsLoggingStatus {
         .map(|o| o.status.success())
         .unwrap_or(false);
 
+    let (can_restore_logging, restore_error) = match run_dns_logging_action("Status") {
+        Ok(available) => (available, None),
+        Err(error) => (false, Some(error)),
+    };
+
     if !dns_installed {
         return DnsLoggingStatus {
             dns_server_installed: false,
             debug_logging_enabled: false,
             log_file_path: None,
             dhcp_server_installed: dhcp_installed,
+            can_restore_logging,
+            restore_error,
         };
     }
 
@@ -134,38 +173,136 @@ fn check_dns_logging_status_windows() -> DnsLoggingStatus {
         debug_logging_enabled: debug_enabled,
         log_file_path: log_path,
         dhcp_server_installed: dhcp_installed,
+        can_restore_logging,
+        restore_error,
     }
 }
 
 #[cfg(target_os = "windows")]
-fn enable_dns_debug_logging_windows() -> Result<String, String> {
-    let output = crate::process_util::hidden_command("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "Set-DnsServerDiagnostics -All $true; \
-             $s = (Get-DnsServer).ServerSetting; \
-             Write-Output \"LogFilePath=$($s.LogFilePath)\"",
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
+fn set_dns_debug_logging_windows(enable: bool) -> Result<String, String> {
+    run_dns_logging_action(if enable { "Enable" } else { "Disable" })?;
+    Ok(if enable {
+        "DNS debug logging enabled. Prior settings were saved for Disable. Review the server's log retention and rollover configuration.".to_string()
+    } else {
+        "Prior DNS logging settings restored. Logging configured before this app may remain enabled.".to_string()
+    })
+}
 
+#[cfg(target_os = "windows")]
+fn run_dns_logging_action(action: &str) -> Result<bool, String> {
+    // Only the three fixed callers above supply this action; no user input is
+    // interpolated into PowerShell and no registry/DNS value crosses IPC.
+    let script = format!(
+        "{}\nInvoke-CmtDnsAction '{}' | ConvertTo-Json -Compress",
+        include_str!("dns_logging.ps1"),
+        action,
+    );
+    let output = crate::process_util::run_complete_command(
+        crate::process_util::hidden_command("powershell.exe").args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &script,
+        ]),
+        std::time::Duration::from_secs(30),
+        4096,
+        4096,
+    )
+    .map_err(|_| {
+        "DNS logging operation did not finish. Scan this server to check saved recovery settings."
+            .to_string()
+    })?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "Failed to enable DNS logging (run as Administrator): {}",
-            stderr.trim()
-        ));
+        return Err("DNS logging operation failed. Run as Administrator and scan this server to check recovery.".to_string());
+    }
+    decode_dns_logging_result(&output.stdout)
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn decode_dns_logging_result(stdout: &[u8]) -> Result<bool, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ResultEnvelope {
+        can_restore_logging: bool,
+        error_code: serde_json::Value,
+    }
+    let result: ResultEnvelope = serde_json::from_slice(stdout).map_err(|_| {
+        "DNS logging returned an invalid result. Scan this server before trying again.".to_string()
+    })?;
+    let error = match result.error_code {
+        serde_json::Value::Null => return Ok(result.can_restore_logging),
+        serde_json::Value::String(code) => match code.as_str() {
+            "DNS_CONFLICT" => "DNS settings differ from the saved or expected configuration. Recovery is retained; review and reconcile the saved settings manually before retrying.",
+            "DNS_CONFIG_UNSUPPORTED" => "This server's DNS diagnostics do not match the supported configuration schema. Automatic changes are unavailable; any saved recovery is retained.",
+            "DNS_STORE_UNTRUSTED" => "The DNS recovery store has unsupported ownership or permissions. Automatic changes are unavailable; no permissions were changed.",
+            "DNS_RECORD_INVALID" => "The saved DNS recovery record is invalid. Automatic changes are blocked; the record is retained for manual review.",
+            "DNS_ALREADY_OWNED" => "Prior DNS settings are already saved. Use Disable to restore them before enabling again.",
+            "DNS_NOT_OWNED" => "This app has no saved DNS settings to restore. DNS configuration was not changed.",
+            "DNS_ALREADY_ENABLED" => "The requested DNS logging settings are already enabled. This app has not taken ownership of them.",
+            "DNS_BUSY" => "Another DNS logging operation is active. Wait for it to finish, then scan this server again.",
+            "DNS_READ_FAILED" => "DNS configuration could not be read. Run as Administrator and check the DNS Server tools; any saved recovery is retained.",
+            "DNS_APPLY_FAILED" | "DNS_VERIFY_FAILED" => "The DNS change could not be verified. Saved recovery is retained; scan this server before retrying or reconcile the settings manually.",
+            _ => "The DNS recovery store or lock could not be accessed. Run as Administrator and scan this server before retrying.",
+        },
+        _ => "DNS logging returned an invalid result. Scan this server before trying again.",
+    };
+    Err(error.to_string())
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+    use super::decode_dns_logging_result;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn powershell_restore_contract_uses_only_mocked_dns_and_temporary_storage() {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../scripts/dns-logging.test.ps1");
+        let output = crate::process_util::run_complete_command(
+            crate::process_util::hidden_command("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-File"])
+                .arg(script),
+            std::time::Duration::from_secs(60),
+            64 * 1024,
+            64 * 1024,
+        )
+        .expect("mocked PowerShell contract must finish");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let log_path = stdout
-        .lines()
-        .find(|l| l.starts_with("LogFilePath="))
-        .map(|l| l.trim_start_matches("LogFilePath=").trim().to_string())
-        .unwrap_or_else(|| "C:\\Windows\\System32\\dns\\dns.log".to_string());
+    #[test]
+    fn recovery_status_requires_a_complete_typed_response() {
+        assert_eq!(
+            decode_dns_logging_result(br#"{"canRestoreLogging":true,"errorCode":null}"#),
+            Ok(true)
+        );
+        for input in [
+            br#"{"canRestoreLogging":true}"#.as_slice(),
+            br#"{"canRestoreLogging":"true","errorCode":null}"#.as_slice(),
+            br#"{"canRestoreLogging":true,"errorCode":null,"extra":1}"#.as_slice(),
+            br#"{"canRestoreLogging":true,"errorCode":{}}"#.as_slice(),
+        ] {
+            assert!(decode_dns_logging_result(input).is_err());
+        }
+    }
 
-    Ok(format!("DNS debug logging enabled. Log file: {}", log_path))
+    #[test]
+    fn failures_never_echo_external_text_or_offer_recovery() {
+        let error = decode_dns_logging_result(
+            br#"{"canRestoreLogging":true,"errorCode":"private server details"}"#,
+        )
+        .unwrap_err();
+        assert!(!error.contains("private"));
+        let conflict =
+            decode_dns_logging_result(br#"{"canRestoreLogging":false,"errorCode":"DNS_CONFLICT"}"#)
+                .unwrap_err();
+        assert!(conflict.contains("Recovery is retained"));
+    }
 }
 
 // ---------------------------------------------------------------------------
