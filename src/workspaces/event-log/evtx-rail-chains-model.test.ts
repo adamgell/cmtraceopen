@@ -26,6 +26,7 @@ import {
   noChainsFoundText,
   pastCapNotice,
   renderCapNotice,
+  uncorrelatedOriginsNotice,
   whyStatement,
 } from "./evtx-correlation-copy";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
@@ -392,7 +393,8 @@ describe("the empty states", () => {
     expect(empty().emptyText).toBe(NO_LINKED_EVENTS_TEXT);
   });
 
-  it.each([
+  /** Everything that withdraws the spec's sentence, with the words that take its place. */
+  const WITHDRAWN = [
     ["an edge that was never loaded", { totalEdges: 7 }, {}, noChainsFoundText(false)],
     ["a narrowed view", { scope: { visibleCount: 3, loadedCount: 9, textLogCount: 0 } }, {}, NO_CHAINS_QUALIFIED_TEXT],
     ["a scope that is not known", { scope: null }, {}, NO_CHAINS_QUALIFIED_TEXT],
@@ -400,10 +402,31 @@ describe("the empty states", () => {
     ["a gap preview that is cut", { gaps: classifyCoverageGaps([], 4) }, {}, NO_CHAINS_QUALIFIED_TEXT],
     ["a rebuild under way", { updating: true }, {}, NO_CHAINS_QUALIFIED_TEXT],
     ["a source that was not fully read", {}, { unreadSources: true }, NO_CHAINS_QUALIFIED_TEXT],
-  ] as const)("does not say there are no linked events under %s", (_why, extra, overrides, text) => {
+    // An origin the engine did not correlate may hold the link no row shows, so no origin is exempt
+    // (review M1): not the one the gap names, and not any other.
+    ["an origin the engine left uncorrelated (an identity conflict)", { gaps: classifyCoverageGaps([{ source: rid(5), reason: "identity conflict" }], 1) }, {}, NO_CHAINS_QUALIFIED_TEXT],
+    ["an origin that is not among the entries read", { gaps: classifyCoverageGaps([{ source: rid(900), reason: "machine identity unavailable" }], 1) }, {}, NO_CHAINS_QUALIFIED_TEXT],
+    ["several origins, the preview cut", { gaps: classifyCoverageGaps([{ source: rid(5), reason: "x" }, { source: rid(6), reason: "x" }], 40) }, {}, NO_CHAINS_QUALIFIED_TEXT],
+  ] as const;
+
+  it.each(WITHDRAWN)("does not say there are no linked events under %s", (_why, extra, overrides, text) => {
     const model = empty(extra as Partial<DataOptions>, overrides);
     expect(model.emptyText).toBe(text);
     expect(model.emptyText).not.toBe(NO_LINKED_EVENTS_TEXT);
+  });
+
+  it.each(WITHDRAWN)("points at a note that exists, under %s: the sentence says the notes above say what was not covered", (_why, extra, overrides) => {
+    const model = empty(extra as Partial<DataOptions>, overrides);
+    // A rebuild under way is said by the status line; every other reason is a note.
+    expect(model.notices.length > 0 || model.statusText === UPDATING_CORRELATION_TEXT).toBe(true);
+  });
+
+  it("says the origins the engine left uncorrelated as a note, with the count and the lower bound", () => {
+    const one = empty({ gaps: classifyCoverageGaps([{ source: rid(5), reason: "x" }], 1) });
+    expect(one.notices).toEqual([uncorrelatedOriginsNotice(classifyCoverageGaps([{ source: rid(5), reason: "x" }], 1))]);
+    expect(one.notices).toEqual(["1 event could not be fully correlated, so links involving it may be missing."]);
+    const cut = empty({ gaps: classifyCoverageGaps([{ source: rid(5), reason: "x" }, { source: rid(6), reason: "x" }], 40) });
+    expect(cut.notices).toContain("At least 2 events could not be fully correlated, so links involving them may be missing.");
   });
 
   it("has no empty state when a row exists, even one that is not a link", () => {
@@ -417,6 +440,15 @@ describe("the empty states", () => {
     expect(ready(ambiguousOnly, { unreadSources: true }).rowsLine).toBe(
       "No exact or candidate chains were found among what was loaded.",
     );
+    // An origin the engine left uncorrelated may hold the link no row shows, whichever origin it is.
+    for (const source of [rid(1), rid(900)]) {
+      const gapped = makeData({
+        items: itemsFor(fixtureEdges("group3")),
+        edges: fixtureEdges("group3"),
+        gaps: classifyCoverageGaps([{ source, reason: "identity conflict" }], 1),
+      });
+      expect(ready(gapped).rowsLine, source).toBe("No exact or candidate chains were found among what was loaded.");
+    }
     expect(ready(pair()).rowsLine).toBeNull();
   });
 });
@@ -461,11 +493,16 @@ describe("the nearby group, which no producer feeds yet", () => {
     expect(JSON.stringify(model.nearby)).not.toMatch(/not linked/);
   });
 
-  it("withdraws 'Not linked' for an entry a gap names, and so for the group", () => {
-    const gaps = classifyCoverageGaps([{ source: rid(9), reason: "x" }], 1);
-    const model = withNearby([stray(8), stray(9, 3_000)], { gaps });
-    expect(model.nearby!.rows.map((row) => row.reason)).toEqual(["time only, not linked", "time only, no loaded link"]);
-    expect(model.nearby!.heading).toBe("Nearby, no loaded link (2)");
+  it("withdraws 'Not linked' for every entry when a gap names an origin, the entry's own or another: the session cannot speak", () => {
+    // The entry the gap names, and an entry it does not: an origin the engine did not correlate may
+    // hold the link either one has, so neither is called not linked (review M1).
+    for (const source of [rid(9), rid(40)]) {
+      const gaps = classifyCoverageGaps([{ source, reason: "x" }], 1);
+      const model = withNearby([stray(8), stray(9, 3_000)], { gaps });
+      expect(model.nearby!.rows.map((row) => row.reason), source).toEqual(["time only, no loaded link", "time only, no loaded link"]);
+      expect(model.nearby!.heading, source).toBe("Nearby, no loaded link (2)");
+      expect(model.legend!.notLinked, source).toBe("No loaded link");
+    }
   });
 
   it("hands the session's loaded partners to the rule: an entry with one is 'in another chain'", () => {
@@ -556,6 +593,12 @@ describe("no string claims an entry is unplaced without proof", () => {
 });
 
 describe("pure", () => {
+  it("asks the session's rule of every uncorrelated origin, and spells no member list of its own", () => {
+    expect(modelSource).toContain("sessionSpeaksForAbsenceOverall(");
+    expect(modelSource).not.toMatch(/\bsessionSpeaksForAbsence\(/);
+    expect(modelSource).not.toMatch(/\bmemberIds:/);
+  });
+
   it("imports no React, store or IO", () => {
     expect(modelSource).not.toMatch(/from "react"|zustand|@tauri-apps|from "\.\/evtx-store"|from "\.\/evtx-layout-store"/);
   });

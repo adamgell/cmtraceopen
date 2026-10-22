@@ -748,8 +748,9 @@ describe("no string claims an entry is unplaced without proof", () => {
     "partitionUnplaced",
     "placeInWindow",
     "reconcileSelection",
-    // A predicate over the plot's inputs: it produces no text.
+    // Predicates over the plot's inputs: they produce no text.
     "sessionSpeaksForAbsence",
+    "sessionSpeaksForAbsenceOverall",
   ]);
 
   it("names every runtime export of both modules in one of the two sets", () => {

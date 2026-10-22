@@ -8,9 +8,10 @@
  *   when the cap dropped it, `listedRows`), never re-sorted and never grouped by strength;
  * - an exact or candidate row is a card with steps, any other row is a compact row with none, and
  *   the explanations are the copy module's (`whyStatement`, `unresolvedStepsNotice`);
- * - an absence is claimed only when `sessionSpeaksForAbsence` holds, no source went unread and no
- *   rebuild is under way. "Not linked" is the plot's per-entry rule (`nearbyLinkLabel`) at session
- *   level, and the nearby group has no strength, no connector and no count;
+ * - an absence is claimed only when `sessionSpeaksForAbsenceOverall` holds: nothing is narrowed,
+ *   no source went unread, no rebuild is under way and no gap names an origin. "Not linked" is the
+ *   plot's per-entry rule (`nearbyLinkLabel`) at session level, and the nearby group has no
+ *   strength, no connector and no count;
  * - a count that is not known is never 0, and an entry with no loaded position is never given one.
  *
  * The "Nearby, not linked" group is fed by a typed `nearby` input that nothing produces in this
@@ -61,7 +62,7 @@ import {
   listedRows,
   nearbyLinkLabel,
   notLinkedLegendLabel,
-  sessionSpeaksForAbsence,
+  sessionSpeaksForAbsenceOverall,
   spanText,
 } from "./evtx-correlation-view-model";
 import { formatClock, type EvtxTimeZoneMode } from "./evtx-time";
@@ -230,15 +231,16 @@ export function buildRailChains(input: RailChainsInput): RailChainsModel {
 
   const scope = scopeDisclosure(data.scope);
   // An absence of links is claimed for the session only when nothing is narrowed, unread or being
-  // rebuilt, every edge was loaded, and no gap clears completeness: a negative claim from a
-  // superseded session is unproven. The rule is the plot's and the dock's, with the same three inputs.
-  const speaks = sessionSpeaksForAbsence({
+  // rebuilt, every edge was loaded, no gap clears completeness and no gap names an origin: a negative
+  // claim from a superseded session is unproven, and an origin the engine did not correlate may hold
+  // the link. The rule is the plot's and the dock's, with the same three inputs, asked of the whole
+  // session (every origin gap is a member).
+  const speaks = sessionSpeaksForAbsenceOverall({
     edgeInputComplete: model.edgeInputComplete,
     scopeNarrowed: scope !== null,
     unreadSources: input.unreadSources,
     updating: data.updating,
     gaps: data.gaps,
-    memberIds: [],
   });
   const reading = data.nextScan?.state === "running" || data.stage === "scanning";
   const progress = data.nextScan?.progress ?? data.scan.progress;

@@ -50,6 +50,7 @@ import {
   notLinkedLegendLabel,
   partitionUnplaced,
   sessionSpeaksForAbsence,
+  sessionSpeaksForAbsenceOverall,
 } from "./evtx-correlation-view-model";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import { COMPLETE_VIEW } from "./evtx-correlation-test-fixtures";
@@ -1425,6 +1426,87 @@ describe("sessionSpeaksForAbsence", () => {
     expect(labelWith({ updating: true })).toBe(NO_LOADED_LINK_LABEL);
     expect(labelWith({ gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) })).toBe(NO_LOADED_LINK_LABEL);
     expect(labelWith({ gaps: classifyCoverageGaps([{ source: rid(2), reason: "x" }], 1) })).toBe(NO_LOADED_LINK_LABEL);
+  });
+});
+
+/**
+ * A claim about the WHOLE session (no linked events, no chains, an entry that is not linked to
+ * anything) has no row whose members to ask about, so the members are every origin the engine left
+ * uncorrelated: an origin it did not correlate may hold the link, whichever entry the claim is about
+ * (#841, review M1). One entry point, built on the rule, and no caller spells the members itself.
+ */
+describe("sessionSpeaksForAbsenceOverall", () => {
+  const speaks = {
+    edgeInputComplete: true,
+    scopeNarrowed: false,
+    unreadSources: false,
+    updating: false,
+    gaps: classifyCoverageGaps([], 0),
+  };
+  const originGap = (n: number, reason = "identity conflict") => ({ source: rid(n), reason });
+
+  it("holds when the rule holds for a row with no member: everything loaded, nothing withdrawn, no gap", () => {
+    expect(sessionSpeaksForAbsenceOverall(speaks)).toBe(true);
+    // A display gap is list-view compaction: it names no origin and cuts nothing.
+    const display = classifyCoverageGaps([{ source: "timeline-item-projection", reason: "compaction" }], 1);
+    expect(sessionSpeaksForAbsenceOverall({ ...speaks, gaps: display })).toBe(true);
+  });
+
+  it("does not hold when ANY gap names an origin, whatever origin it is", () => {
+    for (const n of [1, 40, 9_999]) {
+      const gaps = classifyCoverageGaps([originGap(n)], 1);
+      expect(gaps.global || gaps.previewCut).toBe(false);
+      expect(sessionSpeaksForAbsenceOverall({ ...speaks, gaps }), `origin ${n}`).toBe(false);
+    }
+    const several = classifyCoverageGaps([originGap(1), originGap(2, "machine identity unavailable")], 2);
+    expect(sessionSpeaksForAbsenceOverall({ ...speaks, gaps: several })).toBe(false);
+  });
+
+  it("does not hold for any caveat the rule withdraws on, with no origin gap at all", () => {
+    expect(sessionSpeaksForAbsenceOverall({ ...speaks, edgeInputComplete: false })).toBe(false);
+    expect(sessionSpeaksForAbsenceOverall({ ...speaks, scopeNarrowed: true })).toBe(false);
+    expect(sessionSpeaksForAbsenceOverall({ ...speaks, unreadSources: true })).toBe(false);
+    expect(sessionSpeaksForAbsenceOverall({ ...speaks, updating: true })).toBe(false);
+    expect(sessionSpeaksForAbsenceOverall({ ...speaks, gaps: classifyCoverageGaps([{ source: "correlation", reason: "limit" }], 1) })).toBe(false);
+    expect(sessionSpeaksForAbsenceOverall({ ...speaks, gaps: classifyCoverageGaps([], 4) })).toBe(false);
+  });
+
+  it("is the rule, asked of every origin the engine left uncorrelated", () => {
+    for (const gaps of [
+      classifyCoverageGaps([], 0),
+      classifyCoverageGaps([originGap(1)], 1),
+      classifyCoverageGaps([originGap(1), originGap(2)], 2),
+      classifyCoverageGaps([originGap(1)], 5),
+    ]) {
+      for (const caveat of [{}, { updating: true }, { scopeNarrowed: true }, { edgeInputComplete: false }]) {
+        const view = { ...speaks, ...caveat, gaps };
+        expect(sessionSpeaksForAbsenceOverall(view)).toBe(sessionSpeaksForAbsence({ ...view, memberIds: gaps.originIds }));
+      }
+    }
+  });
+
+  describe("no caller spells the members of a session claim itself", () => {
+    /** Every source of the workspace that is not a test, a test helper or a fixture. */
+    const sources = Object.fromEntries(
+      Object.entries(
+        import.meta.glob("./**/*.{ts,tsx}", { query: "?raw", import: "default", eager: true }) as Record<string, string>,
+      ).filter(([path]) => !/\.test\.tsx?$|-test-helpers\.|-test-fixtures\.|\/__fixtures__\//.test(path)),
+    );
+    const spellsNoMembers = (source: string) => /\bmemberIds:\s*\[\s*\]/.test(source);
+
+    it("sees the spellings it forbids, and not the others", () => {
+      expect(spellsNoMembers("sessionSpeaksForAbsence({ memberIds: [] })")).toBe(true);
+      expect(spellsNoMembers("memberIds:[ ],")).toBe(true);
+      expect(spellsNoMembers("memberIds: [\n],")).toBe(true);
+      expect(spellsNoMembers("memberIds: [...chain.memberIds]")).toBe(false);
+      expect(spellsNoMembers("memberIds: gaps.originIds")).toBe(false);
+    });
+
+    it("finds none in a source of the workspace: a session claim asks sessionSpeaksForAbsenceOverall", () => {
+      expect(Object.keys(sources).length).toBeGreaterThan(50);
+      expect(sources["./evtx-rail-chains-model.ts"]).toBeDefined();
+      expect(Object.entries(sources).filter(([, source]) => spellsNoMembers(source)).map(([path]) => path)).toEqual([]);
+    });
   });
 });
 

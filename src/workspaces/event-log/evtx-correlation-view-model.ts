@@ -344,9 +344,12 @@ export function evidenceForEdge(
 // ---- the plot -----------------------------------------------------------------------------------
 
 /**
- * What a context marker and the legend say when the session can speak for the entry: every edge is
- * loaded, nothing is narrowed, no correlation limit or truncation gap exists, and no gap names the
- * entry's own origin.
+ * What a context marker and the legend say when the session can speak for the entry
+ * (`sessionSpeaksForAbsence`): every edge is loaded, the scope is not narrowed, every source was
+ * read, no rebuild is under way, no correlation limit or truncation gap exists and every gap is
+ * shown, no gap names a member of the row the entry is compared with, and no gap names the entry's
+ * own origin. A list that is compared with no row (the rail's) asks for the whole session, where a
+ * gap that names any origin withdraws it (`sessionSpeaksForAbsenceOverall`).
  */
 export const NOT_LINKED_LABEL = "Not linked";
 /**
@@ -460,7 +463,7 @@ export type PlotChain = Pick<
 export interface NearbyLabelRule {
   /**
    * `sessionSpeaksForAbsence` over the members of the row the entry is compared with. A list that
-   * is compared with no row (the rail's, which is session-level) asks it with no members.
+   * is compared with no row (the rail's, which is session-level) asks `sessionSpeaksForAbsenceOverall`.
    */
   chainClear: boolean;
   /** A gap that names the entry's own origin withdraws "Not linked" for it alone. */
@@ -591,6 +594,17 @@ export function sessionSpeaksForAbsence(input: AbsenceInput): boolean {
     if (input.gaps.originIds.has(id)) return false;
   }
   return true;
+}
+
+/**
+ * `sessionSpeaksForAbsence` for a claim about the WHOLE session: no linked events, no chains, an
+ * entry that is linked to nothing. There is no row whose members to ask about, so the members are
+ * every origin the engine left uncorrelated (`gaps.originIds`), and a gap that names any origin
+ * withdraws the claim: an origin the engine did not correlate may hold the link, whichever entry
+ * the claim is about. A session-level surface asks this, and never spells the member list itself.
+ */
+export function sessionSpeaksForAbsenceOverall(input: Omit<AbsenceInput, "memberIds">): boolean {
+  return sessionSpeaksForAbsence({ ...input, memberIds: input.gaps.originIds });
 }
 
 export function buildChainPlot(input: ChainPlotInput): ChainPlot {
