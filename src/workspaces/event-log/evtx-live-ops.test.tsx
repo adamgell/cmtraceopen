@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deferred } from "../../test-utils/deferred";
 import type { EvtxRecord } from "./types";
@@ -574,6 +574,415 @@ describe("event-log live operations", () => {
     expect(useEvtxStore.getState().tailRequestId).toBe(secondRequestId);
   });
 
+  it("keeps a lossy tail's gap through Pause and Resume, so the row stays partial", async () => {
+    useEvtxStore.setState({ records: [tailRecord(1)] });
+    render(<ChannelPicker />);
+    const rowState = () =>
+      document
+        .querySelector('[data-channel-row="Application"]')
+        ?.getAttribute("data-channel-state");
+    expect(rowState()).toBe("read");
+
+    await act(async () => {
+      await useEvtxStore.getState().startLiveTail();
+    });
+    const handler = listeners.get("evtx-tail-batch")!;
+    const requestId = useEvtxStore.getState().tailRequestId;
+    // Sequence 0 arrives, then 3: batches 1 and 2 were never received.
+    act(() => {
+      handler({
+        payload: {
+          requestId,
+          channel: "Application",
+          sequence: 0,
+          mode: "subscription",
+          records: [tailRecord(2)],
+          coverageGaps: [],
+        },
+      });
+      handler({
+        payload: {
+          requestId,
+          channel: "Application",
+          sequence: 3,
+          mode: "subscription",
+          records: [tailRecord(3)],
+          coverageGaps: [],
+        },
+      });
+    });
+    expect(rowState()).toBe("partial");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Pause live tail" }));
+    await waitFor(() => expect(useEvtxStore.getState().tailMode).toBeNull());
+    expect(rowState()).toBe("partial");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Resume live tail" }));
+    await waitFor(() => expect(useEvtxStore.getState().tailMode).not.toBeNull());
+    // Resume resets the tail's own list, yet the events with the hole are still in the view.
+    expect(useEvtxStore.getState().tailCoverageGaps).toEqual([]);
+    expect(rowState()).toBe("partial");
+    expect(
+      document.getElementById(
+        document
+          .querySelector('[data-channel-row="Application"] input[type="checkbox"]')!
+          .getAttribute("aria-describedby")!,
+      )?.textContent,
+    ).toContain("live tail batch 1 was not received");
+  });
+
+  describe.each([
+    ["the local machine", null],
+    ["a remote machine", "SRV01"],
+  ] as const)("on %s", (_where, machine) => {
+    const deliverLostBatch = () => {
+      const handler = listeners.get("evtx-tail-batch")!;
+      const requestId = useEvtxStore.getState().tailRequestId;
+      act(() => {
+        for (const sequence of [0, 3]) {
+          handler({
+            payload: {
+              requestId,
+              channel: "Application",
+              sequence,
+              mode: "subscription",
+              records: [tailRecord(10 + sequence)],
+              coverageGaps: [],
+            },
+          });
+        }
+      });
+    };
+    const row = () => document.querySelector('[data-channel-row="Application"]');
+    const description = () =>
+      document.getElementById(
+        row()!.querySelector('input[type="checkbox"]')!.getAttribute("aria-describedby")!,
+      )?.textContent ?? "";
+
+    it("drops a lost batch the tail carried when the channel is cleared, and when it is loaded again", async () => {
+      useEvtxStore.setState({ remoteMachine: machine, records: [tailRecord(1)] });
+      render(<ChannelPicker />);
+      await act(async () => {
+        await useEvtxStore.getState().startLiveTail();
+      });
+      deliverLostBatch();
+      expect(row()?.getAttribute("data-channel-state")).toBe("partial");
+
+      fireEvent.click(await screen.findByRole("button", { name: "Pause live tail" }));
+      await waitFor(() => expect(useEvtxStore.getState().tailMode).toBeNull());
+      fireEvent.click(await screen.findByRole("button", { name: "Resume live tail" }));
+      await waitFor(() => expect(useEvtxStore.getState().tailMode).not.toBeNull());
+      expect(row()?.getAttribute("data-channel-state")).toBe("partial");
+      // The carried copy is filed under the name the store's own filters match.
+      const carried = useEvtxStore
+        .getState()
+        .coverageGaps.filter((gap) => gap.includes("live tail batch 1 was not received"));
+      expect(carried).toEqual([
+        `${machine === null ? "" : `${machine}/`}Application: live tail batch 1 was not received`,
+      ]);
+
+      await act(async () => {
+        await useEvtxStore.getState().clearChannel("Application", true);
+      });
+      // Cleared: no stale reason survives for it, on the row or in the coverage. System was tailing
+      // too and its own gap, filed the same way, is not Application's to lose.
+      expect(
+        useEvtxStore.getState().coverageGaps.filter((gap) => gap.includes("Application")),
+      ).toEqual([]);
+      expect(useEvtxStore.getState().coverageGaps.join("\n")).toContain(
+        `${machine === null ? "" : `${machine}/`}System: live tail batch 0 was not received`,
+      );
+      // The pane's numbers follow a running tail through a 75 ms throttle, so the row settles.
+      await waitFor(() => expect(row()?.getAttribute("data-channel-state")).toBe("notLoaded"));
+      expect(description()).not.toContain("live tail batch");
+    });
+  });
+
+  describe("a tail's stop that fails after the source was replaced", () => {
+    // The request id is in the message so a test can tell its own failure from the retries of
+    // earlier tails that no stop can ever reach (module state outlives a test).
+    const stopFailure = (requestId: unknown, channel: unknown) =>
+      `live tail ${String(channel)} for request ${String(requestId)} was not found`;
+    const startReply = (args: Record<string, unknown>) => ({
+      requestId: args.requestId,
+      channel: args.channel,
+      mode: "subscription",
+      active: true,
+      nextSequence: 0,
+      coverageGaps: [],
+    });
+    /** An empty read that succeeds, with the terminal stream event the store waits for. */
+    const emptyRead = (args: Record<string, unknown>) => {
+      const channel = (args.channels as string[])[0];
+      queueMicrotask(() =>
+        listeners.get("evtx-record-stream-complete")?.({
+          payload: { channel, sequenceCount: 0, totalRecords: 0, requestId: args.requestId },
+        }),
+      );
+      return {
+        records: [],
+        channels: [{ name: channel, eventCount: 0, sourceType: "live", enabledState: "enabled" }],
+        totalRecords: 0,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    };
+    const gapsOf = (requestId: string) =>
+      useEvtxStore
+        .getState()
+        .tailCoverageGaps.filter((gap) => gap.includes(`request ${requestId}`));
+
+    it("is logged, not written into a stable live view of the other machine", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      // The old tail's stop is held until SRV01 is on screen, then fails.
+      const stop = deferred<never>();
+      let tailRequestId = "";
+      invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+        if (name === "evtx_start_tail") return startReply(args);
+        if (name === "evtx_stop_tail") {
+          if (args.requestId === tailRequestId) return stop.promise;
+          return { ...startReply(args), active: false, nextSequence: 1 };
+        }
+        if (name === "evtx_enumerate_remote_channels") {
+          return [{ name: "System", eventCount: 0, sourceType: { remote: { machine: "SRV01" } }, enabledState: "enabled" }];
+        }
+        if (name === "evtx_query_remote_channels") return emptyRead(args);
+        return undefined;
+      });
+
+      await useEvtxStore.getState().startLiveTail();
+      tailRequestId = useEvtxStore.getState().tailRequestId!;
+      await useEvtxStore.getState().enumerateRemoteChannels("SRV01");
+      await waitFor(() => {
+        const state = useEvtxStore.getState();
+        expect(state.sourceMode).toBe("live");
+        expect(state.isLoading).toBe(false);
+        expect(state.loadedChannels.has("System")).toBe(true);
+      });
+      expect(useEvtxStore.getState().remoteMachine).toBe("SRV01");
+      render(<ChannelPicker />);
+      const systemRow = () => document.querySelector('[data-channel-row="System"]');
+      expect(systemRow()?.getAttribute("data-channel-state")).toBe("read");
+
+      // Now, with SRV01 live, the old local tail's stop fails.
+      stop.reject(new Error(stopFailure(tailRequestId, "Application")));
+      await waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining(`request ${tailRequestId} was not found`),
+        ),
+      );
+
+      expect(gapsOf(tailRequestId)).toEqual([]);
+      expect(useEvtxStore.getState().tailCoverageGaps).toEqual([]);
+      expect(useEvtxStore.getState().coverageGaps.join("\n")).not.toContain(tailRequestId);
+      // SRV01's own System row is untouched by another machine's tail.
+      expect(systemRow()?.getAttribute("data-channel-state")).toBe("read");
+      warn.mockRestore();
+    });
+
+    it("is still written when the load that superseded the tail is on the same source", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+        if (name === "evtx_start_tail") return startReply(args);
+        if (name === "evtx_stop_tail") throw new Error(stopFailure(args.requestId, args.channel));
+        if (name === "evtx_query_channels") return emptyRead(args);
+        return undefined;
+      });
+      await useEvtxStore.getState().startLiveTail();
+      const tailRequestId = useEvtxStore.getState().tailRequestId!;
+
+      void useEvtxStore.getState().queryChannels(["System"]);
+      await waitFor(() => expect(gapsOf(tailRequestId).length).toBeGreaterThan(0));
+      expect(warn).not.toHaveBeenCalledWith(
+        expect.stringContaining(`request ${tailRequestId} was not found`),
+      );
+      warn.mockRestore();
+    });
+
+    it("survives more than 64 later supersessions: never in another source's view, still in its own", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      let doomedRequestId = "";
+      invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+        if (name === "evtx_start_tail") return startReply(args);
+        if (name === "evtx_stop_tail") {
+          // One tail can never be stopped; every other stop succeeds.
+          if (args.requestId === doomedRequestId) {
+            throw new Error(stopFailure(args.requestId, args.channel));
+          }
+          return { ...startReply(args), active: false, nextSequence: 1 };
+        }
+        if (name === "evtx_enumerate_remote_channels") return [];
+        if (name === "evtx_query_channels" || name === "evtx_query_remote_channels") {
+          return emptyRead(args);
+        }
+        return undefined;
+      });
+
+      // Local tail whose stop never succeeds, then a switch to SRV01.
+      await useEvtxStore.getState().startLiveTail();
+      doomedRequestId = useEvtxStore.getState().tailRequestId!;
+      await useEvtxStore.getState().enumerateRemoteChannels("SRV01");
+      await waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining(`request ${doomedRequestId} was not found`),
+        ),
+      );
+
+      // Far more supersessions than any bound: each starts a tail on SRV01 and a load replaces it,
+      // and each load retries the doomed stop again.
+      useEvtxStore.setState({
+        sourceMode: "live",
+        loadedChannels: new Set(["System"]),
+        channels: [{ name: "System", eventCount: 0, sourceType: "live", enabledState: "enabled" }],
+      });
+      for (let i = 0; i < 70; i += 1) {
+        await useEvtxStore.getState().startLiveTail();
+        await useEvtxStore.getState().queryChannels(["System"]);
+        useEvtxStore.setState({ sourceMode: "live", loadedChannels: new Set(["System"]) });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(useEvtxStore.getState().remoteMachine).toBe("SRV01");
+      expect(gapsOf(doomedRequestId)).toEqual([]);
+      expect(useEvtxStore.getState().coverageGaps.join("\n")).not.toContain(doomedRequestId);
+
+      // Back on the machine the tail belonged to, once that view is stable, the same doomed stop is
+      // retried by the next load and its failure belongs here: the origin outlived all of that.
+      invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+        if (name === "evtx_stop_tail") {
+          if (args.requestId === doomedRequestId) {
+            throw new Error(stopFailure(args.requestId, args.channel));
+          }
+          return { ...startReply(args), active: false, nextSequence: 1 };
+        }
+        if (name === "evtx_enumerate_channels") {
+          return [{ name: "System", eventCount: 0, sourceType: "live", enabledState: "enabled" }];
+        }
+        if (name === "evtx_query_channels") return emptyRead(args);
+        return undefined;
+      });
+      await useEvtxStore.getState().enumerateLocalChannels();
+      await waitFor(() => {
+        const state = useEvtxStore.getState();
+        expect(state.sourceMode).toBe("live");
+        expect(state.isLoading).toBe(false);
+        expect(state.loadedChannels.has("System")).toBe(true);
+      });
+      expect(useEvtxStore.getState().remoteMachine).toBeNull();
+      await useEvtxStore.getState().queryChannels(["System"]);
+      await waitFor(() => expect(gapsOf(doomedRequestId).length).toBeGreaterThan(0));
+      warn.mockRestore();
+    });
+
+    it("keeps the origin of a stop that is still pending when the tail is no longer active", async () => {
+      // Two loads on one live source: the first supersedes the tail, so by the second prune the tail
+      // is neither active nor starting, and only its pending stop says its origin is still needed.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const stop = deferred<never>();
+      let requestId = "";
+      invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+        if (name === "evtx_start_tail") return startReply(args);
+        if (name === "evtx_stop_tail") {
+          if (args.requestId === requestId) return stop.promise;
+          return { ...startReply(args), active: false, nextSequence: 1 };
+        }
+        if (name === "evtx_query_channels") return emptyRead(args);
+        return undefined;
+      });
+      await useEvtxStore.getState().startLiveTail();
+      requestId = useEvtxStore.getState().tailRequestId!;
+
+      await useEvtxStore.getState().queryChannels(["System"]);
+      await useEvtxStore.getState().queryChannels(["System"]);
+      stop.reject(new Error(stopFailure(requestId, "Application")));
+
+      await waitFor(() => expect(gapsOf(requestId).length).toBeGreaterThan(0));
+      expect(warn).not.toHaveBeenCalledWith(
+        expect.stringContaining(`request ${requestId} was not found`),
+      );
+      warn.mockRestore();
+    });
+
+    it("keeps the origin of a start that is still pending when the tail is no longer active", async () => {
+      // The first load detaches a start that has not answered; the second prune finds it neither
+      // active nor stopping, and only its pending start says its origin is still needed. When the
+      // start answers it is stopped, and that stop fails.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const startGate = deferred<void>();
+      invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+        if (name === "evtx_start_tail") {
+          await startGate.promise;
+          return startReply(args);
+        }
+        if (name === "evtx_stop_tail") throw new Error(stopFailure(args.requestId, args.channel));
+        if (name === "evtx_query_channels") return emptyRead(args);
+        return undefined;
+      });
+      const starting = useEvtxStore.getState().startLiveTail();
+      const startCall = invoke.mock.calls.find(([name]) => name === "evtx_start_tail");
+      const requestId = String((startCall?.[1] as Record<string, unknown>).requestId);
+
+      await useEvtxStore.getState().queryChannels(["System"]);
+      await useEvtxStore.getState().queryChannels(["System"]);
+      startGate.resolve();
+      expect(await starting).toEqual([]);
+
+      await waitFor(() => expect(gapsOf(requestId).length).toBeGreaterThan(0));
+      expect(warn).not.toHaveBeenCalledWith(
+        expect.stringContaining(`request ${requestId} was not found`),
+      );
+      warn.mockRestore();
+    });
+
+    it("never writes an outcome whose source it does not know", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      let requestId = "";
+      invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+        if (name === "evtx_start_tail") return startReply(args);
+        if (name === "evtx_stop_tail") {
+          if (args.requestId === requestId) {
+            throw new Error(stopFailure(args.requestId, args.channel));
+          }
+          return { ...startReply(args), active: false, nextSequence: 1 };
+        }
+        return undefined;
+      });
+      await useEvtxStore.getState().startLiveTail();
+      requestId = useEvtxStore.getState().tailRequestId!;
+
+      // reset() forgets where every tail came from and tears the active tail down.
+      useEvtxStore.getState().reset();
+      await waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("has no recorded source")),
+      );
+      expect(gapsOf(requestId)).toEqual([]);
+      warn.mockRestore();
+    });
+  });
+
+  it("does not carry a gap that lost nothing across a restart", async () => {
+    useEvtxStore.setState({ tailCoverageGaps: ["Application: live tail unavailable (not supported)"] });
+
+    await useEvtxStore.getState().startLiveTail();
+
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+  });
+
+  it("clears the carried gap when its channel is cleared", async () => {
+    useEvtxStore.setState({
+      records: [tailRecord(1)],
+      tailCoverageGaps: ["Application: live tail batch 4 was not received"],
+    });
+    await useEvtxStore.getState().startLiveTail();
+    expect(useEvtxStore.getState().coverageGaps).toContain(
+      "Application: live tail batch 4 was not received",
+    );
+
+    await useEvtxStore.getState().clearChannel("Application", true);
+
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+  });
+
   it("accepts sequence zero after restarting the live tail with a fresh request", async () => {
     await useEvtxStore.getState().startLiveTail();
     const handler = listeners.get("evtx-tail-batch");
@@ -896,8 +1305,9 @@ describe("event-log live operations", () => {
     const filter = document.querySelector<HTMLInputElement>(
       'input[placeholder="Filter channels..."]',
     )!;
+    // The live tail control is the footer's Resume (tail off) / Pause (tail on) link-button.
     const liveTailButton = Array.from(document.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Start live tail",
+      (button) => button.textContent?.trim() === "Resume",
     )!;
     await waitFor(() => expect(document.querySelector('[role="status"]')).toHaveFocus());
     liveTailButton.focus();

@@ -2499,3 +2499,154 @@ describe("channel eligibility", () => {
     ]);
   });
 });
+
+describe("a live tail's lost events outlive the tail", () => {
+  const LOST = "System: live tail batch 12 was not received";
+  const UNAVAILABLE = "System: live tail unavailable (not supported)";
+
+  beforeEach(() => {
+    invoke.mockReset();
+    useEvtxStore.setState({
+      records: [streamedRecord("System", 1)],
+      channels: [
+        { name: "System", eventCount: 1, sourceType: "live", enabledState: "enabled" },
+        { name: "Application", eventCount: 0, sourceType: "live", enabledState: "enabled" },
+      ],
+      coverageGaps: [],
+      coverageDetails: [],
+      sourceManifest: null,
+      sourceMode: "live",
+      loadedChannels: new Set(["System"]),
+      selectedChannels: new Set(["System"]),
+      tailMode: "subscription",
+      tailRequestId: "event-log-tail-1",
+      tailChannels: new Set(["System"]),
+      tailCoverageGaps: [LOST, UNAVAILABLE],
+    });
+  });
+
+  it("keeps a lost batch, and only a lost batch, when a load of another channel tears the tail down", async () => {
+    invoke.mockResolvedValueOnce(result("Application", []));
+
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    const state = useEvtxStore.getState();
+    expect(state.tailCoverageGaps).toEqual([]);
+    // The records the tail delivered are still loaded, so the hole in them still shows. A tail that
+    // merely could not start lost nothing and is not carried.
+    expect(state.coverageGaps).toContain(LOST);
+    expect(state.coverageGaps).not.toContain(UNAVAILABLE);
+    expect(state.records.map((record) => record.channel)).toContain("System");
+  });
+
+  it("drops it when that channel is loaded again, as it drops any other gap", async () => {
+    invoke.mockResolvedValueOnce(result("Application", []));
+    await useEvtxStore.getState().queryChannels(["Application"]);
+    expect(useEvtxStore.getState().coverageGaps).toContain(LOST);
+
+    invoke.mockResolvedValueOnce(result("System", []));
+    await useEvtxStore.getState().queryChannels(["System"]);
+
+    expect(useEvtxStore.getState().coverageGaps).not.toContain(LOST);
+  });
+});
+
+describe("a remote machine's tail loss", () => {
+  const LOST = "System: live tail batch 12 was not received";
+
+  beforeEach(() => {
+    invoke.mockReset();
+    useEvtxStore.setState({
+      records: [streamedRecord("System", 1)],
+      channels: [
+        { name: "System", eventCount: 1, sourceType: "live", enabledState: "enabled" },
+        { name: "Application", eventCount: 0, sourceType: "live", enabledState: "enabled" },
+      ],
+      coverageGaps: [],
+      coverageDetails: [],
+      sourceManifest: null,
+      sourceMode: "live",
+      remoteMachine: "SRV01",
+      loadedChannels: new Set(["System"]),
+      selectedChannels: new Set(["System"]),
+      tailMode: "subscription",
+      tailRequestId: "event-log-tail-1",
+      tailChannels: new Set(["System"]),
+      tailCoverageGaps: [LOST],
+    });
+  });
+
+  it("is filed as Machine/Channel, the name every reload and clear filter matches", async () => {
+    invoke.mockResolvedValueOnce(result("Application", []));
+
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    const { coverageGaps } = useEvtxStore.getState();
+    expect(coverageGaps).toContain(`SRV01/${LOST}`);
+    expect(coverageGaps).not.toContain(LOST);
+  });
+
+  it("drops it when that channel is loaded again", async () => {
+    invoke.mockResolvedValueOnce(result("Application", []));
+    await useEvtxStore.getState().queryChannels(["Application"]);
+    expect(useEvtxStore.getState().coverageGaps).toContain(`SRV01/${LOST}`);
+
+    invoke.mockResolvedValueOnce(result("System", []));
+    await useEvtxStore.getState().queryChannels(["System"]);
+
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+  });
+
+  it("does not file a summary that names no channel under a machine", async () => {
+    useEvtxStore.setState({
+      tailCoverageGaps: ["<live tail coverage>: 40 additional live tail diagnostics were coalesced"],
+    });
+    invoke.mockResolvedValueOnce(result("Application", []));
+
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    expect(useEvtxStore.getState().coverageGaps).toEqual([
+      "<live tail coverage>: 40 additional live tail diagnostics were coalesced",
+    ]);
+  });
+
+  it("does not file a gap that is already qualified a second time", async () => {
+    useEvtxStore.setState({ tailCoverageGaps: [`SRV01/${LOST}`] });
+    invoke.mockResolvedValueOnce(result("Application", []));
+
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    expect(useEvtxStore.getState().coverageGaps).toEqual([`SRV01/${LOST}`]);
+  });
+});
+
+describe("tail loss does not cross a switch of source", () => {
+  const LOST = "System: live tail batch 12 was not received";
+
+  it("does not carry a remote machine's lost batch into the local view, even when enumeration fails", async () => {
+    invoke.mockReset();
+    useEvtxStore.setState({
+      records: [streamedRecord("System", 1)],
+      channels: [{ name: "System", eventCount: 1, sourceType: "live", enabledState: "enabled" }],
+      coverageGaps: [],
+      coverageDetails: [],
+      sourceMode: "live",
+      remoteMachine: "SRV01",
+      loadedChannels: new Set(["System"]),
+      selectedChannels: new Set(["System"]),
+      tailMode: "subscription",
+      tailRequestId: "event-log-tail-1",
+      tailChannels: new Set(["System"]),
+      tailCoverageGaps: [LOST],
+    });
+    invoke.mockRejectedValue(new Error("The RPC server is unavailable."));
+
+    await useEvtxStore.getState().enumerateLocalChannels();
+
+    const state = useEvtxStore.getState();
+    expect(state.remoteMachine).toBeNull();
+    expect(state.loadError).toContain("RPC server is unavailable");
+    expect(state.coverageGaps).toEqual([]);
+    expect(state.tailCoverageGaps).toEqual([]);
+  });
+});
