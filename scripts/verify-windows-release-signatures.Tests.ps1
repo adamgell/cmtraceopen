@@ -303,3 +303,151 @@ Describe 'Windows SDK SignTool selection' {
         { Get-WindowsSignTool -SdkRoot $sdk } | Should -Throw '*SignTool is missing*'
     }
 }
+
+Describe 'NSIS bundled payload signature evidence' {
+    BeforeAll { . (Join-Path $PSScriptRoot 'verify-nsis-payload.ps1') }
+    BeforeEach {
+        $caseRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        [void][IO.Directory]::CreateDirectory($caseRoot)
+        $installer = Join-Path $caseRoot 'setup.exe'
+        [IO.File]::WriteAllText($installer, 'installer')
+        $extractionRoot = Join-Path $caseRoot 'extracted'
+        $receiptRoot = Join-Path $caseRoot 'receipts'
+        Mock Write-WindowsReleaseSignatureReceipt { }
+        Mock Expand-NsisVerificationPayload {
+            [void][IO.Directory]::CreateDirectory($extractionRoot)
+            [IO.File]::WriteAllText((Join-Path $extractionRoot 'cmtrace-open.exe'), 'installed payload')
+        }
+        Mock Get-WindowsReleaseContext { [ordered]@{ sourceCommit = 'a' * 40; runId = '1'; runAttempt = '1'; target = 'x86_64-pc-windows-msvc' } }
+    }
+    It 'verifies the bundled application separately and binds installer/payload hashes' {
+        Write-NsisPayloadReceipt -InstallerPath $installer -ExtractionRoot $extractionRoot -ReceiptRoot $receiptRoot -Target 'x86_64-pc-windows-msvc'
+        Should -Invoke Write-WindowsReleaseSignatureReceipt -Times 1 -ParameterFilter { $Paths[0] -eq (Join-Path $extractionRoot 'cmtrace-open.exe') }
+        $proof = Get-Content (Join-Path $receiptRoot 'nsis-bundled-payload.json') -Raw | ConvertFrom-Json
+        $proof.installer.sha256 | Should -Be ((Get-FileHash $installer).Hash.ToLowerInvariant())
+        $proof.payload.sha256 | Should -Be ((Get-FileHash (Join-Path $extractionRoot 'cmtrace-open.exe')).Hash.ToLowerInvariant())
+    }
+    It 'rejects an unsigned bundled application rather than writing acceptance' {
+        Mock Write-WindowsReleaseSignatureReceipt { throw 'Authenticode verification failed' }
+        { Write-NsisPayloadReceipt -InstallerPath $installer -ExtractionRoot $extractionRoot -ReceiptRoot $receiptRoot -Target 'x86_64-pc-windows-msvc' } | Should -Throw '*Authenticode*'
+        Test-Path (Join-Path $receiptRoot 'nsis-bundled-payload.json') | Should -BeFalse
+    }
+    It 'does not extract over an existing directory' {
+        [void][IO.Directory]::CreateDirectory($extractionRoot)
+        { Write-NsisPayloadReceipt -InstallerPath $installer -ExtractionRoot $extractionRoot -ReceiptRoot $receiptRoot -Target 'x86_64-pc-windows-msvc' } | Should -Throw '*exists*'
+        Should -Invoke Expand-NsisVerificationPayload -Times 0
+    }
+    It 'rejects a missing bundled application' {
+        Mock Expand-NsisVerificationPayload { [void][IO.Directory]::CreateDirectory($extractionRoot) }
+        { Write-NsisPayloadReceipt -InstallerPath $installer -ExtractionRoot $extractionRoot -ReceiptRoot $receiptRoot -Target 'x86_64-pc-windows-msvc' } | Should -Throw
+    }
+}
+
+
+Describe 'Tauri bundling-time signing hook' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot 'sign-tauri-windows.ps1')
+        function Invoke-ArtifactSigning { param($Files, $Endpoint, $CodeSigningAccountName,
+            $CertificateProfileName, $FileDigest, $TimestampRfc3161, $TimestampDigest, $Timeout,
+            [switch]$ExcludeEnvironmentCredential, [switch]$ExcludeWorkloadIdentityCredential,
+            [switch]$ExcludeManagedIdentityCredential, [switch]$ExcludeSharedTokenCacheCredential,
+            [switch]$ExcludeVisualStudioCredential, [switch]$ExcludeVisualStudioCodeCredential,
+            [switch]$ExcludeAzureCliCredential, [switch]$ExcludeAzurePowerShellCredential,
+            [switch]$ExcludeAzureDeveloperCliCredential, [switch]$ExcludeInteractiveBrowserCredential) }
+        $hookSettings = @('AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET',
+            'SIGNING_ENDPOINT', 'SIGNING_ACCOUNT_NAME', 'SIGNING_PROFILE_NAME', 'RUNNER_TEMP')
+        $previousHookSettings = @{}
+        foreach ($name in $hookSettings) {
+            $previousHookSettings[$name] = [Environment]::GetEnvironmentVariable($name)
+        }
+    }
+    BeforeEach {
+        foreach ($name in $hookSettings) { [Environment]::SetEnvironmentVariable($name, 'offline-fixture') }
+        $env:RUNNER_TEMP = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        [void][IO.Directory]::CreateDirectory($env:RUNNER_TEMP)
+        $hookFile = Join-Path $TestDrive ('payload ' + [guid]::NewGuid() + '.exe')
+        Set-Content -LiteralPath $hookFile -Value 'offline unsigned fixture'
+        Mock Import-VerifiedArtifactSigning {
+            [pscustomobject]@{ ExportedCommands = @{ 'Invoke-ArtifactSigning' = (Get-Command Invoke-ArtifactSigning) } }
+        }
+        Mock Invoke-ArtifactSigning { }
+        Mock Get-AuthenticodeSignature { [pscustomobject]@{ Status = 'Valid' } }
+    }
+    AfterAll {
+        foreach ($name in $hookSettings) { [Environment]::SetEnvironmentVariable($name, $previousHookSettings[$name]) }
+    }
+    It 'signs only the bundler-supplied file with the existing pinned module and environment credential' {
+        Invoke-TauriWindowsSigning -LiteralPath $hookFile
+        Should -Invoke Import-VerifiedArtifactSigning -Times 1 -Exactly
+        Should -Invoke Invoke-ArtifactSigning -Times 1 -Exactly -ParameterFilter {
+            $Files -eq $hookFile -and $FileDigest -eq 'SHA256' -and $TimestampDigest -eq 'SHA256' -and
+            $TimestampRfc3161 -eq 'http://timestamp.acs.microsoft.com' -and $Timeout -eq 300 -and
+            -not $ExcludeEnvironmentCredential -and $ExcludeAzureCliCredential -and
+            $ExcludeWorkloadIdentityCredential -and $ExcludeManagedIdentityCredential -and
+            $ExcludeSharedTokenCacheCredential -and $ExcludeVisualStudioCredential -and
+            $ExcludeVisualStudioCodeCredential -and $ExcludeAzurePowerShellCredential -and
+            $ExcludeAzureDeveloperCliCredential -and $ExcludeInteractiveBrowserCredential
+        }
+    }
+    It 'fails before signing when an existing credential is absent' {
+        $env:AZURE_CLIENT_SECRET = ''
+        { Invoke-TauriWindowsSigning -LiteralPath $hookFile } | Should -Throw '*AZURE_CLIENT_SECRET*'
+        Should -Invoke Invoke-ArtifactSigning -Times 0
+    }
+    It 'propagates a provider failure and does not inspect a nonexistent signature' {
+        Mock Invoke-ArtifactSigning { throw 'offline provider failure' }
+        { Invoke-TauriWindowsSigning -LiteralPath $hookFile } | Should -Throw '*provider failure*'
+        Should -Invoke Get-AuthenticodeSignature -Times 0
+    }
+    It 'rejects an unsigned result even when the provider returns successfully' {
+        Mock Get-AuthenticodeSignature { [pscustomobject]@{ Status = 'NotSigned' } }
+        { Invoke-TauriWindowsSigning -LiteralPath $hookFile } | Should -Throw '*valid Authenticode*'
+    }
+    It 'rejects a symbolic-link payload before importing the signing provider' {
+        $link = Join-Path $TestDrive ('symlink-' + [guid]::NewGuid() + '.exe')
+        New-Item -ItemType SymbolicLink -Path $link -Target $hookFile | Out-Null
+        { Invoke-TauriWindowsSigning -LiteralPath $link } | Should -Throw '*regular EXE or DLL*'
+        Should -Invoke Import-VerifiedArtifactSigning -Times 0
+        Should -Invoke Invoke-ArtifactSigning -Times 0
+    }
+    It 'rejects a directory and does not sign files recursively' {
+        { Invoke-TauriWindowsSigning -LiteralPath $TestDrive } | Should -Throw '*regular EXE or DLL*'
+        Should -Invoke Invoke-ArtifactSigning -Times 0
+    }
+}
+
+Describe 'ArtifactSigning package verification before import' {
+    BeforeAll { . (Join-Path $PSScriptRoot 'sign-tauri-windows.ps1') }
+    BeforeEach {
+        $previousRunnerTemp = $env:RUNNER_TEMP
+        $env:RUNNER_TEMP = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        [void][IO.Directory]::CreateDirectory($env:RUNNER_TEMP)
+        $package = Join-Path $env:RUNNER_TEMP 'cmtrace-artifact-signing-0.1.8.nupkg'
+        Mock Import-Module { throw 'unverified import reached' }
+    }
+    AfterEach { $env:RUNNER_TEMP = $previousRunnerTemp }
+    It 'rejects tampered bytes before importing any module' {
+        [IO.File]::WriteAllText($package, 'tampered package')
+        { Import-VerifiedArtifactSigning } | Should -Throw '*SHA256 verification failed*'
+        Should -Invoke Import-Module -Times 0
+    }
+    It 'rejects a missing package before importing any module' {
+        { Import-VerifiedArtifactSigning } | Should -Throw
+        Should -Invoke Import-Module -Times 0
+    }
+    It 'imports only the explicit manifest extracted from verified bytes' {
+        $source = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        [void][IO.Directory]::CreateDirectory($source)
+        Set-Content -LiteralPath (Join-Path $source 'ArtifactSigning.psd1') -Value "@{ ModuleVersion = '0.1.8' }"
+        [IO.Compression.ZipFile]::CreateFromDirectory($source, $package)
+        Mock Get-FileHash { [pscustomobject]@{ Hash = '3221344b8c627915d3870f23e80816f31a5d8c2bae1d7c0cdd6c9652f6c4e089' } }
+        Mock Import-Module { [pscustomobject]@{ ExportedCommands = @{ 'Invoke-ArtifactSigning' = 'verified-command' } } }
+        $module = Import-VerifiedArtifactSigning
+        $module.ExportedCommands['Invoke-ArtifactSigning'] | Should -Be 'verified-command'
+        Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter {
+            [IO.Path]::IsPathFullyQualified($Name) -and
+            $Name.StartsWith((Join-Path $env:RUNNER_TEMP 'cmtrace-artifact-signing-')) -and
+            $Name.EndsWith('ArtifactSigning.psd1') -and $RequiredVersion -eq '0.1.8' -and $Force -and $PassThru
+        }
+    }
+}
