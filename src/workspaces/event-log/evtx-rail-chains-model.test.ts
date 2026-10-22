@@ -528,6 +528,21 @@ describe("the nearby group, which no producer feeds yet", () => {
     expect(model.rows).toHaveLength(1);
   });
 
+  it("orders entries at the same time by origin id, and keeps two entries of one origin in the order given", () => {
+    const model = withNearby([stray(9, 3_000), stray(8, 3_000), stray(7, 3_000)]);
+    expect(model.nearby!.rows.map((row) => row.id)).toEqual([rid(7), rid(8), rid(9)]);
+    // Two entries of one origin at one time compare equal, whatever the comparator says of unequal ids.
+    const first = { ...stray(8, 3_000), message: "first" };
+    const second = { ...stray(8, 3_000), message: "second" };
+    expect(withNearby([first, second]).nearby!.rows.map((row) => row.message)).toEqual(["first", "second"]);
+    expect(withNearby([second, first]).nearby!.rows.map((row) => row.message)).toEqual(["second", "first"]);
+  });
+
+  it("breaks a tie with the workspace's one string comparator, which returns 0 for equal ids (review nit)", () => {
+    expect(modelSource).toMatch(/\bcompareStrings\(\s*timelineOriginId\(a\.origin\),\s*timelineOriginId\(b\.origin\)\s*\)/);
+    expect(modelSource).not.toMatch(/\?\s*-1\s*:\s*1/);
+  });
+
   it("orders the entries by time and names them by the lane they are in", () => {
     const model = withNearby([stray(9, 3_000), stray(8, 2_000)]);
     expect(model.nearby!.rows.map((row) => row.timeText)).toEqual(["10:20:02", "10:20:03"]);

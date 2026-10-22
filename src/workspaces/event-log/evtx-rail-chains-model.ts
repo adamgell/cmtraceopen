@@ -18,6 +18,7 @@
  * version (decision A on #838): the workspace passes none, so it is empty in production.
  */
 import {
+  compareStrings,
   strongestRowOf,
   type CorrelationChain,
   type CorrelationChainStrength,
@@ -305,8 +306,7 @@ export function buildRailChains(input: RailChainsInput): RailChainsModel {
     .filter((item) => !model.rowsByMember.has(timelineOriginId(item.origin)))
     .sort(
       (a, b) =>
-        a.timestampMs - b.timestampMs ||
-        (timelineOriginId(a.origin) < timelineOriginId(b.origin) ? -1 : 1),
+        a.timestampMs - b.timestampMs || compareStrings(timelineOriginId(a.origin), timelineOriginId(b.origin)),
     );
   const rule = { chainClear: speaks, gaps: data.gaps, linkPartners: data.linkPartners };
   const labels = context.map((item) => nearbyLinkLabel(timelineOriginId(item.origin), rule));
