@@ -2,7 +2,7 @@ use super::safe::{
     cut_chars, escape, flatten, strip_invisible, strip_summary, token_len_at, Doc, Projected,
     Redactor, Safe,
 };
-use super::{collect, collect_chains, REPORT_CHAIN_ROW_CAP};
+use super::{collect, REPORT_CHAIN_ROW_CAP};
 use super::{
     render_report, render_report_within, EngineNotes, EventLogAnalysisReportRequest, ReportInput,
     ReportSnapshot, MAX_REPORT_BYTES, REPORT_EVENT_ROW_CAP,
@@ -554,6 +554,7 @@ fn snapshot_of(rows: Vec<TimelineItem>, placed: u64) -> ReportSnapshot {
         span_ms: Some((FIXTURE_NOW_MS, FIXTURE_NOW_MS + 1000)),
         machines,
         engine_notes: EngineNotes::default(),
+        holds_link: false,
         entries: HashMap::new(),
         chains: Vec::new(),
     }
@@ -1541,12 +1542,10 @@ fn chain_report_for(
     value["chains"] = chains;
     let request = request_from(value);
     request.validate()?;
-    let (chains, entries) = collect_chains(timeline, request.chains.as_ref().unwrap())?;
-    let mut snapshot = snapshot_of(Vec::new(), 0);
-    snapshot.machines.insert("HOST-0005".to_owned());
-    snapshot.status.total_edges = timeline.edges.len() as u64;
-    snapshot.entries = entries;
-    snapshot.chains = chains;
+    // The snapshot is what `collect` makes of the timeline, as the command makes it.
+    let mut session = status(timeline.items.len() as u64, 0);
+    session.total_edges = timeline.edges.len() as u64;
+    let snapshot = collect(timeline, session, &request)?;
     render_report(&ReportInput {
         request: &request,
         snapshot: &snapshot,
@@ -1889,16 +1888,21 @@ fn the_ladder_says_what_the_chain_list_can_and_cannot_support() {
     ));
 
     // Edges the app did not load: a shortfall is stated with both numbers, and an empty list
-    // is not read as "no chains".
+    // is not read as "no chains". The three relations are ambiguous, so none is a link.
+    let ambiguous = |from: &str, to: &str, value: &str| {
+        let mut one = exact_edge(from, to, value);
+        one.strength = TimelineCorrelationStrength::Ambiguous;
+        one
+    };
     let three_edges = timeline_of(
         Vec::new(),
         vec![
-            exact_edge("x1", "x2", "v1"),
-            exact_edge("x3", "x4", "v2"),
-            exact_edge("x5", "x6", "v3"),
+            ambiguous("x1", "x2", "v1"),
+            ambiguous("x3", "x4", "v2"),
+            ambiguous("x5", "x6", "v3"),
         ],
     );
-    let short = chain_report_for(&three_edges, chains_value(1, (0, 0, 0, 0), Vec::new())).unwrap();
+    let short = chain_report_for(&three_edges, chains_value(1, (0, 0, 1, 0), Vec::new())).unwrap();
     assert!(short.contains(
         "- Built from 1 of 3 correlation edges (2 not loaded), so more chains may exist."
     ));
@@ -1907,7 +1911,7 @@ fn the_ladder_says_what_the_chain_list_can_and_cannot_support() {
          this does not show that none exist."
     ));
     assert!(!short.contains("The engine produced no Exact or Candidate link"));
-    assert!(short.contains("(counts only, at least): 0 Ambiguous"));
+    assert!(short.contains("(counts only, at least): 1 Ambiguous"));
 
     // The engine's own gaps make an empty list unprovable even when every edge was loaded.
     for gap in ["global", "previewCut"] {
@@ -1931,6 +1935,96 @@ fn the_ladder_says_what_the_chain_list_can_and_cannot_support() {
         chain_report_for(&timeline, chains_value(1, (3, 0, 0, 0), vec![one_row()])).unwrap();
     assert!(capped.contains("- Chains listed: 1 of 3 Exact or Candidate chains"));
     assert!(capped.contains("The app lists at most 100 chains; 2 are not listed."));
+}
+
+const NO_LINK_SENTENCE: &str = "The engine produced no Exact or Candidate link";
+
+#[test]
+fn counts_of_none_are_refused_when_the_session_holds_a_link() {
+    // The app's counts say there is no chain, the session's own edges say there is a link. The
+    // app's model is stale, so the report would be saying what the engine did not.
+    let (a, b) = (stable(1), stable(2));
+    let items = vec![chain_item(1, 76, 0, "m"), chain_item(2, 77, 9, "m")];
+    let covered = |strength: TimelineCorrelationStrength| {
+        edge(
+            &a,
+            &b,
+            TimelineCorrelationKeyKind::ActivityId,
+            "activityId",
+            GUID_A,
+            strength,
+        )
+    };
+    for (name, strength) in [
+        ("an Exact link", TimelineCorrelationStrength::Exact),
+        ("a Candidate link", TimelineCorrelationStrength::Candidate),
+    ] {
+        let timeline = timeline_of(items.clone(), vec![covered(strength)]);
+        // Every edge loaded, and only some of them: the counts are still the app's claim.
+        for loaded in [1, 0] {
+            let chains = chains_value(loaded, (0, 0, 0, 0), Vec::new());
+            let error = chain_report_for(&timeline, chains).expect_err(name);
+            assert!(error.contains(RUN_AGAIN), "{name}: {error}");
+            for leaked in ["HOST-0005", "CASE-0002", "machine9", GUID_A] {
+                assert!(!error.contains(leaked), "{name}: {leaked} in {error}");
+            }
+        }
+        // A chain listed for it is not a contradiction.
+        let strength_word = if name.contains("Exact") {
+            "exact"
+        } else {
+            "candidate"
+        };
+        let counts = if strength_word == "exact" {
+            (1, 0, 0, 0)
+        } else {
+            (0, 1, 0, 0)
+        };
+        let listed = row(
+            strength_word,
+            &[a.clone(), b.clone()],
+            json!([pair(&a, &b, &[("activityId", GUID_A)])]),
+        );
+        let report = chain_report_for(&timeline, chains_value(1, counts, vec![listed]))
+            .expect("a listed chain renders");
+        assert!(!report.contains(NO_LINK_SENTENCE), "{report}");
+    }
+}
+
+#[test]
+fn what_the_engine_does_not_call_a_link_does_not_make_counts_of_none_stale() {
+    let (a, b) = (stable(1), stable(2));
+    let items = vec![chain_item(1, 76, 0, "m"), chain_item(2, 77, 9, "m")];
+    let mut ambiguous = exact_edge(&a, &b, GUID_A);
+    ambiguous.strength = TimelineCorrelationStrength::Ambiguous;
+    let mut blocked = exact_edge(&a, &b, GUID_A);
+    blocked.coverage.state = TimelineCorrelationCoverageState::Gap;
+    let mut unresolved = exact_edge(&a, &b, GUID_A);
+    unresolved.to_id = None;
+    for (name, not_a_link) in [
+        ("an Ambiguous relation", ambiguous),
+        ("a Coverage blocked relation", blocked),
+        ("an edge that ends nowhere", unresolved),
+    ] {
+        let timeline = timeline_of(items.clone(), vec![not_a_link]);
+        let report = chain_report_for(&timeline, chains_value(1, (0, 0, 1, 0), Vec::new()))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert!(report.contains(NO_LINK_SENTENCE), "{name}\n{report}");
+    }
+}
+
+#[test]
+fn collect_records_whether_the_session_holds_a_link() {
+    let (a, b) = (stable(1), stable(2));
+    let items = vec![chain_item(1, 76, 0, "m"), chain_item(2, 77, 9, "m")];
+    let request = base_request();
+    let holds = |edges: Vec<TimelineCorrelationEdge>| {
+        collect(&timeline_of(items.clone(), edges), status(2, 0), &request)
+            .expect("collects")
+            .holds_link
+    };
+    assert!(!holds(Vec::new()));
+    assert!(holds(vec![exact_edge(&a, &b, GUID_A)]));
 }
 
 #[test]

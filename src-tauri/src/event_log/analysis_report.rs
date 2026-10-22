@@ -432,6 +432,8 @@ pub(crate) struct ReportSnapshot {
     pub machines: BTreeSet<String>,
     /// What the engine recorded about shortening what it holds.
     pub engine_notes: EngineNotes,
+    /// Whether the session holds a covered Exact or Candidate edge between two of its entries.
+    pub holds_link: bool,
     /// The entries the chains name, by origin id: members and the origins of evidence rows.
     pub entries: HashMap<String, Entry>,
     /// One per chain row of the request, in the same order.
@@ -471,7 +473,7 @@ fn ordered<'a>(left: &'a str, right: &'a str) -> (&'a str, &'a str) {
 /// Confirms each reference of each chain against the session's edges, and looks up the entries the
 /// chains name. A reference the session does not hold is an error: the report never prints a link
 /// the engine did not produce, and never prints one the engine calls ambiguous or blocked.
-pub(crate) fn collect_chains(
+fn collect_chains(
     timeline: &UnifiedTimeline,
     chains: &ReportChains,
 ) -> Result<(Vec<ResolvedChain>, HashMap<String, Entry>), String> {
@@ -593,6 +595,10 @@ pub(crate) fn collect(
             items_compacted: has_gap(TIMELINE_ITEM_PROJECTION_SOURCE),
             transport_projected: has_gap(TIMELINE_TRANSPORT_PROJECTION_SOURCE),
         },
+        holds_link: timeline
+            .edges
+            .iter()
+            .any(|edge| edge.to_id.is_some() && is_engine_link(edge)),
         entries,
         chains,
     })
@@ -608,18 +614,23 @@ fn note_machine(machines: &mut BTreeSet<String>, origin: &TimelineOrigin) {
     }
 }
 
-fn confirm_link(
-    strength: ReportLinkStrength,
-    edge: &TimelineCorrelationEdge,
-) -> Result<(), String> {
-    let linking = matches!(
+/// Whether the engine calls an edge a link: an Exact or Candidate relation over covered input.
+/// Ambiguous and coverage blocked relations are not links.
+fn is_engine_link(edge: &TimelineCorrelationEdge) -> bool {
+    matches!(
         edge.strength,
         TimelineCorrelationStrength::Exact | TimelineCorrelationStrength::Candidate
     ) && matches!(
         edge.coverage.state,
         TimelineCorrelationCoverageState::Covered
-    );
-    if !linking {
+    )
+}
+
+fn confirm_link(
+    strength: ReportLinkStrength,
+    edge: &TimelineCorrelationEdge,
+) -> Result<(), String> {
+    if !is_engine_link(edge) {
         return Err(NOT_A_LINK.to_owned());
     }
     if strength == ReportLinkStrength::Exact
@@ -1356,6 +1367,12 @@ fn render_chains(
     let complete = edges_complete && gaps_clear;
     let counts = chains.counts;
     let linking = counts.exact.saturating_add(counts.candidate);
+    // Counts of none against a session that holds a link: the app's model is stale, and the
+    // sentence below would say what the engine did not. Whether the app loaded every edge does
+    // not change that, so neither does it change this.
+    if linking == 0 && snapshot.holds_link {
+        return Err(REPORT_SESSION_CHANGED.to_owned());
+    }
 
     doc.lit(
         "Chains are built from exact or candidate shared identifiers on one machine. Time \
