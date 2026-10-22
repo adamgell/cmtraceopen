@@ -240,8 +240,8 @@ function highlightValue(
  * slot, and the `t` and `b` keys); this is the pointer route to the same two actions.
  *
  * `variant` does nothing: the timeline variant it once selected is gone. It stays only so the
- * Details pane's call is unchanged while Phase 4 (#830) rewrites that file. Phase 4 removes the
- * prop and the call-site attribute together.
+ * Details pane's call is unchanged while Phase 4 (#830) rewrites that file. The prop and the
+ * call-site attribute go together in whichever of Phase 4 (#830) and Phase 7 (#836) merges second.
  */
 export function EvtxMarkerControls({
   record,

@@ -234,6 +234,11 @@ test.describe("event-logs screenshots", () => {
 
   test("event-logs table", async ({ page }) => {
     await expect(page.getByRole("region", { name: "Event log details" })).toHaveCount(0);
+    // The capture must show the table: its header and a record row, wholly inside the viewport.
+    // A grid squeezed to a few pixels still passes toBeVisible, so check what is in frame.
+    const grid = page.getByRole("grid", { name: timelineGridName });
+    await expect(page.locator("[data-evtx-table-header]")).toBeInViewport({ ratio: 1 });
+    await expect(grid.getByRole("row").first()).toBeInViewport({ ratio: 1 });
     await assertNoHostPaths(page);
     await page.screenshot({
       path: outPath("event-logs-table.png"),
