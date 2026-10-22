@@ -28,6 +28,7 @@ import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import { EvtxViewBar } from "./EvtxViewBar";
+import { EvtxGroupedView } from "./EvtxGroupedView";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
 import { effectiveResizeRange, proposeResize, useRowCappedSize } from "./use-row-capped-size";
 import {
@@ -594,7 +595,10 @@ export function EventLogWorkspace() {
 
   const views: Record<EvtxViewId, EvtxViewEntry> = {
     table: { keepAlive: true, render: renderTableView },
-    grouped: { keepAlive: false, render: () => <ViewPlaceholder view="grouped" /> },
+    grouped: {
+      keepAlive: false,
+      render: () => <EvtxGroupedView records={visibleRecords} nowEpoch={nowEpoch} />,
+    },
     timeline: { keepAlive: false, render: () => <ViewPlaceholder view="timeline" /> },
     charts: { keepAlive: false, render: () => <ViewPlaceholder view="charts" /> },
     correlation: { keepAlive: false, render: () => <ViewPlaceholder view="correlation" /> },

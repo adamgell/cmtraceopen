@@ -224,17 +224,16 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
   }, []);
 
 
-  // Checked against the rendered rows, not the filtered records. Filtering already dropped a
-  // hidden selection, but collapsing a group leaves the record in sortedRecords while taking its
-  // row out of the list, so keyboard navigation could not find the current position and the
-  // detail pane showed a record that was not on screen. Rows covers both.
+  // Checked against the visible records, not the rendered rows. Selection is shared by every view
+  // (spec 9): a record inside a collapsed group is still in the view's scope, and this table stays
+  // mounted, hidden, while another view is active, where a group it has collapsed must not undo a
+  // selection made there. Only a record the filters dropped, or one no longer loaded, is cleared.
   useEffect(() => {
     if (selectedRecordId === null) return;
-    const stillVisible = rows.some(
-      (row) => row.kind === "record" && row.record.id === selectedRecordId
-    );
-    if (!stillVisible) setSelectedRecordId(null);
-  }, [rows, selectedRecordId, setSelectedRecordId]);
+    if (!filteredRecords.some((record) => record.id === selectedRecordId)) {
+      setSelectedRecordId(null);
+    }
+  }, [filteredRecords, selectedRecordId, setSelectedRecordId]);
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,

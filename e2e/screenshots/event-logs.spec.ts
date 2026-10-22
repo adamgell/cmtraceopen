@@ -380,4 +380,26 @@ test.describe("event-logs screenshots", () => {
       animations: "disabled",
     });
   });
+
+  // The Grouped view (spec 8.8, #844) with its first group, the most severe in sort order,
+  // expanded: the summary rows, the trend sparklines, the group's newest events and its Show all
+  // action. The fixture has no correlation edges, so no event carries the Linked badge.
+  test("event-logs grouped view", async ({ page }) => {
+    await page.getByRole("tab", { name: "Grouped" }).click();
+    const grouped = page.getByRole("grid", { name: /^Grouped events, [\d,]+ groups by Event ID$/ });
+    await expect(grouped).toBeVisible();
+    // The fixture is a file set, so the time window is All and the trend spans the loaded events.
+    await expect(grouped.getByRole("columnheader", { name: "All loaded trend" })).toBeVisible();
+
+    const first = grouped.getByRole("button", { name: /^Event ID \d+, / }).first();
+    await first.click();
+    await expect(first).toHaveAttribute("aria-expanded", "true");
+    await expect(grouped.getByRole("button", { name: /^Show all [\d,]+ in table$/ })).toBeVisible();
+
+    await assertNoHostPaths(page);
+    await page.screenshot({
+      path: outPath("event-logs-grouped.png"),
+      animations: "disabled",
+    });
+  });
 });
