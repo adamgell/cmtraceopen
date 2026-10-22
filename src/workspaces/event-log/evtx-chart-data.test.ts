@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildEvtxChartData,
   buildHideRuleQualifier,
@@ -8,6 +8,7 @@ import {
   CHANNEL_ROW_LIMIT,
   heatStepIndex,
   hourOfDay,
+  placedEpochMs,
   TOP_EVENT_ID_LIMIT,
   type EvtxChartChainSummary,
   type EvtxChartInput,
@@ -876,6 +877,143 @@ describe("RFC 3339 text for a zero epoch", () => {
   it("still rejects a space without an offset, and leap seconds", () => {
     expect(hourOfDay(zero("2026-11-01 01:30:00.000"), "utc")).toBeNull();
     expect(hourOfDay(zero("2026-06-30T23:59:60Z"), "utc")).toBeNull();
+  });
+});
+
+describe("timestamp fields are range-checked before Date.parse sees the text", () => {
+  const zero = (timestamp: string) => ({ timestamp, timestampEpoch: 0 });
+  // A parser that accepts everything makes any text that reaches it look placed (epoch 0), so
+  // these cases fail on any engine that would be lenient, not only on the one the tests run in.
+  let parse: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    parse = vi.spyOn(Date, "parse").mockReturnValue(0);
+  });
+  afterEach(() => {
+    parse.mockRestore();
+  });
+
+  it.each([
+    ["minute 75, RFC 3339", "2026-11-01T01:75:00Z"],
+    ["second 75, RFC 3339", "2026-11-01T01:30:75Z"],
+    ["second 60, RFC 3339", "2026-11-01T01:30:60Z"],
+    ["minute 60, RFC 3339, space separator", "2026-11-01 01:60:00Z"],
+    ["offset +24:00", "2026-11-01T01:30:00+24:00"],
+    ["offset -24:00", "2026-11-01T01:30:00-24:00"],
+    ["offset +05:60", "2026-11-01T01:30:00+05:60"],
+    ["offset -05:60", "2026-11-01T01:30:00-05:60"],
+    ["offset +99:00", "2026-11-01T01:30:00+99:00"],
+    ["offset with U+2212 and hour 24", "2026-11-01T01:30:00\u221224:00"],
+    ["offset with U+2212 and minute 60", "2026-11-01T01:30:00\u221205:60"],
+    ["minute 75, zone-less", "2026-11-01T01:75:00"],
+    ["second 75, zone-less", "2026-11-01T01:30:75"],
+    ["second 60, zone-less", "2026-11-01T01:30:60"],
+    ["minute 60, zone-less, fraction", "2026-11-01T01:60:00.5"],
+  ])("%s is not placed and never reaches Date.parse", (_name, text) => {
+    expect(placedEpochMs(zero(text))).toBeNull();
+    expect(hourOfDay(zero(text), "utc")).toBeNull();
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it("does not call Date.parse for a non-zero epoch or for text that is not a timestamp", () => {
+    expect(placedEpochMs({ timestamp: "2026-11-01T01:75:00Z", timestampEpoch: 5 })).toBe(5);
+    expect(placedEpochMs(zero("not a time"))).toBeNull();
+    expect(parse).not.toHaveBeenCalled();
+  });
+});
+
+describe("a fraction of a second reaches Date.parse with exactly three digits", () => {
+  // The ES date-time format has exactly three fraction digits; chrono accepts any number of them
+  // and truncates to milliseconds, so the text is normalized rather than left to the engine.
+  const zero = (timestamp: string) => ({ timestamp, timestampEpoch: 0 });
+  const ES_FORMAT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/;
+  let parse: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    parse = vi.spyOn(Date, "parse");
+  });
+  afterEach(() => {
+    parse.mockRestore();
+  });
+
+  it.each([
+    ["one digit", "2026-11-01T01:30:00.5Z", Date.UTC(2026, 10, 1, 1, 30, 0, 500)],
+    ["two digits, zone-less", "2026-11-01T01:30:00.25", Date.UTC(2026, 10, 1, 1, 30, 0, 250)],
+    ["six digits, offset", "2026-11-01 01:30:00.123456+02:00", Date.UTC(2026, 9, 31, 23, 30, 0, 123)],
+    ["nine digits, truncated not rounded", "2026-11-01T01:30:00.999999999Z", Date.UTC(2026, 10, 1, 1, 30, 0, 999)],
+    ["twelve digits, zone-less", "2026-11-01T01:30:00.000999999999", Date.UTC(2026, 10, 1, 1, 30, 0, 0)],
+    ["three digits", "2026-11-01t01:30:00.250z", Date.UTC(2026, 10, 1, 1, 30, 0, 250)],
+    ["none", "2026-11-01T01:30:00Z", Date.UTC(2026, 10, 1, 1, 30, 0, 0)],
+  ])("%s", (_name, text, expected) => {
+    expect(placedEpochMs(zero(text))).toBe(expected);
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(String(parse.mock.calls[0][0])).toMatch(ES_FORMAT);
+  });
+});
+
+describe("the largest valid minute, second and offset still place", () => {
+  const zero = (timestamp: string) => ({ timestamp, timestampEpoch: 0 });
+
+  it("places minute 59, second 59 and offsets up to 23:59, with the real parser", () => {
+    expect(hourOfDay(zero("2026-11-01T01:59:59Z"), "utc")).toBe(1);
+    expect(hourOfDay(zero("2026-11-01 01:59:59Z"), "utc")).toBe(1);
+    expect(hourOfDay(zero("2026-11-01T01:59:59.999"), "utc")).toBe(1);
+    // 23:30 at +23:59 is 23:31 the day before.
+    expect(hourOfDay(zero("2026-11-01T23:30:00+23:59"), "utc")).toBe(23);
+    // 00:30 at -00:59 is 01:29 the same day.
+    expect(hourOfDay(zero("2026-11-01T00:30:00-00:59"), "utc")).toBe(1);
+    // 01:00 at +05:59 is 19:01 the day before.
+    expect(hourOfDay(zero("2026-11-01T01:00:00+05:59"), "utc")).toBe(19);
+    expect(hourOfDay(zero("2026-11-01T01:00:00\u221219:59"), "utc")).toBe(20);
+    expect(hourOfDay(zero("2026-11-01T01:00:00+00:00"), "utc")).toBe(1);
+  });
+});
+
+describe("edge whitespace is trimmed as the engine trims it", () => {
+  const zero = (timestamp: string) => ({ timestamp, timestampEpoch: 0 });
+  const range = (low: number, high: number) =>
+    Array.from({ length: high - low + 1 }, (_, i) => low + i);
+  // The code points Rust's `str::trim` strips (`char::is_whitespace`), enumerated over all of
+  // U+0000 to U+10FFFF with rustc 1.98. JavaScript's `trim()` differs in exactly two of them:
+  // it strips U+FEFF, which Rust keeps, and keeps U+0085, which Rust strips.
+  const rustWhiteSpace = [
+    ...range(0x09, 0x0d),
+    0x20,
+    0x85,
+    0xa0,
+    0x1680,
+    ...range(0x2000, 0x200a),
+    0x2028,
+    0x2029,
+    0x202f,
+    0x205f,
+    0x3000,
+  ];
+  const forms = ["2026-11-01T01:30:00Z", "2026-11-01 01:30:00+02:00", "2026-11-01T01:30:00.250"];
+
+  it.each(rustWhiteSpace.map((code) => [`U+${code.toString(16).toUpperCase().padStart(4, "0")}`, String.fromCharCode(code)]))(
+    "places text padded with %s on both sides",
+    (_name, space) => {
+      for (const form of forms) {
+        expect(hourOfDay(zero(`${space}${space}${form}${space}`), "utc")).not.toBeNull();
+      }
+      expect(hourOfDay(zero(`${space}2026-11-01T01:30:00Z${space}`), "utc")).toBe(1);
+    },
+  );
+
+  it("does not place text with a leading or trailing U+FEFF, which Rust does not trim", () => {
+    for (const form of forms) {
+      expect(hourOfDay(zero(`\uFEFF${form}`), "utc")).toBeNull();
+      expect(hourOfDay(zero(`${form}\uFEFF`), "utc")).toBeNull();
+      expect(hourOfDay(zero(` \uFEFF${form}`), "utc")).toBeNull();
+    }
+    expect(placedEpochMs(zero("\uFEFF2026-11-01T01:30:00Z"))).toBeNull();
+  });
+
+  it("does not trim other zero-width or separator code points that neither engine trims", () => {
+    for (const code of [0x180e, 0x200b, 0x2060]) {
+      const c = String.fromCharCode(code);
+      expect(hourOfDay(zero(`${c}2026-11-01T01:30:00Z`), "utc")).toBeNull();
+      expect(hourOfDay(zero(`2026-11-01T01:30:00Z${c}`), "utc")).toBeNull();
+    }
   });
 });
 

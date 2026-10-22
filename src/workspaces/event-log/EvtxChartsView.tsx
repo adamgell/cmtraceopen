@@ -754,7 +754,8 @@ export const CHART_DATA_THROTTLE_MS = 75;
 /**
  * The first value is used at once. After a change the latest value applies once `ms` has passed
  * since the first change not yet applied; changes during the wait do not restart it, so a steady
- * stream still updates every `ms`.
+ * stream still updates every `ms`. Callers pass a memoized value: a new identity on every render
+ * never equals the settled one, so the wait would restart after each update.
  */
 function useThrottledValue<T>(value: T, ms: number): T {
   const [settled, setSettled] = useState(value);
@@ -776,6 +777,13 @@ function useThrottledValue<T>(value: T, ms: number): T {
     [],
   );
   return settled;
+}
+
+/** What the figures and the comparison bar show, throttled as one value. */
+interface ChartSnapshot {
+  input: { chart: EvtxChartInput; comparison: ComparisonPresentationInput | null };
+  loading: boolean;
+  windowLabel: string | undefined;
 }
 
 export function EvtxChartsView({
@@ -801,15 +809,23 @@ export function EvtxChartsView({
     }),
     [records, chains, hideRules, channelOrder, timeZoneMode, loadedChannelCount, textLogCount, comparison?.input],
   );
-  const settled = useThrottledValue(input, CHART_DATA_THROTTLE_MS);
+  // Everything that describes the data settles together: the load state, the window label, the
+  // clock and the comparison must change in the same render as the data they describe. Metrics and
+  // tokens are presentation and apply at once.
+  const snapshot = useMemo<ChartSnapshot>(
+    () => ({ input, loading, windowLabel }),
+    [input, loading, windowLabel],
+  );
+  const settled = useThrottledValue(snapshot, CHART_DATA_THROTTLE_MS);
   const presentation = useMemo(
-    () => (settled.comparison ? buildComparisonPresentation(settled.comparison) : null),
-    [settled],
+    () => (settled.input.comparison ? buildComparisonPresentation(settled.input.comparison) : null),
+    [settled.input],
   );
   const data = useMemo(
-    () => buildEvtxChartData({ ...settled.chart, comparison: presentation?.deltas ?? null }),
-    [settled, presentation],
+    () => buildEvtxChartData({ ...settled.input.chart, comparison: presentation?.deltas ?? null }),
+    [settled.input, presentation],
   );
+  const settledTimeZone = settled.input.chart.timeZoneMode;
 
   if (data.totalEvents === 0) {
     return (
@@ -817,7 +833,7 @@ export function EvtxChartsView({
         role="status"
         style={{ padding: 24, fontFamily: LOG_UI_FONT_FAMILY, fontSize: metrics.fontSize, color: tokens.colorNeutralForeground3 }}
       >
-        {loading ? "Loading events..." : "No events to chart. Load events or relax the filters."}
+        {settled.loading ? "Loading events..." : "No events to chart. Load events or relax the filters."}
       </div>
     );
   }
@@ -832,14 +848,14 @@ export function EvtxChartsView({
       ) : null}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 10 }}>
         {data.kpis.map((kpi) => (
-          <KpiCard key={kpi.id} kpi={kpi} windowLabel={windowLabel} metrics={metrics} />
+          <KpiCard key={kpi.id} kpi={kpi} windowLabel={settled.windowLabel} metrics={metrics} />
         ))}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
         <ChannelFigure data={data} metrics={metrics} visualTokens={visualTokens} />
         <TopIdsFigure data={data} metrics={metrics} visualTokens={visualTokens} />
-        <HeatMapFigure data={data} metrics={metrics} visualTokens={visualTokens} timeZoneMode={timeZoneMode} />
-        <HourlyFigure data={data} metrics={metrics} visualTokens={visualTokens} timeZoneMode={timeZoneMode} />
+        <HeatMapFigure data={data} metrics={metrics} visualTokens={visualTokens} timeZoneMode={settledTimeZone} />
+        <HourlyFigure data={data} metrics={metrics} visualTokens={visualTokens} timeZoneMode={settledTimeZone} />
       </div>
     </div>
   );

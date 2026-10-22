@@ -133,7 +133,7 @@ describe("EvtxChartsView", () => {
     vi.useFakeTimers();
     try {
       rerender(<EvtxChartsView {...props({ hideRules: [] })} />);
-      // Debounced: the previous derivation stays until the settle time passes.
+      // Throttled: the previous derivation stays until the settle time passes.
       expect(screen.getByText("excluding 7036 / 16384")).toBeInTheDocument();
       act(() => {
         vi.advanceTimersByTime(CHART_DATA_THROTTLE_MS);
@@ -311,6 +311,8 @@ describe("EvtxChartsView", () => {
           });
           const value = eventsValue();
           if (value !== shown) {
+            // An update applies the latest value, not the one captured when its wait began.
+            expect(value).toBe(count);
             shown = value;
             updates.push(now);
           }
@@ -325,6 +327,12 @@ describe("EvtxChartsView", () => {
         }
         expect(1000 - marks[marks.length - 1]).toBeLessThanOrEqual(CHART_DATA_THROTTLE_MS + 5);
         expect(updates.length).toBeGreaterThan(10);
+        // Once the stream ends the last wait applies the final count, and no timer is left.
+        act(() => {
+          vi.advanceTimersByTime(CHART_DATA_THROTTLE_MS);
+        });
+        expect(eventsValue()).toBe(count);
+        expect(vi.getTimerCount()).toBe(0);
       } finally {
         vi.useRealTimers();
       }
@@ -352,13 +360,163 @@ describe("EvtxChartsView", () => {
         vi.useRealTimers();
       }
     });
+
+    it("clears a pending wait on unmount, and a remount shows the current value at once", () => {
+      vi.useFakeTimers();
+      try {
+        const { rerender, unmount } = render(<EvtxChartsView {...props({ records: batch(1) })} />);
+        rerender(<EvtxChartsView {...props({ records: batch(2) })} />);
+        // The change started a wait; unmounting must not leave it running.
+        expect(vi.getTimerCount()).toBe(1);
+        unmount();
+        expect(vi.getTimerCount()).toBe(0);
+        render(<EvtxChartsView {...props({ records: batch(2) })} />);
+        expect(eventsValue()).toBe(2);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
-  it("says it is loading, not that there are no events, while a load runs", () => {
-    const { rerender } = render(<EvtxChartsView {...props({ records: [], loading: true })} />);
-    expect(screen.getByRole("status")).toHaveTextContent("Loading events...");
-    rerender(<EvtxChartsView {...props({ records: [], loading: false })} />);
-    expect(screen.getByRole("status")).toHaveTextContent("No events to chart");
+  describe("throttled values that describe the data", () => {
+    const advance = (ms: number) => {
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+    };
+    const eventsValue = () => screen.getByTestId("kpi-value-events").textContent;
+    const rows = (n: number) => Array.from({ length: n }, (_, i) => rec({ eventId: 1000 + i, hour: 4 }));
+    const utcQualifier = /hour of day, UTC(?![+-])/;
+    const localQualifier = /hour of day, UTC[+-]\d\d:\d\d/;
+
+    it("says it is loading, not that there are no events, while a load runs", () => {
+      vi.useFakeTimers();
+      try {
+        // Every other prop is the same object after the flip, so only `loading` changes.
+        const base = props({ records: [] });
+        const { rerender } = render(<EvtxChartsView {...base} loading />);
+        expect(screen.getByRole("status")).toHaveTextContent("Loading events...");
+        // A load that ends with zero rows keeps the loading copy until the data settles (accepted cost).
+        rerender(<EvtxChartsView {...base} loading={false} />);
+        advance(CHART_DATA_THROTTLE_MS - 1);
+        expect(screen.getByRole("status")).toHaveTextContent("Loading events...");
+        advance(1);
+        expect(screen.getByRole("status")).toHaveTextContent("No events to chart");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("never says 'No events' between a load ending and its rows being drawn", () => {
+      vi.useFakeTimers();
+      try {
+        const { rerender } = render(<EvtxChartsView {...props({ records: [], loading: true })} />);
+        expect(screen.getByRole("status")).toHaveTextContent("Loading events...");
+        rerender(<EvtxChartsView {...props({ records: rows(3), loading: false })} />);
+        expect(screen.queryByText(/No events to chart/)).toBeNull();
+        expect(screen.getByRole("status")).toHaveTextContent("Loading events...");
+        advance(CHART_DATA_THROTTLE_MS - 1);
+        expect(screen.queryByText(/No events to chart/)).toBeNull();
+        expect(screen.queryByTestId("kpi-value-events")).toBeNull();
+        advance(1);
+        expect(screen.queryByText(/No events to chart/)).toBeNull();
+        expect(screen.queryByRole("status")).toBeNull();
+        expect(eventsValue()).toBe("3");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("shows the loading copy again when a new load starts over drawn charts", () => {
+      vi.useFakeTimers();
+      try {
+        const { rerender } = render(<EvtxChartsView {...props({ records: rows(2) })} />);
+        expect(eventsValue()).toBe("2");
+        rerender(<EvtxChartsView {...props({ records: [], loading: true })} />);
+        expect(eventsValue()).toBe("2");
+        advance(CHART_DATA_THROTTLE_MS);
+        expect(screen.getByRole("status")).toHaveTextContent("Loading events...");
+        expect(screen.queryByTestId("evtx-charts-view")).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the previous window label over the previous count until both change together", () => {
+      vi.useFakeTimers();
+      try {
+        const { rerender } = render(<EvtxChartsView {...props({ records: rows(1), windowLabel: "24 h" })} />);
+        expect(screen.getByText("Events (24 h)")).toBeInTheDocument();
+        rerender(<EvtxChartsView {...props({ records: rows(3), windowLabel: "7 d" })} />);
+        expect(screen.getByText("Events (24 h)")).toBeInTheDocument();
+        expect(eventsValue()).toBe("1");
+        advance(CHART_DATA_THROTTLE_MS - 1);
+        expect(screen.getByText("Events (24 h)")).toBeInTheDocument();
+        expect(eventsValue()).toBe("1");
+        advance(1);
+        expect(screen.getByText("Events (7 d)")).toBeInTheDocument();
+        expect(eventsValue()).toBe("3");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("applies a window label that changes alone after the throttle", () => {
+      vi.useFakeTimers();
+      try {
+        const base = props({ windowLabel: "24 h" });
+        const { rerender } = render(<EvtxChartsView {...base} />);
+        rerender(<EvtxChartsView {...base} windowLabel="7 d" />);
+        advance(CHART_DATA_THROTTLE_MS - 1);
+        expect(screen.getByText("Events (24 h)")).toBeInTheDocument();
+        advance(1);
+        expect(screen.getByText("Events (7 d)")).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the previous clock in both qualifiers until the hour buckets change with it", () => {
+      vi.useFakeTimers();
+      try {
+        // Every other prop is the same object after the flip, so only the clock changes.
+        const base = props({ timeZoneMode: "utc" });
+        const { rerender } = render(<EvtxChartsView {...base} />);
+        const heat = () => screen.getByRole("figure", { name: /heat map/ });
+        const hourly = () => screen.getByRole("figure", { name: /^Errors and warnings per hour/ });
+        expect(heat()).toHaveTextContent(utcQualifier);
+        expect(hourly()).toHaveTextContent(utcQualifier);
+        rerender(<EvtxChartsView {...base} timeZoneMode="local" />);
+        expect(heat()).toHaveTextContent(utcQualifier);
+        expect(hourly()).toHaveTextContent(utcQualifier);
+        advance(CHART_DATA_THROTTLE_MS - 1);
+        expect(heat()).toHaveTextContent(utcQualifier);
+        expect(hourly()).toHaveTextContent(utcQualifier);
+        advance(1);
+        expect(heat()).toHaveTextContent(localQualifier);
+        expect(hourly()).toHaveTextContent(localQualifier);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("leaves no timer running once a change has settled", () => {
+      vi.useFakeTimers();
+      try {
+        const { rerender } = render(<EvtxChartsView {...props({ records: rows(1) })} />);
+        expect(vi.getTimerCount()).toBe(0);
+        rerender(<EvtxChartsView {...props({ records: rows(2), loading: true, windowLabel: "7 d", timeZoneMode: "local" })} />);
+        expect(vi.getTimerCount()).toBe(1);
+        advance(CHART_DATA_THROTTLE_MS);
+        // A throttled value rebuilt on every render would re-arm the timer forever.
+        expect(vi.getTimerCount()).toBe(0);
+        advance(10 * CHART_DATA_THROTTLE_MS);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("sizes text from the log list font metrics", () => {

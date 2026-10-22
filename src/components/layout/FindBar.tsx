@@ -83,6 +83,8 @@ export function FindBar({ onClose }: FindBarProps) {
 
   return (
     <div
+      role="group"
+      aria-label="Find bar"
       style={{
         display: "flex",
         alignItems: "center",
@@ -103,20 +105,21 @@ export function FindBar({ onClose }: FindBarProps) {
         size="small"
         style={{ minWidth: 200, maxWidth: 300, flex: 1 }}
         contentAfter={
-          hasQuery ? (
-            <span
-              style={{
-                fontSize: 11,
-                color: findRegexError || matchCount === 0
-                  ? tokens.colorPaletteRedForeground1
-                  : tokens.colorNeutralForeground3,
-                whiteSpace: "nowrap",
-                paddingRight: 4,
-              }}
-            >
-              {statusText}
-            </span>
-          ) : undefined
+          <span
+            role="status"
+            aria-label="Find results"
+            aria-live="polite"
+            style={{
+              fontSize: 11,
+              color: findRegexError || matchCount === 0
+                ? tokens.colorPaletteRedForeground1
+                : tokens.colorNeutralForeground3,
+              whiteSpace: "nowrap",
+              paddingRight: 4,
+            }}
+          >
+            {statusText}
+          </span>
         }
       />
 

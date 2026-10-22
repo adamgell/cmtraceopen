@@ -54,9 +54,10 @@ export const MAX_DOCK_HEIGHT_RATIO = 0.5;
 /**
  * Which panels have content to show. The Insights rail (Phase 4) and the correlation dock
  * (Phase 11) are not built yet, so their toggles are disabled and a persisted `true` is forced
- * back to `false` on rehydration. The phase that enables a panel must flip it here AND in
- * `DEFAULT_PANELS`, and must bump the persist `version` and migrate a persisted `false` to the
- * new default; otherwise users who already hold `false` never see the new panel.
+ * back to `false` on rehydration. The phase that ships a panel flips it here AND in
+ * `DEFAULT_PANELS` and bumps the persist `version`. It adds NO `migrate` function (AGENTS.md
+ * rules out compatibility migrations): a stored layout from the older version is dropped and the
+ * user gets the new defaults, so nobody stays on a persisted `false` for the new panel.
  */
 export const EVTX_PANELS_AVAILABLE: EvtxPanels = {
   channels: true,
