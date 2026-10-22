@@ -31,6 +31,8 @@ import {
   openWindowsDefaultApps,
   registerLogFileHandler,
   diagnoseEventLogAnalysisSession,
+  renderEventLogAnalysisReport,
+  type EventLogAnalysisReportRequest,
   EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT,
   createEventLogAnalysisSession,
   queryEventLogAnalysisTimeline,
@@ -1564,6 +1566,78 @@ const malformedDiagnosisCases: Array<
       withDiagnosisFindingChange(summary, { recommendedChecks: [42] }),
   ],
 ];
+
+describe("event-log analysis report IPC boundary", () => {
+  const request = (coverageGaps: EvtxCoverageGap[]): EventLogAnalysisReportRequest => ({
+    sessionId: "analysis-session",
+    expectedRevision: 3,
+    generatedAtMs: 1_700_000_000_000,
+    coverageGaps,
+    remoteMachine: null,
+    scope: {
+      sourceMode: "files",
+      loadedRecordCount: 2,
+      eventRecordCount: 2,
+      archiveTextRecordCount: 0,
+      textLogEntryCount: 0,
+      levelMix: [{ level: "Error", count: 2 }],
+      topEventIds: [{ eventId: 7, count: 2 }],
+      distinctEventIdCount: 1,
+      filters: {
+        levels: [],
+        channelsSelected: ["System"],
+        channelsHeld: 1,
+        eventIdSelectors: [],
+        timeWindow: "all",
+        timeRange: null,
+        searchActive: false,
+        quickFilterActive: false,
+        recordScope: null,
+      },
+    },
+    chains: null,
+  });
+
+  it("sends the request under the name the command takes and returns the Markdown", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce("# Event log analysis report\n");
+
+    const markdown = await renderEventLogAnalysisReport(request([]));
+
+    expect(markdown).toBe("# Event log analysis report\n");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("evtx_render_analysis_report", {
+      request: request([]),
+    });
+  });
+
+  it("bounds the coverage gaps exactly as the diagnosis does", async () => {
+    const oversized = "\u{1F642}".repeat(100_000);
+    const coverageGaps: EvtxCoverageGap[] = Array.from({ length: 256 }, (_, index) => ({
+      source: index === 0 ? oversized : `source-${index}`,
+      kind: "limit" as const,
+      reason: `reason-${index}`,
+    }));
+    vi.mocked(invoke).mockResolvedValueOnce(makeValidDiagnosisSummary());
+    vi.mocked(invoke).mockResolvedValueOnce("# report\n");
+
+    await diagnoseEventLogAnalysisSession("analysis-session", coverageGaps);
+    await renderEventLogAnalysisReport(request(coverageGaps));
+
+    const diagnosed = vi.mocked(invoke).mock.calls[0][1] as { coverageGaps: EvtxCoverageGap[] };
+    const reported = vi.mocked(invoke).mock.calls[1][1] as {
+      request: EventLogAnalysisReportRequest;
+    };
+    expect(reported.request.coverageGaps).toEqual(diagnosed.coverageGaps);
+    expect(reported.request.coverageGaps).not.toEqual(coverageGaps);
+  });
+
+  it("refuses a reply that is not text", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ markdown: "# report" });
+
+    await expect(renderEventLogAnalysisReport(request([]))).rejects.toThrow(
+      /evtx_render_analysis_report/,
+    );
+  });
+});
 
 describe("event-log analysis diagnosis IPC boundary", () => {
   it("passes ordinary coverage gaps through without changing them", async () => {

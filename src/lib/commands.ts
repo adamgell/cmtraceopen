@@ -30,6 +30,7 @@ import type {
   DiagnosisOverview,
   EvtxCoverageGap,
   EvtxChannelInfo,
+  EvtxLevel,
   EvtxParseResult,
   EvtxRecord,
 } from "../workspaces/event-log/types";
@@ -37,6 +38,7 @@ import { assertParseResultShape } from "../workspaces/event-log/evtx-coverage";
 import {
   assertUnifiedTimelineShape,
   type TimelineCorrelationEdge,
+  type TimelineCorrelationKeyKind,
   type TimelineCoverageGap,
   type TimelineItem,
   type UnplacedItem,
@@ -2373,6 +2375,73 @@ export async function diagnoseEventLogAnalysisSession(
   });
 }
 
+/**
+ * What the app asks the backend to render as a Markdown report (`evtx_render_analysis_report`).
+ * It mirrors `EventLogAnalysisReportRequest` in analysis_report.rs, which refuses unknown fields:
+ * ids, enum words and numbers only, never search text, filter text, titles or record content.
+ */
+export interface EventLogAnalysisReportRequest {
+  sessionId: string;
+  /** The session revision the app was showing; another revision is refused. */
+  expectedRevision: number;
+  /** When the report was asked for; the backend never reads the clock. */
+  generatedAtMs: number;
+  /** The merged coverage gaps the rail was diagnosed with. */
+  coverageGaps: EvtxCoverageGap[];
+  /** The remote machine the events were read from, as the store names it, or null when local. */
+  remoteMachine: string | null;
+  scope: EventLogAnalysisReportScope;
+  /** The chains built from the session's edges, or null when they were not loaded for it. */
+  chains: EventLogAnalysisReportChains | null;
+}
+
+export interface EventLogAnalysisReportScope {
+  sourceMode: "files" | "live";
+  loadedRecordCount: number;
+  eventRecordCount: number;
+  archiveTextRecordCount: number;
+  textLogEntryCount: number;
+  levelMix: { level: EvtxLevel; count: number }[];
+  topEventIds: { eventId: number; count: number }[];
+  distinctEventIdCount: number | null;
+  filters: EventLogAnalysisReportFilters;
+}
+
+export interface EventLogAnalysisReportFilters {
+  levels: EvtxLevel[];
+  channelsSelected: string[];
+  channelsHeld: number;
+  eventIdSelectors: ({ kind: "single"; id: number } | { kind: "range"; low: number; high: number })[];
+  timeWindow: "1h" | "24h" | "7d" | "30d" | "all";
+  timeRange: { startMs: number; endMs: number } | null;
+  searchActive: boolean;
+  quickFilterActive: boolean;
+  recordScope: "finding" | "chain" | null;
+}
+
+export interface EventLogAnalysisReportChains {
+  loadedEdgeCount: number;
+  correlationGaps: { global: boolean; previewCut: boolean };
+  counts: { exact: number; candidate: number; ambiguous: number; coverageBlocked: number };
+  rows: EventLogAnalysisReportChainRow[];
+}
+
+export interface EventLogAnalysisReportChainRow {
+  strength: "exact" | "candidate";
+  memberCount: number;
+  memberIds: string[];
+  pairs: { left: string; right: string; keys: { kind: TimelineCorrelationKeyKind; value: string }[] }[];
+}
+
+/** Renders the Markdown report of an analysis session. The backend redacts everything it prints. */
+export async function renderEventLogAnalysisReport(
+  request: EventLogAnalysisReportRequest,
+): Promise<string> {
+  return invokeCommand("evtx_render_analysis_report", {
+    request: { ...request, coverageGaps: diagnosisCoverageGapsForTransport(request.coverageGaps) },
+  });
+}
+
 export async function closeEventLogAnalysisSession(
   sessionId: string,
 ): Promise<void> {
@@ -3262,6 +3331,7 @@ const COMMAND_DECODERS = {
   evtx_query_analysis_timeline_window: decodeEventLogAnalysisTimelineWindow,
   evtx_query_analysis_edges: decodeEventLogAnalysisEdgePage,
   evtx_diagnose_analysis_session: decodeDiagnosisSummary,
+  evtx_render_analysis_report: decodeStringResponse,
   evtx_close_analysis_session: decodeUnitResponse,
   build_timeline_cmd: decodeTimelineBundle,
   inspect_evidence_bundle: (value, commandName) =>
