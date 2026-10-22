@@ -18,6 +18,7 @@ import {
   type AccessDeniedClassification,
 } from "./source-error";
 import { useUiStore, type TabSourceContext } from "../stores/ui-store";
+import { MULTI_FILE_OPEN_TRIGGER } from "./log-load-triggers";
 import { useFilterStore } from "../stores/filter-store";
 import type {
   AggregateSourceFile,
@@ -26,6 +27,7 @@ import type {
   LogEntry,
   LogSource,
   ParseResult,
+  PathDiagnostic,
 } from "../types/log";
 import type { RegistryParseResult } from "../types/registry";
 
@@ -56,6 +58,12 @@ export interface LoadLogSourceResult {
   entries: FolderEntry[];
   selectedFilePath: string | null;
   parseResult: ParseResult | null;
+  /**
+   * What a folder listing could not include: entries that were unreadable or unsafe, and the
+   * listing's own limits. Only the folder lanes set it; a caller that reports coverage reads it
+   * here because the store keeps nothing of it.
+   */
+  childErrors?: PathDiagnostic[];
 }
 
 const KNOWN_SOURCE_BY_PRESET_MENU_ID: Record<string, string> = {
@@ -628,6 +636,11 @@ export async function loadSelectedLogFile(
   // batch load), skip the IPC call entirely and apply from cache.
   const cached = getCachedTabSnapshot(filePath);
   if (cached) {
+    // A cache hit that claimed its own generation supersedes any load still in flight, and that
+    // load's finally clears the flag only while its generation is current, so it never will. Clear
+    // it here, as switchToTab does. Nothing the superseded load can still do writes entries, the
+    // active source or the open mode: each write follows an isCurrentTabSwitch check.
+    if (switchGeneration === undefined) state.setLoading(false);
     // Registry files from cache — load via the registry pipeline
     if (cached.parserSelection?.parser === "registry") {
       console.info("[log-source] loadSelectedLogFile registry from cache", { filePath });
@@ -1025,7 +1038,7 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<boolean> {
     state.selectEntry(null);
     state.setFolderLoadProgress(null);
 
-    useUiStore.getState().ensureLogViewVisible("multi-file-open");
+    useUiStore.getState().ensureLogViewVisible(MULTI_FILE_OPEN_TRIGGER);
 
     state.setSourceStatus({
       kind: "loaded",
@@ -1240,6 +1253,7 @@ export async function loadLogSource(
           entries: listing.entries,
           selectedFilePath: null,
           parseResult: null,
+          childErrors: listing.childErrors,
         };
       }
 
@@ -1325,6 +1339,7 @@ export async function loadLogSource(
         entries: listing.entries,
         selectedFilePath: null,
         parseResult: null,
+        childErrors: listing.childErrors,
       };
     }
 

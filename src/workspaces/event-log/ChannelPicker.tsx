@@ -27,6 +27,7 @@ import {
   type TextLogRowModel,
 } from "./evtx-channel-stats";
 import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens";
+import { AddLogSourceControl } from "./AddLogSourceControl";
 import { ChannelClearControls, ChannelClearDialog } from "./ChannelClearControls";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
 import { effectiveResizeRange, proposeResize, useRowCappedSize } from "./use-row-capped-size";
@@ -225,6 +226,8 @@ export function ChannelPicker() {
   const logEntries = useLogStore((s) => s.entries);
   const activeLogSource = useLogStore((s) => s.activeSource);
   const logSourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  // A text-log load moves the source before the entries, so the list is not settled while it runs.
+  const logStoreLoading = useLogStore((s) => s.isLoading);
   const currentPlatform = useUiStore((s) => s.currentPlatform);
 
   const [search, setSearch] = useState("");
@@ -637,14 +640,15 @@ export function ChannelPicker() {
               No channels match filter
             </div>
           )}
-          {correlatingSources.length > 0 && (
-            <AlsoCorrelating
-              sources={correlatingSources}
-              metrics={rowMetrics}
-              primaryText={primaryText}
-              mutedText={mutedText}
-            />
-          )}
+          {/* Always rendered, even with no text log: the Add log source link lives here. */}
+          <AlsoCorrelating
+            sources={correlatingSources}
+            merged={logSourceOpenMode === "merged"}
+            logStoreLoading={logStoreLoading}
+            metrics={rowMetrics}
+            primaryText={primaryText}
+            mutedText={mutedText}
+          />
         </div>
 
         {sourceMode === "live" && loadedChannels.size > 0 && (
@@ -1348,11 +1352,17 @@ function TreeNodeView({
 
 function AlsoCorrelating({
   sources,
+  merged,
+  logStoreLoading,
   metrics,
   primaryText,
   mutedText,
 }: {
   sources: ReturnType<typeof summarizeLogSources>;
+  /** The log store is in "merged" mode, the only mode that correlates every open log. */
+  merged: boolean;
+  /** The log store is loading, so `sources` may not have settled. */
+  logStoreLoading: boolean;
   metrics: RowMetrics;
   primaryText: string;
   mutedText: string;
@@ -1364,6 +1374,18 @@ function AlsoCorrelating({
       <div style={{ ...eyebrowStyle(metrics.captionFontSize, mutedText), padding: "0 12px 4px" }}>
         Also correlating
       </div>
+      {/* Read from the live mode, so it always says what the session is being given (spec 8.19). */}
+      {sources.length > 0 && (
+        <div
+          style={{
+            padding: "0 12px 4px",
+            fontSize: `${metrics.captionFontSize}px`,
+            color: mutedText,
+          }}
+        >
+          {merged ? "Correlating: all open logs" : "Correlating: active log source only"}
+        </div>
+      )}
       {shown.map((source) => (
         <div
           key={source.path}
@@ -1404,6 +1426,13 @@ function AlsoCorrelating({
           {`and ${omitted} more`}
         </div>
       )}
+      <AddLogSourceControl
+        primaryText={primaryText}
+        groupFontSize={metrics.groupFontSize}
+        captionFontSize={metrics.captionFontSize}
+        correlatedCount={sources.length}
+        logStoreLoading={logStoreLoading}
+      />
     </section>
   );
 }

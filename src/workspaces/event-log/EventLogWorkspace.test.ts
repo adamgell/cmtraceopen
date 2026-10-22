@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { scopeLogEntries } from "./unified-timeline";
+import { normalizeLogPath, scopeLogEntries } from "./unified-timeline";
 import type { LogEntry } from "../../types/log";
 
 const entry = (filePath: string, message: string): LogEntry =>
@@ -124,4 +124,20 @@ describe("scopeLogEntries", () => {
       ),
     ).toEqual(entries);
   });
+});
+
+describe("normalizeLogPath", () => {
+  it("takes either separator, collapses runs and ignores case and a trailing slash on Windows", () => {
+    expect(normalizeLogPath("C:\\Logs\\\\Sub/A.LOG", "windows")).toBe("c:/logs/sub/a.log");
+    expect(normalizeLogPath("C:\\Logs\\", "windows")).toBe("c:/logs");
+  });
+
+  it.each(["macos", "linux"] as const)(
+    "keeps case, and treats a backslash as part of the name, on %s",
+    (platform) => {
+      expect(normalizeLogPath("/Logs//Sub/A.LOG/", platform)).toBe("/Logs/Sub/A.LOG");
+      expect(normalizeLogPath("/logs/A.log", platform)).not.toBe(normalizeLogPath("/logs/a.log", platform));
+      expect(normalizeLogPath("/logs/a\\b.log", platform)).toBe("/logs/a\\b.log");
+    },
+  );
 });

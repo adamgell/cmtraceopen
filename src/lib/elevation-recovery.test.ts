@@ -44,10 +44,10 @@ describe("offerElevationForSourceFailure", () => {
   });
 
   it("pins the workspace that failed, not the one switched to mid-probe", async () => {
-    useUiStore.setState({ activeWorkspace: "esp-diagnostics" });
+    useUiStore.setState({ activeWorkspace: "intune" });
     // The probe is an IPC round trip. Switching workspaces while it is in
     // flight must not repoint the restore at whatever is on screen when it
-    // answers: the denied source belonged to ESP.
+    // answers: the denied source belonged to Intune, whose handler reopens it.
     readElevationStateMock.mockImplementation(async () => {
       useUiStore.setState({ activeWorkspace: "log" });
       return { platformSupported: true, isElevated: false };
@@ -60,8 +60,81 @@ describe("offerElevationForSourceFailure", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(useUiStore.getState().elevationPrompt?.request.workspace).toBe(
-      "esp-diagnostics",
+    expect(useUiStore.getState().elevationPrompt?.request.workspace).toBe("intune");
+  });
+
+  describe("the workspace the ticket names", () => {
+    const FILE = "C:\\Windows\\CCM\\Logs\\AppEnforce.log";
+    const FOLDER = "C:\\Windows\\CCM\\Logs";
+
+    it.each([
+      ["file", { kind: "file", path: FILE }],
+      ["folder", { kind: "folder", path: FOLDER }],
+    ] as const)(
+      "names the Log workspace for a denied %s load from Event Logs, whose handler would open EVTX",
+      async (_label, source) => {
+        useUiStore.setState({ activeWorkspace: "event-log" });
+        expect(useUiStore.getState().activeWorkspace).toBe("event-log");
+
+        await expect(
+          offerElevationForSourceFailure({ error: accessDeniedError(), source }),
+        ).resolves.toBe(true);
+
+        expect(useUiStore.getState().elevationPrompt?.request).toEqual({
+          reason: "accessDenied",
+          workspace: "log",
+          target:
+            source.kind === "file"
+              ? { kind: "file", path: FILE }
+              : { kind: "folder", path: FOLDER },
+        });
+      },
+    );
+
+    it.each(["log", "intune", "new-intune"] as const)(
+      "keeps the %s ticket for a denied file",
+      async (workspace) => {
+        useUiStore.setState({ activeWorkspace: workspace });
+
+        await offerElevationForSourceFailure({
+          error: accessDeniedError(),
+          source: { kind: "file", path: FILE },
+        });
+
+        expect(useUiStore.getState().elevationPrompt?.request.workspace).toBe(workspace);
+      },
+    );
+
+    it.each(["intune", "new-intune"] as const)(
+      "names the Log workspace for a denied folder in %s, whose handler only analyzes a folder",
+      async (workspace) => {
+        useUiStore.setState({ activeWorkspace: workspace });
+
+        await offerElevationForSourceFailure({
+          error: accessDeniedError(),
+          source: { kind: "folder", path: FOLDER },
+        });
+
+        expect(useUiStore.getState().elevationPrompt?.request).toEqual({
+          reason: "accessDenied",
+          workspace: "log",
+          target: { kind: "folder", path: FOLDER },
+        });
+      },
+    );
+
+    it.each(["macos-jamf", "macos-diag", "sccm"] as const)(
+      "names the Log workspace for a denied file in %s, which has no handler to reopen it (SCCM is not even in the backend's list)",
+      async (workspace) => {
+        useUiStore.setState({ activeWorkspace: workspace });
+
+        await offerElevationForSourceFailure({
+          error: accessDeniedError(),
+          source: { kind: "file", path: FILE },
+        });
+
+        expect(useUiStore.getState().elevationPrompt?.request.workspace).toBe("log");
+      },
     );
   });
 

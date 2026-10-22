@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { useUiStore, getAvailableWorkspaces, isIntuneWorkspace } from "./ui-store";
 import { DEFAULT_THEME_ID, getAllThemes } from "../lib/themes";
+import { MULTI_FILE_OPEN_TRIGGER, TAB_SWITCH_TRIGGER } from "../lib/log-load-triggers";
 
 describe("ui-store", () => {
   beforeEach(() => {
@@ -247,9 +248,84 @@ describe("ui-store", () => {
 
     it("still hands logs from other workspaces to the Log workspace", () => {
       useUiStore.getState().setActiveWorkspace("macos-diag");
+      expect(useUiStore.getState().activeWorkspace).toBe("macos-diag");
 
       useUiStore.getState().openTab("/var/log/jamf/install.log", "install.log");
       useUiStore.getState().ensureLogViewVisible("tab-switch");
+
+      expect(useUiStore.getState().activeWorkspace).toBe("log");
+    });
+
+    // Every trigger a caller passes to ensureLogViewVisible today, plus one nothing passes.
+    const OTHER_TRIGGERS = [
+      "toolbar.open-all-family",
+      "app-actions.show-find",
+      "app-actions.show-filter",
+      "app-actions.refresh",
+      "file-association.path-open",
+      "app-actions.open-file",
+      "a trigger nobody has written yet",
+    ];
+
+    it.each([TAB_SWITCH_TRIGGER, MULTI_FILE_OPEN_TRIGGER])(
+      "keeps the Event Logs workspace active for the %s trigger its add flow produces",
+      (trigger) => {
+        useUiStore.getState().setActiveWorkspace("event-log");
+        expect(useUiStore.getState().activeWorkspace).toBe("event-log");
+
+        useUiStore.getState().openTab("/var/log/install.log", "install.log");
+        useUiStore.getState().ensureLogViewVisible(trigger);
+
+        const state = useUiStore.getState();
+        expect(state.openTabs[0].filePath).toBe("/var/log/install.log");
+        expect(state.activeWorkspace).toBe("event-log");
+        expect(state.activeView).toBe("event-log");
+      },
+    );
+
+    it.each(OTHER_TRIGGERS)(
+      "hands a text-log load asked for as %s from Event Logs to the Log workspace",
+      (trigger) => {
+        useUiStore.getState().setActiveWorkspace("event-log");
+        expect(useUiStore.getState().activeWorkspace).toBe("event-log");
+
+        useUiStore.getState().ensureLogViewVisible(trigger);
+
+        expect(useUiStore.getState().activeWorkspace).toBe("log");
+        expect(useUiStore.getState().activeView).toBe("log");
+      },
+    );
+
+    it.each([TAB_SWITCH_TRIGGER, MULTI_FILE_OPEN_TRIGGER, ...OTHER_TRIGGERS])(
+      "keeps the macOS JAMF workspace active for a log load asked for as %s",
+      (trigger) => {
+        useUiStore.getState().setActiveWorkspace("macos-jamf");
+        expect(useUiStore.getState().activeWorkspace).toBe("macos-jamf");
+
+        useUiStore.getState().ensureLogViewVisible(trigger);
+
+        expect(useUiStore.getState().activeWorkspace).toBe("macos-jamf");
+      },
+    );
+
+    it.each([TAB_SWITCH_TRIGGER, MULTI_FILE_OPEN_TRIGGER, ...OTHER_TRIGGERS])(
+      "still hands a log asked for as %s from a workspace that keeps no view to the Log workspace",
+      (trigger) => {
+        useUiStore.getState().setActiveWorkspace("macos-diag");
+        expect(useUiStore.getState().activeWorkspace).toBe("macos-diag");
+
+        useUiStore.getState().ensureLogViewVisible(trigger);
+
+        expect(useUiStore.getState().activeWorkspace).toBe("log");
+      },
+    );
+
+    it("still leaves the Event Logs workspace on an explicit switch", () => {
+      useUiStore.getState().setActiveWorkspace("event-log");
+
+      useUiStore
+        .getState()
+        .ensureWorkspaceVisible("log", "toolbar.workspace-select");
 
       expect(useUiStore.getState().activeWorkspace).toBe("log");
     });

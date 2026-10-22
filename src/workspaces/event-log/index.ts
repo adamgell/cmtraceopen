@@ -1,5 +1,6 @@
 // src/workspaces/event-log/index.ts
 import { lazy } from "react";
+import { MULTI_FILE_OPEN_TRIGGER, TAB_SWITCH_TRIGGER } from "../../lib/log-load-triggers";
 import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceDefinition } from "../types";
 
@@ -10,6 +11,11 @@ export const eventLogWorkspace: WorkspaceDefinition = {
   platforms: "all",
   capabilities: {
     sidebar: false,
+    // "Add log source..." loads a text log through the Log workspace's loaders, and opening its
+    // tab (or a multi-file load) asks for the Log view. The log belongs to this workspace's
+    // analysis session, so those two loads must not move the user out of it. Every other trigger
+    // (the toolbar's "open all", find, filter, refresh, a file association) still goes to Log.
+    keepsViewOnLogLoad: [TAB_SWITCH_TRIGGER, MULTI_FILE_OPEN_TRIGGER],
   },
   component: lazy(() =>
     import("./EventLogWorkspace").then(

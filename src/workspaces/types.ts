@@ -31,8 +31,22 @@ export interface WorkspaceCapabilities {
    * the Log workspace. Set on workspaces whose own screen is where the loaded
    * log belongs; explicit navigation (the workspace picker, or a call site that
    * switches views itself) still moves the user. Defaults to false.
+   *
+   * `true` keeps the view for every trigger. A list keeps it only for the
+   * `ensureLogViewVisible` triggers it names, and every other trigger switches to
+   * the Log workspace as it does for a workspace that sets nothing.
    */
-  keepsViewOnLogLoad?: boolean;
+  keepsViewOnLogLoad?: boolean | readonly string[];
+  /**
+   * Whether this workspace's own `onOpenSource` reopens a text-log FILE as a text log, by loading it
+   * through the log store itself (a file source, or a known source that is one file). It does not
+   * cover a folder: a handler that analyzes a folder never loads it as a text log. It matters to one
+   * thing: a text-log load that fails Access Denied offers a restart as administrator, and the
+   * restore ticket names the workspace that reopens the source after it. A workspace that does not
+   * say so, or a target that is not a file, would be reopened as something else (Event Logs as
+   * EVTX, Intune as an analysis), so the ticket names the Log workspace instead. Defaults to false.
+   */
+  reopensTextLogFiles?: boolean;
 }
 
 export interface WorkspaceDefinition {
