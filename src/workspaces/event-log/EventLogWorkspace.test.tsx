@@ -1014,7 +1014,44 @@ describe("EventLogWorkspace fixtures", () => {
     expect(invoke).not.toHaveBeenCalledWith("evtx_export_records", expect.anything());
   });
 
-  it("advances relative time windows when the loaded records refresh", async () => {
+  // A saved capture is measured from its own end (owner ruling b), so its window does not follow the
+  // clock. A live source is, and the window advances when the records refresh.
+  it("advances relative time windows of a live source when the loaded records refresh", async () => {
+    vi.useFakeTimers();
+    const nowEpoch = Date.parse("2026-08-18T13:00:00.000Z");
+    vi.setSystemTime(nowEpoch);
+    try {
+      seedEventLog();
+      useEvtxStore.setState({
+        records: [
+          {
+            ...RECORD,
+            timestamp: "2026-08-18T12:00:00.001Z",
+            timestampEpoch: nowEpoch - 60 * 60 * 1000 + 1,
+          },
+        ],
+        sourceMode: "live",
+        timeWindow: "1h",
+      });
+      render(<EventLogWorkspace />);
+      expect(recordGridRows(document.body).length).toBeGreaterThan(0);
+
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+        await Promise.resolve();
+      });
+      expect(recordGridRows(document.body).length).toBeGreaterThan(0);
+
+      act(() =>
+        useEvtxStore.setState((state) => ({ records: [...state.records] })),
+      );
+      expect(recordGridRows(document.body)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not advance the relative window of a saved capture with the clock", async () => {
     vi.useFakeTimers();
     const nowEpoch = Date.parse("2026-08-18T13:00:00.000Z");
     vi.setSystemTime(nowEpoch);
@@ -1035,15 +1072,12 @@ describe("EventLogWorkspace fixtures", () => {
       expect(recordGridRows(document.body).length).toBeGreaterThan(0);
 
       await act(async () => {
-        vi.advanceTimersByTime(30_000);
+        vi.advanceTimersByTime(3 * 60 * 60 * 1000);
         await Promise.resolve();
       });
+      act(() => useEvtxStore.setState((state) => ({ records: [...state.records] })));
+      // Three hours later the capture's last hour is still its last hour.
       expect(recordGridRows(document.body).length).toBeGreaterThan(0);
-
-      act(() =>
-        useEvtxStore.setState((state) => ({ records: [...state.records] })),
-      );
-      expect(recordGridRows(document.body)).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }

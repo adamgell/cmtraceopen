@@ -42,6 +42,7 @@ import {
   type EvtxRailTabId,
   type EvtxViewId,
 } from "./evtx-layout-store";
+import { filesWindowAnchor } from "./evtx-comparison";
 import { selectVisibleRecords } from "./evtx-filter";
 import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
@@ -243,9 +244,15 @@ export function EventLogWorkspace() {
   const quickFilter = useEvtxStore((s) => s.quickFilter);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const columnOrder = useEvtxStore((s) => s.columnConfig.order);
+  // The instant every relative window is measured from. A live source is measured from the clock. A
+  // saved capture is a snapshot, so it is measured from its own end: "Last 24 h" is the last 24
+  // hours it holds, not the last 24 hours before this computer's clock, which would show nothing
+  // for an export that is a day old. Everything that applies a window (the grid, the timeline, the
+  // view bar, the "as of" label and the comparison) takes it from here.
   const nowEpoch = useMemo(
-    () => Date.now(),
+    () => (sourceMode === "files" ? filesWindowAnchor(records, Date.now()) : Date.now()),
     [
+      sourceMode,
       records,
       selectedChannels,
       filterLevels,
