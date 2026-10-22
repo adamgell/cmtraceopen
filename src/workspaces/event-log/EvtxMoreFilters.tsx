@@ -5,6 +5,11 @@
  * view bar or the table header, and the issue requires every capability of the old filter bar to
  * stay reachable, so they sit in a "Display" section here. They are not criteria and do not count
  * toward the button's number.
+ *
+ * The quick-filter controls show and edit the filter as edited. The store applies it as
+ * `quickFilter` whenever it can (`quickFilterApplies`), and otherwise keeps it as
+ * `quickFilterDraft`, so a field query that does not parse stays as typed and is not applied
+ * (spec 8.3).
  */
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -29,6 +34,7 @@ import {
   type EvtxQuickFilterScope,
 } from "./evtx-filter";
 import { useFilterChips, type EvtxFilterChip } from "./EvtxFilterChips";
+import { notAppliedMessage, useSettledQueryError } from "./evtx-query-error";
 import { useSavedFilterStore } from "./evtx-filter-store";
 import { orderFilters, sanitizeCriteria } from "./evtx-saved-filters";
 import { timeZoneLabel } from "./evtx-time";
@@ -47,8 +53,7 @@ const SORT_FIELD_LABELS: Record<EvtxSortField, string> = {
 
 const SORT_FIELDS: EvtxSortField[] = ["time", "eventId", "level", "provider", "channel"];
 
-// Records, so a mode added later (the field grammar in Phase 5b, #833) fails to compile until it
-// has a label here.
+// Records, so a mode added later fails to compile until it has a label here.
 const QUICK_FILTER_MODE_LABELS: Record<EvtxQuickFilterMode, string> = {
   oneString: "One string",
   multipleWords: "Any words",
@@ -56,7 +61,18 @@ const QUICK_FILTER_MODE_LABELS: Record<EvtxQuickFilterMode, string> = {
   allWords: "All words",
   allStrings: "All strings",
   eventIds: "Event IDs",
+  fieldQuery: "Field query",
 };
+const QUICK_FILTER_PLACEHOLDERS: Record<EvtxQuickFilterMode, string> = {
+  oneString: "Quick filter...",
+  multipleWords: "Quick filter...",
+  multipleStrings: "Quick filter...",
+  allWords: "Quick filter...",
+  allStrings: "Quick filter...",
+  eventIds: "Quick IDs (e.g. 4624-4626)",
+  fieldQuery: "Field query (e.g. id:76 level:error)",
+};
+const QUICK_FIELD_QUERY_ERROR_ID = "quick-field-query-error";
 const QUICK_FILTER_SCOPE_LABELS: Record<EvtxQuickFilterScope, string> = {
   allColumns: "All columns",
   visibleColumns: "Visible columns",
@@ -85,7 +101,8 @@ interface EvtxMoreFiltersProps {
 export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProps) {
   const filterEventIds = useEvtxStore((s) => s.filterEventIds);
   const setFilterEventIds = useEvtxStore((s) => s.setFilterEventIds);
-  const quickFilter = useEvtxStore((s) => s.quickFilter);
+  // The quick filter as edited: the draft while it is not applied, else the applied one.
+  const quickFilter = useEvtxStore((s) => s.quickFilterDraft ?? s.quickFilter);
   const setQuickFilter = useEvtxStore((s) => s.setQuickFilter);
   const sortField = useEvtxStore((s) => s.sortField);
   const setSortField = useEvtxStore((s) => s.setSortField);
@@ -95,7 +112,7 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
   const setTimeZoneMode = useEvtxStore((s) => s.setTimeZoneMode);
   const setGroupBy = useEvtxStore((s) => s.setGroupBy);
   const setBeforeLoadCriteria = useEvtxStore((s) => s.setBeforeLoadCriteria);
-  const setFilterSearch = useEvtxStore((s) => s.setFilterSearch);
+  const setOnLoadCriteria = useEvtxStore((s) => s.setOnLoadCriteria);
 
   // Event IDs are a before-load criterion: committing a list refetches the loaded channels in live
   // mode. So the field edits a draft, and the list is committed on Enter or blur, never per
@@ -116,6 +133,13 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
     () => quickFilter.mode === "eventIds" && parseEventIdSelectors(quickFilter.query).invalid,
     [quickFilter.mode, quickFilter.query],
   );
+  // A field query that does not parse is not applied, so once the typing settles the reason is
+  // shown beside the query, which is left as the operator typed it.
+  const quickFieldQueryError = useSettledQueryError(
+    quickFilter.query,
+    quickFilter.mode === "fieldQuery",
+  );
+  const quickQueryInvalid = quickEventIdInputInvalid || quickFieldQueryError !== null;
   const activeCount = moreFiltersActiveCount(useFilterChips().chips);
 
   const savedFilters = useSavedFilterStore((s) => s.savedFilters);
@@ -143,9 +167,10 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
           timeWindow: state.timeWindow,
           selectedChannels: [...state.selectedChannels],
         },
+        // The operator's text, as typed, whether or not it is applied.
         onLoad: {
-          search: state.filterSearch,
-          quickFilter: state.quickFilter,
+          search: state.filterSearchDraft ?? state.filterSearch,
+          quickFilter: state.quickFilterDraft ?? state.quickFilter,
         },
         afterLoad: { groupBy: state.groupBy },
       }),
@@ -159,8 +184,7 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
     if (!filter) return;
     const { criteria } = filter;
     setBeforeLoadCriteria(criteria.beforeLoad);
-    setFilterSearch(criteria.onLoad.search);
-    setQuickFilter(criteria.onLoad.quickFilter);
+    setOnLoadCriteria(criteria.onLoad);
     setGroupBy(criteria.afterLoad.groupBy);
     markFilterUsed(id);
   };
@@ -248,17 +272,21 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
               input={{ style: { fontSize: controlFontSize } }}
               value={quickFilter.query}
               onChange={(_, data) => setQuickFilter({ ...quickFilter, query: data.value })}
-              placeholder={
-                quickFilter.mode === "eventIds" ? "Quick IDs (e.g. 4624-4626)" : "Quick filter..."
-              }
+              placeholder={QUICK_FILTER_PLACEHOLDERS[quickFilter.mode]}
               aria-label="Quick filter query"
-              aria-invalid={quickEventIdInputInvalid}
-              aria-describedby={quickEventIdInputInvalid ? "quick-event-id-filter-error" : undefined}
+              aria-invalid={quickQueryInvalid}
+              aria-describedby={
+                quickEventIdInputInvalid
+                  ? "quick-event-id-filter-error"
+                  : quickFieldQueryError
+                    ? QUICK_FIELD_QUERY_ERROR_ID
+                    : undefined
+              }
               title={quickEventIdInputInvalid ? EVENT_ID_VALIDATION_HELP : undefined}
               size="small"
               style={{
                 width: "200px",
-                borderColor: quickEventIdInputInvalid ? invalidColor : undefined,
+                borderColor: quickQueryInvalid ? invalidColor : undefined,
               }}
             />
             {quickEventIdInputInvalid && (
@@ -270,6 +298,15 @@ export function EvtxMoreFilters({ controlFontSize, visual }: EvtxMoreFiltersProp
                 style={invalidStyle}
               >
                 Invalid quick Event IDs
+              </span>
+            )}
+            {/*
+              Mounted for the whole time the mode is Field query, and empty while the query is
+              applied, so the message is announced politely when it appears, once per message.
+            */}
+            {quickFilter.mode === "fieldQuery" && (
+              <span id={QUICK_FIELD_QUERY_ERROR_ID} role="status" style={invalidStyle}>
+                {quickFieldQueryError ? notAppliedMessage(quickFieldQueryError) : ""}
               </span>
             )}
           </span>

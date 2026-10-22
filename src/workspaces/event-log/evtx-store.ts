@@ -34,10 +34,13 @@ import {
 export { selectVisibleRecords } from "./evtx-filter";
 import {
   DEFAULT_QUICK_FILTER,
+  fieldQueryError,
   parseEventIdSelectors,
+  quickFilterApplies,
   type EvtxBeforeLoadCriteria,
   type EvtxEventIdSelector,
   type EvtxGroupField,
+  type EvtxOnLoadCriteria,
   type EvtxQuickFilter,
 } from "./evtx-filter";
 import {
@@ -811,9 +814,21 @@ interface EvtxState {
   archiveMembers: EvtxArchiveMember[];
   filterLevels: Set<EvtxLevel>;
   filterEventIds: string;
+  /**
+   * The search applied to the records: the last text the search box held that parsed as a field
+   * query (spec 8.3: a query that does not parse is not applied). Every view, count, chip and
+   * export reads this one.
+   */
   filterSearch: string;
-  /** The on-load and after-load quick criteria are retained across every refetch. */
+  /** The search box's text while it is not applied, else null: the box shows `filterSearch`. */
+  filterSearchDraft: string | null;
+  /**
+   * The quick filter applied, retained across every refetch like the other on-load criteria: the
+   * last one edited that `quickFilterApplies`.
+   */
   quickFilter: EvtxQuickFilter;
+  /** The quick filter as edited while it is not applied, else null: More filters shows `quickFilter`. */
+  quickFilterDraft: EvtxQuickFilter | null;
   timeWindow: EvtxTimeWindow;
   /** Which clock event times are shown in. */
   timeZoneMode: EvtxTimeZoneMode;
@@ -859,8 +874,15 @@ loadGeneration: number;
   toggleFilterLevel: (level: EvtxLevel) => void;
   setFilterEventIds: (eventIds: string) => void;
   setBeforeLoadCriteria: (criteria: EvtxBeforeLoadCriteria) => void;
+  /** An edit: applies the text when it parses, and otherwise keeps it as the draft. */
   setFilterSearch: (search: string) => void;
+  /** An edit: applies the filter when it can be applied, and otherwise keeps it as the draft. */
   setQuickFilter: (filter: EvtxQuickFilter) => void;
+  /**
+   * Replaces both on-load criteria, as a saved filter does. A search or quick filter that cannot
+   * be applied leaves none applied, rather than the one from before the load.
+   */
+  setOnLoadCriteria: (criteria: EvtxOnLoadCriteria) => void;
   setTimeWindow: (window: EvtxTimeWindow) => void;
   setGroupBy: (fields: EvtxGroupField[]) => void;
   toggleColumnVisible: (id: EvtxColumnId) => void;
@@ -1238,7 +1260,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
   filterEventIds: "",
   filterSearch: "",
+  filterSearchDraft: null,
   quickFilter: { ...DEFAULT_QUICK_FILTER },
+  quickFilterDraft: null,
   timeZoneMode: "local" as EvtxTimeZoneMode,
   timeWindow: "24h",
   columnConfig: defaultColumnConfig(),
@@ -2300,8 +2324,29 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     });
     refreshIfServerFilterChanged(before);
   },
-  setFilterSearch: (search) => set({ filterSearch: search }),
-  setQuickFilter: (filter) => set({ quickFilter: { ...filter } }),
+  // Local criteria: none of these changes the server filter, so none refetches.
+  setFilterSearch: (search) =>
+    set(
+      fieldQueryError(search)
+        ? { filterSearchDraft: search }
+        : { filterSearchDraft: null, filterSearch: search }
+    ),
+  setQuickFilter: (filter) =>
+    set(
+      quickFilterApplies(filter)
+        ? { quickFilterDraft: null, quickFilter: { ...filter } }
+        : { quickFilterDraft: { ...filter } }
+    ),
+  setOnLoadCriteria: ({ search, quickFilter }) => {
+    const searchApplies = fieldQueryError(search) === null;
+    const quickApplies = quickFilterApplies(quickFilter);
+    set({
+      filterSearch: searchApplies ? search : "",
+      filterSearchDraft: searchApplies ? null : search,
+      quickFilter: quickApplies ? { ...quickFilter } : { ...quickFilter, query: "" },
+      quickFilterDraft: quickApplies ? null : { ...quickFilter },
+    });
+  },
   setTimeWindow: (window) => {
     const before = currentServerFilterKey();
     set({ timeWindow: window });
@@ -2351,8 +2396,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
       filterEventIds: "",
       filterSearch: "",
+      filterSearchDraft: null,
       timeZoneMode: "local",
       quickFilter: { ...DEFAULT_QUICK_FILTER },
+      quickFilterDraft: null,
       timeWindow: "24h",
       // Reset with everything else. Gaps describe records that are gone, so surviving a reset
       // would report a hole in a set no longer on screen, and a zone left over from a previous
