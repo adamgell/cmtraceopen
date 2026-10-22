@@ -141,7 +141,8 @@ describe("readWindowFacts: pairing the counts with the window, on the session ke
     const facts = read(scene({ counts: countsFor(fixtureEdges("exactPair"), { updating: true }) }));
     expect(facts.paired).toBe(true);
     expect(facts.updating).toBe(true);
-    expect(facts.narrowed).toBe(true);
+    // An earlier session's pair is `updating`, which is its own input to the absence rule, and is
+    // not folded into the scope.
     expect(facts.scopeNarrowed).toBe(false);
   });
 
@@ -152,27 +153,25 @@ describe("readWindowFacts: pairing the counts with the window, on the session ke
   });
 });
 
-describe("readWindowFacts: narrowed is the scope, an unread source, or an earlier session's pair", () => {
+describe("readWindowFacts: the scope is its own fact, and the three caveats are never folded into one", () => {
   it("is not narrowed when nothing is", () => {
     const facts = read(scene());
     expect(facts.scopeNarrowed).toBe(false);
-    expect(facts.narrowed).toBe(false);
+    expect(facts.updating).toBe(false);
   });
 
   it("is narrowed when the session was built from fewer events than are loaded", () => {
     const facts = read(scene({ counts: countsFor(fixtureEdges("exactPair"), { scope: { visibleCount: 3, loadedCount: 9, textLogCount: 0 } }) }));
     expect(facts.scopeNarrowed).toBe(true);
-    expect(facts.narrowed).toBe(true);
   });
 
   it("is narrowed when the scope is not known", () => {
-    expect(read(scene({ counts: countsFor(fixtureEdges("exactPair"), { scope: null }) })).narrowed).toBe(true);
+    expect(read(scene({ counts: countsFor(fixtureEdges("exactPair"), { scope: null }) })).scopeNarrowed).toBe(true);
   });
 
-  it("is narrowed by an unread source, which is not a scope", () => {
+  it("does not call an unread source a scope: it is the caller's own input to the absence rule", () => {
     const facts = read(scene({ unreadSources: true }));
     expect(facts.scopeNarrowed).toBe(false);
-    expect(facts.narrowed).toBe(true);
   });
 });
 

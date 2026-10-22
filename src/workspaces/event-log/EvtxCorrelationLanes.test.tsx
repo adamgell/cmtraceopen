@@ -26,6 +26,7 @@ import { buildCorrelationChains, type CorrelationChain } from "./evtx-correlatio
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import { pickRailTextColors } from "./evtx-rail-text";
 import { buildChainPlot, type ChainPlot, type PlotMarker } from "./evtx-correlation-view-model";
+import { COMPLETE_VIEW } from "./evtx-correlation-test-fixtures";
 import { formatClock } from "./evtx-time";
 import { buildEvtxVisualTokens, resolveToken } from "./evtx-visual-tokens";
 import lanesSource from "./EvtxCorrelationLanes.tsx?raw";
@@ -39,7 +40,6 @@ import {
 
 const rid = (n: number) => `source4:Live|machine10:DESKTOP-01|channel6:System|record${n}`;
 const T0 = Date.UTC(2026, 9, 6, 10, 20, 0);
-const VIEW = { edgeInputComplete: true, narrowed: false, gaps: classifyCoverageGaps([], 0) };
 const SIZES = correlationSizes(14);
 
 function fixtureEdges(name: string): TimelineCorrelationEdge[] {
@@ -158,7 +158,7 @@ const exactPlot = (extra: { nearby?: TimelineItem[]; window?: { startMs: number;
   buildChainPlot({
     chain: chainOf(fixtureEdges("exactPair"), pair()),
     itemsById: mapOf(pair()),
-    ...VIEW,
+    ...COMPLETE_VIEW,
     ...extra,
   });
 
@@ -174,7 +174,7 @@ describe("the lanes and markers", () => {
     const plot = buildChainPlot({
       chain: chainOf(fixtureEdges("exactPair"), pair()),
       itemsById: mapOf(items),
-      ...VIEW,
+      ...COMPLETE_VIEW,
       nearby: [...logs, items[3]!],
     });
     draw(plot);
@@ -193,7 +193,7 @@ describe("the lanes and markers", () => {
     const plot = buildChainPlot({
       chain: chainOf(fixtureEdges("exactPair"), []),
       itemsById: new Map(),
-      ...VIEW,
+      ...COMPLETE_VIEW,
     });
     draw(plot);
     expect(screen.getByRole("figure")).toHaveTextContent(
@@ -220,7 +220,7 @@ describe("the lanes and markers", () => {
     const plot = buildChainPlot({
       chain: chainOf(fixtureEdges("exactPair"), pair()),
       itemsById: mapOf([...pair(), items[1]!]),
-      ...VIEW,
+      ...COMPLETE_VIEW,
       nearby: [items[1]!],
     });
     draw(plot);
@@ -327,7 +327,7 @@ describe("connectors (acceptance 3 and 4)", () => {
     ];
     const chain = chainOf(edges, items);
     expect(chain.strength).toBe("candidate");
-    draw(buildChainPlot({ chain, itemsById: mapOf(items), ...VIEW }));
+    draw(buildChainPlot({ chain, itemsById: mapOf(items), ...COMPLETE_VIEW }));
     const lines = Array.from(document.querySelectorAll<SVGLineElement>("line[data-connector]"));
     expect(lines.map((line) => line.getAttribute("data-strength")).sort()).toEqual(["candidate", "exact"]);
     const candidate = lines.find((line) => line.getAttribute("data-strength") === "candidate")!;
@@ -353,7 +353,7 @@ describe("connectors (acceptance 3 and 4)", () => {
     });
     const chain = chainOf(edges, items);
     expect(["ambiguous", "coverageBlocked"]).toContain(chain.strength);
-    draw(buildChainPlot({ chain, itemsById: mapOf(items), ...VIEW }));
+    draw(buildChainPlot({ chain, itemsById: mapOf(items), ...COMPLETE_VIEW }));
     expect(document.querySelectorAll("line[data-connector]")).toHaveLength(0);
     expect(document.querySelectorAll('[data-role="member"]').length).toBeGreaterThan(0);
   });
@@ -361,18 +361,18 @@ describe("connectors (acceptance 3 and 4)", () => {
   it("draws no connector for an edge whose evidence is missing", () => {
     const items = pair();
     const edge = { ...synthetic("e1", rid(1), rid(2)), evidence: [] };
-    draw(buildChainPlot({ chain: chainOf([edge], items), itemsById: mapOf(items), ...VIEW }));
+    draw(buildChainPlot({ chain: chainOf([edge], items), itemsById: mapOf(items), ...COMPLETE_VIEW }));
     expect(document.querySelectorAll("line[data-connector]")).toHaveLength(0);
   });
 });
 
 describe("a 'Not linked' marker (acceptance 2, decision A on #838)", () => {
   const stray = () => eventItem(9, T0 + 3_000, "warning");
-  const withStray = (gaps = VIEW.gaps) =>
+  const withStray = (gaps = COMPLETE_VIEW.gaps) =>
     buildChainPlot({
       chain: chainOf(fixtureEdges("exactPair"), pair()),
       itemsById: mapOf([...pair(), stray()]),
-      ...VIEW,
+      ...COMPLETE_VIEW,
       gaps,
       nearby: [stray()],
     });
@@ -473,7 +473,7 @@ describe("keyboard", () => {
   const three = () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 2_000), eventItem(3, T0 + 4_000)];
     const edges = [synthetic("e1", rid(1), rid(2)), synthetic("e2", rid(2), rid(3))];
-    return buildChainPlot({ chain: chainOf(edges, items), itemsById: mapOf(items), ...VIEW });
+    return buildChainPlot({ chain: chainOf(edges, items), itemsById: mapOf(items), ...COMPLETE_VIEW });
   };
   const buttons = () => Array.from(document.querySelectorAll<HTMLButtonElement>("button[data-marker]"));
 
@@ -554,7 +554,7 @@ const dockPlot = () => {
   return buildChainPlot({
     chain: chainOf(fixtureEdges("exactPair"), pair()),
     itemsById: mapOf(items),
-    ...VIEW,
+    ...COMPLETE_VIEW,
     window: { startMs: T0 - 75_000, endMs: T0 + 75_000 },
     nearby: items.slice(2),
   });
@@ -738,7 +738,7 @@ describe.each(getAllThemes().map((theme) => [theme.id, theme] as const))(
         buildChainPlot({
           chain,
           itemsById: mapOf([...items, eventItem(9, T0 + 3_000)]),
-          ...VIEW,
+          ...COMPLETE_VIEW,
           nearby: [eventItem(9, T0 + 3_000)],
         }),
       );

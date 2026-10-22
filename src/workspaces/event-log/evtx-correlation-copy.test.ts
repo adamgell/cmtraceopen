@@ -87,6 +87,7 @@ import { WAIT_FOR_UPDATE_REASON } from "./evtx-unplaced";
 import * as copyExports from "./evtx-correlation-copy";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
 import * as viewModelExports from "./evtx-correlation-view-model";
+import { COMPLETE_VIEW } from "./evtx-correlation-test-fixtures";
 import {
   IN_ANOTHER_CHAIN_LABEL,
   LINK_TO_EVENT_UNKNOWN_LABEL,
@@ -834,10 +835,9 @@ describe("no string claims an entry is unplaced without proof", () => {
     const itemsById = mapOf(read);
     const narrowed = scopeDisclosure({ visibleCount: 2, loadedCount: 10, textLogCount: 3 });
     const incomplete = { edgeInputComplete: false, unloadedEdgeCount: 9 };
-    const view = { edgeInputComplete: true, narrowed: false, gaps: classifyCoverageGaps([], 0) };
-    const plot = buildChainPlot({ chain, itemsById, ...view });
+    const plot = buildChainPlot({ chain, itemsById, ...COMPLETE_VIEW });
     // An explicit window that leaves every member outside it, so the pinned labels are built.
-    const pinned = buildChainPlot({ chain, itemsById, ...view, window: { startMs: T0 + 1, endMs: T0 + 2 } });
+    const pinned = buildChainPlot({ chain, itemsById, ...COMPLETE_VIEW, window: { startMs: T0 + 1, endMs: T0 + 2 } });
     const logLine: TimelineItem = {
       timestampMs: T0,
       severity: "warning",
@@ -917,12 +917,11 @@ describe("no string claims an entry is unplaced without proof", () => {
   }
 
   it("builds pinned labels for the audit, so shortEntryId and the pin text are really run", () => {
-    const view = { edgeInputComplete: true, narrowed: false, gaps: classifyCoverageGaps([], 0) };
     const chain = chainFor("exactPair", items);
     const pinned = buildChainPlot({
       chain,
       itemsById: mapOf(items),
-      ...view,
+      ...COMPLETE_VIEW,
       window: { startMs: T0 + 1, endMs: T0 + 2 },
     });
     expect(pinned.members.map((marker) => marker.pinLabel)).toEqual(["72 \u00b7 1 ms earlier", "76 \u00b7 6 s later"]);

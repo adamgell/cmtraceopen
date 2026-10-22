@@ -52,6 +52,7 @@ import {
   sessionSpeaksForAbsence,
 } from "./evtx-correlation-view-model";
 import { classifyCoverageGaps } from "./evtx-correlation-gaps";
+import { COMPLETE_VIEW } from "./evtx-correlation-test-fixtures";
 import { chipForOriginKind } from "./evtx-kind-chip-value";
 import { TIME_RANGE_SEPARATOR } from "./evtx-time";
 import {
@@ -64,8 +65,6 @@ import {
 } from "./unified-timeline";
 
 const rid = (n: number) => `source4:Live|machine10:DESKTOP-01|channel6:System|record${n}`;
-/** Edges complete, nothing narrowed, no coverage gap: the only state in which "Not linked" may be said. */
-const VIEW = { edgeInputComplete: true, narrowed: false, gaps: classifyCoverageGaps([], 0) };
 /** What no string may say unless the entry is proven unplaced (the scan finished, on a complete list). */
 const NO_UNPROVEN_CLAIM = /not placed|no timeline position|without a timeline position|no timestamp/i;
 
@@ -479,7 +478,7 @@ describe("buildChainPlot", () => {
   it("draws a real exact pair as two markers on one lane joined by one exact connector backed by evidence", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 6_000)];
     const chain = chainOf(fixtureEdges("exactPair"), items);
-    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items) });
     expect(plot.members.map((m) => m.id)).toEqual([rid(1), rid(2)]);
     expect(plot.lanes).toHaveLength(1);
     expect(plot.connectors).toHaveLength(1);
@@ -499,7 +498,7 @@ describe("buildChainPlot", () => {
     ];
     const chain = chainOf(edges, items);
     expect(chain.strength).toBe("candidate");
-    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items) });
     expect(plot.connectors.map((c) => `${c.left}>${c.right}:${c.strength}`)).toEqual([
       `${rid(1)}>${rid(2)}:exact`,
       `${rid(2)}>${rid(3)}:candidate`,
@@ -510,7 +509,7 @@ describe("buildChainPlot", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 1_000)];
     const chain = chainOf(fixtureEdges("secondaryPair"), items);
     expect(chain.strength).toBe("candidate");
-    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items) });
     expect(plot.connectors.map((c) => c.strength)).toEqual(["candidate"]);
     expect(plot.connectors[0]!.evidence.length).toBeGreaterThan(0);
   });
@@ -519,7 +518,7 @@ describe("buildChainPlot", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 1_000), eventItem(3, T0 + 2_000)];
     const chain = chainOf(fixtureEdges("group3"), items);
     expect(chain.strength).toBe("ambiguous");
-    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items) });
     expect(plot.members).toHaveLength(3);
     expect(plot.connectors).toEqual([]);
     expect(plot.undrawnEdges).toEqual([]);
@@ -529,7 +528,7 @@ describe("buildChainPlot", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 1_000)];
     const chain = chainOf(fixtureEdges("gappedPair"), items);
     expect(chain.strength).toBe("coverageBlocked");
-    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items) });
     expect(plot.members).toHaveLength(2);
     expect(plot.connectors).toEqual([]);
   });
@@ -537,7 +536,7 @@ describe("buildChainPlot", () => {
   it("does not draw an exact edge that has no evidence row, and says so", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 1_000)];
     const chain = chainOf([synthetic("e1", rid(1), rid(2), "exact", { evidence: [] })], items);
-    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items) });
     expect(plot.connectors).toEqual([]);
     expect(plot.undrawnEdges).toEqual([
       { left: rid(1), right: rid(2), strength: "exact", reason: "noEvidence" },
@@ -557,7 +556,7 @@ describe("buildChainPlot", () => {
       ],
       items,
     );
-    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items) });
     expect(plot.connectors).toEqual([]);
     expect(plot.undrawnEdges[0]?.reason).toBe("noEvidence");
   });
@@ -565,7 +564,7 @@ describe("buildChainPlot", () => {
   it("gives a member with no item no position and no connector, and counts it", () => {
     const items = [eventItem(1, T0)];
     const chain = chainOf([synthetic("e1", rid(1), rid(2), "exact")], items);
-    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items) });
     expect(plot.members.map((m) => m.id)).toEqual([rid(1)]);
     expect(plot.connectors).toEqual([]);
     expect(plot.undrawnEdges).toEqual([
@@ -576,7 +575,7 @@ describe("buildChainPlot", () => {
 
   it("draws an empty plot, with the members counted, when no member is placed", () => {
     const chain = chainOf(fixtureEdges("exactPair"), []);
-    const plot = buildChainPlot({ ...VIEW, chain, itemsById: new Map() });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: new Map() });
     expect(plot.window).toBeNull();
     expect(plot.members).toEqual([]);
     expect(plot.lanes).toEqual([]);
@@ -589,7 +588,7 @@ describe("buildChainPlot", () => {
     const items = [eventItem(1, T0, "info", { eventId: 76 }), eventItem(2, T0 + 60_000, "info", { eventId: 72 })];
     const chain = chainOf(fixtureEdges("exactPair"), items);
     const window = { startMs: T0 + 3_000, endMs: T0 + 50_000 };
-    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items), window });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items), window });
     const [before, after] = plot.members;
     expect(before).toMatchObject({ id: rid(1) });
     expect(before!.placement).toEqual({ x: 0, pinned: "before", outsideMs: 3_000 });
@@ -602,7 +601,7 @@ describe("buildChainPlot", () => {
 
   it("gives an inside member no pin label", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 6_000)];
-    const plot = buildChainPlot({ ...VIEW, chain: chainOf(fixtureEdges("exactPair"), items), itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chainOf(fixtureEdges("exactPair"), items), itemsById: mapOf(items) });
     for (const marker of plot.members) {
       expect(marker.pinLabel).toBeNull();
       expect(marker.placement.pinned).toBeNull();
@@ -611,7 +610,7 @@ describe("buildChainPlot", () => {
 
   it("uses the default window and its five ticks", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 100_000)];
-    const plot = buildChainPlot({ ...VIEW, chain: chainOf(fixtureEdges("exactPair"), items), itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chainOf(fixtureEdges("exactPair"), items), itemsById: mapOf(items) });
     expect(plot.window).toEqual({ startMs: T0 - 25_000, endMs: T0 + 125_000 });
     expect(plot.ticks).toHaveLength(5);
     expect(plot.ticks[0]).toBe(T0 - 25_000);
@@ -629,7 +628,7 @@ describe("buildChainPlot", () => {
 
     it("draws the first markers in time order and counts the rest", () => {
       const { items, chain } = manyMembers(CORRELATION_MARKER_CAP + 30);
-      const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items) });
       expect(plot.members).toHaveLength(CORRELATION_MARKER_CAP);
       expect(plot.omittedMarkers).toBe(30);
       expect(plot.members.map((m) => m.sequenceIndex)).toEqual(
@@ -639,7 +638,7 @@ describe("buildChainPlot", () => {
 
     it("does not draw a connector to a marker the cap left out, and reports why", () => {
       const { items, chain } = manyMembers(5);
-      const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items), markerCap: 3 });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items), markerCap: 3 });
       expect(plot.members).toHaveLength(3);
       expect(plot.connectors).toHaveLength(2);
       expect(plot.undrawnEdges.map((edge) => edge.reason)).toEqual(["beyondMarkerCap", "beyondMarkerCap"]);
@@ -647,7 +646,7 @@ describe("buildChainPlot", () => {
 
     it("counts the connectors the connector cap left out", () => {
       const { items, chain } = manyMembers(6);
-      const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items), connectorCap: 2 });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items), connectorCap: 2 });
       expect(plot.connectors).toHaveLength(2);
       expect(plot.omittedConnectors).toBe(3);
     });
@@ -659,14 +658,14 @@ describe("buildChainPlot", () => {
     const stray = eventItem(9, T0 + 3_000, "warning");
 
     it("draws nothing extra when given none, which is what production passes", () => {
-      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [] });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [] });
       expect(plot.nearby).toEqual([]);
       expect(plot.showsNotLinkedLegend).toBe(false);
-      expect(buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items) }).nearby).toEqual([]);
+      expect(buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items) }).nearby).toEqual([]);
     });
 
     it("draws a context entry as a marker with no connector, kept apart from the members, and shows the legend", () => {
-      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray] });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray] });
       expect(plot.nearby).toHaveLength(1);
       expect(plot.nearby[0]).toMatchObject({ id: rid(9), role: "nearby", sequenceIndex: null });
       expect(plot.members.map((m) => m.role)).toEqual(["member", "member"]);
@@ -679,23 +678,23 @@ describe("buildChainPlot", () => {
     });
 
     it("counts a context entry in no member, connector or chain figure", () => {
-      const withContext = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray] });
-      const without = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items) });
+      const withContext = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray] });
+      const without = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items) });
       expect(withContext.members).toEqual(without.members);
       expect(withContext.connectors).toEqual(without.connectors);
       expect(withContext.membersWithoutItem).toBe(without.membersWithoutItem);
     });
 
     it("never draws a member twice, and never marks one as not linked", () => {
-      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [items[0]!, stray] });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [items[0]!, stray] });
       expect(plot.nearby.map((m) => m.id)).toEqual([rid(9)]);
     });
 
     it("puts a context entry on its own lane and counts the ones past the cap", () => {
       const other = eventItem(8, T0 + 2_000, "info", { channel: "Application" });
-      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, other], markerCap: 1 });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, other], markerCap: 1 });
       expect(plot.omittedNearby).toBe(1);
-      const plotAll = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, other] });
+      const plotAll = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, other] });
       expect(plotAll.lanes.map((lane) => lane.label)).toEqual(["Application", "System"]);
     });
 
@@ -705,7 +704,7 @@ describe("buildChainPlot", () => {
       ["the view is narrowed", { edgeInputComplete: true, narrowed: true }, NO_LOADED_LINK_LABEL],
       ["both", { edgeInputComplete: false, narrowed: true }, NO_LOADED_LINK_LABEL],
     ])("labels a context marker and the legend by what is known: %s", (_why, state, label) => {
-      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], ...state });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], ...state });
       expect(plot.nearby[0]?.linkLabel).toBe(label);
       expect(plot.notLinkedLabel).toBe(label);
       expect(plot.showsNotLinkedLegend).toBe(true);
@@ -716,7 +715,7 @@ describe("buildChainPlot", () => {
 
     describe("needs the engine's correlation gaps to allow it (J1)", () => {
       const gapped = (gaps: ReturnType<typeof classifyCoverageGaps>, nearby = [stray]) =>
-        buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby, gaps });
+        buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby, gaps });
       const originGap = (id: string) => ({
         source: id,
         reason: "exact UserId identity group exceeds the 256-member correlation limit",
@@ -784,7 +783,7 @@ describe("buildChainPlot", () => {
 
         it("withdraws it for a member beyond the marker cap: the key is lost whether or not the member is drawn", () => {
           const plot = buildChainPlot({
-            ...VIEW,
+            ...COMPLETE_VIEW,
             chain: chain(),
             itemsById: mapOf(items),
             nearby: [stray],
@@ -800,7 +799,7 @@ describe("buildChainPlot", () => {
           const partial = chainOf(fixtureEdges("exactPair"), [items[0]!]);
           expect(partial.unresolvedMemberIds).toEqual([rid(2)]);
           const plot = buildChainPlot({
-            ...VIEW,
+            ...COMPLETE_VIEW,
             chain: partial,
             itemsById: mapOf([items[0]!]),
             nearby: [stray],
@@ -813,7 +812,7 @@ describe("buildChainPlot", () => {
         it("gives the legend the same words when no member can be placed", () => {
           const bare = chainOf(fixtureEdges("exactPair"), []);
           const plot = buildChainPlot({
-            ...VIEW,
+            ...COMPLETE_VIEW,
             chain: bare,
             itemsById: new Map(),
             gaps: classifyCoverageGaps([aliasConflict(rid(1))], 1),
@@ -844,11 +843,11 @@ describe("buildChainPlot", () => {
 
       it("gives the same words for a chain with no placed member, where nothing can be drawn", () => {
         const bare = chainOf(fixtureEdges("exactPair"), []);
-        const clear = buildChainPlot({ ...VIEW, chain: bare, itemsById: new Map() });
+        const clear = buildChainPlot({ ...COMPLETE_VIEW, chain: bare, itemsById: new Map() });
         expect(clear.window).toBeNull();
         expect(clear.notLinkedLabel).toBe(NOT_LINKED_LABEL);
         const cut = buildChainPlot({
-          ...VIEW,
+          ...COMPLETE_VIEW,
           chain: bare,
           itemsById: new Map(),
           gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1),
@@ -864,7 +863,7 @@ describe("buildChainPlot", () => {
     });
 
     it("gives the legend its words even when no marker is drawn, and never reads Not linked on an unknown state", () => {
-      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), edgeInputComplete: false });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), edgeInputComplete: false });
       expect(plot.showsNotLinkedLegend).toBe(false);
       expect(plot.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
       expect(NO_LOADED_LINK_LABEL).not.toBe(NOT_LINKED_LABEL);
@@ -872,8 +871,8 @@ describe("buildChainPlot", () => {
 
     it("draws the same whatever order the context entries arrive in", () => {
       const a = eventItem(8, T0 + 2_000);
-      const forward = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [a, stray] });
-      const reversed = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, a] });
+      const forward = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [a, stray] });
+      const reversed = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, a] });
       expect(forward).toEqual(reversed);
     });
   });
@@ -886,7 +885,7 @@ describe("buildChainPlot", () => {
     const partners = (...ids: [number, number][]) => new Map(ids.map(([n, count]) => [rid(n), count]));
 
     it("calls it In another chain, never Not linked, even when every edge is loaded and nothing is narrowed", () => {
-      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners([9, 1]) });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners([9, 1]) });
       expect(plot.nearby[0]?.linkLabel).toBe(IN_ANOTHER_CHAIN_LABEL);
       expect(plot.nearby[0]?.linkLabel).not.toBe(NOT_LINKED_LABEL);
     });
@@ -898,29 +897,29 @@ describe("buildChainPlot", () => {
         { edgeInputComplete: false, narrowed: true, gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) },
         { edgeInputComplete: true, narrowed: false, gaps: classifyCoverageGaps([{ source: rid(9), reason: "x" }], 1) },
       ]) {
-        const plot = buildChainPlot({ ...VIEW, ...state, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners([9, 3]) });
+        const plot = buildChainPlot({ ...COMPLETE_VIEW, ...state, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners([9, 3]) });
         expect(plot.nearby[0]?.linkLabel).toBe(IN_ANOTHER_CHAIN_LABEL);
       }
     });
 
     it("leaves an entry with no partner on the old rule, and a count of 0 is no partner", () => {
-      const clear = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [plain], linkPartners: partners([9, 1]) });
+      const clear = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [plain], linkPartners: partners([9, 1]) });
       expect(clear.nearby[0]?.linkLabel).toBe(NOT_LINKED_LABEL);
-      const zero = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners([9, 0]) });
+      const zero = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners([9, 0]) });
       expect(zero.nearby[0]?.linkLabel).toBe(NOT_LINKED_LABEL);
-      const unknown = buildChainPlot({ ...VIEW, edgeInputComplete: false, chain: chain(), itemsById: mapOf(items), nearby: [plain], linkPartners: partners([9, 1]) });
+      const unknown = buildChainPlot({ ...COMPLETE_VIEW, edgeInputComplete: false, chain: chain(), itemsById: mapOf(items), nearby: [plain], linkPartners: partners([9, 1]) });
       expect(unknown.nearby[0]?.linkLabel).toBe(NO_LOADED_LINK_LABEL);
     });
 
     it("is exactly the old behavior when no partner map is given", () => {
-      const withNone = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain] });
-      const withEmpty = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain], linkPartners: new Map() });
+      const withNone = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain] });
+      const withEmpty = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain], linkPartners: new Map() });
       expect(withEmpty).toEqual(withNone);
       expect(withNone.nearby.map((m) => m.linkLabel)).toEqual([NOT_LINKED_LABEL, NOT_LINKED_LABEL]);
     });
 
     it("keeps the dotted marker, no connector and no membership for it", () => {
-      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners([9, 2]) });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners([9, 2]) });
       expect(plot.nearby[0]).toMatchObject({ role: "nearby", sequenceIndex: null });
       expect(plot.connectors).toHaveLength(1);
       expect(plot.members.map((m) => m.id)).toEqual([rid(1), rid(2)]);
@@ -928,21 +927,21 @@ describe("buildChainPlot", () => {
 
     describe("the legend's one word for the dotted marker", () => {
       it("drops to Not in this chain when any marker is linked elsewhere, and says nothing stronger", () => {
-        const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain], linkPartners: partners([9, 1]) });
+        const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain], linkPartners: partners([9, 1]) });
         expect(plot.notLinkedLabel).toBe(NOT_IN_THIS_CHAIN_LABEL);
         expect(plot.showsNotLinkedLegend).toBe(true);
       });
 
       it("says Not in this chain also when the others are not known to be unlinked", () => {
-        const plot = buildChainPlot({ ...VIEW, edgeInputComplete: false, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain], linkPartners: partners([9, 1]) });
+        const plot = buildChainPlot({ ...COMPLETE_VIEW, edgeInputComplete: false, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain], linkPartners: partners([9, 1]) });
         expect(plot.notLinkedLabel).toBe(NOT_IN_THIS_CHAIN_LABEL);
       });
 
       it("still says Not linked only when every marker may be called that", () => {
-        const clear = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [plain, stray], linkPartners: partners([5, 1]) });
+        const clear = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [plain, stray], linkPartners: partners([5, 1]) });
         expect(clear.notLinkedLabel).toBe(NOT_LINKED_LABEL);
         const gap = classifyCoverageGaps([{ source: rid(9), reason: "x" }], 1);
-        const mixed = buildChainPlot({ ...VIEW, gaps: gap, chain: chain(), itemsById: mapOf(items), nearby: [plain, stray] });
+        const mixed = buildChainPlot({ ...COMPLETE_VIEW, gaps: gap, chain: chain(), itemsById: mapOf(items), nearby: [plain, stray] });
         expect(mixed.notLinkedLabel).toBe(NO_LOADED_LINK_LABEL);
       });
 
@@ -960,33 +959,33 @@ describe("buildChainPlot", () => {
     const partners = new Map([[rid(9), 2]]);
 
     it("calls an entry with a partner 'Link to this event not known', never 'In another chain'", () => {
-      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners, selectionIdentified: false });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners, selectionIdentified: false });
       expect(plot.nearby[0]?.linkLabel).toBe(LINK_TO_EVENT_UNKNOWN_LABEL);
       expect(plot.nearby[0]?.linkLabel).not.toBe(IN_ANOTHER_CHAIN_LABEL);
     });
 
     it("leaves what the entry itself shows alone: Not linked and No loaded link are facts about it", () => {
-      const clear = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [plain], linkPartners: partners, selectionIdentified: false });
+      const clear = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [plain], linkPartners: partners, selectionIdentified: false });
       expect(clear.nearby[0]?.linkLabel).toBe(NOT_LINKED_LABEL);
-      const unknown = buildChainPlot({ ...VIEW, edgeInputComplete: false, chain: chain(), itemsById: mapOf(items), nearby: [plain], linkPartners: partners, selectionIdentified: false });
+      const unknown = buildChainPlot({ ...COMPLETE_VIEW, edgeInputComplete: false, chain: chain(), itemsById: mapOf(items), nearby: [plain], linkPartners: partners, selectionIdentified: false });
       expect(unknown.nearby[0]?.linkLabel).toBe(NO_LOADED_LINK_LABEL);
     });
 
     it("says it whatever else is incomplete, as a loaded partner does", () => {
-      const plot = buildChainPlot({ ...VIEW, edgeInputComplete: false, narrowed: true, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners, selectionIdentified: false });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, edgeInputComplete: false, narrowed: true, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners, selectionIdentified: false });
       expect(plot.nearby[0]?.linkLabel).toBe(LINK_TO_EVENT_UNKNOWN_LABEL);
     });
 
     it("gives the legend the same word when any marker has it, ahead of Not in this chain", () => {
-      const plot = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain], linkPartners: partners, selectionIdentified: false });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain], linkPartners: partners, selectionIdentified: false });
       expect(plot.notLinkedLabel).toBe(LINK_TO_EVENT_UNKNOWN_LABEL);
-      const identified = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain], linkPartners: partners });
+      const identified = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray, plain], linkPartners: partners });
       expect(identified.notLinkedLabel).toBe(NOT_IN_THIS_CHAIN_LABEL);
     });
 
     it("is the identified behavior by default and when true", () => {
-      const byDefault = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners });
-      const explicit = buildChainPlot({ ...VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners, selectionIdentified: true });
+      const byDefault = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners });
+      const explicit = buildChainPlot({ ...COMPLETE_VIEW, chain: chain(), itemsById: mapOf(items), nearby: [stray], linkPartners: partners, selectionIdentified: true });
       expect(byDefault.nearby[0]?.linkLabel).toBe(IN_ANOTHER_CHAIN_LABEL);
       expect(explicit).toEqual(byDefault);
     });
@@ -1004,16 +1003,16 @@ describe("buildChainPlot", () => {
 
     it("draws the connector between two members that are both in the part it was given", () => {
       const row = full();
-      const plot = buildChainPlot({ ...VIEW, chain: row, itemsById: mapOf([first, second]) });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: row, itemsById: mapOf([first, second]) });
       const part = { memberIds: row.memberIds, unresolvedMemberIds: [], edges: row.edges, evidence: row.evidence, startMs: row.startMs, endMs: row.endMs };
-      expect(buildChainPlot({ ...VIEW, chain: part, itemsById: mapOf([first, second]) })).toEqual(plot);
+      expect(buildChainPlot({ ...COMPLETE_VIEW, chain: part, itemsById: mapOf([first, second]) })).toEqual(plot);
       expect(plot.connectors).toHaveLength(1);
     });
 
     it("leaves an edge to a member that is not in the part undrawn, and counts that member as having no item", () => {
       const row = full();
       const part = { memberIds: [rid(1)], unresolvedMemberIds: [rid(2)], edges: row.edges, evidence: row.evidence, startMs: T0, endMs: T0 };
-      const plot = buildChainPlot({ ...VIEW, chain: part, itemsById: mapOf([first]), window: { startMs: T0 - 5_000, endMs: T0 + 5_000 } });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: part, itemsById: mapOf([first]), window: { startMs: T0 - 5_000, endMs: T0 + 5_000 } });
       expect(plot.connectors).toEqual([]);
       expect(plot.undrawnEdges.map((edge) => edge.reason)).toEqual(["endpointWithoutItem"]);
       expect(plot.membersWithoutItem).toBe(1);
@@ -1021,7 +1020,7 @@ describe("buildChainPlot", () => {
 
     it("plots an entry that is in no row: one member, no connector, the rest as context", () => {
       const part = { memberIds: [rid(1)], unresolvedMemberIds: [], edges: [], evidence: [], startMs: T0, endMs: T0 };
-      const plot = buildChainPlot({ ...VIEW, chain: part, itemsById: mapOf([first]), nearby: [stray], window: { startMs: T0 - 5_000, endMs: T0 + 5_000 } });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, chain: part, itemsById: mapOf([first]), nearby: [stray], window: { startMs: T0 - 5_000, endMs: T0 + 5_000 } });
       expect(plot.members.map((m) => m.id)).toEqual([rid(1)]);
       expect(plot.nearby.map((m) => m.id)).toEqual([rid(9)]);
       expect(plot.connectors).toEqual([]);
@@ -1031,7 +1030,7 @@ describe("buildChainPlot", () => {
     it("still withdraws Not linked when a member the part left out has a gap", () => {
       const part = { memberIds: [rid(1)], unresolvedMemberIds: [rid(2)], edges: [], evidence: [], startMs: T0, endMs: T0 };
       const gaps = classifyCoverageGaps([{ source: rid(2), reason: "x" }], 1);
-      const plot = buildChainPlot({ ...VIEW, gaps, chain: part, itemsById: mapOf([first]), nearby: [stray], window: { startMs: T0 - 5_000, endMs: T0 + 5_000 } });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, gaps, chain: part, itemsById: mapOf([first]), nearby: [stray], window: { startMs: T0 - 5_000, endMs: T0 + 5_000 } });
       expect(plot.nearby[0]?.linkLabel).toBe(NO_LOADED_LINK_LABEL);
     });
   });
@@ -1042,7 +1041,7 @@ describe("buildChainPlot", () => {
     const items = [first, second];
     const ids = items.map((item) => timelineOriginId(item.origin));
     const chain = chainOf([synthetic("e1", ids[0]!, ids[1]!, "exact")], items);
-    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items) });
     // Two files, one shared source: two lanes.
     expect(plot.lanes.map((lane) => lane.label)).toEqual(["AppDiscovery.log", "AppEnforce.log"]);
     expect(plot.members.map((m) => m.entry)).toEqual([
@@ -1055,8 +1054,8 @@ describe("buildChainPlot", () => {
   it("is the same on every build of the same input", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 6_000), eventItem(3, T0 + 7_000, "error")];
     const chain = chainOf(fixtureEdges("exactPair"), items);
-    expect(buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) })).toEqual(
-      buildChainPlot({ ...VIEW, chain, itemsById: mapOf([...items].reverse()) }),
+    expect(buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items) })).toEqual(
+      buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf([...items].reverse()) }),
     );
   });
 });
@@ -1102,7 +1101,7 @@ describe("whyRows", () => {
     const items = [eventItem(1, T0), eventItem(2, T0 + 1_000), eventItem(3, T0 + 2_000)];
     const edges = [synthetic("e1", rid(1), rid(2), "exact"), synthetic("e2", rid(2), rid(3), "candidate")];
     const chain = chainOf(edges, items);
-    const plot = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items) });
+    const plot = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items) });
     const rows = whyRows(chain, mapOf(items));
     expect(plot.connectors.length).toBeGreaterThan(0);
     for (const connector of plot.connectors) {
@@ -1392,8 +1391,8 @@ describe("sessionSpeaksForAbsence", () => {
     const T0 = Date.UTC(2026, 9, 6, 10, 20, 0);
     const items = [eventItem(1, T0), eventItem(2, T0 + 6_000)];
     const chain = chainOf(fixtureEdges("exactPair"), items);
-    const labelWith = (view: Partial<typeof VIEW>) =>
-      buildChainPlot({ ...VIEW, ...view, chain, itemsById: mapOf(items), nearby: [eventItem(9, T0 + 3_000)] })
+    const labelWith = (view: Partial<typeof COMPLETE_VIEW>) =>
+      buildChainPlot({ ...COMPLETE_VIEW, ...view, chain, itemsById: mapOf(items), nearby: [eventItem(9, T0 + 3_000)] })
         .nearby[0]?.linkLabel;
     expect(labelWith({})).toBe(NOT_LINKED_LABEL);
     expect(labelWith({ edgeInputComplete: false })).toBe(NO_LOADED_LINK_LABEL);
@@ -1482,10 +1481,10 @@ describe("the plot says what the extracted rules say (#841)", () => {
     const gaps = classifyCoverageGaps([{ source: rid(9), reason: "x" }], 1);
     const linkPartners = new Map([[rid(7), 1]]);
     for (const view of [{ gaps, linkPartners }, { gaps: classifyCoverageGaps([], 0), linkPartners }, { gaps: classifyCoverageGaps([], 0) }]) {
-      const plot = buildChainPlot({ ...VIEW, ...view, chain, itemsById: mapOf(items), nearby });
+      const plot = buildChainPlot({ ...COMPLETE_VIEW, ...view, chain, itemsById: mapOf(items), nearby });
       const chainClear = sessionSpeaksForAbsence({
-        edgeInputComplete: VIEW.edgeInputComplete,
-        narrowed: VIEW.narrowed,
+        edgeInputComplete: COMPLETE_VIEW.edgeInputComplete,
+        narrowed: COMPLETE_VIEW.narrowed,
         gaps: view.gaps,
         memberIds: [...chain.memberIds, ...chain.unresolvedMemberIds],
       });
@@ -1498,9 +1497,9 @@ describe("the plot says what the extracted rules say (#841)", () => {
   });
 
   it("says what the session can say when no marker is drawn", () => {
-    const empty = buildChainPlot({ ...VIEW, chain, itemsById: mapOf(items), window: null });
+    const empty = buildChainPlot({ ...COMPLETE_VIEW, chain, itemsById: mapOf(items), window: null });
     expect(empty.notLinkedLabel).toBe(notLinkedLegendLabel([], true));
-    const narrowed = buildChainPlot({ ...VIEW, narrowed: true, chain, itemsById: mapOf(items), window: null });
+    const narrowed = buildChainPlot({ ...COMPLETE_VIEW, narrowed: true, chain, itemsById: mapOf(items), window: null });
     expect(narrowed.notLinkedLabel).toBe(notLinkedLegendLabel([], false));
   });
 
