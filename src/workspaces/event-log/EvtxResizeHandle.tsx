@@ -18,6 +18,7 @@ import {
   type PointerEvent,
 } from "react";
 import { makeStyles, tokens } from "@fluentui/react-components";
+import { EVTX_FOCUS_RING } from "./evtx-bar-states";
 
 const useStyles = makeStyles({
   handle: {
@@ -25,13 +26,14 @@ const useStyles = makeStyles({
     zIndex: 2,
     backgroundColor: "transparent",
     ":hover": { backgroundColor: tokens.colorNeutralStroke1 },
-    // A real outline (kept in forced-colors mode, where background fills are dropped), drawn
-    // inside the strip, plus the fill for normal themes.
+    // Two-tone ring inside the 7 px strip: the outer 2 px is an outline (forced-colors mode keeps
+    // outlines, which drop fills) in the outer focus color and the 3 px core is filled with the
+    // inner focus color, so the ring is visible on any region fill.
     ":focus-visible": {
-      backgroundColor: tokens.colorStrokeFocus2,
+      backgroundColor: EVTX_FOCUS_RING.inner,
       outlineStyle: "solid",
       outlineWidth: "2px",
-      outlineColor: tokens.colorStrokeFocus2,
+      outlineColor: EVTX_FOCUS_RING.outer,
       outlineOffset: "-2px",
     },
   },

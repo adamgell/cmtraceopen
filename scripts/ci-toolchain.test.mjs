@@ -23,7 +23,7 @@ const PINNED_REF = {
 
 /**
  * The ref used by steps that pass an explicit `toolchain:` input. Version refs
- * remove that input, so the MSRV job — which asks for 1.88 — has to keep using
+ * remove that input, so the MSRV job — which asks for 1.89 — has to keep using
  * an input-accepting ref.
  */
 const INPUT_ACCEPTING_REF = {
@@ -48,6 +48,7 @@ function toolchainSteps(contents) {
     const lookahead = lines.slice(index + 1, index + 4).join("\n");
     const inputMatch = /^\s+toolchain:\s*"?([^"\n]+?)"?\s*$/m.exec(lookahead);
     steps.push({
+      name: /^\s*- name: (.+)$/.exec(lines[index - 1] ?? "")?.[1] ?? null,
       sha: match[1],
       comment: (match[2] ?? "").trim(),
       hasInput: inputMatch !== null,
@@ -90,7 +91,8 @@ test("every workflow installs the pinned toolchain, or asks for its own", () => 
  * from 1.92.0 while every local `cargo fmt` ran the pinned 1.98.1: the ref was
  * right for a step with an input, so nothing objected to the version.
  */
-const MSRV_INPUT = "1.88";
+const MSRV_INPUT = "1.89";
+const PARSER_MSRV_INPUT = "1.88";
 
 /**
  * The workflow filenames the guards scan.
@@ -130,10 +132,11 @@ function inputOffenders(workflow, contents) {
     }
     if (
       step.inputVersion !== PINNED_REF.version &&
-      step.inputVersion !== MSRV_INPUT
+      step.inputVersion !== MSRV_INPUT &&
+      !(step.inputVersion === PARSER_MSRV_INPUT && workflow === "cmtrace-ci.yml" && step.name === "Setup parser Rust 1.88")
     ) {
       offenders.push(
-        `${workflow}:${step.line} asks for ${step.inputVersion}, expected ${PINNED_REF.version} or the MSRV floor ${MSRV_INPUT}`,
+        `${workflow}:${step.line} asks for ${step.inputVersion}, expected ${PINNED_REF.version} or the MSRV floors ${MSRV_INPUT}/${PARSER_MSRV_INPUT}`,
       );
     }
   }
@@ -311,6 +314,11 @@ test("the drift policy accepts the pin and the floor, and rejects anything else"
     "the MSRV floor is accepted",
   );
   assert.equal(
+    inputOffenders("fixture.yml", step(PARSER_MSRV_INPUT)).length,
+    1,
+    "the parser-only MSRV floor is rejected for a generic workflow step",
+  );
+  assert.equal(
     inputOffenders("fixture.yml", step("1.92.0")).length,
     1,
     "a stale explicit version is rejected",
@@ -335,4 +343,37 @@ test("the ref guard rejects a comment that names the wrong channel", () => {
     1,
     `the comment must name the channel the ref installs: ${JSON.stringify(offenders)}`,
   );
+});
+
+test("the parser floor is rejected for desktop and unrelated workflow steps", () => {
+  const fixture = name => [
+    `      - name: ${name}`,
+    `        uses: dtolnay/rust-toolchain@${INPUT_ACCEPTING_REF.sha} # stable`,
+    "        with:",
+    `          toolchain: "${PARSER_MSRV_INPUT}"`,
+  ].join("\n");
+  assert.equal(inputOffenders("cmtrace-ci.yml", fixture("Setup Rust")).length, 1);
+  assert.equal(inputOffenders("other.yml", fixture("Setup parser Rust 1.88")).length, 1);
+  assert.deepEqual(inputOffenders("cmtrace-ci.yml", fixture("Setup parser Rust 1.88")), []);
+});
+
+test("Windows signature CI runs both fixed signing suites with exact Pester", () => {
+  const workflow = readFileSync(join(workflowDir, "cmtrace-ci.yml"), "utf8");
+  const windowsJob = workflow.slice(workflow.indexOf("  windows-esp:"));
+  assert.match(windowsJob, /- name: Test Windows release signature guard\n\s+shell: pwsh\n\s+run: pwsh -NoLogo -NoProfile -NonInteractive -File scripts\/run-windows-signing-contract-tests\.ps1/);
+  const setupStart = windowsJob.indexOf("- name: Ensure exact Pester for signing contract tests");
+  const guardStart = windowsJob.indexOf("- name: Test Windows release signature guard");
+  assert.ok(setupStart >= 0 && setupStart < guardStart);
+  const setup = windowsJob.slice(setupStart, guardStart);
+  assert.match(setup, /Install-Module -Name Pester -RequiredVersion 5\.7\.1 -Repository PSGallery -Scope CurrentUser -Force -ErrorAction Stop/);
+  assert.match(setup, /Get-Module -ListAvailable -Name Pester/);
+  assert.match(setup, /\$_.Version -eq \[version\]'5\.7\.1'/);
+  assert.match(setup, /Import-Module Pester -RequiredVersion 5\.7\.1 -ErrorAction Stop/);
+  assert.doesNotMatch(setup, /SkipPublisherCheck|Set-PSRepository|AllUsers|secrets\.|permissions:/);
+  const runner = readFileSync(join(repoRoot, "scripts/run-windows-signing-contract-tests.ps1"), "utf8");
+  assert.match(runner, /Import-Module Pester -RequiredVersion 5\.7\.1 -ErrorAction Stop/);
+  assert.ok(runner.includes("'verify-windows-release-signatures.Tests.ps1'"));
+  assert.ok(runner.includes("'tests/sign-tauri-windows-temp.Tests.ps1'"));
+  assert.ok(windowsJob.includes('"./src-tauri/installer/remove-file-associations.Tests.ps1"'));
+  assert.ok(windowsJob.includes('"./scripts/collection/tests/Invoke-CmtraceEvidenceCollection.Tests.ps1"'));
 });
