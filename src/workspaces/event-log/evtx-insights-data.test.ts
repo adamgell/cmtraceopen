@@ -169,8 +169,8 @@ describe("redactedValueMatches", () => {
 
   it("matches a profile path with an embedded user token", () => {
     const evidence = `C:\\Users\\${USER}\\Downloads\\System.evtx`;
-    expect(redactedValueMatches(evidence, "C:\\Users\\adam.gell\\Downloads\\System.evtx")).toBe(true);
-    expect(redactedValueMatches(evidence, "C:\\Users\\adam.gell\\Downloads\\Other.evtx")).toBe(false);
+    expect(redactedValueMatches(evidence, "C:\\Users\\examiner\\Downloads\\System.evtx")).toBe(true);
+    expect(redactedValueMatches(evidence, "C:\\Users\\examiner\\Downloads\\Other.evtx")).toBe(false);
     // A token stands for a non-empty segment.
     expect(redactedValueMatches(evidence, "C:\\Users\\\\Downloads\\System.evtx")).toBe(false);
   });
@@ -253,7 +253,7 @@ describe("findingForRecord", () => {
   it("matches the real redacted projection: host, user and path tokens inside longer strings", () => {
     const home = record(1, {
       computer: "LAB-PC-07",
-      sourceLabel: "C:\\Users\\adam.gell\\Downloads\\System.evtx",
+      sourceLabel: "C:\\Users\\examiner\\Downloads\\System.evtx",
     });
     const ipc = findingWith(
       evidence({
