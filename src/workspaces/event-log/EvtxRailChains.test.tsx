@@ -24,6 +24,7 @@ import { CORRELATION_CHAIN_RENDER_LIMIT } from "./evtx-correlation-chains";
 import {
   CHAIN_STEPS_NOT_READ_TEXT,
   NO_ANALYSIS_TEXT,
+  NO_CHAINS_QUALIFIED_TEXT,
   NO_LINKED_EVENTS_TEXT,
   READING_EDGES_TEXT,
   SAME_TIME_NOTE,
@@ -379,6 +380,15 @@ describe("the empty states", () => {
     expect(screen.getByTestId("rail-chains-empty").textContent).not.toMatch(/no linked events/i);
   });
 
+  it("withdraws it for an origin the engine left uncorrelated, and shows the note the qualified sentence points at (review M1)", () => {
+    show(makeData({ items: [], edges: [], gaps: classifyCoverageGaps([{ source: rid(900), reason: "conflicting explicit identity aliases" }], 1) }));
+    expect(screen.getByTestId("rail-chains-empty")).toHaveTextContent(NO_CHAINS_QUALIFIED_TEXT);
+    expect(screen.getByTestId("rail-chains-empty").textContent).not.toMatch(/no linked events/i);
+    expect(screen.getByTestId("rail-chains-notices")).toHaveTextContent(
+      "1 event could not be fully correlated, so links involving it may be missing.",
+    );
+  });
+
   it("has none beside rows, and qualifies the line above rows that are not links", () => {
     show(makeData({ items: itemsFor(fixtureEdges("group3")), edges: fixtureEdges("group3") }));
     expect(screen.queryByTestId("rail-chains-empty")).toBeNull();
@@ -393,6 +403,16 @@ describe("what it says about what it did not cover", () => {
     expect(screen.getByTestId("rail-chains-notices")).toHaveTextContent("paged and bounded");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists every note the model holds, the origins the engine left uncorrelated among them", () => {
+    show(pair({ gaps: classifyCoverageGaps([{ source: rid(900), reason: "x" }, { source: rid(901), reason: "x" }], 40), totalEdges: 40 }));
+    const lines = Array.from(screen.getByTestId("rail-chains-notices").querySelectorAll("li")).map((li) => li.textContent);
+    expect(lines).toContain("At least 2 events could not be fully correlated, so links involving them may be missing.");
+    expect(lines).toContain("More coverage gaps may exist than are listed, so some entries may not have been correlated and chains may be incomplete.");
+    expect(lines.some((line) => line?.includes("paged and bounded"))).toBe(true);
+    // One line per note, none dropped by the component.
+    expect(lines).toHaveLength(3);
   });
 
   it("says the update and the read as plain text, marks the tab busy, and dims the rows", () => {
