@@ -16,6 +16,7 @@ import {
   visibleColumns,
   type EvtxColumnConfig,
 } from "./evtx-columns";
+import { DEFAULT_QUICK_FILTER, matchesQuickFilter } from "./evtx-filter";
 import type { EvtxRecord } from "./types";
 
 /**
@@ -258,5 +259,181 @@ describe("map columns", () => {
   it("still rejects an id that is neither fixed nor a map column", () => {
     const config = sanitizeColumnConfig({ order: ["level", "notAColumn", "mapped:"] });
     expect(config.order).toEqual(["level"]);
+  });
+});
+
+describe("default column widths (spec 8.7)", () => {
+  it.each([
+    ["level", 32],
+    ["timestamp", 154],
+    ["eventId", 52],
+    ["channel", 120],
+    ["provider", 162],
+    ["links", 44],
+  ] as const)("gives %s a default width of %i", (id, width) => {
+    expect(columnSpec(id).defaultWidth).toBe(width);
+    expect(columnWidth(defaultColumnConfig(), columnSpec(id))).toBe(width);
+  });
+
+  it("leaves the columns the spec does not name as they were", () => {
+    // 8.7 lists "others" as unchanged: the widths of the optional columns must not move.
+    expect(
+      EVTX_COLUMNS.filter((column) =>
+        ["recordId", "computer", "task", "opcode", "processId", "threadId", "keywords"].includes(
+          column.id,
+        ),
+      ).map((column) => [column.id, column.defaultWidth]),
+    ).toEqual([
+      ["recordId", 70],
+      ["computer", 120],
+      ["task", 60],
+      ["opcode", 60],
+      ["processId", 60],
+      ["threadId", 60],
+      ["keywords", 140],
+    ]);
+  });
+});
+
+describe("column header labels", () => {
+  it("gives the Event ID column a short header and no other column one", () => {
+    expect(
+      EVTX_COLUMNS.filter((column) => column.headerLabel !== undefined).map((column) => [
+        column.id,
+        column.headerLabel,
+      ]),
+    ).toEqual([["eventId", "ID"]]);
+    // The cells, the chooser and quick filter use the full label.
+    expect(columnSpec("eventId").label).toBe("Event ID");
+  });
+});
+
+describe("the links column", () => {
+  it("is shown by default, after the unbounded description", () => {
+    expect(defaultColumnConfig().order).toEqual([
+      "level",
+      "timestamp",
+      "eventId",
+      "channel",
+      "provider",
+      "message",
+      "links",
+    ]);
+    expect(columnSpec("links")).toMatchObject({ label: "Links", defaultVisible: true });
+  });
+
+  it("can be hidden and shown again like any other column", () => {
+    const hidden = toggleColumn(defaultColumnConfig(), "links");
+    expect(hidden.order).not.toContain("links");
+    const shown = toggleColumn(hidden, "links").order;
+    expect(shown[shown.length - 1]).toBe("links");
+  });
+
+  it("has no text value, so an unknown count is never read as none", () => {
+    // The count comes from correlation edges the record does not carry. A "0" here would be a
+    // value nothing established.
+    expect(columnValue(record(), "links")).toBe("");
+  });
+
+  describe("quick-filter search", () => {
+    // Every searched value of this record is free of the digit 0 (the time renders as
+    // 2111-11-11 11:11:11.111 in UTC), so a "0" could only come from the links column.
+    const zeroless = record({
+      timestampEpoch: Date.UTC(2111, 10, 11, 11, 11, 11, 111),
+      computer: "HOST-A",
+    });
+    const search = (scope: "visibleColumns" | "allColumns") => ({
+      ...DEFAULT_QUICK_FILTER,
+      query: "0",
+      scope,
+    });
+
+    it("never finds a value in the links column of the visible columns", () => {
+      expect(matchesQuickFilter(zeroless, search("visibleColumns"), ["links"], "utc")).toBe(false);
+      // Control: the matcher does find the digit in a visible column that holds it.
+      expect(
+        matchesQuickFilter({ ...zeroless, eventId: 4100 }, search("visibleColumns"), ["links", "eventId"], "utc"),
+      ).toBe(true);
+      expect(
+        matchesQuickFilter(zeroless, search("visibleColumns"), ["eventId", "recordId"], "utc"),
+      ).toBe(false);
+    });
+
+    it("never finds a value in the links column under the all-columns scope either", () => {
+      // The all-columns scope reaches every column the chooser offers, links included.
+      expect(matchesQuickFilter(zeroless, search("allColumns"), undefined, "utc")).toBe(false);
+      // Control: the same scope does find the digit once another column holds it.
+      expect(
+        matchesQuickFilter({ ...zeroless, eventId: 4100 }, search("allColumns"), undefined, "utc"),
+      ).toBe(true);
+    });
+  });
+});
+
+describe("column configurations saved before the links column existed", () => {
+  // What a build before the links column wrote for the default layout: the six visible columns,
+  // with the width overrides an operator had set against the old default widths.
+  const savedBeforeLinks = JSON.stringify({
+    order: ["level", "timestamp", "eventId", "channel", "provider", "message"],
+    widths: { level: 40, timestamp: 165, eventId: 50, channel: 140, provider: 160 },
+  });
+
+  it("loads with the same order, and does not inject the links column", () => {
+    const loaded = sanitizeColumnConfig(JSON.parse(savedBeforeLinks));
+    expect(loaded.order).toEqual(["level", "timestamp", "eventId", "channel", "provider", "message"]);
+    expect(visibleColumns(loaded).map((column) => column.id)).not.toContain("links");
+  });
+
+  it("keeps every saved width override rather than applying the new defaults", () => {
+    const loaded = sanitizeColumnConfig(JSON.parse(savedBeforeLinks));
+    expect(loaded.widths).toEqual({
+      level: 40,
+      timestamp: 165,
+      eventId: 50,
+      channel: 140,
+      provider: 160,
+    });
+    expect(columnWidth(loaded, columnSpec("timestamp"))).toBe(165);
+    expect(columnWidth(loaded, columnSpec("level"))).toBe(40);
+  });
+
+  it("gives a column the saved config left no override for the new default width", () => {
+    const loaded = sanitizeColumnConfig({ order: ["level", "timestamp", "provider"], widths: { level: 40 } });
+    expect(columnWidth(loaded, columnSpec("level"))).toBe(40);
+    expect(columnWidth(loaded, columnSpec("timestamp"))).toBe(154);
+    expect(columnWidth(loaded, columnSpec("provider"))).toBe(162);
+  });
+
+  it("loads the old default layout, which carried no width overrides", () => {
+    const loaded = sanitizeColumnConfig({
+      order: ["level", "timestamp", "eventId", "channel", "provider", "message"],
+      widths: {},
+    });
+    expect(loaded.order).not.toContain("links");
+    expect(columnWidth(loaded, columnSpec("provider"))).toBe(162);
+  });
+
+  it("preserves a customized layout: reordered, with optional columns and a map column", () => {
+    const custom = sanitizeColumnConfig({
+      order: ["message", "level", "recordId", mappedColumnId("RemoteHost"), "timestamp"],
+      widths: { message: 400, recordId: 90 },
+    });
+    expect(custom.order).toEqual([
+      "message",
+      "level",
+      "recordId",
+      mappedColumnId("RemoteHost"),
+      "timestamp",
+    ]);
+    expect(custom.widths).toEqual({ message: 400, recordId: 90 });
+  });
+
+  it("keeps the links column, and a width for it, when a later build saved them", () => {
+    const loaded = sanitizeColumnConfig({
+      order: ["level", "message", "links"],
+      widths: { links: 60 },
+    });
+    expect(loaded.order).toEqual(["level", "message", "links"]);
+    expect(columnWidth(loaded, columnSpec("links"))).toBe(60);
   });
 });

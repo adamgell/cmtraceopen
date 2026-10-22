@@ -1,8 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const LEVEL_BADGE_PRESENT_OFFSET = 9;
-const LEVEL_BADGE_ABSENT_OFFSET = 5;
 const virtualizerState = vi.hoisted(() => ({
   measured: [] as HTMLElement[],
   measuredSizes: new Map<number, number>(),
@@ -17,14 +15,9 @@ const virtualizerState = vi.hoisted(() => ({
   visibleCount: null as number | null,
   scrollToIndex: vi.fn(),
   recalculate: () => undefined,
-  measureElementSize: (element: HTMLElement) => {
-    const hasLevelBadge = element.querySelector("[data-evtx-level-badge]") !== null;
-    return element.getAttribute("role") === "row" &&
-      !element.hasAttribute("data-evtx-marker-key")
-      ? Number.parseFloat(element.style.height)
-      : Number.parseFloat(element.style.lineHeight) +
-          (hasLevelBadge ? LEVEL_BADGE_PRESENT_OFFSET : LEVEL_BADGE_ABSENT_OFFSET);
-  },
+  // Every row, record or group, carries its border-box height (spec D1), so a measured row is the
+  // height it declares.
+  measureElementSize: (element: HTMLElement) => Number.parseFloat(element.style.height),
   resizeItem: (index: number, size: number) => {
     virtualizerState.resizeItemCalls += 1;
     virtualizerState.resizedSizes.set(index, size);
@@ -153,6 +146,7 @@ import {
   MIN_LOG_DETAILS_FONT_SIZE,
   MIN_LOG_LIST_FONT_SIZE,
 } from "../../lib/log-accessibility";
+import { useMarkerStore } from "../../stores/marker-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore } from "./evtx-store";
 import { defaultColumnConfig, visibleColumns } from "./evtx-columns";
@@ -163,6 +157,7 @@ import { EvtxFilterBar } from "./EvtxFilterBar";
 import { EvtxViewBar } from "./EvtxViewBar";
 import { requireSelector } from "./evtx-test-dom";
 import { EvtxTimeline } from "./EvtxTimeline";
+import { evtxRowMinWidth } from "./EvtxTimelineRow";
 import { SourcePicker } from "./SourcePicker";
 import {
   MAX_EXPORT_CHUNK_BYTES,
@@ -248,10 +243,11 @@ describe("event-viewer shared font metrics", () => {
     cleanup();
   });
 
-  it("uses valid grid ownership for flat and grouped rows with interactive marker controls", () => {
+  it("uses valid grid ownership for flat and grouped rows", () => {
     seedEventLog();
     useEvtxStore.setState({ groupBy: ["level"] });
-    const columnCount = visibleColumns(defaultColumnConfig()).length + 1;
+    // One cell per column: the row carries no marker cell (spec 8.7).
+    const columnCount = visibleColumns(defaultColumnConfig()).length;
 
     const grouped = render(<EvtxTimeline />);
     const treegrid = grouped.getByRole("treegrid", {
@@ -277,10 +273,9 @@ describe("event-viewer shared font metrics", () => {
       expect(cell).toHaveAttribute("aria-colindex", String(index + 1));
     });
     expect(recordRow.firstElementChild).toBe(recordCells[0]);
-    expect(recordCells[0]).toContainElement(grouped.getByRole("button", { name: "Tag event" }));
-    expect(recordCells[0]).toContainElement(
-      grouped.getByRole("button", { name: "Bookmark event" }),
-    );
+    expect(recordCells[0]).toHaveAccessibleName(/^Level:/);
+    // Tagging and bookmarking are the `t` and `b` keys on the row and the Details pane's buttons.
+    expect(within(recordRow).queryAllByRole("button")).toHaveLength(0);
 
     fireEvent.click(groupRow);
     expect(groupRow).toHaveAttribute("aria-expanded", "false");
@@ -301,6 +296,65 @@ describe("event-viewer shared font metrics", () => {
     expect(flatRow).not.toHaveAttribute("aria-level");
     expect(flatCells).toHaveLength(columnCount);
     expect(flatRow.firstElementChild).toBe(flatCells[0]);
+  });
+
+  it("keeps tagging and bookmarking reachable by key and from the Details pane, with no button on the row", () => {
+    seedEventLog();
+    useEvtxStore.setState({ groupBy: [] });
+    useMarkerStore.setState({ markersByFile: new Map() });
+
+    try {
+      const view = render(
+        <>
+          <EvtxTimeline />
+          <EvtxDetailPane />
+        </>
+      );
+      const row = recordGridRows(view.container)[0];
+      expect(within(row).queryAllByRole("button")).toHaveLength(0);
+      expect(row).not.toHaveAttribute("data-marker-category");
+
+      // The Details pane's button is the pointer route.
+      fireEvent.click(screen.getByRole("button", { name: "Tag event" }));
+      expect(screen.getByRole("button", { name: "Remove event tag" })).toHaveAttribute(
+        "aria-pressed",
+        "true"
+      );
+      // The row shows the marker in its left slot and in its description, with no button.
+      expect(row).toHaveAttribute("data-marker-category");
+      expect(row.style.borderLeft).toMatch(/^4px solid /);
+      expect(row).toHaveAttribute("aria-description", expect.stringContaining("Tagged"));
+
+      // The b key on the focused row is the keyboard route; it replaces the tag with a bookmark.
+      fireEvent.keyDown(row, { key: "b" });
+      expect(screen.getByRole("button", { name: "Remove bookmark" })).toHaveAttribute(
+        "aria-pressed",
+        "true"
+      );
+      expect(row).toHaveAttribute("data-marker-category", "bookmark");
+      fireEvent.keyDown(row, { key: "t" });
+      expect(screen.getByRole("button", { name: "Remove event tag" })).toBeInTheDocument();
+      expect(within(row).queryAllByRole("button")).toHaveLength(0);
+    } finally {
+      useMarkerStore.setState({ markersByFile: new Map() });
+    }
+  });
+
+  it("gives group header rows the record rows' minimum width, so the band spans every column", () => {
+    seedEventLog();
+    useEvtxStore.setState({ groupBy: ["level"] });
+    const minWidth = `${evtxRowMinWidth(
+      defaultColumnConfig(),
+      visibleColumns(defaultColumnConfig())
+    )}px`;
+
+    const view = render(<EvtxTimeline />);
+    const [groupRow, recordRow] = view.getAllByRole("row");
+    expect(groupRow).toHaveAttribute("aria-expanded");
+    expect(groupRow.style.minWidth).toBe(minWidth);
+    expect(recordRow.style.minWidth).toBe(minWidth);
+    expect(minWidth).toBe("652px");
+    view.unmount();
   });
 
   it("names channel-folder disclosure and selection controls", () => {
@@ -392,11 +446,11 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.measured).toContain(recordRow);
     expect(virtualizerState.items[1]).toMatchObject({
       index: 1,
-      size: smallList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET,
+      size: smallList.rowHeight,
       start: smallList.rowHeight,
     });
     expect(virtualizerState.totalSize).toBe(
-      smallList.rowHeight + smallList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      smallList.rowHeight * 2
     );
     expect(groupRow.style.boxSizing).toBe("border-box");
     expect(groupRow.style.height).toBe(`${smallList.rowHeight}px`);
@@ -458,12 +512,12 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.measured).toContain(recordRowLarge);
     expect(virtualizerState.items[1]).toMatchObject({
       index: 1,
-      size: largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET,
+      size: largeList.rowHeight,
       start: largeList.rowHeight,
     });
     const groupRowLarge = screen.getAllByRole("row")[0];
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      largeList.rowHeight * 2
     );
     groupRowLarge.focus();
     fireEvent.keyDown(groupRowLarge, { key: "ArrowDown" });
@@ -510,7 +564,7 @@ describe("event-viewer shared font metrics", () => {
     const initialMeasureCalls = virtualizerState.measureCalls;
     const smallList = getLogListMetrics(MIN_LOG_LIST_FONT_SIZE);
     expect(virtualizerState.initialItems[1].size).toBe(
-      smallList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      smallList.rowHeight
     );
 
     expect(channelInput.style.fontSize).toBe(`${MIN_LOG_LIST_FONT_SIZE}px`);
@@ -537,11 +591,11 @@ describe("event-viewer shared font metrics", () => {
     expect(recordRow.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
     expect(virtualizerState.resizedSizes.get(1)).toBe(
-      largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      largeList.rowHeight
     );
     expect(virtualizerState.items[1].start).toBe(largeList.rowHeight);
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      largeList.rowHeight * 2
     );
   });
   it("updates connected rows while estimating offscreen rows after a font change", () => {
@@ -570,14 +624,68 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
 
     expect(virtualizerState.resizedSizes.get(1)).toBe(
-      largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      largeList.rowHeight
     );
     expect(virtualizerState.resizedSizes.has(2)).toBe(false);
     expect(virtualizerState.items).toHaveLength(2);
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight +
-        (largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET) * 2,
+      largeList.rowHeight * 3,
     );
+  });
+  it("mounts the column header above the grid, sized from the same metrics and outside the row count", () => {
+    seedEventLog();
+    useEvtxStore.setState({ groupBy: [], sortField: "time", sortDirection: "desc" });
+    setListFontSize(MIN_LOG_LIST_FONT_SIZE);
+
+    const timeline = render(<EvtxTimeline />);
+    const header = timeline.container.querySelector<HTMLElement>("[data-evtx-table-header]");
+    const grid = timeline.getByRole("grid");
+    expect(header).not.toBeNull();
+    expect(header!.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(header).not.toContainElement(grid);
+    // Presentational: it adds no row, so the grid still counts records only.
+    expect(header).toHaveAttribute("aria-hidden", "true");
+    expect(grid).toHaveAttribute("aria-rowcount", "1");
+    expect(timeline.getAllByRole("row")).toHaveLength(1);
+    expect(header!.style.height).toBe(
+      `${getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).headerLineHeight + 2}px`
+    );
+
+    setListFontSize(MAX_LOG_LIST_FONT_SIZE);
+    expect(header!.style.height).toBe(
+      `${getLogListMetrics(MAX_LOG_LIST_FONT_SIZE).headerLineHeight + 2}px`
+    );
+
+    expect(header!.querySelector("[data-evtx-sort-direction]")).toHaveAttribute(
+      "data-evtx-sort-direction",
+      "desc"
+    );
+    act(() => {
+      useEvtxStore.setState({ sortDirection: "asc" });
+    });
+    expect(header!.querySelector("[data-evtx-sort-direction]")).toHaveAttribute(
+      "data-evtx-sort-direction",
+      "asc"
+    );
+    timeline.unmount();
+  });
+  it("keeps the header over its columns when the grid scrolls sideways", () => {
+    seedEventLog();
+    useEvtxStore.setState({ groupBy: [] });
+
+    const timeline = render(<EvtxTimeline />);
+    const header = timeline.container.querySelector<HTMLElement>("[data-evtx-table-header]")!;
+    const grid = timeline.getByRole("grid");
+    expect(header.scrollLeft).toBe(0);
+
+    grid.scrollLeft = 120;
+    fireEvent.scroll(grid);
+    expect(header.scrollLeft).toBe(120);
+
+    grid.scrollLeft = 0;
+    fireEvent.scroll(grid);
+    expect(header.scrollLeft).toBe(0);
+    timeline.unmount();
   });
   it("keeps a 100,000-record view addressable with a bounded DOM window", () => {
     seedEventLog();
@@ -646,7 +754,7 @@ describe("event-viewer shared font metrics", () => {
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
     expect(virtualizerState.resizedSizes.get(1)).toBe(
-      largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+      largeList.rowHeight
     );
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
     timeline.unmount();
@@ -674,7 +782,7 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.resizedSizes.has(1)).toBe(false);
     expect(virtualizerState.items).toHaveLength(1);
     expect(virtualizerState.totalSize).toBe(
-      (largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET) * 2
+      largeList.rowHeight * 2
     );
     timeline.unmount();
   });
@@ -702,7 +810,7 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.resizedSizes.get(0)).toBe(5);
     expect(virtualizerState.totalSize).toBe(5);
   });
-  it("uses the smaller record cache when the level column is hidden", () => {
+  it("sizes a record row from the metrics whether or not the level column is shown", () => {
     seedEventLog();
     useEvtxStore.setState((state) => ({
       columnConfig: {
@@ -716,7 +824,7 @@ describe("event-viewer shared font metrics", () => {
     const timeline = render(<EvtxTimeline />);
     expect(recordGridRows(timeline.container)).toHaveLength(1);
     expect(virtualizerState.initialItems[1].size).toBe(
-      getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).rowLineHeight + LEVEL_BADGE_ABSENT_OFFSET
+      getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).rowHeight
     );
 
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
@@ -724,10 +832,10 @@ describe("event-viewer shared font metrics", () => {
 
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
     expect(virtualizerState.resizedSizes.get(1)).toBe(
-      largeList.rowLineHeight + LEVEL_BADGE_ABSENT_OFFSET
+      largeList.rowHeight
     );
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + largeList.rowLineHeight + LEVEL_BADGE_ABSENT_OFFSET
+      largeList.rowHeight * 2
     );
   });
 });

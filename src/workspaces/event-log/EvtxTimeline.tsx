@@ -24,7 +24,7 @@ import {
 } from "./evtx-filter";
 import type { EvtxRecord, EvtxLevel } from "./types";
 import { visibleColumns } from "./evtx-columns";
-import { EvtxTimelineRow } from "./EvtxTimelineRow";
+import { evtxRowMinWidth, EvtxTimelineHeader, EvtxTimelineRow } from "./EvtxTimelineRow";
 
 const LEVEL_ORDER: Record<EvtxLevel, number> = {
   Critical: 0,
@@ -116,9 +116,6 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     () => getLogListMetrics(logListFontSize),
     [logListFontSize]
   );
-  const recordRowExtra = columnConfig.order.includes("level") ? 6 : 2;
-  const rowEstimate = metrics.rowHeight + recordRowExtra;
-
 
   const filteredRecords = useMemo(
     () =>
@@ -155,6 +152,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
   }, [filteredRecords, sortField, sortDirection]);
 
   const parentRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
   const rowElementsRef = useRef(new Set<HTMLElement>());
   const previousUiRowKeysRef = useRef<readonly string[]>([]);
 
@@ -240,8 +238,8 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (index) =>
-      rows[index]?.kind === "group" ? metrics.rowHeight : rowEstimate,
+    // Every row, record or group, is `getLogListMetrics(...).rowHeight` tall (spec D1).
+    estimateSize: () => metrics.rowHeight,
     getItemKey: (index) => uiRowKeys[index] ?? "row:empty",
     overscan: 10,
   });
@@ -280,7 +278,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     for (const element of rowElementsRef.current) {
       if (element.isConnected) measureConnectedRow(element);
     }
-  }, [metrics.rowHeight, rowEstimate, measureConnectedRow, virtualizer.measure]);
+  }, [metrics.rowHeight, measureConnectedRow, virtualizer.measure]);
 
   // Row filtering and the rolling time-window clock may create a new rows array without changing
   // any rendered identity or dimension. Preserve TanStack's keyed cache in that case. When rows
@@ -400,20 +398,29 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     );
   }
 
-  return (
+  const grid = (
     <div
       ref={parentRef}
-      // Rows contain real marker buttons. A grid permits those controls inside a gridcell while a
-      // treegrid also carries the grouped rows' hierarchy and disclosure state.
+      // One tab stop, roving across the rows, and arrow-key navigation between them: the grid
+      // pattern. A treegrid adds the grouped rows' hierarchy and disclosure state.
       role={groupBy.length > 0 ? "treegrid" : "grid"}
       tabIndex={-1}
       onKeyDown={handleKeyDown}
+      // The header sits outside the scroller, so it follows a sideways scroll by hand and stays
+      // over its columns when the grid is narrower than they are.
+      onScroll={(event) => {
+        if (headerRef.current) headerRef.current.scrollLeft = event.currentTarget.scrollLeft;
+      }}
       aria-label={`Event log timeline - ${sortedRecords.length} records`}
       aria-rowcount={rows.length}
-      aria-colcount={columns.length + 1}
+      aria-colcount={columns.length}
       style={{
         overflowY: "auto",
-        height: "100%",
+        // Fills what the header leaves, and reserves the gutter the header reserves too, so a
+        // classic scrollbar never moves the rows' columns out from under it.
+        flex: "1 1 auto",
+        minHeight: 0,
+        scrollbarGutter: "stable",
         padding: "0",
         fontFamily: LOG_UI_FONT_FAMILY,
         outline: "none",
@@ -469,6 +476,9 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                     // it, so positioning a header absolutely applied that offset a second time and
                     // took it out of flow, letting the rows beneath slide up into its place.
                     width: "100%",
+                    // As wide as the record rows, so the band spans every column when the grid
+                    // is narrower than they are and scrolls sideways.
+                    minWidth: `${evtxRowMinWidth(columnConfig, columns)}px`,
                     display: "flex",
                     alignItems: "center",
                     paddingLeft: `${8 + row.depth * 16}px`,
@@ -486,7 +496,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                   <div
                     role="gridcell"
                     aria-colindex={1}
-                    aria-colspan={columns.length + 1}
+                    aria-colspan={columns.length}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -516,9 +526,9 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                 dataIndex={virtualRow.index}
                 isSelected={selectedRecordId === record.id}
                 fontSize={fontSize}
-                smallFontSize={smallFontSize}
                 monoFontSize={monoFontSize}
                 lineHeight={lineHeight}
+                rowHeight={metrics.rowHeight}
                 columnConfig={columnConfig}
                 columns={columns}
                 timeZoneMode={timeZoneMode}
@@ -537,6 +547,28 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
           })}
         </div>
       </div>
+    </div>
+  );
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        fontFamily: LOG_UI_FONT_FAMILY,
+      }}
+    >
+      <EvtxTimelineHeader
+        ref={headerRef}
+        columns={columns}
+        columnConfig={columnConfig}
+        fontSize={fontSize}
+        headerLineHeight={metrics.headerLineHeight}
+        sortField={sortField}
+        sortDirection={sortDirection}
+      />
+      {grid}
     </div>
   );
 }
