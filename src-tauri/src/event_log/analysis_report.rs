@@ -3,11 +3,16 @@
 //! The report is rendered by the backend from what the analysis session holds, so no record text
 //! crosses IPC and reaches the file unredacted. Three rules shape this module:
 //!
-//! - **One writer, one gate.** [`safe::Doc`] only accepts [`safe::Safe`] values. A `Safe` is minted
-//!   from a raw string by exactly one function, [`safe::Redactor::text`], which redacts, substitutes
-//!   known machine names, flattens, cuts and only then escapes Markdown. Everything else that
-//!   reaches the document is a `'static` literal, a number, an enum word or a machine token. A raw
-//!   `&str` from the session cannot be printed because it does not type-check.
+//! - **One writer, one gate.** [`safe::Doc`] only accepts [`safe::Safe`] values, and a `Safe` is
+//!   minted from a string by exactly two functions. [`safe::Redactor::text`] takes text from the
+//!   analysis session: it deletes the invisible characters, redacts, substitutes the known machine
+//!   names, flattens, cuts and only then escapes Markdown. [`safe::Redactor::projected`] takes a
+//!   [`safe::ProjectedText`], which can only be read out of a [`safe::Projected`] summary, one that
+//!   had its invisible characters deleted and went through the diagnosis projection: it
+//!   substitutes the known machine names, flattens, cuts and escapes. Everything else that reaches
+//!   the document is a `'static` literal, a number, an enum word, a UTC time or a token, which is a
+//!   hash of a name and never the name. A raw `&str` from the session cannot be printed because it
+//!   does not type-check.
 //! - **Evidence first.** Every sentence is a count the report holds or a statement of what was not
 //!   loaded, scoped, read or capped. Nothing says one entry caused another.
 //! - **Fail closed.** A report that exceeds [`MAX_REPORT_BYTES`], or that names a relation the
@@ -21,7 +26,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use cmtraceopen_parser::diagnosis::{
     adapt_timeline_edge, CorrelationEdge, CoverageGap, CoverageState, DiagnosisFinding,
-    DiagnosisSummary, EvidenceRef, FindingClass, FindingConfidence, FindingSeverity,
+    DiagnosisSummary, EventEvidenceRef, EvidenceRef, FindingClass, FindingConfidence,
+    FindingSeverity, TextLogEvidenceRef,
 };
 use cmtraceopen_parser::unified_timeline::{
     origin_id, TimelineCorrelationCoverageState, TimelineCorrelationEdge,
@@ -30,7 +36,9 @@ use cmtraceopen_parser::unified_timeline::{
 };
 use serde::Deserialize;
 
-use self::safe::{Doc, Projected, Redactor, Safe, MIN_SUBSTITUTED_MACHINE_CHARS};
+use self::safe::{
+    file_name, Doc, Projected, ProjectedText, Redactor, Safe, Within, MIN_SUBSTITUTED_MACHINE_CHARS,
+};
 use super::analysis_session::{
     EventLogAnalysisSessionStatus, TIMELINE_GAP_SOURCE_PREFIX, TIMELINE_TRANSPORT_PROJECTION_SOURCE,
 };
@@ -926,10 +934,10 @@ fn render_coverage(
 ) {
     let summary = projected.summary();
     doc.lit("## Coverage and limits").nl().nl();
-    let (timeline_gaps, listed): (Vec<&CoverageGap>, Vec<&CoverageGap>) = summary
-        .coverage_gaps
-        .iter()
-        .partition(|gap| gap.source.starts_with(TIMELINE_GAP_SOURCE_PREFIX));
+    let (timeline_gaps, listed): (Vec<Within<CoverageGap>>, Vec<Within<CoverageGap>>) = projected
+        .root()
+        .each(|summary| &summary.coverage_gaps)
+        .partition(|gap| gap.get().source.starts_with(TIMELINE_GAP_SOURCE_PREFIX));
     if listed.is_empty() {
         doc.lit(if timeline_gaps.is_empty() {
             "- The engine listed no coverage gap. A channel that was not loaded or not selected \
@@ -948,11 +956,11 @@ fn render_coverage(
         let mut lines: Vec<(Safe, u64)> = Vec::new();
         for gap in &listed {
             let line = Safe::join(&[
-                Safe::literal(coverage_state_word(gap.state)),
+                Safe::literal(coverage_state_word(gap.get().state)),
                 Safe::literal(": "),
-                redactor.projected(projected, display_source(&gap.source), REPORT_NAME_CHARS),
+                redactor.projected(gap.text(|g| &g.source).file_name(), REPORT_NAME_CHARS),
                 Safe::literal(": "),
-                redactor.projected(projected, &gap.detail, REPORT_COVERAGE_DETAIL_CHARS),
+                redactor.projected(gap.text(|g| &g.detail), REPORT_COVERAGE_DETAIL_CHARS),
             ]);
             match lines.iter_mut().find(|(known, _)| *known == line) {
                 Some((_, count)) => *count += 1,
@@ -973,7 +981,7 @@ fn render_coverage(
             .lit(" (");
         let mut counts: Vec<(&'static str, u64)> = Vec::new();
         for gap in &timeline_gaps {
-            let word = coverage_state_word(gap.state);
+            let word = coverage_state_word(gap.get().state);
             match counts.iter_mut().find(|(known, _)| *known == word) {
                 Some((_, count)) => *count += 1,
                 None => counts.push((word, 1)),
@@ -1028,18 +1036,18 @@ fn render_findings(doc: &mut Doc, redactor: &Redactor, projected: &Projected) {
     doc.lit("## Findings").nl().nl();
     doc.lit("Engine summary: ")
         .safe(&redactor.projected(
-            projected,
-            &summary.overview.headline,
+            projected.root().text(|summary| &summary.overview.headline),
             REPORT_FINDING_TEXT_CHARS,
         ))
         .nl()
         .nl();
-    let mut actionable: Vec<&DiagnosisFinding> = summary
-        .findings
-        .iter()
-        .filter(|finding| !matches!(finding.class, FindingClass::CoverageGap))
+    let mut actionable: Vec<Within<DiagnosisFinding>> = projected
+        .root()
+        .each(|summary| &summary.findings)
+        .filter(|finding| !matches!(finding.get().class, FindingClass::CoverageGap))
         .collect();
     actionable.sort_by(|left, right| {
+        let (left, right) = (left.get(), right.get());
         right
             .severity
             .cmp(&left.severity)
@@ -1069,18 +1077,14 @@ fn render_findings(doc: &mut Doc, redactor: &Redactor, projected: &Projected) {
             .nl();
     }
     for finding in actionable {
-        render_finding(doc, redactor, projected, finding);
+        render_finding(doc, redactor, finding);
     }
 }
 
-fn render_finding(
-    doc: &mut Doc,
-    redactor: &Redactor,
-    projected: &Projected,
-    finding: &DiagnosisFinding,
-) {
+fn render_finding(doc: &mut Doc, redactor: &Redactor, projected: Within<DiagnosisFinding>) {
+    let finding = projected.get();
     doc.lit("### ")
-        .safe(&redactor.projected(projected, &finding.title, REPORT_FINDING_TITLE_CHARS))
+        .safe(&redactor.projected(projected.text(|f| &f.title), REPORT_FINDING_TITLE_CHARS))
         .nl()
         .nl();
     doc.lit("- Class: ")
@@ -1091,20 +1095,19 @@ fn render_finding(
         .lit(finding_confidence_word(finding.confidence))
         .nl();
     doc.lit("- Summary: ")
-        .safe(&redactor.projected(projected, &finding.summary, REPORT_FINDING_TEXT_CHARS))
+        .safe(&redactor.projected(projected.text(|f| &f.summary), REPORT_FINDING_TEXT_CHARS))
         .nl();
     if !finding.evidence.is_empty() {
         doc.lit("- Evidence: ");
-        for (index, evidence) in finding
-            .evidence
-            .iter()
+        for (index, evidence) in projected
+            .each(|f| &f.evidence)
             .take(REPORT_FINDING_EVIDENCE_LABELS)
             .enumerate()
         {
             if index > 0 {
                 doc.lit("; ");
             }
-            write_evidence_label(doc, redactor, projected, evidence);
+            write_evidence_label(doc, redactor, evidence);
         }
         if finding.evidence.len() > REPORT_FINDING_EVIDENCE_LABELS {
             doc.lit("; and ")
@@ -1113,12 +1116,10 @@ fn render_finding(
         }
         doc.nl();
     }
-    if let Some(first) = finding.recommended_checks.first() {
-        doc.lit("- Recommended check: ").safe(&redactor.projected(
-            projected,
-            first,
-            REPORT_FINDING_TEXT_CHARS,
-        ));
+    if let Some(first) = projected.maybe_text(|f| f.recommended_checks.first().map(String::as_str))
+    {
+        doc.lit("- Recommended check: ")
+            .safe(&redactor.projected(first, REPORT_FINDING_TEXT_CHARS));
         if finding.recommended_checks.len() > 1 {
             doc.lit("; and ")
                 .count((finding.recommended_checks.len() - 1) as u64)
@@ -1130,56 +1131,53 @@ fn render_finding(
 }
 
 /// How an evidence reference names its record, without the source path or the machine.
-fn write_evidence_label(
-    doc: &mut Doc,
-    redactor: &Redactor,
-    projected: &Projected,
-    evidence: &EvidenceRef,
-) {
-    match evidence {
-        EvidenceRef::Event(event) => {
-            doc.count(u64::from(event.event_id)).lit(" \u{b7} ");
-            let place = event.channel.as_deref().unwrap_or(&event.provider);
-            doc.safe(&redactor.projected(projected, place, REPORT_NAME_CHARS))
-                .lit(" \u{b7} ");
-            let numbered = event
-                .record_id_text
-                .as_deref()
-                .filter(|text| text.chars().any(|digit| digit != '0'));
-            if let Some(text) = numbered {
-                doc.lit("record ")
-                    .safe(&redactor.projected(projected, text, 40));
-            } else if let Some(fallback) =
-                event.fallback_identity.as_deref().filter(|f| !f.is_empty())
-            {
-                let head: String = fallback.chars().take(8).collect();
-                doc.lit("ref ")
-                    .safe(&redactor.projected(projected, &head, 16));
-            } else if event.record_id != 0 {
-                doc.lit("record ").count(event.record_id);
-            } else {
-                doc.lit("no record ID");
-            }
+fn write_evidence_label(doc: &mut Doc, redactor: &Redactor, evidence: Within<EvidenceRef>) {
+    if let Some(projected) = evidence.variant(event_variant) {
+        let event = projected.get();
+        doc.count(u64::from(event.event_id)).lit(" \u{b7} ");
+        let place = projected.text(|e| e.channel.as_deref().unwrap_or(&e.provider));
+        doc.safe(&redactor.projected(place, REPORT_NAME_CHARS))
+            .lit(" \u{b7} ");
+        let numbered = projected
+            .maybe_text(|e| e.record_id_text.as_deref())
+            .filter(|text| text.as_str().chars().any(|digit| digit != '0'));
+        if let Some(text) = numbered {
+            doc.lit("record ").safe(&redactor.projected(text, 40));
+        } else if let Some(fallback) = projected
+            .maybe_text(|e| e.fallback_identity.as_deref())
+            .filter(|fallback| !fallback.as_str().is_empty())
+        {
+            doc.lit("ref ")
+                .safe(&redactor.projected(fallback.first_chars(8), 16));
+        } else if event.record_id != 0 {
+            doc.lit("record ").count(event.record_id);
+        } else {
+            doc.lit("no record ID");
         }
-        EvidenceRef::TextLog(log) => {
-            doc.safe(&redactor.projected(
-                projected,
-                display_source(&log.file_path),
-                REPORT_NAME_CHARS,
-            ))
-            .lit(" \u{b7} line ")
-            .count(u64::from(log.line_number));
-        }
-        _ => {
-            doc.lit("a source-specific evidence reference");
-        }
+    } else if let Some(projected) = evidence.variant(text_log_variant) {
+        doc.safe(&redactor.projected(
+            projected.text(|log| &log.file_path).file_name(),
+            REPORT_NAME_CHARS,
+        ))
+        .lit(" \u{b7} line ")
+        .count(u64::from(projected.get().line_number));
+    } else {
+        doc.lit("a source-specific evidence reference");
     }
 }
 
-/// A source label for printing: a path is reduced to its last segment, so a folder name above the
-/// file never reaches the report.
-fn display_source(source: &str) -> &str {
-    source.rsplit(['\\', '/']).next().unwrap_or(source)
+fn event_variant(evidence: &EvidenceRef) -> Option<&EventEvidenceRef> {
+    match evidence {
+        EvidenceRef::Event(event) => Some(event),
+        _ => None,
+    }
+}
+
+fn text_log_variant(evidence: &EvidenceRef) -> Option<&TextLogEvidenceRef> {
+    match evidence {
+        EvidenceRef::TextLog(log) => Some(log),
+        _ => None,
+    }
 }
 
 fn confidence_rank(confidence: FindingConfidence) -> u8 {
@@ -1355,18 +1353,17 @@ fn render_chains(
         correlations: adapted,
         ..DiagnosisSummary::default()
     })?;
+    let edges: Vec<Within<CorrelationEdge>> = projected
+        .root()
+        .each(|summary| &summary.correlations)
+        .collect();
     let mut cursor = 0usize;
     for (index, (row, resolved)) in chains.rows.iter().zip(&snapshot.chains).enumerate() {
-        let projected_edges =
-            &projected.summary().correlations[cursor..cursor + resolved.edges.len()];
+        let projected_edges = &edges[cursor..cursor + resolved.edges.len()];
         cursor += resolved.edges.len();
         render_chain(
             doc,
-            &ChainContext {
-                redactor,
-                snapshot,
-                projected: &projected,
-            },
+            &ChainContext { redactor, snapshot },
             index as u64 + 1,
             row,
             resolved,
@@ -1380,7 +1377,6 @@ fn render_chains(
 struct ChainContext<'a> {
     redactor: &'a Redactor,
     snapshot: &'a ReportSnapshot,
-    projected: &'a Projected,
 }
 
 fn render_chain(
@@ -1389,13 +1385,9 @@ fn render_chain(
     number: u64,
     row: &ReportChainRow,
     resolved: &ResolvedChain,
-    projected_edges: &[CorrelationEdge],
+    projected_edges: &[Within<CorrelationEdge>],
 ) {
-    let ChainContext {
-        redactor,
-        snapshot,
-        projected,
-    } = *context;
+    let ChainContext { redactor, snapshot } = *context;
     doc.lit("### Chain ")
         .count(number)
         .lit(": ")
@@ -1464,14 +1456,17 @@ fn render_chain(
 
     let mut lines: Vec<Safe> = Vec::new();
     for (edge, projected_edge) in resolved.edges.iter().zip(projected_edges) {
-        for (raw, safe_row) in edge.evidence.iter().zip(&projected_edge.evidence) {
+        for (raw, safe_row) in edge
+            .evidence
+            .iter()
+            .zip(projected_edge.each(|e| &e.evidence))
+        {
             let line = evidence_line(
                 redactor,
                 snapshot,
-                projected,
                 &raw.origin_id,
                 &raw.field,
-                &safe_row.value,
+                safe_row.text(|row| &row.value),
             );
             if !lines.contains(&line) {
                 lines.push(line);
@@ -1539,7 +1534,7 @@ fn entry_label(redactor: &Redactor, entry: Option<&Entry>) -> Safe {
                 ])
             }
             TimelineOrigin::Log { file, line, .. } => Safe::join(&[
-                redactor.text(display_source(file), REPORT_NAME_CHARS),
+                redactor.text(file_name(file), REPORT_NAME_CHARS),
                 Safe::literal(" \u{b7} line "),
                 Safe::count(u64::from(*line)),
             ]),
@@ -1556,10 +1551,9 @@ fn entry_label(redactor: &Redactor, entry: Option<&Entry>) -> Safe {
 fn evidence_line(
     redactor: &Redactor,
     snapshot: &ReportSnapshot,
-    projected: &Projected,
     origin: &str,
     field: &str,
-    projected_value: &str,
+    projected_value: ProjectedText<'_>,
 ) -> Safe {
     let label = entry_label(redactor, snapshot.entries.get(origin));
     let Some(kind) = field_kind(field) else {
@@ -1572,11 +1566,12 @@ fn evidence_line(
             Safe::literal(": "),
             word,
             Safe::literal(" = "),
-            redactor.projected(projected, projected_value, REPORT_NAME_CHARS),
+            redactor.projected(projected_value, REPORT_NAME_CHARS),
         ]),
         ValuePolicy::Token => {
-            let value = if safe::token_len_at(projected_value, 0) == Some(projected_value.len()) {
-                redactor.projected(projected, projected_value, REPORT_NAME_CHARS)
+            let shown = projected_value.as_str();
+            let value = if safe::token_len_at(shown, 0) == Some(shown.len()) {
+                redactor.projected(projected_value, REPORT_NAME_CHARS)
             } else {
                 Safe::literal("(masked)")
             };
@@ -1788,7 +1783,7 @@ fn write_item_row(doc: &mut Doc, redactor: &Redactor, item: &TimelineItem) {
             doc.lit("log line ")
                 .count(u64::from(*line))
                 .lit(" | ")
-                .safe(&redactor.text(display_source(file), REPORT_NAME_CHARS))
+                .safe(&redactor.text(file_name(file), REPORT_NAME_CHARS))
                 .lit(" | ")
                 .safe(&redactor.text(component.as_deref().unwrap_or(""), REPORT_NAME_CHARS));
         }

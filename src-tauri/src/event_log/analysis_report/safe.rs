@@ -67,6 +67,86 @@ impl Projected {
     pub(super) fn summary(&self) -> &DiagnosisSummary {
         &self.0
     }
+
+    /// The summary itself, as the starting point for reading text out of it.
+    pub(super) fn root(&self) -> Within<'_, DiagnosisSummary> {
+        Within(&self.0)
+    }
+}
+
+/// A borrow of something inside a [`Projected`] summary. It is the only way to get a
+/// [`ProjectedText`]: every way of reaching a string takes a closure that is higher-ranked over
+/// the borrow, so it can return text borrowed from the item it is given (or a `'static` literal)
+/// and cannot return a string that came from anywhere else.
+pub(super) struct Within<'a, T>(&'a T);
+
+impl<T> Clone for Within<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Within<'_, T> {}
+
+impl<'a, T> Within<'a, T> {
+    /// The item, for the counts, enums and structure the report reads from it.
+    pub(super) fn get(self) -> &'a T {
+        self.0
+    }
+
+    pub(super) fn text(self, pick: impl for<'s> FnOnce(&'s T) -> &'s str) -> ProjectedText<'a> {
+        ProjectedText(pick(self.0))
+    }
+
+    pub(super) fn maybe_text(
+        self,
+        pick: impl for<'s> FnOnce(&'s T) -> Option<&'s str>,
+    ) -> Option<ProjectedText<'a>> {
+        pick(self.0).map(ProjectedText)
+    }
+
+    pub(super) fn each<U: 'a>(
+        self,
+        pick: impl for<'s> FnOnce(&'s T) -> &'s [U],
+    ) -> impl Iterator<Item = Within<'a, U>> {
+        pick(self.0).iter().map(Within)
+    }
+
+    pub(super) fn variant<U: 'a>(
+        self,
+        pick: impl for<'s> FnOnce(&'s T) -> Option<&'s U>,
+    ) -> Option<Within<'a, U>> {
+        pick(self.0).map(Within)
+    }
+}
+
+/// A string read out of a [`Projected`] summary. [`Redactor::projected`] accepts nothing else, so
+/// text that did not come from a projected summary cannot be written through it.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ProjectedText<'a>(&'a str);
+
+impl<'a> ProjectedText<'a> {
+    pub(super) fn as_str(self) -> &'a str {
+        self.0
+    }
+
+    /// The last path segment.
+    pub(super) fn file_name(self) -> Self {
+        Self(file_name(self.0))
+    }
+
+    /// The first `count` characters.
+    pub(super) fn first_chars(self, count: usize) -> Self {
+        match self.0.char_indices().nth(count) {
+            Some((end, _)) => Self(&self.0[..end]),
+            None => self,
+        }
+    }
+}
+
+/// A path reduced to its last segment, so a folder name above a file never reaches the report.
+pub(super) fn file_name(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
 /// The document being written. It accepts literals, numbers and [`Safe`] values only.
@@ -172,8 +252,8 @@ impl Redactor {
     /// Text read from a projected summary. The projection is the diagnosis' own redaction, so
     /// the export pass is not run over it again: that pass rewrites the tokens the projection
     /// wrote (`[account:..]` would become `[account:[sensitive:Account]]`).
-    pub(super) fn projected(&self, _from: &Projected, text: &str, max_chars: usize) -> Safe {
-        self.finish(text, max_chars)
+    pub(super) fn projected(&self, text: ProjectedText<'_>, max_chars: usize) -> Safe {
+        self.finish(text.as_str(), max_chars)
     }
 
     /// Substitute known machines, flatten, cut, escape.

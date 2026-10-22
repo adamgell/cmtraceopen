@@ -1,5 +1,6 @@
 use super::safe::{
-    cut_chars, escape, flatten, strip_invisible, strip_summary, token_len_at, Doc, Redactor, Safe,
+    cut_chars, escape, flatten, strip_invisible, strip_summary, token_len_at, Doc, Projected,
+    Redactor, Safe,
 };
 use super::{collect, collect_chains, REPORT_CHAIN_ROW_CAP};
 use super::{
@@ -1103,6 +1104,88 @@ fn findings_are_listed_by_severity_then_confidence_with_bounded_evidence() {
     // Evidence is named by event, channel and record: never by source path or machine.
     assert!(!report.contains("CASE-0001"));
     assert!(!report.contains("HOST-0004"));
+}
+
+#[test]
+fn projected_text_is_sliced_by_characters_and_by_path_segment() {
+    let mut summary = DiagnosisSummary::default();
+    summary.overview.headline = "\u{e9}\u{e9}\u{e9}\u{4e2d}x".to_owned();
+    let projected = Projected::new(summary).expect("projects");
+    let headline = projected.root().text(|summary| &summary.overview.headline);
+    assert_eq!(headline.first_chars(3).as_str(), "\u{e9}\u{e9}\u{e9}");
+    assert_eq!(
+        headline.first_chars(4).as_str(),
+        "\u{e9}\u{e9}\u{e9}\u{4e2d}"
+    );
+    assert_eq!(headline.first_chars(5).as_str(), headline.as_str());
+    assert_eq!(headline.first_chars(0).as_str(), "");
+    assert_eq!(headline.as_str(), "\u{e9}\u{e9}\u{e9}\u{4e2d}x");
+
+    let mut summary = DiagnosisSummary::default();
+    summary.overview.headline = r"C:\Cases/CASE-0001\Sync.log".to_owned();
+    let projected = Projected::new(summary).expect("projects");
+    let path = projected.root().text(|summary| &summary.overview.headline);
+    assert_eq!(path.file_name().as_str(), "Sync.log");
+}
+
+#[test]
+fn a_path_is_reduced_to_its_last_segment_whichever_separator_it_uses() {
+    for path in [
+        r"C:\Cases\CASE-0001\Logs\Sync.log",
+        "/home/case0001/Logs/Sync.log",
+        "C:/Cases/CASE-0001/Sync.log",
+        r"C:\Cases/CASE-0001\Sync.log",
+        "Sync.log",
+    ] {
+        // A text-log evidence reference reaches the report through the projected summary.
+        let mut one = finding(
+            "a",
+            FindingClass::Symptom,
+            FindingSeverity::Info,
+            FindingConfidence::Low,
+            "Sync",
+        );
+        one.evidence = vec![EvidenceRef::TextLog(TextLogEvidenceRef {
+            source: "x".to_owned(),
+            file_path: path.to_owned(),
+            line_number: 42,
+            entry_id: 1,
+        })];
+        let report = render_with(
+            &base_request(),
+            &snapshot_of(Vec::new(), 0),
+            &summary_of(vec![one], Vec::new()),
+        );
+        assert!(
+            report.contains("- Evidence: Sync.log \u{b7} line 42\n"),
+            "{path}\n{report}"
+        );
+        // A text-log line in the events table reaches it as session text.
+        let origin = TimelineOrigin::Log {
+            file: path.to_owned(),
+            component: None,
+            line: 12,
+            source: "Sync.log".to_owned(),
+            machine: None,
+            bundle: None,
+            record_id: 12,
+        };
+        let item = TimelineItem {
+            timestamp_ms: FIXTURE_NOW_MS,
+            severity: TimelineSeverity::Info,
+            message: "m".to_owned(),
+            origin,
+        };
+        let report = render(&base_request(), &snapshot_of(vec![item], 1));
+        assert!(
+            report.contains("| log line 12 | Sync.log |  | m |"),
+            "{path}\n{report}"
+        );
+        assert!(
+            !leaks(&report, "CASE-0001") && !leaks(&report, "case0001"),
+            "{path}"
+        );
+    }
 }
 
 #[test]
