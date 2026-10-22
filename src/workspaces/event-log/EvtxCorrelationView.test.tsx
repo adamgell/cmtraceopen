@@ -530,6 +530,7 @@ describe("a 'Not linked' context marker through the view (decision A on #838, ac
     ["edges were not all loaded", () => data({ totalEdges: 8 })],
     ["the view is narrowed", () => data({ scope: { visibleCount: 3, loadedCount: 9, textLogCount: 0 } })],
     ["the scope of the model is not known", () => data({ scope: null })],
+    ["a rebuild is under way and the model on show is an earlier session's", () => data({ updating: true })],
     ["the engine limited correlation", () => data({ gaps: classifyCoverageGaps([{ source: "correlation", reason: "x" }], 1) })],
     ["a gap names the entry's own origin", () => data({ gaps: classifyCoverageGaps([{ source: rid(9), reason: "x" }], 1) })],
     ["a gap names a member of the chain", () => data({ gaps: classifyCoverageGaps([{ source: rid(1), reason: "alias" }], 1) })],
@@ -538,6 +539,27 @@ describe("a 'Not linked' context marker through the view (decision A on #838, ac
     expect(strayName()).toContain("No loaded link");
     expect(strayName()).not.toContain("Not linked");
     expect(screen.getByRole("group", { name: "Legend" })).toHaveTextContent("no loaded link (no line)");
+  });
+
+  it("says 'No loaded link' instead while a source was not fully read: its events never reached the session", () => {
+    seedStore();
+    act(() =>
+      useEvtxStore.setState({
+        coverageDetails: [{ source: "Security", kind: "accessDenied", reason: "needs elevation" }],
+      }),
+    );
+    show(data(), [stray()]);
+    expect(strayName()).toContain("No loaded link");
+    expect(strayName()).not.toContain("Not linked");
+    expect(screen.getByRole("group", { name: "Legend" })).toHaveTextContent("no loaded link (no line)");
+  });
+
+  it("takes the unread sources from the store's one producer and the rebuild from the shared data", () => {
+    expect(viewSource).toMatch(/\buseUnreadSources\(\)/);
+    expect(viewSource).toMatch(/\bunreadSources,/);
+    expect(viewSource).toMatch(/\bupdating: data\.updating\b/);
+    // And folds none of the three into one flag.
+    expect(viewSource).not.toMatch(/\bnarrowed\b[^\n]*[:=][^\n]*\|\|/);
   });
 
   it("draws none by default, which is what the workspace passes", () => {

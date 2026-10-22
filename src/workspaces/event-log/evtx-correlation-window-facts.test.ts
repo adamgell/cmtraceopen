@@ -173,6 +173,13 @@ describe("readWindowFacts: the scope is its own fact, and the three caveats are 
     const facts = read(scene({ unreadSources: true }));
     expect(facts.scopeNarrowed).toBe(false);
   });
+
+  it("carries no field that stands for the scope, the unread sources and the rebuild together", () => {
+    const facts = read(scene({ unreadSources: true, counts: countsFor(fixtureEdges("exactPair"), { updating: true }) }));
+    expect(Object.keys(facts)).not.toContain("narrowed");
+    expect(facts.scopeNarrowed).toBe(false);
+    expect(facts.updating).toBe(true);
+  });
 });
 
 describe("readWindowFacts: which entry is the selected event, and what may be shown", () => {
