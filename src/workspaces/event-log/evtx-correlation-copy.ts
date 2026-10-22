@@ -281,6 +281,12 @@ export function noChainsFoundText(speaks: boolean): string {
     : "No chains were found among the edges that were loaded.";
 }
 
+/**
+ * Said in place of "{n} chains" where the engine's gaps leave the number unproven
+ * (`chainCountForGaps`): a number that is not known is never given, and never 0.
+ */
+export const CHAIN_COUNT_NOT_KNOWN_TEXT = "The chain count is not known";
+
 /** Said in place of a chain's entries while they are read. */
 export const CHAIN_ENTRIES_BEING_READ_TEXT = "The entries of this chain are being read.";
 

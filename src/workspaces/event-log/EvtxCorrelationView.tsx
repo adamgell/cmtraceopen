@@ -23,6 +23,7 @@ import { correlationSizes, type CorrelationSizes } from "./evtx-correlation-size
 import { EvtxCorrelationOverview } from "./EvtxCorrelationOverview";
 import { EvtxUnplacedList } from "./EvtxUnplacedList";
 import {
+  CHAIN_COUNT_NOT_KNOWN_TEXT,
   CHAIN_ENTRIES_BEING_READ_TEXT,
   NO_ANALYSIS_TEXT,
   NO_ENTRY_POSITION_TEXT,
@@ -45,7 +46,7 @@ import {
   whyStatement,
   UPDATING_CORRELATION_TEXT,
 } from "./evtx-correlation-copy";
-import { correlationChainCount, type CorrelationChain } from "./evtx-correlation-chains";
+import { chainCountForGaps, correlationChainCount, type CorrelationChain } from "./evtx-correlation-chains";
 import {
   resolveOriginRecords,
 } from "./evtx-correlation-origin-index";
@@ -549,19 +550,22 @@ export default function EvtxCorrelationView({ nearby = NO_NEARBY }: EvtxCorrelat
       if (data.error !== null) return "";
       return data.stage === "unavailable" ? NO_ANALYSIS_TEXT : READING_EDGES_TEXT;
     }
-    // The chain count the Insights card and the Chains tab state: a coverage blocked row is a coverage
-    // state and is said apart, never counted as a chain.
-    const chainCount = correlationChainCount(model.counts);
+    // The chain count the Insights card and the Chains tab state, by the rule they ask: a coverage
+    // blocked row is a coverage state and is said apart, never counted as a chain, and a number the
+    // engine's gaps leave unproven is not said at all.
+    const chainCount = chainCountForGaps(correlationChainCount(model.counts), gaps);
     const blocked = model.counts.coverageBlocked;
     return [
-      `${chainCount.toLocaleString()} ${chainCount === 1 ? "chain" : "chains"}${blocked > 0 ? `, ${blocked.toLocaleString()} coverage blocked` : ""}`,
+      chainCount === null
+        ? CHAIN_COUNT_NOT_KNOWN_TEXT
+        : `${chainCount.toLocaleString()} ${chainCount === 1 ? "chain" : "chains"}${blocked > 0 ? `, ${blocked.toLocaleString()} coverage blocked` : ""}`,
       model.edgeInputComplete ? null : "Correlation edges are partial",
       lossSentence,
       data.updating ? "Updating" : null,
     ]
       .filter((part): part is string => part !== null)
       .join(". ");
-  }, [model, lossSentence, data.updating, data.error, data.stage]);
+  }, [model, gaps, lossSentence, data.updating, data.error, data.stage]);
   const spoken = useThrottledValue(announcement, CORRELATION_ANNOUNCE_MS);
   // The publications of the throttle, counted here because the throttle does not report them (it is
   // shared and stays as it is): the region's text changes exactly when it publishes.

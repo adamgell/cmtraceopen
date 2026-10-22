@@ -1216,6 +1216,43 @@ describe("the live region (acceptance 22)", () => {
     show(pairData({ totalEdges: 9 }));
     expect(screen.getByTestId("correlation-announcer")).toHaveTextContent("1 chain. Correlation edges are partial");
   });
+
+  describe("announces no chain number the engine's gaps leave unproven, as the tab and the card state none (#841, review L1)", () => {
+    const limit = classifyCoverageGaps([{ source: "correlation", reason: "limit" }], 1);
+    // 100 origin gaps shown of 101: `global` is read from the preview, so a cut one can hide a limit.
+    const cut = classifyCoverageGaps(
+      Array.from({ length: 100 }, (_, i) => ({ source: rid(500 + i), reason: "x" })),
+      101,
+    );
+    const originOnly = classifyCoverageGaps([{ source: rid(900), reason: "alias conflict" }], 1);
+
+    it.each([
+      ["a limit or truncation gap", limit],
+      ["a gap preview that is cut", cut],
+    ])("says the count is not known, and no blocked count either, under %s", (_why, gaps) => {
+      show(mixedData({ gaps }));
+      expect(screen.getByTestId("correlation-announcer").textContent).toBe("The chain count is not known");
+    });
+
+    it("keeps the other parts of the announcement beside it", () => {
+      show(pairData({ gaps: limit, totalEdges: 9, updating: true }));
+      expect(screen.getByTestId("correlation-announcer").textContent).toBe(
+        "The chain count is not known. Correlation edges are partial. Updating",
+      );
+    });
+
+    it("announces the chains that were found when only an origin is uncorrelated, but never a 0", () => {
+      show(pairData({ gaps: originOnly }));
+      expect(screen.getByTestId("correlation-announcer").textContent).toBe("1 chain");
+      cleanup();
+      show(makeData({ items: [], edges: [], totalEdges: 0, gaps: originOnly }));
+      expect(screen.getByTestId("correlation-announcer").textContent).toBe("The chain count is not known");
+    });
+
+    it("asks the rule the Chains tab and the Insights card ask, and counts no chain itself", () => {
+      expect(viewSource).toMatch(/\bchainCountForGaps\(correlationChainCount\(model\.counts\), gaps\)/);
+    });
+  });
 });
 
 describe("text and colors", () => {

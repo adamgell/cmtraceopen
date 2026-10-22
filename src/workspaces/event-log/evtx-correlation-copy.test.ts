@@ -18,6 +18,7 @@ import {
   NOT_IN_TIMELINE_NOTE,
   NOT_READ_NOTE,
   ANALYSIS_BUILDING_TEXT,
+  CHAIN_COUNT_NOT_KNOWN_TEXT,
   CHAIN_ENTRIES_BEING_READ_TEXT,
   CHAIN_STEPS_NOT_READ_TEXT,
   CONTAINS_SELECTED_EVENT_SUFFIX,
@@ -634,6 +635,7 @@ describe("no string claims an entry is unplaced without proof", () => {
     "NOT_IN_TIMELINE_NOTE",
     "NOT_READ_NOTE",
     "ANALYSIS_BUILDING_TEXT",
+    "CHAIN_COUNT_NOT_KNOWN_TEXT",
     "CHAIN_ENTRIES_BEING_READ_TEXT",
     "CHAIN_STEPS_NOT_READ_TEXT",
     "CONTAINS_SELECTED_EVENT_SUFFIX",
@@ -846,6 +848,7 @@ describe("no string claims an entry is unplaced without proof", () => {
       noChainsFoundText(true),
       noChainsFoundText(false),
       chainRowName(chain),
+      CHAIN_COUNT_NOT_KNOWN_TEXT,
       CHAIN_ENTRIES_BEING_READ_TEXT,
       CHAIN_STEPS_NOT_READ_TEXT,
       CONTAINS_SELECTED_EVENT_SUFFIX,
@@ -1646,6 +1649,7 @@ describe("the words the Correlation view and the Chains tab share (#841)", () =>
       "The entries of this chain are being read",
       "No entry has a loaded timeline position",
       "same timestamp as the entry above",
+      "The chain count is not known",
     ];
 
     /**
@@ -1758,6 +1762,9 @@ describe("the words of the rail's Chains tab (#841)", () => {
 
   it("explains a chain whose entries are not listed, and says no more", () => {
     expect(CHAIN_ENTRIES_BEING_READ_TEXT).toBe("The entries of this chain are being read.");
+    // Said in place of a chain number the engine's gaps leave unproven: it states no number, never a 0.
+    expect(CHAIN_COUNT_NOT_KNOWN_TEXT).toBe("The chain count is not known");
+    expect(CHAIN_COUNT_NOT_KNOWN_TEXT).not.toMatch(/\d/);
     expect(CHAIN_STEPS_NOT_READ_TEXT).toBe("The entries of this chain were not read, so there are no steps to show.");
     expect(NO_ENTRY_POSITION_TEXT).toBe("No entry has a loaded timeline position.");
   });
