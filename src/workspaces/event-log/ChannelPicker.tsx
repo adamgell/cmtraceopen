@@ -30,6 +30,7 @@ import { useEvtxVisualTokens, type EvtxVisualTokens } from "./evtx-visual-tokens
 import { AddLogSourceControl } from "./AddLogSourceControl";
 import { ChannelClearControls, ChannelClearDialog } from "./ChannelClearControls";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
+import { effectiveResizeRange, proposeResize, useRowCappedSize } from "./use-row-capped-size";
 import { scopeLogEntries } from "./unified-timeline";
 import { useChannelClear } from "./use-channel-clear";
 import type { EvtxChannelInfo, EvtxTimeWindow } from "./types";
@@ -235,6 +236,15 @@ export function ChannelPicker() {
     () => new Map(),
   );
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
+  // On a narrow window the workspace caps this pane below `sidebarWidth`; the handle reports and
+  // steps from the width actually rendered, and its maximum never exceeds the cap.
+  const { ref: paneRef, ...paneMeasure } = useRowCappedSize(2, sidebarWidth);
+  const resizeRange = effectiveResizeRange(
+    sidebarWidth,
+    MIN_SIDEBAR_WIDTH,
+    MAX_SIDEBAR_WIDTH,
+    paneMeasure,
+  );
 
   // Its effects run before the pane's own (the throttle below): keep the call ahead of them.
   const clearWorkflow = useChannelClear({ clearChannel, loadedChannels, channelFilterRef });
@@ -368,6 +378,7 @@ export function ChannelPicker() {
     // resize strip is overlaid on that border rather than adding a band beside it.
     <div
       id={CHANNEL_PANE_ID}
+      ref={paneRef}
       style={{
         display: "flex",
         // Shrinkable only so the 40% cap on the workspace's channel wrapper (the body row's
@@ -659,13 +670,16 @@ export function ChannelPicker() {
         edge="end"
         label="Resize channel pane"
         controls={CHANNEL_PANE_ID}
-        value={sidebarWidth}
-        min={MIN_SIDEBAR_WIDTH}
-        max={MAX_SIDEBAR_WIDTH}
+        value={resizeRange.value}
+        min={resizeRange.min}
+        max={resizeRange.max}
         direction={1}
-        onChange={(next) =>
-          setSidebarWidth(Math.max(MIN_SIDEBAR_WIDTH, Math.min(next, MAX_SIDEBAR_WIDTH)))
-        }
+        onChange={(next) => {
+          // Only an interaction that changes the visible width may change the stored one; while
+          // the cap binds, a proposal equal to the rendered width must not overwrite the request.
+          const proposed = proposeResize(next, resizeRange);
+          if (proposed !== null) setSidebarWidth(proposed);
+        }}
       />
     </div>
   );
