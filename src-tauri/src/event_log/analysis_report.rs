@@ -259,8 +259,9 @@ pub struct ReportChainRow {
     /// printed only if it is the end of one of this row's `pairs`, and each appears once.
     pub member_ids: Vec<String>,
     /// The reduced pairs the chain is made of, at most [`MAX_REPORT_CHAIN_PAIRS`]. A row without
-    /// a pair is refused, and so is a listed member that no pair ends at. The app therefore picks
-    /// its pairs as a spanning forest over the members it lists first, then any pairs that carry
+    /// a pair is refused, and so is a listed member that no pair ends at, and a row whose pairs do
+    /// not connect into one chain. The app therefore lists members in an order that keeps them
+    /// connected and picks its pairs as a spanning tree over them first, then any pairs that carry
     /// further identifiers, up to the cap.
     pub pairs: Vec<ReportChainPair>,
 }
