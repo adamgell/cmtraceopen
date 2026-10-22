@@ -52,7 +52,7 @@ fn parse_forwarded_open_request(
         paths: parse_initial_launch_arguments(arguments)
             .file_paths
             .into_iter()
-            .map(|path| resolve_forwarded_path(&path, working_directory))
+            .filter_map(|path| resolve_forwarded_path(&path, working_directory))
             .collect(),
     }
 }
@@ -62,18 +62,24 @@ fn parse_forwarded_open_request(
 /// An absolute path is already what the second launch meant and is handed on
 /// exactly as it was typed — it is not normalized, so a `..` segment or a
 /// symlinked prefix opens the file the user named rather than a rewritten path.
-/// A launch that could not report its directory leaves the path as it arrived:
-/// there is nothing better to resolve it against than the running window's own
-/// directory.
-fn resolve_forwarded_path(path: &str, working_directory: &str) -> String {
-    if working_directory.is_empty() || Path::new(path).is_absolute() {
-        return path.to_string();
+/// A launch that could not report its directory cannot identify relative paths.
+/// Discard those arguments rather than opening a file relative to the primary.
+fn resolve_forwarded_path(path: &str, working_directory: &str) -> Option<String> {
+    if Path::new(path).is_absolute() {
+        return Some(path.to_string());
+    }
+    if working_directory.is_empty() {
+        log::warn!(
+            "Ignoring relative second-launch path because its working directory is unavailable"
+        );
+        return None;
     }
 
     Path::new(working_directory)
         .join(path)
-        .to_string_lossy()
-        .into_owned()
+        .into_os_string()
+        .into_string()
+        .ok()
 }
 
 /// Whether this launch replaces a running instance rather than joining it.
@@ -152,64 +158,47 @@ mod tests {
 
     const EXECUTABLE: &str = r"C:\Program Files\CMTrace Open\CMTrace Open.exe";
 
-    /// A forwarded launch whose working directory was not reported.
-    ///
-    /// The plugin sends an empty directory when the second process cannot read
-    /// its own, and those cases keep the path exactly as it arrived — which is
-    /// also what lets a host that is not the launch platform assert the parsed
-    /// paths without resolving anything.
+    /// The plugin sends an empty directory when the second launch cannot
+    /// report its cwd. Only absolute arguments remain usable in that case.
     const NO_WORKING_DIRECTORY: &str = "";
+
+    fn absolute_fixture(path: &str) -> String {
+        std::env::temp_dir()
+            .join(path)
+            .into_os_string()
+            .into_string()
+            .expect("absolute UTF-8 test fixture")
+    }
 
     #[test]
     fn a_forwarded_launch_opens_the_path_that_follows_the_executable() {
+        let path = absolute_fixture("ccmexec.log");
         let request = parse_forwarded_open_request(
-            [EXECUTABLE, r"C:\Windows\CCM\Logs\ccmexec.log"].map(String::from),
+            [EXECUTABLE.to_string(), path.clone()],
             NO_WORKING_DIRECTORY,
         );
-
-        assert_eq!(request.paths, [r"C:\Windows\CCM\Logs\ccmexec.log"]);
+        assert_eq!(request.paths, [path]);
     }
 
     #[test]
     fn a_forwarded_path_containing_spaces_survives_intact() {
+        let path =
+            absolute_fixture("Microsoft Intune Management Extension/IntuneManagementExtension.log");
         let request = parse_forwarded_open_request(
-            [
-                EXECUTABLE,
-                r"C:\Program Files\Microsoft Intune Management Extension\Logs\IntuneManagementExtension.log",
-            ]
-            .map(String::from),
+            [EXECUTABLE.to_string(), path.clone()],
             NO_WORKING_DIRECTORY,
         );
-
-        assert_eq!(
-            request.paths,
-            [
-                r"C:\Program Files\Microsoft Intune Management Extension\Logs\IntuneManagementExtension.log"
-            ],
-        );
+        assert_eq!(request.paths, [path]);
     }
 
     #[test]
     fn a_forwarded_launch_opens_every_path_it_carries() {
+        let paths = ["ccmexec.log", "InventoryAgent.log", "PolicyAgent.log"].map(absolute_fixture);
         let request = parse_forwarded_open_request(
-            [
-                EXECUTABLE,
-                r"C:\Windows\CCM\Logs\ccmexec.log",
-                r"C:\Windows\CCM\Logs\InventoryAgent.log",
-                r"C:\Windows\CCM\Logs\PolicyAgent.log",
-            ]
-            .map(String::from),
+            std::iter::once(EXECUTABLE.to_string()).chain(paths.clone()),
             NO_WORKING_DIRECTORY,
         );
-
-        assert_eq!(
-            request.paths,
-            [
-                r"C:\Windows\CCM\Logs\ccmexec.log",
-                r"C:\Windows\CCM\Logs\InventoryAgent.log",
-                r"C:\Windows\CCM\Logs\PolicyAgent.log",
-            ],
-        );
+        assert_eq!(request.paths, paths);
     }
 
     #[test]
@@ -303,19 +292,17 @@ mod tests {
             .expect("mock app");
         let app_handle = app.handle();
 
+        let path = absolute_fixture("ime.log");
         handle(
             app_handle,
             parse_forwarded_open_request(
-                [EXECUTABLE.to_string(), r"C:\Logs\ime.log".to_string()],
+                [EXECUTABLE.to_string(), path.clone()],
                 NO_WORKING_DIRECTORY,
             ),
         );
 
         let state = app.state::<AppState>();
-        assert_eq!(
-            state.take_second_launch_paths().expect("claim"),
-            [r"C:\Logs\ime.log"],
-        );
+        assert_eq!(state.take_second_launch_paths().expect("claim"), [path],);
         // The announcement wakes the window; a second claim finds nothing, so
         // the handoff itself cannot open the same file twice.
         assert!(state.take_second_launch_paths().expect("claim").is_empty());
@@ -359,3 +346,7 @@ mod tests {
         assert!(!is_replacement_launch(&association));
     }
 }
+
+#[cfg(test)]
+#[path = "single_instance.test.rs"]
+mod unavailable_directory_tests;

@@ -16,7 +16,7 @@ import { useModalOwnership } from "../../hooks/use-modal-ownership";
 import { useUiStore } from "../../stores/ui-store";
 import { cancelActiveLoad, channelCanHoldEvents, useEvtxStore } from "./evtx-store";
 import { EvtxResizeHandle } from "./EvtxResizeHandle";
-import { effectiveResizeRange, useRowCappedSize } from "./use-row-capped-size";
+import { effectiveResizeRange, proposeResize, useRowCappedSize } from "./use-row-capped-size";
 import type { EvtxChannelInfo } from "./types";
 
 // ── Tree data structure ─────────────────────────────────────────────────────
@@ -160,12 +160,12 @@ export function ChannelPicker() {
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   // On a narrow window the workspace caps this pane below `sidebarWidth`; the handle reports and
   // steps from the width actually rendered, and its maximum never exceeds the cap.
-  const paneRef = useRef<HTMLDivElement | null>(null);
+  const { ref: paneRef, ...paneMeasure } = useRowCappedSize(2, sidebarWidth);
   const resizeRange = effectiveResizeRange(
     sidebarWidth,
     MIN_SIDEBAR_WIDTH,
     MAX_SIDEBAR_WIDTH,
-    useRowCappedSize(paneRef, 2),
+    paneMeasure,
   );
 
   useEffect(() => {
@@ -607,9 +607,12 @@ export function ChannelPicker() {
         min={resizeRange.min}
         max={resizeRange.max}
         direction={1}
-        onChange={(next) =>
-          setSidebarWidth(Math.max(MIN_SIDEBAR_WIDTH, Math.min(next, MAX_SIDEBAR_WIDTH)))
-        }
+        onChange={(next) => {
+          // Only an interaction that changes the visible width may change the stored one; while
+          // the cap binds, a proposal equal to the rendered width must not overwrite the request.
+          const proposed = proposeResize(next, resizeRange);
+          if (proposed !== null) setSidebarWidth(proposed);
+        }}
       />
     </div>
   );
