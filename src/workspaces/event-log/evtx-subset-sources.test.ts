@@ -23,6 +23,9 @@ const record = (partial: Partial<EvtxRecord> = {}): EvtxRecord => ({
   eventData: [],
   rawXml: "<Event />",
   sourceLabel: "Live",
+  // A live read of an ordinary channel holds events of that channel, so unless a test says
+  // otherwise the event's own channel is the one that was queried.
+  eventChannel: partial.channel ?? "System",
   ...partial,
 });
 
@@ -65,13 +68,13 @@ describe("planEvtxSubsetSources", () => {
       {
         kind: "channel",
         path: "Application",
-        recordGroups: [{ computer: "HOST", recordIds: ["2"] }],
+        recordGroups: [{ computer: "HOST", channel: "Application", recordIds: ["2"] }],
         recordCount: 1,
       },
       {
         kind: "channel",
         path: "System",
-        recordGroups: [{ computer: "HOST", recordIds: ["5", "6"] }],
+        recordGroups: [{ computer: "HOST", channel: "System", recordIds: ["5", "6"] }],
         recordCount: 2,
       },
     ]);
@@ -89,7 +92,9 @@ describe("planEvtxSubsetSources", () => {
       {
         kind: "file",
         path,
-        recordGroups: [{ computer: "HOST", recordIds: ["10", "9007199254740991"] }],
+        recordGroups: [
+          { computer: "HOST", channel: "System", recordIds: ["10", "9007199254740991"] },
+        ],
         recordCount: 2,
       },
     ]);
@@ -105,7 +110,7 @@ describe("planEvtxSubsetSources", () => {
     // The largest id the query can match exactly is still sent; the two above it are listed.
     expect(plan.sources).toHaveLength(1);
     expect(plan.sources[0].recordGroups).toEqual([
-      { computer: "HOST", recordIds: ["5", "9007199254740991"] },
+      { computer: "HOST", channel: "System", recordIds: ["5", "9007199254740991"] },
     ]);
     expect(plan.skipped).toEqual([{ reason: "idTooLarge", records: 2 }]);
     expect(plan.skipped.map(describeSkippedRecords)).toEqual([
@@ -116,27 +121,30 @@ describe("planEvtxSubsetSources", () => {
   });
 
   it("sends each id once and treats sources that differ only by case as one", () => {
+    // The queried channel is spelled three ways; the events all name the one channel they are in.
     const plan = planEvtxSubsetSources([
-      record({ channel: "System", eventRecordId: 5 }),
-      record({ channel: "system", eventRecordId: 5 }),
-      record({ channel: "SYSTEM", eventRecordId: 6 }),
+      record({ channel: "System", eventChannel: "System", eventRecordId: 5 }),
+      record({ channel: "system", eventChannel: "System", eventRecordId: 5 }),
+      record({ channel: "SYSTEM", eventChannel: "System", eventRecordId: 6 }),
     ]);
     expect(plan.sources).toHaveLength(1);
     expect(plan.sources[0].path).toBe("System");
-    expect(plan.sources[0].recordGroups).toEqual([{ computer: "HOST", recordIds: ["5", "6"] }]);
+    expect(plan.sources[0].recordGroups).toEqual([
+      { computer: "HOST", channel: "System", recordIds: ["5", "6"] },
+    ]);
   });
 
   it("keeps events of different machines apart, so one machine's id never stands for another's", () => {
     // A log that collects events can hold the same EventRecordID from two machines.
     const plan = planEvtxSubsetSources([
-      record({ channel: "ForwardedEvents", computer: "HOST-A", eventRecordId: 100 }),
-      record({ channel: "ForwardedEvents", computer: "HOST-B", eventRecordId: 100 }),
-      record({ channel: "ForwardedEvents", computer: "HOST-A", eventRecordId: 100 }),
+      record({ channel: "ForwardedEvents", eventChannel: "System", computer: "HOST-A", eventRecordId: 100 }),
+      record({ channel: "ForwardedEvents", eventChannel: "System", computer: "HOST-B", eventRecordId: 100 }),
+      record({ channel: "ForwardedEvents", eventChannel: "System", computer: "HOST-A", eventRecordId: 100 }),
     ]);
     expect(plan.sources).toHaveLength(1);
     expect(plan.sources[0].recordGroups).toEqual([
-      { computer: "HOST-A", recordIds: ["100"] },
-      { computer: "HOST-B", recordIds: ["100"] },
+      { computer: "HOST-A", channel: "System", recordIds: ["100"] },
+      { computer: "HOST-B", channel: "System", recordIds: ["100"] },
     ]);
     // Two distinct events, not one: the dialog must not offer "1 event" for them.
     expect(plan.sources[0].recordCount).toBe(2);
@@ -148,7 +156,51 @@ describe("planEvtxSubsetSources", () => {
       record({ computer: "Unknown", eventRecordId: 1 }),
       record({ computer: "  ", eventRecordId: 2 }),
     ]);
-    expect(plan.sources[0].recordGroups).toEqual([{ computer: null, recordIds: ["1", "2"] }]);
+    expect(plan.sources[0].recordGroups).toEqual([
+      { computer: null, channel: "System", recordIds: ["1", "2"] },
+    ]);
+  });
+
+  it("keeps two source logs of one machine apart, so one log's id never stands for another's", () => {
+    // A collector holds the same machine's EventRecordID 100 from two of its logs.
+    const plan = planEvtxSubsetSources([
+      record({ channel: "ForwardedEvents", eventChannel: "System", computer: "HOST-A", eventRecordId: 100 }),
+      record({ channel: "ForwardedEvents", eventChannel: "Security", computer: "HOST-A", eventRecordId: 100 }),
+      record({ channel: "ForwardedEvents", eventChannel: "System", computer: "HOST-A", eventRecordId: 100 }),
+    ]);
+    expect(plan.sources).toHaveLength(1);
+    expect(plan.sources[0].path).toBe("ForwardedEvents");
+    expect(plan.sources[0].recordGroups).toEqual([
+      { computer: "HOST-A", channel: "System", recordIds: ["100"] },
+      { computer: "HOST-A", channel: "Security", recordIds: ["100"] },
+    ]);
+    // Two distinct events, not one: the dialog must not offer "1 event" for them.
+    expect(plan.sources[0].recordCount).toBe(2);
+    expect(plan.exportableRecords).toBe(2);
+  });
+
+  it("asks only for the visible twin when a filter hid the other", () => {
+    const plan = planEvtxSubsetSources([
+      record({ channel: "ForwardedEvents", eventChannel: "System", computer: "HOST-A", eventRecordId: 100 }),
+    ]);
+    expect(plan.sources[0].recordGroups).toEqual([
+      { computer: "HOST-A", channel: "System", recordIds: ["100"] },
+    ]);
+    expect(plan.exportableRecords).toBe(1);
+  });
+
+  it("keeps the source log of a file's events, and sends none for events that name none", () => {
+    const path = "C:\\logs\\Forwarded.evtx";
+    const plan = planEvtxSubsetSources([
+      record({ sourceLabel: path, channel: "Security", eventChannel: "Security", eventRecordId: 1 }),
+      record({ sourceLabel: path, channel: "Unknown", eventChannel: null, eventRecordId: 2 }),
+      record({ sourceLabel: path, channel: "Unknown", eventChannel: "  ", eventRecordId: 3 }),
+      record({ sourceLabel: path, channel: "Unknown", eventChannel: undefined, eventRecordId: 4 }),
+    ]);
+    expect(plan.sources[0].recordGroups).toEqual([
+      { computer: "HOST", channel: "Security", recordIds: ["1"] },
+      { computer: "HOST", channel: null, recordIds: ["2", "3", "4"] },
+    ]);
   });
 
   it("counts, by reason, what cannot be exported instead of dropping it", () => {

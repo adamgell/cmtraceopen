@@ -62,7 +62,7 @@ const SKIP_REASON_ORDER: readonly EvtxSubsetSkipReason[] = [
 ];
 
 export interface EvtxSubsetSourcePlan extends EvtxSubsetSourceRequest {
-  /** Distinct events (machine and EventRecordID) that will be requested from this source. */
+  /** Distinct events (machine, source channel and EventRecordID) requested from this source. */
   recordCount: number;
 }
 
@@ -119,12 +119,33 @@ function computerOf(record: EvtxRecord): string | null {
   return name === "" || name === UNKNOWN_COMPUTER ? null : record.computer;
 }
 
+/**
+ * The log an event was written to, by its own `System/Channel`, or null when it names none. This is
+ * not `record.channel`: a live read stamps the log that was queried there, which for a collector
+ * such as ForwardedEvents is the collector, not where the event came from. The source log is the
+ * third part of an event's identity, because one machine can forward two logs whose
+ * EventRecordIDs coincide.
+ */
+function sourceChannelOf(record: EvtxRecord): string | null {
+  const name = record.eventChannel;
+  return name == null || name.trim() === "" ? null : name;
+}
+
+/**
+ * What identifies an event beside its EventRecordID. The backend's `EventOrigin` is the same
+ * definition: it names these two parts in the query and compares them when it reads the file back.
+ */
+function originKey(computer: string | null, channel: string | null): string {
+  return JSON.stringify([computer, channel]);
+}
+
 type Classification =
   | {
       kind: "export";
       source: EvtxSubsetSourceRequest["kind"];
       path: string;
       computer: string | null;
+      channel: string | null;
       id: string;
     }
   | { kind: "skip"; reason: EvtxSubsetSkipReason };
@@ -135,30 +156,35 @@ function classify(record: EvtxRecord): Classification {
   if (label.startsWith(REMOTE_SOURCE_PREFIX)) return { kind: "skip", reason: "remote" };
   const id = eventRecordIdText(record);
   const computer = computerOf(record);
+  const channel = sourceChannelOf(record);
   if (label === LIVE_SOURCE_LABEL) {
     // The label says "Live", not which channel, so the record's own channel names the source.
     // The live path stamps the channel that was queried, which is the one to export from.
     if (record.channel.length === 0) return { kind: "skip", reason: "notEvtx" };
     if (id === null) return { kind: "skip", reason: "noRecordId" };
     if (exceedsExactRange(id)) return { kind: "skip", reason: "idTooLarge" };
-    return { kind: "export", source: "channel", path: record.channel, computer, id };
+    return { kind: "export", source: "channel", path: record.channel, computer, channel, id };
   }
   if (label.includes(ARCHIVE_MEMBER_SEPARATOR)) return { kind: "skip", reason: "archive" };
   if (!label.toLowerCase().endsWith(".evtx")) return { kind: "skip", reason: "notEvtx" };
   if (id === null) return { kind: "skip", reason: "noRecordId" };
   if (exceedsExactRange(id)) return { kind: "skip", reason: "idTooLarge" };
-  return { kind: "export", source: "file", path: label, computer, id };
+  return { kind: "export", source: "file", path: label, computer, channel, id };
 }
 
 export function planEvtxSubsetSources(records: readonly EvtxRecord[]): EvtxSubsetPlan {
-  // Keyed case-insensitively: Windows treats channel names and paths that way, and the backend
-  // refuses a request that lists one source twice. Machines are kept exactly as logged.
+  // Sources are keyed case-insensitively: Windows treats channel names and paths that way, and the
+  // backend refuses a request that lists one source twice. Machines and source channels are kept
+  // exactly as logged, because the query compares them exactly.
   const groups = new Map<
     string,
     {
       kind: EvtxSubsetSourceRequest["kind"];
       path: string;
-      byComputer: Map<string | null, Set<string>>;
+      byOrigin: Map<
+        string,
+        { computer: string | null; channel: string | null; ids: Set<string> }
+      >;
     }
   >();
   const skippedByReason = new Map<EvtxSubsetSkipReason, number>();
@@ -172,21 +198,23 @@ export function planEvtxSubsetSources(records: readonly EvtxRecord[]): EvtxSubse
     const key = `${outcome.source}\u0000${outcome.path.toLowerCase()}`;
     let group = groups.get(key);
     if (!group) {
-      group = { kind: outcome.source, path: outcome.path, byComputer: new Map() };
+      group = { kind: outcome.source, path: outcome.path, byOrigin: new Map() };
       groups.set(key, group);
     }
-    let ids = group.byComputer.get(outcome.computer);
-    if (!ids) {
-      ids = new Set();
-      group.byComputer.set(outcome.computer, ids);
+    const origin = originKey(outcome.computer, outcome.channel);
+    let events = group.byOrigin.get(origin);
+    if (!events) {
+      events = { computer: outcome.computer, channel: outcome.channel, ids: new Set() };
+      group.byOrigin.set(origin, events);
     }
-    ids.add(outcome.id);
+    events.ids.add(outcome.id);
   }
 
   const sources: EvtxSubsetSourcePlan[] = [...groups.values()]
-    .map(({ kind, path, byComputer }) => {
-      const recordGroups = [...byComputer.entries()].map(([computer, ids]) => ({
+    .map(({ kind, path, byOrigin }) => {
+      const recordGroups = [...byOrigin.values()].map(({ computer, channel, ids }) => ({
         computer,
+        channel,
         recordIds: [...ids],
       }));
       return {

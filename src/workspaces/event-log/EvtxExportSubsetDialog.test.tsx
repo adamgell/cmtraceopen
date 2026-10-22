@@ -25,6 +25,8 @@ const record = (partial: Partial<EvtxRecord> = {}): EvtxRecord => ({
   eventData: [],
   rawXml: "<Event />",
   sourceLabel: "Live",
+  // An ordinary live channel holds events of that channel.
+  eventChannel: partial.channel ?? "System",
   ...partial,
 });
 
@@ -199,12 +201,14 @@ describe("EvtxExportSubsetDialog", () => {
         {
           kind: "channel",
           path: "Application",
-          recordGroups: [{ computer: "HOST", recordIds: ["3"] }],
+          recordGroups: [{ computer: "HOST", channel: "Application", recordIds: ["3"] }],
         },
         {
           kind: "channel",
           path: "System",
-          recordGroups: [{ computer: "HOST", recordIds: ["9007199254740991"] }],
+          recordGroups: [
+            { computer: "HOST", channel: "System", recordIds: ["9007199254740991"] },
+          ],
         },
       ],
     });
@@ -391,8 +395,8 @@ describe("EvtxExportSubsetDialog", () => {
   it("sends the same id from two machines as two events, one group each", async () => {
     vi.mocked(invoke).mockResolvedValueOnce({ folder: "C:\\out", files: [] });
     renderDialog([
-      record({ channel: "ForwardedEvents", computer: "HOST-A", eventRecordId: 100 }),
-      record({ channel: "ForwardedEvents", computer: "HOST-B", eventRecordId: 100 }),
+      record({ channel: "ForwardedEvents", eventChannel: "System", computer: "HOST-A", eventRecordId: 100 }),
+      record({ channel: "ForwardedEvents", eventChannel: "System", computer: "HOST-B", eventRecordId: 100 }),
     ]);
     const list = await screen.findByRole("list", { name: "Sources" });
     expect(list).toHaveTextContent("ForwardedEvents2 events");
@@ -405,8 +409,33 @@ describe("EvtxExportSubsetDialog", () => {
         {
           path: "ForwardedEvents",
           recordGroups: [
-            { computer: "HOST-A", recordIds: ["100"] },
-            { computer: "HOST-B", recordIds: ["100"] },
+            { computer: "HOST-A", channel: "System", recordIds: ["100"] },
+            { computer: "HOST-B", channel: "System", recordIds: ["100"] },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("sends the same id from two source logs of one machine as two events, one group each", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ folder: "C:\\out", files: [] });
+    renderDialog([
+      record({ channel: "ForwardedEvents", eventChannel: "System", computer: "HOST-A", eventRecordId: 100 }),
+      record({ channel: "ForwardedEvents", eventChannel: "Security", computer: "HOST-A", eventRecordId: 100 }),
+    ]);
+    const list = await screen.findByRole("list", { name: "Sources" });
+    expect(list).toHaveTextContent("ForwardedEvents2 events");
+    await chooseFolder();
+    await act(async () => {
+      fireEvent.click(exportButton());
+    });
+    expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({
+      sources: [
+        {
+          path: "ForwardedEvents",
+          recordGroups: [
+            { computer: "HOST-A", channel: "System", recordIds: ["100"] },
+            { computer: "HOST-A", channel: "Security", recordIds: ["100"] },
           ],
         },
       ],

@@ -108,13 +108,16 @@ export interface EvtxClearResponse {
 export type EvtxSubsetSourceKind = "channel" | "file";
 
 /**
- * The events of one source that were logged by one machine. `EventRecordID` is only unique per
- * log on the machine that wrote it, so a log that collects events (ForwardedEvents) can hold the
- * same ID twice; the machine is part of an event's identity and the export query names it.
+ * The events of one source that share a machine and a source channel. `EventRecordID` is only
+ * unique per log on the machine that wrote it, so a log that collects events (ForwardedEvents) can
+ * hold the same ID from two machines, or from two logs of one machine; the machine and the source
+ * channel are part of an event's identity and the export query names them.
  */
 export interface EvtxSubsetRecordGroup {
   /** `System/Computer` of these events, or null when they carry none. */
   computer: string | null;
+  /** The events' own `System/Channel`, or null when they carry none. */
+  channel: string | null;
   /** `EventRecordID`s as decimal strings, so a large one is never rounded in transit. */
   recordIds: string[];
 }
@@ -130,7 +133,10 @@ export interface EvtxSubsetSourceRequest {
 /** Events on one side of the comparison between the request and the written file. */
 export interface EvtxSubsetIdDifference {
   count: number;
-  /** The first few, as `EventRecordID` or `computer: EventRecordID`. Capped; `count` is the whole. */
+  /**
+   * The first few, as `EventRecordID 101 on HOST-A in System` (the machine and the log only when
+   * the event names them). Capped; `count` is the whole.
+   */
   sample: string[];
 }
 
@@ -141,7 +147,7 @@ export interface EvtxSubsetFileResult {
   sourcePath: string;
   fileName: string;
   outputPath: string;
-  /** Distinct `EventRecordID`s that were asked for. */
+  /** Distinct events (machine, source channel and `EventRecordID`) that were asked for. */
   requestedRecords: number;
   status: EvtxSubsetFileStatus;
   /** Events found by reading the written file back; null means "not verified", never zero. */

@@ -1312,7 +1312,7 @@ describe("event-log manifest commands", () => {
     {
       kind: "channel" as const,
       path: "System",
-      recordGroups: [{ computer: "HOST-A", recordIds: ["5", "6"] }],
+      recordGroups: [{ computer: "HOST-A", channel: "System", recordIds: ["5", "6"] }],
     },
   ];
 
