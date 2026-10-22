@@ -104,6 +104,69 @@ export interface EvtxClearResponse {
   result: EvtxClearStatusResult;
 }
 
+/** What an EVTX subset is cut from: a registered channel, or an `.evtx` file on disk. */
+export type EvtxSubsetSourceKind = "channel" | "file";
+
+/**
+ * The events of one source that share a machine and a source channel. `EventRecordID` is only
+ * unique per log on the machine that wrote it, so a log that collects events (ForwardedEvents) can
+ * hold the same ID from two machines, or from two logs of one machine; the machine and the source
+ * channel are part of an event's identity and the export query names them.
+ */
+export interface EvtxSubsetRecordGroup {
+  /** `System/Computer` of these events, or null when they carry none. */
+  computer: string | null;
+  /** The events' own `System/Channel`, or null when they carry none. */
+  channel: string | null;
+  /** `EventRecordID`s as decimal strings, so a large one is never rounded in transit. */
+  recordIds: string[];
+}
+
+/** One source log and the events to keep from it. */
+export interface EvtxSubsetSourceRequest {
+  kind: EvtxSubsetSourceKind;
+  /** The channel name, or the absolute `.evtx` path. */
+  path: string;
+  recordGroups: EvtxSubsetRecordGroup[];
+}
+
+/** Events on one side of the comparison between the request and the written file. */
+export interface EvtxSubsetIdDifference {
+  count: number;
+  /**
+   * The first few, as `EventRecordID 101 on HOST-A in System` (the machine and the log only when
+   * the event names them). Capped; `count` is the whole.
+   */
+  sample: string[];
+}
+
+export type EvtxSubsetFileStatus = "exported" | "failed";
+
+export interface EvtxSubsetFileResult {
+  kind: EvtxSubsetSourceKind;
+  sourcePath: string;
+  fileName: string;
+  outputPath: string;
+  /** Distinct events (machine, source channel and `EventRecordID`) that were asked for. */
+  requestedRecords: number;
+  status: EvtxSubsetFileStatus;
+  /** Events found by reading the written file back; null means "not verified", never zero. */
+  exportedRecords: number | null;
+  /** Requested events the file does not hold; null when the file could not be read back. */
+  missing: EvtxSubsetIdDifference | null;
+  /** Events the file holds that were not requested; null when it could not be read back. */
+  unrequested: EvtxSubsetIdDifference | null;
+  /** True only when the localized messages were archived next to the file. */
+  messagesArchived: boolean;
+  error: string | null;
+  warnings: string[];
+}
+
+export interface EvtxSubsetResult {
+  folder: string;
+  files: EvtxSubsetFileResult[];
+}
+
 export interface SystemDateTimePreferences {
   datePattern: string;
   timePattern: string;
@@ -409,6 +472,8 @@ function isEvtxRecordResponse(value: unknown): value is EvtxRecord {
     (value.processId === undefined ||
       value.processId === null ||
       isFiniteCommandNumber(value.processId)) &&
+    (value.eventChannel === undefined ||
+      isNullableCommandString(value.eventChannel)) &&
     (value.activityId === undefined ||
       value.activityId === null ||
       typeof value.activityId === "string") &&
@@ -1405,6 +1470,81 @@ export async function clearEventLogChannel(
     return invalidCommandResponse("evtx_clear_channel");
   }
   return response;
+}
+
+function isEvtxSubsetIdDifference(value: unknown): boolean {
+  return (
+    value === null ||
+    (isCommandRecord(value) &&
+      hasCommandFields(value, {
+        count: isNonNegativeCommandCount,
+        sample: isStringArray,
+      }))
+  );
+}
+
+function isEvtxSubsetFileResult(value: unknown): value is EvtxSubsetFileResult {
+  if (
+    !isCommandRecord(value) ||
+    !hasCommandFields(value, {
+      kind: (field) => field === "channel" || field === "file",
+      sourcePath: (field) => typeof field === "string",
+      fileName: (field) => typeof field === "string",
+      outputPath: (field) => typeof field === "string",
+      requestedRecords: isNonNegativeCommandCount,
+      status: (field) => field === "exported" || field === "failed",
+      exportedRecords: (field) =>
+        field === null || isNonNegativeCommandCount(field),
+      missing: isEvtxSubsetIdDifference,
+      unrequested: isEvtxSubsetIdDifference,
+      messagesArchived: (field) => typeof field === "boolean",
+      error: (field) => field === null || typeof field === "string",
+      warnings: isStringArray,
+    })
+  ) {
+    return false;
+  }
+  // The read-back either happened or it did not: the count and both comparisons are all present or
+  // all null, and a failed file was never read back. A mix would be shown as a verified, clean
+  // file (a null comparison reads as "nothing differs"), which no real read-back produces.
+  const readBack = [value.exportedRecords, value.missing, value.unrequested];
+  const verified = readBack.every((field) => field !== null);
+  const unverified = readBack.every((field) => field === null);
+  return value.status === "failed" ? unverified : verified || unverified;
+}
+
+function decodeEventLogSubsetResult(
+  value: unknown,
+  commandName: string,
+): EvtxSubsetResult {
+  const result = decodeRecordResponse<EvtxSubsetResult>(value, commandName, {
+    folder: (field) => typeof field === "string",
+    files: (field) => Array.isArray(field) && field.every(isEvtxSubsetFileResult),
+  });
+  return result;
+}
+
+/**
+ * Copies the given events out of live channels and `.evtx` files into new `.evtx` files in
+ * `folder`, one per source. The files are raw copies and are not redacted. Windows only.
+ */
+export async function exportEventLogSubset(
+  folder: string,
+  sources: EvtxSubsetSourceRequest[],
+): Promise<EvtxSubsetResult> {
+  const result = await invokeCommand("evtx_export_subset", { folder, sources });
+  // One file result per requested source, in request order. Anything else means the response does
+  // not describe this request, and showing it would report files that were never asked for.
+  if (
+    result.files.length !== sources.length ||
+    result.files.some(
+      (file, index) =>
+        file.sourcePath !== sources[index].path || file.kind !== sources[index].kind,
+    )
+  ) {
+    return invalidCommandResponse("evtx_export_subset");
+  }
+  return result;
 }
 
 const DIAGNOSIS_COVERAGE_STATES = new Set([
@@ -3251,6 +3391,7 @@ const COMMAND_DECODERS = {
   evtx_expand_sources: decodeEventLogSourceManifest,
   evtx_parse_manifest: decodeEventLogParseResult,
   evtx_clear_channel: decodeEventLogClearResponse,
+  evtx_export_subset: decodeEventLogSubsetResult,
   evtx_create_export_session: decodeEventLogExportSessionStatus,
   evtx_append_export_chunk: decodeEventLogExportSessionStatus,
   evtx_finalize_export_session: decodeEventLogExportResult,

@@ -142,6 +142,7 @@ export type ModalOwner =
   | "elevationPrompt"
   | "collectionResult"
   | "eventLogChannelClear"
+  | "eventLogSubsetExport"
   | "espForceAction";
 
 export interface UiState {
@@ -652,6 +653,8 @@ export const useUiStore = create<UiState>()(
         ].filter(
           (owner) =>
             owner === "eventLogChannelClear" ||
+            // An export that is copying events must not lose its dialog to an unrelated dismissal.
+            owner === "eventLogSubsetExport" ||
             owner === "espForceAction" ||
             owner === "collectionResult" ||
             (owner === "fileAssociationPrompt" && lockedAssociationPrompt),

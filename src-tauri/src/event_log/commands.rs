@@ -1615,6 +1615,7 @@ mod tests {
             timestamp_epoch: 1_755_523_200_000,
             provider: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider".into(),
             channel: "Application".into(),
+            event_channel: None,
             event_id: 75,
             level: super::super::models::EvtxLevel::Information,
             computer: "WIN-TEST".into(),

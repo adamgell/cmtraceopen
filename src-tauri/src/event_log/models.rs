@@ -127,7 +127,13 @@ pub struct EvtxRecord {
     pub timestamp: String,
     pub timestamp_epoch: i64,
     pub provider: String,
+    /// The log the record was read from: the channel that was queried, or for an `.evtx` file the
+    /// event's own channel. A collector log such as ForwardedEvents holds events from other logs,
+    /// so for those this is the collector, and `event_channel` names where the event came from.
     pub channel: String,
+    /// The event's own `System/Channel`, `None` when the XML names none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_channel: Option<String>,
     pub event_id: u32,
     pub level: EvtxLevel,
     pub computer: String,

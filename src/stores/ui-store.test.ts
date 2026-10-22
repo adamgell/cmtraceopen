@@ -396,6 +396,18 @@ describe("ui-store", () => {
       expect(state.collectionResult?.bundleId).toBe("collection-2");
     });
 
+    it("keeps the EVTX subset export dialog when other transient dialogs are dismissed", () => {
+      useUiStore.getState().setShowAboutDialog(true);
+      useUiStore.getState().requestModal("eventLogSubsetExport");
+
+      useUiStore.getState().closeTransientDialogs("test");
+
+      const state = useUiStore.getState();
+      expect(state.showAboutDialog).toBe(false);
+      expect(state.modalOwner).toBe("eventLogSubsetExport");
+      expect(state.modalQueue).toEqual([]);
+    });
+
     it("retains a locked registration owner while clearing other transient requests", () => {
       useUiStore.getState().setShowFileAssociationPrompt(true);
       useUiStore.getState().setFileAssociationPromptBusy(true);

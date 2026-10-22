@@ -944,6 +944,7 @@ fn record(message: &str) -> EvtxRecord {
         timestamp_epoch: 0,
         provider: "Provider".into(),
         channel: "Application".into(),
+        event_channel: None,
         event_id: 326,
         level: EvtxLevel::Error,
         computer: "HOST".into(),

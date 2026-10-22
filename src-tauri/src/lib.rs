@@ -467,6 +467,8 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::export_session::evtx_close_export_session,
             #[cfg(feature = "event-log")]
+            event_log::export_subset::evtx_export_subset,
+            #[cfg(feature = "event-log")]
             event_log::commands::evtx_load_event_maps,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_loaded_map_count,

@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { save } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -241,15 +242,23 @@ describe("EvtxViewBar", () => {
     expect(useEvtxStore.getState().columnConfig.order.length).toBe(count + 1);
   });
 
-  it("lists exactly the existing export formats", async () => {
+  it("lists the existing export formats, then the Windows-only EVTX subset item", async () => {
     render(<EvtxViewBar nowEpoch={0} />);
     fireEvent.click(
       screen.getByTitle("Export the events currently shown, using the same filters as the list"),
     );
     const items = await screen.findAllByRole("menuitem");
-    expect(items.map((item) => item.textContent)).toEqual(
-      EVTX_EXPORT_FORMATS.map((format) => format.label),
-    );
+    expect(items.map((item) => item.textContent)).toEqual([
+      ...EVTX_EXPORT_FORMATS.map((format) => format.label),
+      "EVTX subset\u2026",
+    ]);
+    // Set off from the report formats by a divider that sits between them and the new item.
+    const divider = document.querySelector(".fui-MenuDivider");
+    expect(divider).not.toBeNull();
+    const follows = (a: Element, b: Element) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(items[EVTX_EXPORT_FORMATS.length - 1], divider as Element)).toBe(true);
+    expect(follows(divider as Element, items[EVTX_EXPORT_FORMATS.length])).toBe(true);
   });
 
   it("reorders a column and resets columns inside the Columns popover, with icon arrows", async () => {
@@ -399,5 +408,249 @@ describe("EvtxViewBar", () => {
       fireEvent.click(screen.getByRole("button", { name: "Dismiss export error" }));
       expect(screen.queryByRole("alert")).toBeNull();
     });
+  });
+});
+
+const EXPORT_BUTTON_TITLE =
+  "Export the events currently shown, using the same filters as the list";
+
+const subsetRecord = (partial: Partial<EvtxRecord> = {}): EvtxRecord => ({
+  id: 1,
+  eventRecordId: 1,
+  timestamp: "2026-08-09T12:00:00Z",
+  timestampEpoch: 0,
+  provider: "Provider",
+  channel: "System",
+  eventId: 1,
+  level: "Error",
+  computer: "HOST",
+  message: "event",
+  eventData: [],
+  rawXml: "<Event />",
+  sourceLabel: "Live",
+  ...partial,
+});
+
+async function openExportMenu() {
+  fireEvent.click(screen.getByTitle(EXPORT_BUTTON_TITLE));
+  return screen.findAllByRole("menuitem");
+}
+
+describe("EVTX subset menu entry", () => {
+  beforeEach(() => {
+    resetStores();
+    useUiStore.setState(useUiStore.getInitialState(), true);
+    useEvtxStore.setState({
+      records: [
+        subsetRecord({ id: 1, channel: "System", eventRecordId: 10, level: "Error" }),
+        subsetRecord({ id: 2, channel: "System", eventRecordId: 11, level: "Warning" }),
+        subsetRecord({ id: 3, channel: "Application", eventRecordId: 5, level: "Error" }),
+      ],
+      selectedChannels: new Set(["System", "Application"]),
+      timeWindow: "all",
+      sourceMode: "live",
+    });
+  });
+  afterEach(cleanup);
+
+  it.each(["macos", "linux"] as const)("is not offered on %s", async (platform) => {
+    useUiStore.setState({ currentPlatform: platform });
+    render(<EvtxViewBar nowEpoch={0} />);
+    const items = await openExportMenu();
+    expect(items.map((item) => item.textContent)).toEqual(
+      EVTX_EXPORT_FORMATS.map((format) => format.label),
+    );
+    expect(screen.queryByRole("menuitem", { name: /EVTX subset/ })).toBeNull();
+    expect(document.querySelector(".fui-MenuDivider")).toBeNull();
+  });
+
+  it("is disabled for a remote source, with the spec's reason reachable", async () => {
+    useEvtxStore.setState({ remoteMachine: "SRV01" });
+    render(<EvtxViewBar nowEpoch={0} />);
+    await openExportMenu();
+    const item = screen.getByRole("menuitem", { name: /EVTX subset/ });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    // Same treatment as the disabled panel toggles: the reason is the item's description, from a
+    // tooltip that shows on hover and focus, not a title and not a hand-built hidden span.
+    expect(item).not.toHaveAttribute("title");
+    expect(item).toHaveAccessibleDescription("Not available for remote sources.");
+    expect(screen.getAllByText("Not available for remote sources.")).toHaveLength(1);
+    fireEvent.click(item);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("keeps the disabled item in the focus order, like the enabled items, so its reason can be read", async () => {
+    useEvtxStore.setState({ remoteMachine: "SRV01" });
+    render(<EvtxViewBar nowEpoch={0} />);
+    const items = await openExportMenu();
+    const item = screen.getByRole("menuitem", { name: /EVTX subset/ });
+    // Fluent maps a disabled MenuItem to a focusable, aria-disabled one (disabledFocusable): it
+    // is not `disabled`, and it takes part in the focus order exactly as the enabled items do.
+    // jsdom has no layout, so arrow-key movement and the tooltip appearing on focus cannot be
+    // exercised here; that is a check for a real browser.
+    expect(item).not.toHaveAttribute("disabled");
+    expect(item.tabIndex).toBe(items[0].tabIndex);
+    act(() => item.focus());
+    expect(item).toHaveFocus();
+  });
+
+  it("opens the dialog with exactly the records the list shows", async () => {
+    // The Warning event is filtered out of the list, so it must not be offered for export.
+    useEvtxStore.setState({ filterLevels: new Set(["Error"]) });
+    render(<EvtxViewBar nowEpoch={0} />);
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    const sources = within(within(dialog).getByRole("list", { name: "Sources" }));
+    expect(sources.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Application1 event",
+      "System1 event",
+    ]);
+  });
+
+  it("reports Nothing to export instead of opening an empty dialog", async () => {
+    useEvtxStore.setState({ records: [] });
+    render(<EvtxViewBar nowEpoch={0} />);
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+    expect(document.querySelector("[data-evtx-export-status]")).toHaveTextContent(
+      "Nothing to export",
+    );
+    // Announced like the other exports' empty case, and again if it is chosen again.
+    expect(document.querySelector("[data-evtx-export-announcement]")).toHaveTextContent(
+      "Nothing to export",
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("clears an old export failure line when a subset is started", async () => {
+    render(<EvtxViewBar nowEpoch={0} />);
+    exportMock.stream.mockReset().mockRejectedValueOnce(new Error("boom"));
+    vi.mocked(save).mockReset().mockResolvedValue("/tmp/events.json");
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "JSON" }));
+    await screen.findByText(/Export failed: boom/);
+    expect(document.querySelector("[data-evtx-export-error]")).not.toBeNull();
+
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+    await screen.findByRole("alertdialog");
+    expect(document.querySelector("[data-evtx-export-error]")).toBeNull();
+  });
+
+  it("reports a finished subset as visible status without touching the polite announcement region", async () => {
+    vi.mocked(open).mockReset().mockResolvedValue("C:\\out");
+    vi.mocked(invoke).mockReset().mockImplementation(async (_command, args) => {
+      const { sources } = args as {
+        sources: Array<{ path: string; recordGroups: Array<{ recordIds: string[] }> }>;
+      };
+      return {
+        folder: "C:\\out",
+        files: sources.map((source) => {
+          const events = source.recordGroups.reduce((sum, group) => sum + group.recordIds.length, 0);
+          return {
+          kind: "channel",
+          sourcePath: source.path,
+          fileName: `${source.path}-subset.evtx`,
+          outputPath: `C:\\out\\${source.path}-subset.evtx`,
+          requestedRecords: events,
+          status: "exported",
+          exportedRecords: events,
+          missing: { count: 0, sample: [] },
+          unrequested: { count: 0, sample: [] },
+          messagesArchived: true,
+          error: null,
+          warnings: [],
+          };
+        }),
+      };
+    });
+    render(<EvtxViewBar nowEpoch={0} />);
+    const live = document.querySelector<HTMLElement>("[data-evtx-export-announcement]")!;
+    const heard: string[] = [];
+    const observer = new MutationObserver(() => heard.push(live.textContent ?? ""));
+    observer.observe(live, { childList: true, characterData: true, subtree: true });
+
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+    await screen.findByRole("alertdialog");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose folder\u2026" }));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Export unredacted" })).not.toHaveAttribute(
+        "aria-disabled",
+        "true",
+      ),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Export unredacted" }));
+    });
+    await screen.findByRole("list", { name: "Exported files" });
+    await waitFor(() =>
+      expect(document.querySelector("[data-evtx-export-status]")).toHaveTextContent(
+        "Exported 2 EVTX subset files (3 events).",
+      ),
+    );
+    observer.disconnect();
+    // The dialog announces its own start and result; the bar's region stays quiet, so it still
+    // carries only the other exports' start and final result.
+    expect(heard).toEqual([]);
+    // A subset that works never uses the failure line under the bar.
+    expect(document.querySelector("[data-evtx-export-error]")).toBeNull();
+  });
+
+  it("shows a refused subset request in the dialog, where it can be retried, not under the bar", async () => {
+    vi.mocked(open).mockReset().mockResolvedValue("C:\\out");
+    vi.mocked(invoke)
+      .mockReset()
+      .mockRejectedValue("These files already exist in C:\\out and are never overwritten: System-subset.evtx.");
+    render(<EvtxViewBar nowEpoch={0} />);
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+    await screen.findByRole("alertdialog");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose folder\u2026" }));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Export unredacted" })).not.toHaveAttribute(
+        "aria-disabled",
+        "true",
+      ),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Export unredacted" }));
+    });
+    const alert = await within(screen.getByRole("alertdialog")).findByRole("alert");
+    expect(alert).toHaveTextContent("never overwritten");
+    expect(document.querySelector("[data-evtx-export-error]")).toBeNull();
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+  });
+
+  it("puts focus on Cancel when the dialog is opened from the menu, and keeps it there", async () => {
+    render(<EvtxViewBar nowEpoch={0} />);
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+    await screen.findByRole("alertdialog");
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    await waitFor(() => expect(cancel).toHaveFocus());
+    // Closing the menu makes Fluent restore focus to the Export button. If that landed after the
+    // dialog's own focus it would take it back, so look again after the menu has finished closing.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    expect(cancel).toHaveFocus();
+    expect(screen.getByTitle(EXPORT_BUTTON_TITLE)).not.toHaveFocus();
+  });
+
+  it("returns focus to the Export button when the dialog is cancelled", async () => {
+    render(<EvtxViewBar nowEpoch={0} />);
+    await openExportMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /EVTX subset/ }));
+    await screen.findByRole("alertdialog");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(screen.getByTitle(EXPORT_BUTTON_TITLE)).toHaveFocus());
   });
 });

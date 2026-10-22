@@ -17,6 +17,7 @@ import {
   appendEventLogAnalysisChunk,
   appendEventLogExportChunk,
   clearEventLogChannel,
+  exportEventLogSubset,
   closeEventLogExportSession,
   createEventLogExportSession,
   openLogFile,
@@ -1293,6 +1294,107 @@ describe("event-log manifest commands", () => {
     );
   });
 
+  const subsetFile = {
+    kind: "channel",
+    sourcePath: "System",
+    fileName: "System-subset.evtx",
+    outputPath: "C:\\out\\System-subset.evtx",
+    requestedRecords: 2,
+    status: "exported",
+    exportedRecords: 2,
+    missing: { count: 0, sample: [] },
+    unrequested: { count: 0, sample: [] },
+    messagesArchived: true,
+    error: null,
+    warnings: [],
+  };
+  const subsetSources = [
+    {
+      kind: "channel" as const,
+      path: "System",
+      recordGroups: [{ computer: "HOST-A", channel: "System", recordIds: ["5", "6"] }],
+    },
+  ];
+
+  it("sends the folder and the record ids as text per computer, and returns the validated per-file results", async () => {
+    const response = { folder: "C:\\out", files: [subsetFile] };
+    invokeMock.mockResolvedValueOnce(response);
+
+    await expect(exportEventLogSubset("C:\\out", subsetSources)).resolves.toEqual(response);
+    expect(invokeMock).toHaveBeenCalledWith("evtx_export_subset", {
+      folder: "C:\\out",
+      sources: subsetSources,
+    });
+  });
+
+  it("accepts a failed file, and an exported one whose read-back could not be done", async () => {
+    const response = {
+      folder: "C:\\out",
+      files: [
+        {
+          ...subsetFile,
+          status: "failed",
+          exportedRecords: null,
+          missing: null,
+          unrequested: null,
+          error: "access denied",
+        },
+      ],
+    };
+    invokeMock.mockResolvedValueOnce(response);
+    await expect(exportEventLogSubset("C:\\out", subsetSources)).resolves.toEqual(response);
+  });
+
+  it.each([
+    [null],
+    [{ folder: "C:\\out" }],
+    [{ files: [] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, status: "partial" }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, exportedRecords: -1 }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, warnings: "none" }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, messagesArchived: "yes" }] }],
+    // The read-back is all or nothing: a count without its comparisons would read as a clean file.
+    [{ folder: "C:\\out", files: [{ ...subsetFile, missing: null }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, unrequested: null }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, missing: null, unrequested: null }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, exportedRecords: null }] }],
+    // A failed file was never read back, so it carries none of the three.
+    [{ folder: "C:\\out", files: [{ ...subsetFile, status: "failed" }] }],
+    [
+      {
+        folder: "C:\\out",
+        files: [
+          { ...subsetFile, status: "failed", exportedRecords: null, missing: null, unrequested: { count: 0, sample: [] } },
+        ],
+      },
+    ],
+    // The comparison with the request must be present and well formed: absent is not "none".
+    [{ folder: "C:\\out", files: [{ ...subsetFile, missing: undefined }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, unrequested: { count: -1, sample: [] } }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, missing: { count: 1, sample: [5] } }] }],
+    // A reply that does not describe the request: wrong source, wrong kind, extra file, or
+    // missing file.
+    [{ folder: "C:\\out", files: [{ ...subsetFile, sourcePath: "Application" }] }],
+    [{ folder: "C:\\out", files: [{ ...subsetFile, kind: "file" }] }],
+    [{ folder: "C:\\out", files: [subsetFile, subsetFile] }],
+    [{ folder: "C:\\out", files: [] }],
+  ])("rejects a malformed or mismatched subset reply (%#)", async (reply) => {
+    invokeMock.mockResolvedValueOnce(reply);
+
+    await expect(exportEventLogSubset("C:\\out", subsetSources)).rejects.toThrow(
+      "Command 'evtx_export_subset' returned an invalid response.",
+    );
+  });
+
+  it("passes a refused request's message through to the caller", async () => {
+    invokeMock.mockRejectedValueOnce(
+      "These files already exist in C:\\out and are never overwritten: System-subset.evtx.",
+    );
+    await expect(exportEventLogSubset("C:\\out", subsetSources)).rejects.toThrow(
+      "never overwritten: System-subset.evtx",
+    );
+  });
+
   const validEventRecord = {
     id: 1,
     eventRecordId: 42,
@@ -1336,6 +1438,47 @@ describe("event-log manifest commands", () => {
     async (eventRecordIdText) => {
       vi.mocked(invoke).mockResolvedValueOnce({
         records: [{ ...validEventRecord, eventRecordIdText }],
+        channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+        totalRecords: 1,
+        parseErrors: 0,
+        errorMessages: [],
+      });
+
+      await expect(
+        parseEventLogManifest({ entries: [], coverage: [] }),
+      ).rejects.toThrow(
+        "Command 'evtx_parse_manifest' returned an invalid response.",
+      );
+    },
+  );
+
+  it.each([
+    ["absent", {}],
+    ["null", { eventChannel: null }],
+    ["string", { eventChannel: "Security" }],
+  ] as const)(
+    "accepts %s eventChannel values",
+    async (_label, identity) => {
+      const result = {
+        records: [{ ...validEventRecord, ...identity }],
+        channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+        totalRecords: 1,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+      vi.mocked(invoke).mockResolvedValueOnce(result);
+
+      await expect(
+        parseEventLogManifest({ entries: [], coverage: [] }),
+      ).resolves.toEqual(result);
+    },
+  );
+
+  it.each([[42], [true], [[]], [{ value: "Security" }]])(
+    "rejects malformed eventChannel type %s",
+    async (eventChannel) => {
+      vi.mocked(invoke).mockResolvedValueOnce({
+        records: [{ ...validEventRecord, eventChannel }],
         channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
         totalRecords: 1,
         parseErrors: 0,
