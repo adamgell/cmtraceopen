@@ -22,8 +22,6 @@ const PENDING_AUDIT = new Set([
   "cmtrace-nightly-signed.yml:windows-signed-nightly:1",
   // tracked in #906
   "cmtrace-nightly-signed.yml:macos-signed-nightly:1",
-  // tracked in #906
-  "cmtrace-release.yml:release:1",
   // tracked in #906 (runs git tag and git push, so it needs the credential)
   "codesign.yml:prepare-windows-release:1",
   // tracked in #906
