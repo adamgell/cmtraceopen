@@ -122,7 +122,7 @@ describe("EvtxChartsView", () => {
     vi.useFakeTimers();
     try {
       rerender(<EvtxChartsView {...props({ hideRules: [] })} />);
-      // Debounced: the previous derivation stays until the settle time passes.
+      // Throttled: the previous derivation stays until the settle time passes.
       expect(screen.getByText("excluding 7036 / 16384")).toBeInTheDocument();
       act(() => {
         vi.advanceTimersByTime(CHART_DATA_THROTTLE_MS);

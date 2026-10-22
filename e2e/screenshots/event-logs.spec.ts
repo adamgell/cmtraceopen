@@ -268,7 +268,7 @@ test.describe("event-logs screenshots", () => {
     await expect(page.getByRole("figure", { name: /^Events by channel/ })).toBeVisible({
       timeout: 15_000,
     });
-    // Chart data is debounced; wait for the settled KPI grid and all four figures.
+    // Chart data is throttled; wait for the settled KPI grid and all four figures.
     await expect(page.getByRole("figure")).toHaveCount(4);
     await expect(page.getByTestId("kpi-value-events")).not.toHaveText("0");
     await assertNoHostPaths(page);
