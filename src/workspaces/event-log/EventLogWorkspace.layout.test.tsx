@@ -31,6 +31,7 @@ vi.mock("./UnifiedTimelineView", () => ({
 
 import { useLogStore } from "../../stores/log-store";
 import { EventLogWorkspace, EvtxViewHost, type EvtxViewEntry } from "./EventLogWorkspace";
+import { CHART_DATA_THROTTLE_MS } from "./EvtxChartsView";
 import { EvtxViewBar } from "./EvtxViewBar";
 import { requireElement, stubLayout } from "./evtx-test-dom";
 import {
@@ -453,6 +454,35 @@ describe("EventLogWorkspace Charts view wiring", () => {
     render(<EventLogWorkspace />);
     await screen.findByText("Loading events...", {}, { timeout: 10_000 });
     expect(screen.queryByText(/No events to chart/)).toBeNull();
+  });
+
+  it("does not say 'No events' between a load ending and its records being drawn", async () => {
+    useEvtxStore.setState({ isLoading: true });
+    render(<EventLogWorkspace />);
+    // Real timers until the lazy chunk has loaded; fake timers only for the flip.
+    await screen.findByText("Loading events...", {}, { timeout: 10_000 });
+    vi.useFakeTimers();
+    try {
+      // The visible rows come back in the same store update that ends the load.
+      act(() => {
+        useEvtxStore.setState({ isLoading: false });
+      });
+      expect(screen.queryByText(/No events to chart/)).toBeNull();
+      expect(screen.getByText("Loading events...")).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(CHART_DATA_THROTTLE_MS - 1);
+      });
+      expect(screen.queryByText(/No events to chart/)).toBeNull();
+      expect(screen.getByText("Loading events...")).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(screen.queryByText(/No events to chart/)).toBeNull();
+      expect(screen.queryByText("Loading events...")).toBeNull();
+      expect(screen.getByTestId("kpi-value-events")).toHaveTextContent("1");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows n/a for the chains tile until a timeline page exists", async () => {
