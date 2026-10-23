@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Merged tabs update live**: A tab made with Merge tabs now tails every one of its source files, starting where each file's tab had read to, and slots new lines into time order without re-sorting the whole timeline. Previously it was a snapshot of the moment it was created and kept tailing only the file that had been open. Pause, close, truncation/rotation and multi-line record amendments apply per source, and a source hidden in the merge legend keeps accumulating lines. Windows Firewall sources in a merged tab remain a snapshot.
+
+- **Untimestamped lines in merged tabs**: Lines with no timestamp of their own, such as stack-trace frames in timestamped text logs, now stay under the record above them in the same file instead of collecting at the end of the merged timeline. Their Date/Time column stays empty. Files with no timestamps at all are still placed after every timestamped entry, and correlated-entry lookup accounts for the new ordering.
+
 ## [1.6.3] - 2026-10-20
 
 ### Removed

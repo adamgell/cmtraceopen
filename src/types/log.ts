@@ -205,6 +205,13 @@ export interface LogEntry {
   message: string;
   component: string | null;
   timestamp: number | null;
+  /**
+   * Set only by `mergeEntries`: the time this entry sorts at in a merged view.
+   * Equals `timestamp`, or for an untimestamped line, the timestamp of the
+   * nearest timestamped line in the same file (so a stack-trace line stays
+   * with its record). Null when the whole file has no timestamps.
+   */
+  mergeTimestamp?: number | null;
   timestampDisplay: string | null;
   severity: Severity;
   thread: number | null;
