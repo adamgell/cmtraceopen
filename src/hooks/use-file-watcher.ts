@@ -46,6 +46,7 @@ export function useFileWatcher() {
     (s) => s.aggregateTailGeneration,
   );
   const formatDetected = useLogStore((s) => s.formatDetected);
+  const mergedSourceTails = useLogStore((s) => s.mergedTabState?.sourceTails);
   const isPaused = useLogStore((s) => s.isPaused);
   const appendEntries = useLogStore((s) => s.appendEntries);
   const amendEntry = useLogStore((s) => s.amendEntry);
@@ -57,6 +58,9 @@ export function useFileWatcher() {
   );
   const resetEntries = useLogStore((s) => s.resetEntries);
   const resetAggregateEntries = useLogStore((s) => s.resetAggregateEntries);
+  const appendMergedEntries = useLogStore((s) => s.appendMergedEntries);
+  const amendMergedEntry = useLogStore((s) => s.amendMergedEntry);
+  const resetMergedEntries = useLogStore((s) => s.resetMergedEntries);
   const setParserSelection = useLogStore((s) => s.setParserSelection);
   const setTotalLines = useLogStore((s) => s.setTotalLines);
   const firewallSessionKey = useLogStore(s => s.sourceOpenMode === "aggregate-folder"
@@ -82,7 +86,20 @@ export function useFileWatcher() {
       return () => cleanups.forEach(cleanup => cleanup());
     }
 
-    if (!openFilePath || !formatDetected) return;
+    if (sourceOpenMode === "merged") {
+      // Tail every source of the merged tab from where its tab snapshot left
+      // off. `sourceTails` is fixed when the merged tab is created, so tail
+      // batches do not restart these watches.
+      if (!mergedSourceTails) return;
+      const cleanups = Object.entries(mergedSourceTails).map(([path, tail]) =>
+        startSourceWatch(path, tail.formatDetected, tail.byteOffset, 0, tail.totalLines + 1),
+      );
+      return () => cleanups.forEach(cleanup => cleanup());
+    }
+
+    // Only a single-file view owns `openFilePath`'s tail. Closing a merged
+    // view leaves the path, but must not restart a tail in the emptied view.
+    if (sourceOpenMode !== "single-file" || !openFilePath || !formatDetected) return;
 
     const byteOffset = useLogStore.getState().byteOffset;
     const totalLines = useLogStore.getState().totalLines;
@@ -94,7 +111,7 @@ export function useFileWatcher() {
     const nextLine = totalLines + 1;
 
     return startSourceWatch(openFilePath, formatDetected, byteOffset, nextId, nextLine);
-  }, [aggregateTailKey, firewallSessionKey, formatDetected, openFilePath, sourceOpenMode]);
+  }, [aggregateTailKey, firewallSessionKey, formatDetected, mergedSourceTails, openFilePath, sourceOpenMode]);
 
   // Handle pause/resume
   useEffect(() => {
@@ -114,7 +131,19 @@ export function useFileWatcher() {
       return;
     }
 
-    if (!openFilePath) return;
+    if (sourceOpenMode === "merged") {
+      for (const path of Object.keys(mergedSourceTails ?? {})) {
+        const action = isPaused ? pauseTail : resumeTail;
+        const token = currentFirewallControl(path);
+        if (!token && useLogStore.getState().firewallSources[path]) continue;
+        (token ? action(path, token) : action(path)).catch((err) =>
+          console.error(`Failed to ${isPaused ? "pause" : "resume"} merged tail:`, err)
+        );
+      }
+      return;
+    }
+
+    if (sourceOpenMode !== "single-file" || !openFilePath) return;
 
     const token = currentFirewallControl(openFilePath);
     if (!token && useLogStore.getState().firewallSources[openFilePath]) return;
@@ -127,7 +156,7 @@ export function useFileWatcher() {
         console.error("Failed to resume tail:", err)
       );
     }
-  }, [aggregateFiles, firewallSessionKey, isPaused, openFilePath, sourceOpenMode]);
+  }, [aggregateFiles, firewallSessionKey, isPaused, mergedSourceTails, openFilePath, sourceOpenMode]);
 
   // Listen for new tail entries from the Rust backend
   useEffect(() => {
@@ -147,6 +176,11 @@ export function useFileWatcher() {
         reset,
       } = payload;
       const state = useLogStore.getState();
+      // Merged tabs do not tail firewall sources (see createMergedTab). A late
+      // firewall event must not reconcile its rows into the merged view.
+      if (state.sourceOpenMode === "merged" && (payload.firewallControl || state.firewallSources[filePath])) {
+        return;
+      }
       if (payload.firewallControl || state.firewallSources[filePath]) {
         state.applyFirewallTail(payload);
         return;
@@ -190,9 +224,34 @@ export function useFileWatcher() {
         return;
       }
 
+      if (state.sourceOpenMode === "merged") {
+        if (!state.mergedTabState?.sourceFilePaths.includes(filePath)) {
+          return;
+        }
+
+        if (parseErrors > 0) {
+          console.warn(
+            `Tail parsing reported ${parseErrors} coverage gap(s) for ${filePath}`,
+          );
+        }
+
+        if (reset) {
+          resetMergedEntries(filePath, newEntries, observedThroughLine);
+          return;
+        }
+
+        for (const amendment of amendments) {
+          amendMergedEntry(filePath, amendment);
+        }
+
+        // Also called for an empty batch, so the replay cursor still advances.
+        appendMergedEntries(filePath, newEntries, observedThroughLine);
+        return;
+      }
+
       const currentPath = state.openFilePath;
 
-      if (!currentPath || currentPath !== filePath) {
+      if (state.sourceOpenMode !== "single-file" || !currentPath || currentPath !== filePath) {
         return;
       }
 
@@ -235,12 +294,15 @@ export function useFileWatcher() {
   }, [
     amendAggregateEntry,
     amendEntry,
+    amendMergedEntry,
     appendAggregateEntries,
     appendEntries,
+    appendMergedEntries,
     observeAggregateTailLine,
     recordAggregateTailParseErrors,
     resetAggregateEntries,
     resetEntries,
+    resetMergedEntries,
     setParserSelection,
     setTotalLines,
   ]);
