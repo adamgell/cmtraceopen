@@ -24,13 +24,13 @@ describe("project-controlled download link boundaries", () => {
       "Stable downloads: https://download.cmtraceopen.com/?source=github-release",
     );
     expect(stableReleaseWorkflow).toContain(
-      'template=".github/release-notes/template.md"',
+      ".tag_name == $tag and .draft == true and .prerelease == false",
     );
-    expect(stableReleaseWorkflow).toContain(
-      "releaseBody: ${{ steps.notes.outputs.body }}",
+    expect(stableReleaseWorkflow).not.toMatch(
+      /\bgh\s+release\s+(?:create|edit)\b|^\s*releaseBody:/m,
     );
-    expect(stableReleaseWorkflow).toContain(
-      'sed -e "s|{{TAG}}|$TAG_NAME|g" -e "s|{{VERSION}}|$VERSION|g"',
+    expect(windowsReleaseWorkflow).toContain(
+      "gh release create $env:TAG_NAME --draft --title $releaseTitle --notes-file release-notes.md",
     );
     expect(windowsReleaseWorkflow).toContain(
       '$releaseNotes = $releaseNotes.Replace("{{TAG}}", $env:TAG_NAME)',
